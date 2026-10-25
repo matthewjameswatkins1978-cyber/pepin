@@ -1,0 +1,28 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "pepin/pepin"
+
+// Values
+pub fn compile(String, String) -> Result[String, Diagnostic]
+
+pub fn describe_json() -> String
+
+pub fn diagnostic_json(Diagnostic) -> String
+
+// Errors
+
+// Types and methods
+pub(all) struct Diagnostic {
+  code : String
+  message : String
+  file : String
+  position : Position
+}
+
+pub(all) struct Position {
+  line : Int32
+  column : Int32
+}
+
+// Type aliases
+
+// Traits
