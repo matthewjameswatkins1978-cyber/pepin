@@ -16,6 +16,12 @@ def invoke(*args):
 
 
 class PepCliTests(unittest.TestCase):
+    def test_help_lists_supported_commands(self):
+        result = invoke("--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("query FILE --holes --json", result.stdout)
+        self.assertIn("run FILE", result.stdout)
+
     def source(self, text):
         temp = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".pep", delete=False, newline="")
         temp.write(text)

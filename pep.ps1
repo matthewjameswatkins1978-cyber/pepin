@@ -3,8 +3,21 @@ param(
   [string[]] $Arguments
 )
 $ErrorActionPreference = 'Stop'
+if ($Arguments -and $Arguments.Count -gt 0 -and $Arguments[0] -in @('help', '-h', '--help')) {
+  Write-Output 'Pep — inspect, check, query, and run plaintext .pep programs'
+  Write-Output ''
+  Write-Output 'Usage:'
+  Write-Output '  .\pep.ps1 describe [--json]'
+  Write-Output '  .\pep.ps1 inspect FILE [--json]'
+  Write-Output '  .\pep.ps1 check FILE [--json]'
+  Write-Output '  .\pep.ps1 query FILE --holes --json [--offset BYTE]'
+  Write-Output '  .\pep.ps1 run FILE'
+  Write-Output ''
+  Write-Output 'Use query to inspect typed holes and compatible in-scope bindings.'
+  exit 0
+}
 if (-not $Arguments -or $Arguments.Count -eq 0) {
-  Write-Error 'usage: .\pep.ps1 describe [--json] | inspect|check|query|run FILE [options]'
+  Write-Error 'usage: .\pep.ps1 --help'
   exit 2
 }
 $Command = $Arguments[0]
