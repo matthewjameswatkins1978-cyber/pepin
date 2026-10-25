@@ -1,5 +1,7 @@
 # Pep seed language decision (2026-10-25)
 
+The seed choice implements part of the broader [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md). Binding future technical constraints are in [Technical Resolution 001](TECHNICAL_RESOLUTION_001.md); this file records current seed facts and limits.
+
 ## Decision
 
 Use **OCaml 5.5.2** as Pep's seed implementation language. The compiler owns Pep's syntax, typed representation, semantic queries, diagnostics, and eventual self-hosting path. OCaml is implementation machinery; it does not define Pep's surface syntax or semantics.

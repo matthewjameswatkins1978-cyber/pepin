@@ -1,5 +1,7 @@
 # Next packet: Pep document snapshots and revision-aware queries
 
+This packet advances [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md) under [Technical Resolution 001](TECHNICAL_RESOLUTION_001.md). Queries and named holes must be bound to immutable document revisions; offsets remain original UTF-8 byte offsets for both LF and CRLF input.
+
 ## Objective
 
 Build the smallest persistent document-analysis layer that lets an editor or AI query Pep by source identity and revision, while preserving the current compiler as the semantic authority. Establish observable parse/type reuse and invalidation before claiming incremental analysis.
