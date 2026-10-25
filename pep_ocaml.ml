@@ -317,13 +317,512 @@ let execute c =
   |TExpr e::rest->ignore(eval env stack e);exec_stmts env stack rest
  in ignore(exec_stmts [] [] c.tops)
 
+(* Session protocol v3. Revisions are content-addressed and each analysis is
+   immutable; only a document's current-revision pointer changes. *)
+type json_value =
+  | JObject of (string * json_value) list
+  | JArray of json_value list
+  | JString of string
+  | JNumber of string
+  | JBool of bool
+  | JNull
+
+exception Json_parse_error of string
+exception Session_error of string * string
+
+let json_fail message = raise (Json_parse_error message)
+
+let valid_utf8 text =
+  let length = String.length text in
+  let continuation byte = byte land 0xc0 = 0x80 in
+  let rec scan i =
+    if i = length then true
+    else
+      let first = Char.code text.[i] in
+      if first < 0x80 then scan (i + 1)
+      else
+        let width, minimum, initial_mask =
+          if first >= 0xc0 && first <= 0xdf then 2, 0x80, 0x1f
+          else if first >= 0xe0 && first <= 0xef then 3, 0x800, 0x0f
+          else if first >= 0xf0 && first <= 0xf7 then 4, 0x10000, 0x07
+          else 0, 0, 0
+        in
+        if width = 0 || i + width > length then false
+        else
+          let codepoint = ref (first land initial_mask) in
+          let ok = ref true in
+          for j = 1 to width - 1 do
+            let byte = Char.code text.[i + j] in
+            if not (continuation byte) then ok := false
+            else codepoint := (!codepoint lsl 6) lor (byte land 0x3f)
+          done;
+          !ok
+          && !codepoint >= minimum
+          && !codepoint <= 0x10ffff
+          && not (!codepoint >= 0xd800 && !codepoint <= 0xdfff)
+          && scan (i + width)
+  in
+  scan 0
+
+let add_utf8 buffer codepoint =
+  if codepoint < 0 || codepoint > 0x10ffff || codepoint >= 0xd800 && codepoint <= 0xdfff then
+    json_fail "Invalid Unicode scalar value";
+  if codepoint <= 0x7f then Buffer.add_char buffer (Char.chr codepoint)
+  else if codepoint <= 0x7ff then (
+    Buffer.add_char buffer (Char.chr (0xc0 lor (codepoint lsr 6)));
+    Buffer.add_char buffer (Char.chr (0x80 lor (codepoint land 0x3f)))
+  ) else if codepoint <= 0xffff then (
+    Buffer.add_char buffer (Char.chr (0xe0 lor (codepoint lsr 12)));
+    Buffer.add_char buffer (Char.chr (0x80 lor ((codepoint lsr 6) land 0x3f)));
+    Buffer.add_char buffer (Char.chr (0x80 lor (codepoint land 0x3f)))
+  ) else (
+    Buffer.add_char buffer (Char.chr (0xf0 lor (codepoint lsr 18)));
+    Buffer.add_char buffer (Char.chr (0x80 lor ((codepoint lsr 12) land 0x3f)));
+    Buffer.add_char buffer (Char.chr (0x80 lor ((codepoint lsr 6) land 0x3f)));
+    Buffer.add_char buffer (Char.chr (0x80 lor (codepoint land 0x3f)))
+  )
+
+let parse_json input =
+  if not (valid_utf8 input) then json_fail "JSON input is not valid UTF-8";
+  let length = String.length input and cursor = ref 0 in
+  let fail message = json_fail (Printf.sprintf "%s at byte %d" message !cursor) in
+  let peek () = if !cursor < length then input.[!cursor] else '\000' in
+  let take () = if !cursor >= length then fail "Unexpected end of JSON" else let c = input.[!cursor] in incr cursor; c in
+  let rec whitespace () = match peek () with ' ' | '\t' | '\r' | '\n' -> incr cursor; whitespace () | _ -> () in
+  let expect c = if take () <> c then fail (Printf.sprintf "Expected %C" c) in
+  let hex_value = function
+    | '0'..'9' as c -> Char.code c - Char.code '0'
+    | 'a'..'f' as c -> Char.code c - Char.code 'a' + 10
+    | 'A'..'F' as c -> Char.code c - Char.code 'A' + 10
+    | _ -> fail "Invalid hexadecimal escape"
+  in
+  let hex4 () =
+    let value = ref 0 in
+    for _ = 1 to 4 do value := (!value lsl 4) lor hex_value (take ()) done;
+    !value
+  in
+  let parse_string () =
+    expect '"';
+    let buffer = Buffer.create 32 in
+    let rec loop () = match take () with
+      | '"' -> Buffer.contents buffer
+      | '\\' ->
+          (match take () with
+           | '"' -> Buffer.add_char buffer '"'
+           | '\\' -> Buffer.add_char buffer '\\'
+           | '/' -> Buffer.add_char buffer '/'
+           | 'b' -> Buffer.add_char buffer '\b'
+           | 'f' -> Buffer.add_char buffer '\012'
+           | 'n' -> Buffer.add_char buffer '\n'
+           | 'r' -> Buffer.add_char buffer '\r'
+           | 't' -> Buffer.add_char buffer '\t'
+           | 'u' ->
+               let first = hex4 () in
+               let codepoint =
+                 if first >= 0xd800 && first <= 0xdbff then (
+                   if take () <> '\\' || take () <> 'u' then fail "Missing low surrogate";
+                   let second = hex4 () in
+                   if second < 0xdc00 || second > 0xdfff then fail "Invalid low surrogate";
+                   0x10000 + ((first - 0xd800) lsl 10) + (second - 0xdc00)
+                 ) else if first >= 0xdc00 && first <= 0xdfff then fail "Unexpected low surrogate"
+                 else first
+               in
+               add_utf8 buffer codepoint
+           | _ -> fail "Invalid JSON escape");
+          loop ()
+      | c when Char.code c < 0x20 -> fail "Unescaped control character in JSON string"
+      | c -> Buffer.add_char buffer c; loop ()
+    in
+    loop ()
+  in
+  let parse_number () =
+    let start = !cursor in
+    ignore (if peek () = '-' then take () else '\000');
+    (match peek () with
+     | '0' -> ignore (take ()); if peek () >= '0' && peek () <= '9' then fail "Leading zero in JSON number"
+     | '1'..'9' -> while peek () >= '0' && peek () <= '9' do ignore (take ()) done
+     | _ -> fail "Invalid JSON number");
+    if peek () = '.' then (
+      ignore (take ());
+      if not (peek () >= '0' && peek () <= '9') then fail "Invalid JSON fraction";
+      while peek () >= '0' && peek () <= '9' do ignore (take ()) done
+    );
+    if peek () = 'e' || peek () = 'E' then (
+      ignore (take ());
+      if peek () = '+' || peek () = '-' then ignore (take ());
+      if not (peek () >= '0' && peek () <= '9') then fail "Invalid JSON exponent";
+      while peek () >= '0' && peek () <= '9' do ignore (take ()) done
+    );
+    JNumber (String.sub input start (!cursor - start))
+  in
+  let literal word value =
+    for i = 0 to String.length word - 1 do if take () <> word.[i] then fail "Invalid JSON literal" done;
+    value
+  in
+  let rec value () =
+    whitespace ();
+    match peek () with
+    | '"' -> JString (parse_string ())
+    | '{' -> object_value ()
+    | '[' -> array_value ()
+    | 't' -> literal "true" (JBool true)
+    | 'f' -> literal "false" (JBool false)
+    | 'n' -> literal "null" JNull
+    | '-' | '0'..'9' -> parse_number ()
+    | _ -> fail "Expected a JSON value"
+  and object_value () =
+    expect '{'; whitespace ();
+    if peek () = '}' then (ignore (take ()); JObject [])
+    else
+      let fields = ref [] in
+      let rec members () =
+        whitespace ();
+        if peek () <> '"' then fail "Expected a JSON object key";
+        let key = parse_string () in
+        if List.mem_assoc key !fields then fail "Duplicate JSON object key";
+        whitespace (); expect ':';
+        let field_value = value () in
+        fields := (key, field_value) :: !fields;
+        whitespace ();
+        match take () with
+        | '}' -> JObject (List.rev !fields)
+        | ',' -> members ()
+        | _ -> fail "Expected ',' or '}'"
+      in members ()
+  and array_value () =
+    expect '['; whitespace ();
+    if peek () = ']' then (ignore (take ()); JArray [])
+    else
+      let items = ref [] in
+      let rec elements () =
+        items := value () :: !items;
+        whitespace ();
+        match take () with
+        | ']' -> JArray (List.rev !items)
+        | ',' -> elements ()
+        | _ -> fail "Expected ',' or ']'"
+      in elements ()
+  in
+  let parsed = value () in
+  whitespace ();
+  if !cursor <> length then fail "Trailing data after JSON value";
+  parsed
+
+let sha256_constants = Array.map Int32.of_string [|
+  "0x428a2f98"; "0x71374491"; "0xb5c0fbcf"; "0xe9b5dba5"; "0x3956c25b"; "0x59f111f1"; "0x923f82a4"; "0xab1c5ed5";
+  "0xd807aa98"; "0x12835b01"; "0x243185be"; "0x550c7dc3"; "0x72be5d74"; "0x80deb1fe"; "0x9bdc06a7"; "0xc19bf174";
+  "0xe49b69c1"; "0xefbe4786"; "0x0fc19dc6"; "0x240ca1cc"; "0x2de92c6f"; "0x4a7484aa"; "0x5cb0a9dc"; "0x76f988da";
+  "0x983e5152"; "0xa831c66d"; "0xb00327c8"; "0xbf597fc7"; "0xc6e00bf3"; "0xd5a79147"; "0x06ca6351"; "0x14292967";
+  "0x27b70a85"; "0x2e1b2138"; "0x4d2c6dfc"; "0x53380d13"; "0x650a7354"; "0x766a0abb"; "0x81c2c92e"; "0x92722c85";
+  "0xa2bfe8a1"; "0xa81a664b"; "0xc24b8b70"; "0xc76c51a3"; "0xd192e819"; "0xd6990624"; "0xf40e3585"; "0x106aa070";
+  "0x19a4c116"; "0x1e376c08"; "0x2748774c"; "0x34b0bcb5"; "0x391c0cb3"; "0x4ed8aa4a"; "0x5b9cca4f"; "0x682e6ff3";
+  "0x748f82ee"; "0x78a5636f"; "0x84c87814"; "0x8cc70208"; "0x90befffa"; "0xa4506ceb"; "0xbef9a3f7"; "0xc67178f2"
+|]
+
+let sha256_hex text =
+  let open Int32 in
+  let rotr value count = logor (shift_right_logical value count) (shift_left value (32 - count)) in
+  let xor3 a b c = logxor (logxor a b) c in
+  let length = String.length text in
+  let padded_length = ((length + 9 + 63) / 64) * 64 in
+  let padded = Bytes.make padded_length '\000' in
+  Bytes.blit_string text 0 padded 0 length;
+  Bytes.set padded length '\128';
+  let bit_length = Int64.mul (Int64.of_int length) 8L in
+  for i = 0 to 7 do
+    let shift = 8 * (7 - i) in
+    let byte = Int64.to_int (Int64.logand (Int64.shift_right_logical bit_length shift) 0xffL) in
+    Bytes.set padded (padded_length - 8 + i) (Char.chr byte)
+  done;
+  let state = Array.map of_string [|
+    "0x6a09e667"; "0xbb67ae85"; "0x3c6ef372"; "0xa54ff53a";
+    "0x510e527f"; "0x9b05688c"; "0x1f83d9ab"; "0x5be0cd19"
+  |] in
+  let words = Array.make 64 0l in
+  for offset = 0 to (padded_length / 64) - 1 do
+    let block = offset * 64 in
+    for i = 0 to 15 do
+      let at = block + i * 4 in
+      let b0 = of_int (Char.code (Bytes.get padded at))
+      and b1 = of_int (Char.code (Bytes.get padded (at + 1)))
+      and b2 = of_int (Char.code (Bytes.get padded (at + 2)))
+      and b3 = of_int (Char.code (Bytes.get padded (at + 3))) in
+      words.(i) <- logor (shift_left b0 24) (logor (shift_left b1 16) (logor (shift_left b2 8) b3))
+    done;
+    for i = 16 to 63 do
+      let x = words.(i - 15) and y = words.(i - 2) in
+      let small0 = xor3 (rotr x 7) (rotr x 18) (shift_right_logical x 3)
+      and small1 = xor3 (rotr y 17) (rotr y 19) (shift_right_logical y 10) in
+      words.(i) <- add small1 (add words.(i - 7) (add small0 words.(i - 16)))
+    done;
+    let a = ref state.(0) and b = ref state.(1) and c = ref state.(2) and d = ref state.(3)
+    and e = ref state.(4) and f = ref state.(5) and g = ref state.(6) and h = ref state.(7) in
+    for i = 0 to 63 do
+      let large1 = xor3 (rotr !e 6) (rotr !e 11) (rotr !e 25) in
+      let choose = logxor (logand !e !f) (logand (lognot !e) !g) in
+      let first = add !h (add large1 (add choose (add sha256_constants.(i) words.(i)))) in
+      let large0 = xor3 (rotr !a 2) (rotr !a 13) (rotr !a 22) in
+      let majority = xor3 (logand !a !b) (logand !a !c) (logand !b !c) in
+      let second = add large0 majority in
+      h := !g; g := !f; f := !e; e := add !d first;
+      d := !c; c := !b; b := !a; a := add first second
+    done;
+    state.(0) <- add state.(0) !a; state.(1) <- add state.(1) !b;
+    state.(2) <- add state.(2) !c; state.(3) <- add state.(3) !d;
+    state.(4) <- add state.(4) !e; state.(5) <- add state.(5) !f;
+    state.(6) <- add state.(6) !g; state.(7) <- add state.(7) !h
+  done;
+  String.concat "" (Array.to_list (Array.map (Printf.sprintf "%08lx") state))
+
+type session_analysis = {
+  source: string;
+  revision: string;
+  parsed: program option;
+  checked: checked option;
+  diagnostic: error option;
+}
+
+type session_document = {
+  document_id: string;
+  document_name: string option;
+  mutable current_revision: string;
+  revisions: (string, session_analysis) Hashtbl.t;
+}
+
+let session_parse_count = ref 0
+let session_typecheck_count = ref 0
+let session_cache_hits = ref 0
+
+let session_metrics_json () =
+  Printf.sprintf "{\"parse_count\":%d,\"typecheck_count\":%d,\"cache_hits\":%d}"
+    !session_parse_count !session_typecheck_count !session_cache_hits
+
+let analyse_session_source source =
+  let revision = "sha256:" ^ sha256_hex source in
+  incr session_parse_count;
+  try
+    let tops = parse source in
+    incr session_typecheck_count;
+    try
+      let checked = check tops in
+      { source; revision; parsed = Some tops; checked = Some checked; diagnostic = None }
+    with Error diagnostic ->
+      { source; revision; parsed = Some tops; checked = None; diagnostic = Some diagnostic }
+  with Error diagnostic ->
+    { source; revision; parsed = None; checked = None; diagnostic = Some diagnostic }
+
+let session_status analysis =
+  match analysis.diagnostic, analysis.checked with
+  | Some _, _ | _, None -> "invalid"
+  | None, Some checked -> program_status checked
+
+let session_diagnostic_json diagnostic =
+  Printf.sprintf "{\"code\":%s,\"severity\":\"error\",\"message\":%s,\"expectedType\":%s,\"span\":%s}"
+    (json_string diagnostic.code) (json_string diagnostic.message)
+    (match diagnostic.expected with None -> "null" | Some ty -> json_string (type_name ty))
+    (span_json diagnostic.at)
+
+let session_hole_json document revision hole =
+  let name = match hole.hid with None -> "null" | Some value -> json_string value in
+  let identity = match hole.hid with
+    | None -> "null"
+    | Some value ->
+        Printf.sprintf "{\"document\":%s,\"revision\":%s,\"scope\":%s,\"name\":%s}"
+          (json_string document) (json_string revision) (json_string hole.hscope) (json_string value)
+  in
+  let bindings = "[" ^ String.concat "," (List.map (fun binding ->
+    Printf.sprintf "{\"name\":%s,\"bindingId\":%d,\"type\":%s}"
+      (json_string binding.bname) binding.bid
+      (match binding.bty with None -> "null" | Some ty -> json_string (type_name ty))) hole.hbindings) ^ "]" in
+  let actions = match hole.hty with
+    | None -> "[]"
+    | Some ty ->
+        let candidates = candidates ty hole.hbindings in
+        "[{\"kind\":\"fill_hole\",\"expectedType\":" ^ json_string (type_name ty) ^
+        ",\"candidates\":[" ^ String.concat "," (List.map (fun binding ->
+          Printf.sprintf "{\"name\":%s,\"bindingId\":%d}" (json_string binding.bname) binding.bid) candidates) ^ "]}]"
+  in
+  Printf.sprintf "{\"identity\":%s,\"name\":%s,\"scope\":%s,\"expectedType\":%s,\"bindings\":%s,\"actions\":%s,\"span\":%s}"
+    identity name (json_string hole.hscope)
+    (match hole.hty with None -> "null" | Some ty -> json_string (type_name ty))
+    bindings actions (span_json hole.hspan)
+
+let session_documents : (string, session_document) Hashtbl.t = Hashtbl.create 8
+
+let session_response operation document revision analysis ?offset () =
+  let holes = match analysis.checked with
+    | None -> []
+    | Some checked ->
+        (match offset with
+         | None -> checked.holes
+         | Some byte -> List.filter (fun hole -> hole.hspan.lo = byte) checked.holes)
+  in
+  let ast = match analysis.parsed with None -> "null" | Some tops -> ast_json tops in
+  let typed = match analysis.checked with None -> "null" | Some checked -> typed_json checked in
+  let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s}"
+    (json_string operation) (json_string document)
+    (match Hashtbl.find_opt session_documents document with
+     | Some doc -> (match doc.document_name with None -> "null" | Some name -> json_string name)
+     | None -> "null")
+    (json_string revision) (json_string (session_status analysis)) ast typed
+    (String.concat "," (List.map (session_hole_json document revision) holes)) diagnostics
+
+let session_error_json operation code message ?document ?current_revision () =
+  let optional key = function None -> "" | Some value -> ",\"" ^ key ^ "\":" ^ json_string value in
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"error\",\"operation\":%s,\"error\":{\"code\":%s,\"message\":%s}%s%s,\"metrics\":%s}"
+    (match operation with None -> "null" | Some op -> json_string op)
+    (json_string code) (json_string message)
+    (optional "document" document) (optional "currentRevision" current_revision)
+    (session_metrics_json ())
+
+let session_member fields key = List.assoc_opt key fields
+
+let session_required_string fields key = match session_member fields key with
+  | Some (JString value) -> value
+  | None -> raise (Session_error ("PEP_SESSION_FIELD_REQUIRED", "Missing string field '" ^ key ^ "'"))
+  | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be a string"))
+
+let session_optional_string fields key = match session_member fields key with
+  | None | Some JNull -> None
+  | Some (JString value) -> Some value
+  | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be a string or null"))
+
+let session_integer fields key = match session_member fields key with
+  | Some (JNumber number) ->
+      (try int_of_string number with _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be an integer")))
+  | None -> raise (Session_error ("PEP_SESSION_FIELD_REQUIRED", "Missing integer field '" ^ key ^ "'"))
+  | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be an integer"))
+
+let session_object = function
+  | JObject fields -> fields
+  | _ -> raise (Session_error ("PEP_SESSION_REQUEST_TYPE", "Each JSONL request must be a JSON object"))
+
+let session_document fields =
+  let id = session_required_string fields "document" in
+  match Hashtbl.find_opt session_documents id with
+  | None -> raise (Session_error ("PEP_DOCUMENT_NOT_FOUND", "Document identity was not opened in this session"))
+  | Some document -> document
+
+let session_get_revision document revision =
+  match Hashtbl.find_opt document.revisions revision with
+  | Some analysis -> analysis
+  | None -> raise (Session_error ("PEP_REVISION_NOT_FOUND", "Revision is not retained in this session"))
+
+let session_revision source = "sha256:" ^ sha256_hex source
+
+let session_analyse_or_reuse document source =
+  let revision = session_revision source in
+  match Hashtbl.find_opt document.revisions revision with
+  | Some analysis when analysis.source = source -> incr session_cache_hits; analysis
+  | Some _ -> raise (Session_error ("PEP_REVISION_HASH_COLLISION", "SHA-256 revision collision detected; source was not changed"))
+  | None ->
+      let analysis = analyse_session_source source in
+      Hashtbl.add document.revisions revision analysis;
+      analysis
+
+let session_is_boundary source offset =
+  offset = 0 || offset = String.length source || Char.code source.[offset] land 0xc0 <> 0x80
+
+let session_apply_edit document fields =
+  let expected = session_required_string fields "expected_revision" in
+  if expected <> document.current_revision then
+    raise (Session_error ("PEP_STALE_REVISION", "Edit expected a revision other than the document's current revision"));
+  let start_byte = session_integer fields "start_byte" and end_byte = session_integer fields "end_byte" in
+  let replacement = session_required_string fields "replacement" in
+  let current = session_get_revision document document.current_revision in
+  let source_length = String.length current.source in
+  if start_byte < 0 || end_byte < start_byte || end_byte > source_length then
+    raise (Session_error ("PEP_INVALID_EDIT_RANGE", "Edit range must be a half-open byte range within the source"));
+  if not (valid_utf8 replacement) then
+    raise (Session_error ("PEP_INVALID_UTF8", "Replacement must contain valid UTF-8"));
+  if not (session_is_boundary current.source start_byte && session_is_boundary current.source end_byte) then
+    raise (Session_error ("PEP_UTF8_BOUNDARY", "Edit range splits a UTF-8 code point"));
+  let buffer = Buffer.create (source_length - (end_byte - start_byte) + String.length replacement) in
+  Buffer.add_substring buffer current.source 0 start_byte;
+  Buffer.add_string buffer replacement;
+  Buffer.add_substring buffer current.source end_byte (source_length - end_byte);
+  let new_source = Buffer.contents buffer in
+  let analysis = session_analyse_or_reuse document new_source in
+  Hashtbl.replace document.revisions analysis.revision analysis;
+  document.current_revision <- analysis.revision;
+  session_response "apply_edit" document.document_id analysis.revision analysis ()
+
+let session_process request =
+  let fields = session_object request in
+  let schema = session_integer fields "schemaVersion" in
+  if schema <> 3 then raise (Session_error ("PEP_SESSION_SCHEMA_VERSION", "This session supports schemaVersion 3"));
+  let operation = session_required_string fields "op" in
+  match operation with
+  | "open" ->
+      let source = session_required_string fields "source" in
+      if not (valid_utf8 source) then raise (Session_error ("PEP_INVALID_UTF8", "Source must contain valid UTF-8"));
+      let name = session_optional_string fields "name" in
+      let next = (Hashtbl.length session_documents) + 1 in
+      let document_id = "doc-" ^ string_of_int next in
+      if Hashtbl.mem session_documents document_id then raise (Session_error ("PEP_DOCUMENT_ID_EXHAUSTED", "Could not allocate a session document identity"));
+      let analysis = analyse_session_source source in
+      let document = { document_id; document_name = name; current_revision = analysis.revision; revisions = Hashtbl.create 8 } in
+      Hashtbl.add document.revisions analysis.revision analysis;
+      Hashtbl.add session_documents document_id document;
+      session_response operation document_id analysis.revision analysis ()
+  | "query" | "inspect" ->
+      let document = session_document fields in
+      let revision = session_required_string fields "revision" in
+      let analysis = session_get_revision document revision in
+      incr session_cache_hits;
+      let offset = match session_member fields "offset" with
+        | None | Some JNull -> None
+        | Some (JNumber number) ->
+            (try let value = int_of_string number in if value < 0 then raise Exit; Some value
+             with _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field 'offset' must be a nonnegative integer")))
+        | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field 'offset' must be an integer"))
+      in
+      session_response operation document.document_id revision analysis ?offset ()
+  | "apply_edit" ->
+      let document = session_document fields in
+      let expected = session_required_string fields "expected_revision" in
+      if expected <> document.current_revision then
+        session_error_json (Some operation) "PEP_STALE_REVISION"
+          "Edit expected a revision other than the document's current revision"
+          ~document:document.document_id ~current_revision:document.current_revision ()
+      else session_apply_edit document fields
+  | "metrics" ->
+      Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":\"metrics\",\"metrics\":%s}"
+        (session_metrics_json ())
+  | _ -> raise (Session_error ("PEP_SESSION_UNKNOWN_OPERATION", "Unsupported session operation '" ^ operation ^ "'"))
+
+let session_operation_hint = function
+  | JObject fields -> (match session_member fields "op" with Some (JString op) -> Some op | _ -> None)
+  | _ -> None
+
+let run_session_jsonl () =
+  let rec loop () =
+    try
+      let line = input_line stdin in
+      let response =
+        try
+          let request = parse_json line in
+          (try session_process request with
+           | Session_error (code, message) ->
+               session_error_json (session_operation_hint request) code message ())
+        with Json_parse_error message -> session_error_json None "PEP_SESSION_MALFORMED_JSON" message ()
+      in
+      print_endline response;
+      flush stdout;
+      loop ()
+    with End_of_file -> ()
+  in
+  loop ()
+
 let read_file path = let ic=open_in_bin path in Fun.protect ~finally:(fun()->close_in ic)(fun()->really_input_string ic (in_channel_length ic))
-let usage () = prerr_endline "usage: pep describe [--json] | inspect|check|run FILE [--json] | query FILE --holes --json [--offset N]";exit 2
+let usage () = prerr_endline "usage: pep describe [--json] | inspect|check|run FILE [--json] | query FILE --holes --json [--offset N] | session --jsonl";exit 2
 let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\"],\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
+  |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in
     if command="inspect" then print_endline("{\"schemaVersion\":2,\"status\":\"parsed\",\"ast\":"^ast_json tops^"}") else

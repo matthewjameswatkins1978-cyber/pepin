@@ -12,6 +12,7 @@ if ($Arguments -and $Arguments.Count -gt 0 -and $Arguments[0] -in @('help', '-h'
   Write-Output '  .\pep.ps1 check FILE [--json]'
   Write-Output '  .\pep.ps1 query FILE --holes --json [--offset BYTE]'
   Write-Output '  .\pep.ps1 run FILE'
+  Write-Output '  .\pep.ps1 session --jsonl'
   Write-Output ''
   Write-Output 'Use query to inspect typed holes and compatible in-scope bindings.'
   exit 0
@@ -21,12 +22,17 @@ if (-not $Arguments -or $Arguments.Count -eq 0) {
   exit 2
 }
 $Command = $Arguments[0]
-if ($Command -notin @('describe', 'inspect', 'check', 'query', 'run')) {
+if ($Command -notin @('describe', 'inspect', 'check', 'query', 'run', 'session')) {
   Write-Error "unknown command '$Command'"
   exit 2
 }
+$SessionJsonl = $Command -eq 'session'
+if ($SessionJsonl -and ($Arguments.Count -ne 2 -or $Arguments[1] -ne '--jsonl')) {
+  Write-Error 'usage: .\pep.ps1 session --jsonl'
+  exit 2
+}
 $SourceFile = $null
-if ($Command -ne 'describe') {
+if ($Command -ne 'describe' -and -not $SessionJsonl) {
   if ($Arguments.Count -lt 2 -or $Arguments[1].StartsWith('-')) { Write-Error "usage: .\pep.ps1 $Command FILE [options]"; exit 2 }
   $SourceFile = $Arguments[1]
 }

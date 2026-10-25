@@ -88,7 +88,8 @@ Future implementation packets applying this resolution must include evidence app
 - interpreter-versus-generated-C behavior checks before the C11 backend is described as accepted.
 
 ## 13. Implementation status at publication
+The OCaml seed provides bidirectional synthesis/checking, explicit partial checked expressions for holes, original UTF-8 byte spans, LF/CRLF line reporting, versioned JSON responses, and an interpreter that refuses incomplete programs. These facts are documented in [SEED_LANGUAGE.md](SEED_LANGUAGE.md) and exercised by the Windows CLI suite.
 
-The OCaml seed already has bidirectional synthesis/checking in its checker, explicit partial checked expressions for holes, original UTF-8 byte spans, LF/CRLF tests, deterministic versioned JSON responses, and an interpreter that refuses incomplete programs. Those are current seed facts documented in `SEED_LANGUAGE.md` and exercised by the Windows CLI suite.
+Implementation packet A2 adds an in-process, ephemeral JSONL session with immutable source revisions, SHA-256 revision IDs, revision-bound hole identities, stale-checked raw byte edits, retained prior analyses, and a cache for repeated analysis of the same revision. The session reuses the existing parser and checker. Every changed revision is fully parsed and checked; there is no cross-revision incremental reuse.
 
-The seed does not yet provide immutable revisioned document snapshots, revision-bound query identities, structural source edits, parametric containers, an extension boundary or activation flow, or a Pep-written C11 generator. Those remain future work under the binding decisions above.
+Compiler-backed structural edits, parametric containers, an extension boundary or activation flow, and a Pep-written C11 generator remain unimplemented. The raw session edit is not yet a structural refactoring operation.

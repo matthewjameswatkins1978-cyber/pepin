@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import subprocess
@@ -15,12 +16,167 @@ def invoke(*args):
     )
 
 
+def invoke_session(requests):
+    payload = "\n".join(json.dumps(item, ensure_ascii=False) for item in requests) + "\n"
+    return subprocess.run(
+        ["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+        cwd=ROOT, text=True, input=payload, capture_output=True, check=False,
+    )
+
+
 class PepCliTests(unittest.TestCase):
+    def test_session_revision_hash_matches_sha256_for_multiblock_source(self):
+        source = 'say("x")\n' * 12
+        result = invoke_session([{"schemaVersion": 3, "op": "open", "source": source}])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened = json.loads(result.stdout)
+        self.assertEqual(opened["revision"], "sha256:" + hashlib.sha256(source.encode()).hexdigest())
+
+    def test_session_revisions_queries_and_analysis_cache(self):
+        source = 'fn double(n: Int) -> Int { return ?calculation }\n'
+        opened, query_a, query_b, metrics = [
+            {"schemaVersion": 3, "op": "open", "name": "example", "source": source},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": "REVISION"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": "REVISION"},
+            {"schemaVersion": 3, "op": "metrics"},
+        ]
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        query_a["revision"] = revision
+        query_b["revision"] = revision
+        result = invoke_session([opened, query_a, query_b, metrics])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(responses[0]["revision"], revision)
+        self.assertEqual(responses[1], responses[2])
+        for key in ("status", "ast", "typedTree", "holes", "diagnostics"):
+            self.assertEqual(responses[0][key], responses[1][key])
+        self.assertEqual(responses[1]["status"], "incomplete")
+        hole = responses[1]["holes"][0]
+        self.assertEqual(hole["expectedType"], "Int")
+        self.assertEqual(hole["identity"]["revision"], revision)
+        self.assertGreaterEqual(responses[3]["metrics"]["cache_hits"], 2)
+        self.assertEqual(responses[3]["metrics"]["parse_count"], 1)
+        self.assertEqual(responses[3]["metrics"]["typecheck_count"], 1)
+
+    def test_session_edit_preserves_old_revision_and_rejects_stale_edit(self):
+        source = "let value: Int = ?todo\n"
+        original_file = self.source(source)
+        original_bytes = original_file.read_bytes()
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": source.index("?todo"), "end_byte": source.index("?todo") + 5, "replacement": "1"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": revision},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": 0, "end_byte": 0, "replacement": " "},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": "sha256:" + hashlib.sha256(b"let value: Int = 1\n").hexdigest()},
+        ]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, edited, old, stale, current = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(opened["revision"], revision)
+        self.assertNotEqual(edited["revision"], revision)
+        self.assertEqual(old["status"], "incomplete")
+        self.assertEqual(len(old["holes"]), 1)
+        self.assertEqual(stale["error"]["code"], "PEP_STALE_REVISION")
+        self.assertEqual(stale["currentRevision"], edited["revision"])
+        self.assertEqual(current["status"], "valid")
+        fresh = json.loads(invoke("check", self.source("let value: Int = 1\n"), "--json").stdout)
+        self.assertEqual(current["typedTree"], fresh["typedTree"])
+        self.assertEqual(original_file.read_bytes(), original_bytes)
+
+    def test_session_edit_validates_byte_ranges_and_utf8_boundaries(self):
+        source = 'say("é")\n'
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        start = source.encode().index("é".encode())
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": start + 1, "end_byte": start + 2, "replacement": "x"},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": -1, "end_byte": 0, "replacement": ""},
+            {"schemaVersion": 3, "op": "metrics"},
+        ]
+        responses = [json.loads(line) for line in invoke_session(requests).stdout.splitlines()]
+        self.assertEqual(responses[1]["error"]["code"], "PEP_UTF8_BOUNDARY")
+        self.assertEqual(responses[2]["error"]["code"], "PEP_INVALID_EDIT_RANGE")
+        self.assertEqual(responses[3]["metrics"]["parse_count"], 1)
+
+    def test_session_malformed_json_does_not_end_process(self):
+        payload = "{not json}\n" + json.dumps({"schemaVersion": 3, "op": "open", "source": 'say("ok")\n'}) + "\n"
+        result = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+                                cwd=ROOT, text=True, input=payload, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(responses[0]["error"]["code"], "PEP_SESSION_MALFORMED_JSON")
+        self.assertEqual(responses[1]["status"], "valid")
+
+    def test_session_keeps_lf_and_crlf_offsets_in_original_bytes(self):
+        sources = ['let greeting: Str = "café"\n?x\n', 'let greeting: Str = "café"\r\n?x\r\n']
+        requests = [{"schemaVersion": 3, "op": "open", "source": source} for source in sources]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        holes = [response["holes"][0] for response in responses]
+        self.assertEqual([hole["span"]["start"]["line"] for hole in holes], [2, 2])
+        self.assertEqual(holes[1]["span"]["start"]["offset"] - holes[0]["span"]["start"]["offset"], 1)
+
+    def test_session_new_revision_reports_type_errors_then_validity(self):
+        source = 'fn amount(seed: Int) -> Int { return ?answer }\n'
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        hole = source.index("?answer")
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": hole, "end_byte": hole + len("?answer"), "replacement": '"bad"'},
+        ]
+        invalid_source = source.replace("?answer", '"bad"')
+        invalid_revision = "sha256:" + hashlib.sha256(invalid_source.encode()).hexdigest()
+        requests.extend([
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": invalid_revision},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": invalid_revision,
+             "start_byte": hole, "end_byte": hole + len('"bad"'), "replacement": "seed"},
+        ])
+        valid_source = source.replace("?answer", "seed")
+        valid_revision = "sha256:" + hashlib.sha256(valid_source.encode()).hexdigest()
+        requests.append({"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": valid_revision})
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, invalid_edit, invalid, valid_edit, valid = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(opened["status"], "incomplete")
+        self.assertNotEqual(invalid_edit["revision"], revision)
+        self.assertEqual(invalid["status"], "invalid")
+        self.assertEqual(invalid["diagnostics"][0]["code"], "PEP_TYPE_MISMATCH")
+        self.assertEqual(valid_edit["status"], "valid")
+        self.assertEqual(valid["status"], "valid")
+
+    def test_session_edit_before_function_recalculates_spans(self):
+        source = 'fn f(n: Int) -> Int { return ?x }\n'
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": 0, "end_byte": 0, "replacement": "\n"},
+        ]
+        edited = source[:0] + "\n" + source
+        new_revision = "sha256:" + hashlib.sha256(edited.encode()).hexdigest()
+        requests.append({"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": new_revision})
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, updated, queried = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(opened["holes"][0]["span"]["start"]["line"], 1)
+        self.assertEqual(updated["holes"][0]["span"]["start"]["line"], 2)
+        self.assertEqual(queried["holes"], updated["holes"])
+        self.assertEqual(queried["revision"], updated["revision"])
+
     def test_help_lists_supported_commands(self):
         result = invoke("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("query FILE --holes --json", result.stdout)
         self.assertIn("run FILE", result.stdout)
+        self.assertIn("session --jsonl", result.stdout)
 
     def source(self, text):
         temp = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".pep", delete=False, newline="")
@@ -109,6 +265,9 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(description["schemaVersion"], 2)
         self.assertEqual(description["types"], ["Int", "Bool", "Str", "Unit"])
         self.assertIn("query_holes", description["features"])
+        self.assertIn("jsonl_session", description["features"])
+        self.assertEqual(description["session"]["schemaVersion"], 3)
+        self.assertFalse(description["session"]["crossRevisionReuse"])
 
 
     def test_recursive_factorial_runs(self):
