@@ -1,172 +1,165 @@
 # Pep C23 backend feasibility report
 
-Mission: `PEP-C23-RESEARCH-01`
-Baseline: reviewed A11 SHA `3fb83b7fb9eeb82674f12b021b1f21f2d677c795`
+Mission: `PEP-C23-PROOF-02` (continuation of `PEP-C23-RESEARCH-01`)
+Reviewed base: `e1df2a2a8b17026848889ecbec8fd932ee7b19eb`
 Branch: `exp/c23-feasibility`
 
-## Result in one sentence
+## Result
 
-The proposed representation is technically implementable as a small portable
-C23-mode runtime, but this Windows checkout has no installed Clang or GCC, so
-native compilation, Windows ABI validation, cross-compiler agreement, code-size
-measurement, and runtime benchmarking remain open acceptance work.
+The isolated C23 corpus now has genuine Windows compilation and execution
+evidence with Clang and GCC. Both strict builds and both runtime executables
+pass. The checked-AST-to-C23 contract remains a proposal for A14; this work
+does not implement an emitter, native Pep compiler, A14, or a language change.
 
-This branch contains experiments only. It does not implement A14, a Pep-written
-emitter, a native backend, or a language-semantics change.
+## Toolchains and environment
 
-## Toolchain reality
+Evidence was collected on 2026-10-26 from Windows PowerShell 7.6.9 in the
+repository checkout. Both compilers were installed user-scoped with Scoop;
+system configuration and administrator privileges were not used.
 
-The local checks were made on 2026-10-26 from PowerShell 7.6.9. Neither compiler
-was callable from PATH. The following bounded installation locations were also
-absent:
+| Compiler | Actual executable | Version / target | C23 preprocessor evidence |
+|---|---|---|---|
+| Clang | `C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe` | LLVM/Clang 23.1.4, `x86_64-pc-windows-msvc`, POSIX thread model | `__STDC_VERSION__ 202311L`, `__clang__ 1` |
+| GCC | `C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe` | MinGW-Builds GCC 16.2.0, `x86_64-posix-seh-rev1` | `__STDC_VERSION__ 202311L`, `__GNUC__ 16` |
 
-| Candidate | Result |
-|---|---|
-| `clang` | unavailable |
-| `gcc` | unavailable |
-| `clang-cl` / MSVC `cl` | unavailable |
-| MSYS2 `C:\msys64\clang64\bin\clang.exe` | absent |
-| MSYS2 `C:\msys64\clang64\bin\gcc.exe` | absent |
-| LLVM `C:\Program Files\LLVM\bin\clang.exe` | absent |
-| Visual Studio LLVM path | absent |
-| TinyCC / Zig | unavailable |
-| Docker Linux engine | daemon unavailable |
-| WSL Ubuntu | installed but stopped |
+The reproducible strict command is:
 
-Consequently there is no truthful local `clang --version`, `gcc --version`,
-`-std=c23` feature result, executable, or native output to report. The build
-driver records this explicitly as `UNAVAILABLE|clang`, `UNAVAILABLE|gcc` and
-returns exit code 2. It never substitutes `c11` or `gnu23`.
+```text
+<compiler> -std=c23 -Wall -Wextra -Wpedantic -Werror -O2 -I experiments/c23_feasibility c23_runtime.c <probe> -o <output>
+```
 
-The next toolchain gate must use the actual installed MSYS2 CLANG64 or another
-verified Windows-compatible C23 toolchain, with Clang primary and GCC as the
-independent cross-check, exactly as required by Technical Resolution 002.
+The driver records the resolved path, version and command. Discovery order is
+explicit override (`PEP_C23_CLANG` / `PEP_C23_GCC`), PATH, then the shared
+`toolchain_paths.json` known-location manifest. `-Discover` reports availability
+without compiling. A missing compiler is `UNAVAILABLE|name` with exit code 2;
+an invoked compiler failure is a nonzero failure other than 2.
 
-## Corpus and representation findings
+The C23 language probe compiled and ran under both compilers. It exercises
+`constexpr`, `static_assert`, `nullptr`, `typeof_unqual` and standard alignment.
+Clang accepts the standard named `nullptr_t` typedef from `<stddef.h>`. The
+MinGW GCC headers do not: a direct strict compile rejects `nullptr_t`, although
+GCC accepts `nullptr` and `typeof_unqual`. The shared probe therefore uses
+`typeof_unqual(nullptr)` so the language feature proof remains cross-compiler,
+and this header portability limitation is recorded rather than hidden.
 
-The isolated source in this directory covers the following candidate ABI:
+## Native proof results
 
-| Pep value/operation | Experiment | Current disposition |
+Both compilers built the language probe and runtime probe with exit code 0.
+Both runtime executables returned exit code 0 and printed
+`SUMMARY|failures=0`.
+
+The runtime proof covers:
+
+- checked signed 64-bit add, subtract, multiply, divide and negation;
+- division by zero and minimum-integer division by `-1`;
+- valid UTF-8, embedded NUL bytes and rejection of overlong UTF-8;
+- `bool`, explicit Unit and immutable record field access;
+- arena-backed recursive tagged unions, recursive evaluation, depth and invalid-tag rejection;
+- immutable list copying, append preservation, range checking and overflow-safe allocation sizing;
+- recursive factorial overflow and iterative control-flow summation;
+- arena alignment against `_Alignof(max_align_t)`.
+
+The deterministic native/interpreter comparator is `compare_semantics.py`. Its
+JSON result is true for both compilers, with these six observable rows per
+compiler:
+
+```json
+{"expression":42,"record":42,"list_original":42,"list_extended":49,"factorial":120,"sum_to":5050}
+```
+
+This is an equality comparison of pinned observable values, not a claim that
+the current interpreter and C runtime share an implementation or ABI.
+
+Clang AddressSanitizer compilation also succeeds. On Windows the resulting
+executable requires LLVM's `clang_rt.asan_dynamic-x86_64.dll` directory on
+`PATH`; with that runtime directory supplied, the complete runtime proof exits
+0 with no sanitizer report. The missing-DLL first attempt is a deployment
+requirement, not a suppressed diagnostic.
+
+## Runtime and portability decisions
+
+| Pep value / operation | Experimental representation | Disposition |
 |---|---|---|
-| `Int` | fixed-width `int64_t` plus checked add/sub/mul/div/neg | recommended |
-| `Bool` | standard `bool` | recommended |
-| `Unit` | explicit one-byte value object | recommended; avoid zero-size extensions |
-| `Str` | `{ const unsigned char *data; size_t len; }` with strict UTF-8 validation | recommended |
-| immutable record | ordinary C struct passed/read through `const` APIs | recommended for emitted value records |
-| recursive union | tag plus union payload, arena-owned immutable graph | recommended starting model |
-| homogeneous list | owned element array with explicit length; append copies input | recommended baseline |
-| calls/recursion | ordinary C calls with checked recursive depth | recommended with depth/error policy |
-| pattern matching | `switch` over a closed tag enum, invalid tags rejected | recommended |
-| loops/control flow | ordinary `for`/`while` with checked arithmetic | recommended |
-| failure propagation | explicit `pep_status` and out parameters | recommended; deterministic |
+| `Int` | `int64_t` with checked operations | Recommended |
+| `Bool` | Standard `bool` | Recommended |
+| `Unit` | Explicit one-byte object | Recommended; no zero-size extension |
+| `Str` | `{ const unsigned char *data; size_t len; }`, strict UTF-8 | Recommended |
+| Immutable records | Ordinary C structs, ordered fields | Recommended |
+| Recursive unions | Explicit tag plus union payload, arena-owned immutable graph | Recommended starting model |
+| Homogeneous lists | Owned element array plus length; append copies | Safe baseline, not a final performance choice |
+| Calls and recursion | Ordinary C calls plus checked depth/error propagation | Recommended with explicit limits |
+| Pattern matching | `switch` over closed tag enum; invalid tags return status | Recommended |
+| Control flow | Ordinary `for` / `while` with checked arithmetic | Recommended |
+| Failure | Enumerated `pep_status` and out parameters | Recommended deterministic ABI |
 
-The C23 language probe intentionally tests C23 `constexpr`, `static_assert`,
-`nullptr`, `typeof_unqual`, and standard alignment. It is separate from the
-runtime probe so a compiler can report feature support independently. It has not
-been compiled on this host.
+The runtime checks signed overflow before C arithmetic, rejects division hazards,
+checks size multiplication and arena growth before allocation, preserves exact
+string lengths including embedded zeros, and disposes arena/list ownership at
+explicit boundaries. It does not use `long`, Windows APIs, compiler intrinsics,
+tagged pointers, NaN boxing, `assert`, `abort`, ambient `errno`, or compiler
+extensions.
 
-## Runtime hazards addressed
-
-- Signed overflow is checked before every arithmetic operation; the minimum
-  integer divided by `-1` and negated minimum integer are explicit overflow
-  cases.
-- Division by zero is a status, never a C operation.
-- UTF-8 is validated from byte ranges and rejects overlong encodings,
-  surrogates, out-of-range code points, and truncated sequences.
-- Strings carry a byte length, so embedded zero bytes do not truncate values.
-- Recursive values use arena blocks with stable addresses and one explicit
-  disposal point; no recursive destructor or ownership cycle is required for
-  the immutable expression experiment.
-- List append allocates a fresh array and leaves the input array unchanged.
-- Allocation-size multiplication and arena capacity growth are checked before
-  allocation.
-- Every runtime failure is an enumerated status rather than `errno`, an
-  assertion, an uninitialised output, or compiler-specific exception behaviour.
-- The runtime uses fixed-width integer types and standard-library facilities;
-  it does not use Windows APIs, compiler intrinsics, tagged pointers, NaN
-  boxing, or unportable `long` width assumptions.
-
-These are source-level design proofs until the same files pass strict Clang and
-GCC builds and executable tests.
-
-## Rejected approaches
-
-1. **NUL-terminated `char *` strings:** rejected because Pep strings and source
-   bytes may contain embedded zero bytes and require exact byte lengths.
-2. **C `long` for Pep `Int`:** rejected because its width is ABI-dependent on
-   Windows and other hosts; `int64_t` is the semantic contract.
-3. **Raw untagged C unions:** rejected because they make an invalid constructor
-   state indistinguishable from a valid value and make pattern-match failure
-   nondeterministic.
-4. **Tagged pointers or NaN boxing:** rejected for the first backend because
-   they add alignment, provenance, representation, and sanitiser hazards
-   without a demonstrated need in Pep's current checked value set.
-5. **Tracing GC or reference counting:** deferred. Immutable records, lists and
-   recursive values can use explicit arena ownership in the first ABI; GC would
-   add a second runtime policy before Pep has a measured lifetime requirement.
-6. **`assert`, `abort`, or ambient `errno`:** rejected as the semantic error
-   channel because they do not provide deterministic Pep diagnostics or
-   composable failure propagation.
-
-## Interpreter comparison
-
-The current OCaml interpreter is the semantic oracle. The repository's pinned
-examples produced these exact outputs during this mission:
-
-| Pep source | Output |
-|---|---|
-| `examples/hello.pep` | `Hello, Pep!` |
-| `examples/point_sum.pep` | `42` |
-| `examples/recursive_expr.pep` | `42` |
-| `examples/a6_collections_control.pep` | `42`, `0`, `1`, `17`, `22`, `10`, `0`, `1`, `42` |
-
-The C probe mirrors the same observable cases where the current language has
-them: `20 + 22`, a recursive `Add(Number(20), Number(22))`, record field sum,
-list sum/append preservation, recursion, loop sum, and controlled arithmetic
-errors. No native comparison is claimed because no C compiler was available.
+Rejected or deferred alternatives are NUL-terminated strings, ABI-dependent
+`long`, untagged unions, tagged pointers/NaN boxing, and a tracing GC or
+reference-counting runtime before Pep has a measured lifetime requirement.
 
 ## A14 starting contract
 
-The future Pep-written emitter should receive an approved checked AST containing,
+The future Pep-written emitter should consume an approved checked AST containing,
 at minimum:
 
-1. stable node tags and source spans for expressions/statements;
-2. resolved binding and call IDs, parameter/result types, and recursion edges;
-3. nominal record IDs with ordered fields and their checked types;
-4. nominal union IDs with ordered constructor IDs, payload types, and an
-   exhaustiveness-checked match tree;
+1. stable node and statement tags with source spans;
+2. resolved binding IDs, call IDs, parameter/result types and recursion edges;
+3. nominal record IDs, ordered fields and checked field types;
+4. nominal union IDs, ordered constructor IDs, payload types and the checked,
+   exhaustive match tree;
 5. homogeneous list element types and explicit empty-list typing;
-6. string values as validated UTF-8 bytes plus length, not C source fragments;
-7. explicit control-flow and error sites, including checked arithmetic and
-   division hazards;
-8. a declared supported-feature set so unsupported nodes produce a structured
-   diagnostic before any C text is emitted.
+6. validated UTF-8 string bytes plus length, never C source fragments;
+7. explicit control-flow and checked-error sites for overflow and division;
+8. a supported-feature set so an unsupported node produces a structured
+   diagnostic before C text is emitted.
 
-The emitter/runtime boundary should expose a small status-returning ABI based on
-`int64_t`, `bool`, an explicit Unit value, length-delimited UTF-8 strings,
-by-value records, tagged unions with a documented ownership policy, and
-homogeneous list operations. The first ownership policy should be arena-backed
-immutable recursive values plus fresh owned list results; the emitter must not
-silently rely on C global state or host-specific allocation behaviour.
+The runtime boundary should expose the representations above and a documented
+ownership model: arena-backed immutable recursive values, fresh owned list
+results, and status/out-parameter failure propagation. The checked tree, not
+the emitter, owns semantic validation. The emitter must not infer types,
+silently lower unsupported features, rely on global mutable state, or depend on
+host-specific allocation behaviour.
 
-Generated C must be canonical for identical checked input: stable declaration
-and field order, stable helper names, stable formatting, no timestamps, no
-absolute paths, and no compiler-specific extensions. Acceptance must compile
-the same generated bytes with strict `-std=c23` Clang and GCC and compare both
-executables with the checked interpreter, including deterministic error cases.
+Identical checked input must produce canonical C23 bytes: stable declaration,
+field and helper ordering; stable formatting; no timestamps, absolute paths or
+compiler-specific extensions. Acceptance should compile identical generated
+bytes with strict Clang and GCC and compare both executables to the checked
+interpreter, including deterministic failures.
 
-## Next acceptance gate
+## Remaining blockers and next gate
 
-Install or expose a verified Windows-compatible C23 toolchain and rerun:
+- The GCC MinGW distribution's `<stddef.h>` named `nullptr_t` gap needs an A14
+  policy decision: avoid the typedef in generated C, or require a toolchain
+  header baseline that supplies it. The current corpus avoids the gap without
+  weakening `-std=c23`.
+- The ASan Windows executable needs an explicit runtime-DLL deployment rule.
+- This corpus does not yet measure generated-code size, allocation throughput,
+  deep-recursion limits, or a complete checked-AST emitter. Those are A14 work,
+  not evidence to invent here.
+- Native equivalence currently covers pinned scalar observables; it does not
+  prove arbitrary Pep programs or compiler-independent layout of future emitted
+  records/unions.
 
-```powershell
-.\experiments\c23_feasibility\build.ps1 -Compiler all -Probe
-python -m unittest discover -s tests -v
-```
+The next acceptance gate is Lucy's independent review of the pushed branch and
+the exact evidence below. A14 may begin only after the runtime contract,
+unsupported-feature diagnostics and toolchain/header policy are reviewed; no
+milestone pointer or master branch change is implied.
 
-The gate passes only when both language and runtime probes compile with their
-reported compilers under `-std=c23 -Wall -Wextra -Wpedantic -Werror`, the runtime
-probe exits with `SUMMARY|failures=0` under both compilers, the feature probe
-reports the required C23 facilities, and the output is compared against the
-interpreter oracle. Only after that evidence should A14 review decide whether
-the ABI is sufficient for an emitter implementation.
+## Evidence receipt
+
+- Strict targeted feasibility tests: 15/15 passed.
+- Clang language probe: compiled and executed, exit 0.
+- Clang runtime proof: compiled and executed, exit 0, `failures=0`.
+- GCC language probe: compiled and executed, exit 0.
+- GCC runtime proof: compiled and executed, exit 0, `failures=0`.
+- Clang ASan runtime proof: compiled and executed with LLVM runtime DLL path,
+  exit 0, `failures=0`.
+- Native/interpreter JSON comparison: Clang and GCC both `equal=true`.
+- Full repository regression suite: required at the final consequential
+  boundary; its result must be recorded in the final mission receipt.
