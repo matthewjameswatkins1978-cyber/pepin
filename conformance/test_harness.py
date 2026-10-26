@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 from . import harness
 from .generator import INT_MAX, INT_MIN, ArithmeticFault, boundary_vectors, checked_neg, generate_cases
+from .metamorphic import MetamorphicPair, compare_pair, pairs_for_case, semantic_signature
 
 
 class HarnessContractTests(unittest.TestCase):
@@ -294,6 +295,45 @@ class HarnessContractTests(unittest.TestCase):
             harness.run_grammar_generated(7, 1, 1, findings, stats)
         self.assertEqual(findings[0]["classification"], "confirmed-bug")
         self.assertEqual(findings[0]["expected"], case.expected_output)
+
+    def test_metamorphic_relations_are_deterministic_and_span_aware(self) -> None:
+        case = generate_cases(7, 1, 1)[0]
+        first = pairs_for_case(case)
+        second = pairs_for_case(case)
+        self.assertEqual(first, second)
+        self.assertEqual({pair.relation for pair in first}, {"line-ending", "trailing-comments"})
+        self.assertNotEqual(first[0].original, first[0].transformed)
+        left = {"status": "valid", "revision": "sha256:a", "span": {"start": 1}, "typed": {"type": "Int"}}
+        right = {"status": "valid", "revision": "sha256:b", "span": {"start": 99}, "typed": {"type": "Int"}}
+        self.assertEqual(semantic_signature(left), semantic_signature(right))
+
+    def test_metamorphic_synthetic_mismatch_is_classified(self) -> None:
+        left = {"status": "completed", "returncode": 0,
+                "response": {"status": "valid", "typed": {"type": "Int"}}}
+        right = {"status": "completed", "returncode": 0,
+                 "response": {"status": "invalid", "diagnostics": [{"code": "PEP_PARSE"}]}}
+        finding = compare_pair(left, right, "1\n", "1\n")
+        self.assertEqual(finding["classification"], "confirmed-bug")
+        self.assertIn("semantic", finding["detail"])
+
+    def test_metamorphic_runner_records_preserved_relation_and_fails_wrong_output(self) -> None:
+        case = generate_cases(7, 1, 1)[0]
+        pair = MetamorphicPair("pair-1", case.case_id, "line-ending", case.source,
+                               case.source.replace(b"\n", b"\r\n"), case.expected_output)
+        check = {"status": "completed", "returncode": 0,
+                 "response": {"status": "valid"}, "stdout": "", "stderr": ""}
+        good_run = {"status": "completed", "returncode": 0, "stdout": case.expected_output,
+                    "stderr": "", "response": {"status": "valid"}}
+        bad_run = dict(good_run)
+        bad_run["stdout"] = "wrong\n"
+        findings: list[dict[str, object]] = []
+        stats = self._grammar_stats() | {"metamorphicPairs": 0, "metamorphicPreserved": 0}
+        with patch.object(harness, "generate_cases", return_value=(case,)), \
+             patch.object(harness, "pairs_for_case", return_value=(pair,)), \
+             patch.object(harness, "cli_case", side_effect=[check, check, good_run, bad_run]):
+            harness.run_metamorphic(7, 1, 1, findings, stats)
+        self.assertEqual(stats["metamorphicPairs"], 1)
+        self.assertEqual(findings[0]["classification"], "confirmed-bug")
 
 
 if __name__ == "__main__":

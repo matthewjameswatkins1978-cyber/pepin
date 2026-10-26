@@ -23,8 +23,10 @@ from typing import Any, Callable, Iterable
 
 try:
     from .generator import boundary_vectors, generate_cases
+    from .metamorphic import compare_pair, pairs_for_case
 except ImportError:  # Running this file directly from the repository root.
     from generator import boundary_vectors, generate_cases
+    from metamorphic import compare_pair, pairs_for_case
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -612,6 +614,61 @@ def run_grammar_generated(seed: int, count: int, depth: int,
         })
 
 
+def run_metamorphic(seed: int, count: int, depth: int,
+                    findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Replay bounded source transformations against strict semantic oracles."""
+    for case in generate_cases(seed, count, depth):
+        for pair in pairs_for_case(case):
+            stats["metamorphicPairs"] += 1
+            original_check = cli_case(pair.origin_case_id + "-meta-original", pair.original, "check")
+            transformed_check = cli_case(pair.pair_id, pair.transformed, "check")
+            original_contract, original_detail = check_result_contract(original_check, expected_status="valid")
+            transformed_contract, transformed_detail = check_result_contract(transformed_check, expected_status="valid")
+            if not original_contract or not transformed_contract:
+                classification = ("infrastructure-failure" if
+                                  (original_check.get("status") != "completed" or
+                                   transformed_check.get("status") != "completed" or
+                                   not isinstance(original_check.get("response"), dict) or
+                                   not isinstance(transformed_check.get("response"), dict))
+                                  else "confirmed-bug")
+                append_finding(findings, stats, {
+                    "caseId": pair.pair_id, "kind": "metamorphic",
+                    "classification": classification,
+                    "detail": "Metamorphic check contract was not preserved",
+                    "relation": pair.relation,
+                    "contract": {"original": original_detail, "transformed": transformed_detail},
+                    "evidence": {"original": original_check, "transformed": transformed_check},
+                })
+                continue
+            original_run = cli_case(pair.origin_case_id + "-meta-original", pair.original, "run")
+            transformed_run = cli_case(pair.pair_id, pair.transformed, "run")
+            oracle = compare_pair(original_check, transformed_check,
+                                  original_run.get("stdout"), transformed_run.get("stdout"))
+            if (original_run.get("status") != "completed" or
+                    transformed_run.get("status") != "completed" or
+                    original_run.get("returncode") != 0 or transformed_run.get("returncode") != 0):
+                oracle = {"classification": "infrastructure-failure",
+                          "detail": "Metamorphic runtime process did not complete successfully",
+                          "original": original_run, "transformed": transformed_run}
+            elif (original_run.get("stdout") != pair.expected_output or
+                  transformed_run.get("stdout") != pair.expected_output):
+                oracle = {"classification": "confirmed-bug",
+                          "detail": "Metamorphic runtime output disagrees with the independent expected output",
+                          "expected": pair.expected_output,
+                          "originalOutput": original_run.get("stdout"),
+                          "transformedOutput": transformed_run.get("stdout")}
+            if oracle["classification"] == "missing-test":
+                stats["metamorphicPreserved"] += 1
+                note_classification(stats, "missing-test")
+            else:
+                append_finding(findings, stats, {
+                    "caseId": pair.pair_id, "kind": "metamorphic",
+                    "classification": oracle["classification"],
+                    "detail": oracle["detail"], "relation": pair.relation,
+                    "originCaseId": pair.origin_case_id, "oracle": oracle,
+                })
+
+
 def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     source = "fn double(n: Int) -> Int { return ?calculation }\n"
     rev = revision(source.encode())
@@ -854,6 +911,8 @@ def report_text(result: dict[str, Any]) -> str:
         ("grammarInvalid", "grammar-aware invalid cases"), ("grammarExpectedOutput", "grammar output checks"),
         ("grammarExpectedRejection", "grammar expected rejections"),
         ("grammarBoundaryVectors", "independent integer boundary vectors"),
+        ("metamorphicPairs", "metamorphic source pairs"),
+        ("metamorphicPreserved", "metamorphic relations preserved"),
         ("expectedRejection", "expected rejections"), ("controlledRuntimeFailures", "controlled runtime failures"),
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
@@ -910,6 +969,7 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         "grammarGenerated": 0, "grammarValid": 0, "grammarInvalid": 0,
         "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
         "grammarBoundaryVectors": len(boundary_vectors()),
+        "metamorphicPairs": 0, "metamorphicPreserved": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
         "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
         "classificationCounts": {},
@@ -929,6 +989,8 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         run_generated(seed, args.count, findings, stats)
         if args.grammar_count:
             run_grammar_generated(seed, args.grammar_count, args.grammar_depth, findings, stats)
+        if args.metamorphic_count:
+            run_metamorphic(seed, args.metamorphic_count, args.grammar_depth, findings, stats)
     session_invariants(findings, stats)
     if args.reduce:
         reduce_findings(findings, args.reduce)
@@ -936,7 +998,8 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
     git_branch = run_bounded(["git", "branch", "--show-current"], timeout=3)
     lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
                    "--count", str(args.count), "--grammar-count", str(args.grammar_count),
-                   "--grammar-depth", str(args.grammar_depth), "--timeout", str(args.timeout),
+                   "--grammar-depth", str(args.grammar_depth), "--metamorphic-count", str(args.metamorphic_count),
+                   "--timeout", str(args.timeout),
                    "--reduce", str(args.reduce)]
     if args.a11:
         lab_command.append("--a11")
@@ -962,13 +1025,16 @@ def main() -> int:
                         help="bounded grammar-aware valid/invalid pairs per seed (0 disables)")
     parser.add_argument("--grammar-depth", type=int, default=2,
                         help="maximum recursive expression depth for grammar cases")
+    parser.add_argument("--metamorphic-count", type=int, default=0,
+                        help="valid grammar cases per seed to replay under source transformations (0 disables)")
     parser.add_argument("--timeout", type=float, default=8.0, help="documented process timeout")
     parser.add_argument("--reduce", type=int, default=2, help="confirmed findings to reduce")
     parser.add_argument("--a11", action="store_true", help="run the existing bounded A11 lexer differential suite")
     parser.add_argument("--a11-timeout", type=float, default=180.0, help="timeout for inherited A11 evidence")
     args = parser.parse_args()
-    if args.count < 1 or args.count > 100 or args.grammar_count < 0 or args.grammar_count > 100 or args.reduce < 0:
-        parser.error("count must be 1..100, grammar-count must be 0..100 and reduce must be nonnegative")
+    if (args.count < 1 or args.count > 100 or args.grammar_count < 0 or args.grammar_count > 100 or
+            args.metamorphic_count < 0 or args.metamorphic_count > 100 or args.reduce < 0):
+        parser.error("count must be 1..100, grammar-count/metamorphic-count must be 0..100 and reduce must be nonnegative")
     if args.grammar_depth < 0 or args.grammar_depth > 5:
         parser.error("grammar-depth must be 0..5")
     if args.timeout <= 0 or args.a11_timeout <= 0:

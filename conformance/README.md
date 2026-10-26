@@ -35,6 +35,18 @@ These vectors are recorded as model evidence; they do not silently stand in
 for compiler execution. A12 parser topology remains gated and is not imported
 by this tier.
 
+## Metamorphic tier
+
+`conformance/metamorphic.py` provides two reviewed relations for valid generated
+cases: switching LF/CRLF line endings and adding lexer comments at line ends.
+The runner is enabled with `--metamorphic-count N`; each selected valid case
+normally yields two bounded pairs. Both checks must remain valid, both runs must
+match the independent expected output, and a span/revision-insensitive semantic
+signature must agree. A transformed case that differs only in source offsets is
+therefore not a false finding, while a synthetic mismatch is a fatal harness
+test. The relation itself is pure and deterministic, making it suitable for
+future source-aware reduction without importing a Pep parser.
+
 ## Run
 
 From the repository root:
