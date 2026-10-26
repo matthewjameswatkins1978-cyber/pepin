@@ -18,6 +18,7 @@ static void check_true(const char *name, bool condition) {
 static void check_status(const char *name, pep_status actual, pep_status expected) {
     if (actual == expected) {
         printf("PASS|%s|%s\n", name, pep_status_name(actual));
+        printf("OBS|%s|%s\n", name, pep_status_name(actual));
     } else {
         printf("FAIL|%s|got=%s|expected=%s\n", name,
                pep_status_name(actual), pep_status_name(expected));
@@ -28,6 +29,7 @@ static void check_status(const char *name, pep_status actual, pep_status expecte
 static void check_i64(const char *name, int64_t actual, int64_t expected) {
     if (actual == expected) {
         printf("PASS|%s|%" PRId64 "\n", name, actual);
+        printf("OBS|%s|%" PRId64 "\n", name, actual);
     } else {
         printf("FAIL|%s|got=%" PRId64 "|expected=%" PRId64 "\n", name, actual, expected);
         failures += 1;
@@ -64,6 +66,8 @@ int main(void) {
 
     pep_arena arena;
     check_status("arena_init", pep_arena_init(&arena, 64), PEP_OK);
+    void *aligned = pep_arena_alloc(&arena, sizeof(int64_t), _Alignof(max_align_t));
+    check_true("arena_alignment", aligned != NULL && ((uintptr_t)aligned % _Alignof(max_align_t)) == 0);
     pep_expr *left = pep_expr_number(&arena, 20);
     pep_expr *right = pep_expr_number(&arena, 22);
     pep_expr *expression = pep_expr_add(&arena, left, right);
@@ -85,6 +89,9 @@ int main(void) {
     check_i64("list_sum_extended_result", value, 49);
     check_true("list_append_preserves_input", original.len == 3 && original.items[2] == 20);
     check_status("list_get_range", pep_list_get(&original, 3, &value), PEP_ERR_RANGE);
+    const int64_t allocation_guard = 0;
+    pep_i64_list rejected = { 0, NULL };
+    check_status("list_allocation_overflow", pep_list_from_array(&allocation_guard, SIZE_MAX, &rejected), PEP_ERR_ALLOCATION);
     pep_list_dispose(&original);
     pep_list_dispose(&extended);
 
