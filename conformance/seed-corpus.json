@@ -1,0 +1,19 @@
+{
+  "schema": "pepin-conformance/v1",
+  "base": "3fb83b7fb9eeb82674f12b021b1f21f2d677c795",
+  "defaultSeeds": [20261026, 1101, 1201],
+  "fixedCorpus": "all examples/*.pep files at the run revision",
+  "families": [
+    "valid execution and checked semantics",
+    "invalid syntax and type rejection",
+    "runtime bounds and arithmetic failures",
+    "revision, cache, malformed-session, and open_bytes invariants"
+  ],
+  "timeoutSeconds": 8,
+  "outputs": [
+    "_build/conformance/results.json",
+    "_build/conformance/report.md",
+    "_build/conformance/corpus",
+    "_build/conformance/counterexamples"
+  ]
+}
