@@ -1,5 +1,5 @@
 # A8: First compiler-aware development tool written in Pep
-**Status: QUEUED until A7 accepted.** Final already scoped phase of the A6–A8 campaign.
+**Status: READY.** Final already scoped phase of the A6–A8 campaign, after accepted and published A7.
 
 ## Objective
 Implement **unused-function reachability analysis in ordinary Pep source** and run it through the existing versioned tool registry. The host supplies immutable checked facts, but **does not compute the answer**.

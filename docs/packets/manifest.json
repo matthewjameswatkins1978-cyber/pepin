@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "current": "A7",
-  "lastAccepted": "A6",
-  "lastAcceptedCommit": "4d3bceff7be0f013d08310cf8e75eb5a1f365556",
+  "current": "A8",
+  "lastAccepted": "A7",
+  "lastAcceptedCommit": "e97382a92bb27b4724099425c5bfaf126a983cb8",
   "policy": {
     "ready": "current implementation",
     "queued": "existing A6-A8 campaign after previous acceptance",
@@ -21,7 +21,7 @@
     {
       "id": "A7",
       "path": "docs/packets/A7-TYPED-SEMANTIC-API.md",
-      "status": "ready",
+      "status": "completed",
       "dependsOn": [
         "A6"
       ]
@@ -29,7 +29,7 @@
     {
       "id": "A8",
       "path": "docs/packets/A8-PEP-WRITTEN-ANALYSER.md",
-      "status": "queued",
+      "status": "ready",
       "dependsOn": [
         "A7"
       ]

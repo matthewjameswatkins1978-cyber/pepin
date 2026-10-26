@@ -4,8 +4,8 @@ This is the canonical packet index. For any implementation handoff, **start at [
 | Stage | Packet | Status | Dependency |
 |---|---|---|---|
 | A6 | [A6](A6-COLLECTIONS-AND-CONTROL-FLOW.md) | completed | A5 |
-| A7 | [A7](A7-TYPED-SEMANTIC-API.md) | ready | A6 |
-| A8 | [A8](A8-PEP-WRITTEN-ANALYSER.md) | queued | A7 |
+| A7 | [A7](A7-TYPED-SEMANTIC-API.md) | completed | A6 |
+| A8 | [A8](A8-PEP-WRITTEN-ANALYSER.md) | ready | A7 |
 | A9 | [A9](A9-DEVELOPMENT-TOOLS.md) | provisional | A8 |
 | A10 | [A10](A10-COMPILER-FOUNDATION-LIBRARY.md) | provisional | A8 |
 | A11 | [A11](A11-PEP-WRITTEN-LEXER.md) | provisional | A10 |

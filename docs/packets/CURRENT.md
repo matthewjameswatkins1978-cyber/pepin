@@ -2,15 +2,15 @@
 
 This is the **one stable entry URL** for implementation agents. Do not guess the next task from conversation history or the newest commit.
 
-## Authorised next phase: A7
-**[Read and execute A7: Typed compiler semantics exposed to Pep](A7-TYPED-SEMANTIC-API.md).** This is the next phase in the already-scoped A6–A8 campaign. A8 remains queued until A7 is accepted and published.
+## Authorised next phase: A8
+**[Read and execute A8: First compiler-aware development tool written in Pep](A8-PEP-WRITTEN-ANALYSER.md).** A7 is accepted and published; A8 is the final already-scoped phase of the A6–A8 campaign.
 
-Last verified implementation milestone is A6 at [4d3bcef](https://github.com/matthewjameswatkins1978-cyber/pepin/commit/4d3bceff7be0f013d08310cf8e75eb5a1f365556), with **67/67 tests passing** (56 OCaml CLI, including 11 A6 tests; 11 historical MoonBit CLI). See the [A6 acceptance record](archive/A6-ACCEPTANCE-RECORD.md). Master includes the follow-up phase pointer update; inspect current HEAD, never reset to the A6 implementation commit.
+Last accepted implementation milestone is A7 at [e97382a](https://github.com/matthewjameswatkins1978-cyber/pepin/commit/e97382a92bb27b4724099425c5bfaf126a983cb8). The clean OCaml build succeeded; **50/50 primary OCaml/A7 tests** and **11/11 historical MoonBit tests** passed. See the [A7 packet](A7-TYPED-SEMANTIC-API.md) and inspect current HEAD before continuing.
 
 ## Progression
 - A6: completed and published.
-- A7: ready now.
-- A8: queued, only after accepted/published A7.
+- A7: completed and published.
+- A8: ready now.
 - A9–A15: provisional; not authorised without review after A8.
 
 ## Agent instructions

@@ -1,5 +1,5 @@
 # A7: Typed compiler semantics exposed to Pep
-**Status: READY.** Next authorised phase in the already-scoped A6–A8 campaign, following accepted and published A6.
+**Status: COMPLETED.** Published in [e97382a](https://github.com/matthewjameswatkins1978-cyber/pepin/commit/e97382a92bb27b4724099425c5bfaf126a983cb8); clean OCaml build and 50/50 primary OCaml/A7 tests passed, with 11/11 historical MoonBit tests passing.
 
 ## Objective
 Enable an authorised Pep function to inspect a target program's **compiler-resolved function declarations and call graph** without scanning source text or receiving a mutable AST.
