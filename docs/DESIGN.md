@@ -27,6 +27,10 @@ The following v0.3 commitments are not current compiler capabilities:
 - a Pep-written C23 generator (ISO/IEC 9899:2024) or self-hosted compiler.
 
 Same-revision cached analysis is implemented, but it does not constitute incremental compilation. A4 added records, recursive tagged unions, constructors, checked pattern matching, and match-arm holes. A5 added the in-process tool registry, test-vector validation, explicit activation, scalar invocation, side-effect rejection, runtime budgets, and hot replacement. A6 adds compiler-known lists and practical control flow; see the implemented list above. The local tool host is trusted and is not a sandbox. A Pep-written C23 generator and self-hosting remain future work. [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md) establishes the forward-looking C23 target; MoonBit A0's C11 generation is historical only. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the versioned message boundary and [packets/CURRENT.md](packets/CURRENT.md) for the next authorised packet.
+## Provisional AI-first execution/resource-boundary research (not implemented)
+
+The [26 October 2026 research note](RESEARCH_AI_FIRST_EXECUTION_2026-10-26.md) evaluates managed programming with checked resource domains, concurrent deep isolation, prepared real-time views, GPU submission lifetimes, library execution contracts, and machine-readable AI inspection. **It is not a binding technical resolution, not an implemented feature list, and not authorisation for A9–A15.** It deliberately leaves resource cycles, lease ownership, copy/projection guarantees, and cancellation details open until prototyped and tested.
+
 ## Planned implementation packets
 
 The [packet index](packets/README.md) lists A6–A15; [CURRENT](packets/CURRENT.md) identifies the only currently authorised phase. These documents are plans and must **never** be described as implemented capabilities before acceptance and published verification. A9–A15 are provisional pending review after A8.
