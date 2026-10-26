@@ -1,7 +1,7 @@
 # Pep C23 runtime ABI-04 report
 
-Mission: `PEP-C23-ABI-04`  
-Branch: `exp/c23-feasibility`  
+Mission: `PEP-C23-ABI-04`
+Branch: `exp/c23-feasibility`
 Scope: isolated C23 runtime and ABI experiments only. This is not an A14
 emitter, a native Pep compiler, a language-semantics change, or an A15 step.
 
@@ -164,8 +164,8 @@ and the absence of a generated-artifact differential test.
 - Interpreter/native comparison: six successes plus three comparable failures
   per compiler, with zero comparable counterexamples; native-only invalid
   states remain explicitly non-comparable.
-- Full repository regression is required at the final consequential boundary
-  and is reported in the final mission receipt.
+- Full repository regression: **105/105 passed** with
+  `python -m unittest discover -s tests -v`.
 
 ## NEXT GATE
 
