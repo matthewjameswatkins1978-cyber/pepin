@@ -7,7 +7,8 @@
     "ready": "currently authorised implementation phase; current is null during a review pause",
     "queued": "existing A6-A8 campaign after previous acceptance",
     "provisional": "design draft, requires separate approval",
-    "completed": "accepted public evidence"
+    "completed": "accepted public evidence",
+    "deferred": "provisional phase retained but deprioritised; not automatically scheduled"
   },
   "packets": [
     {
@@ -40,7 +41,8 @@
       "status": "provisional",
       "dependsOn": [
         "A8"
-      ]
+      ],
+      "priority": "deferred"
     },
     {
       "id": "A10",
@@ -48,7 +50,8 @@
       "status": "provisional",
       "dependsOn": [
         "A8"
-      ]
+      ],
+      "priority": "next-design-gate"
     },
     {
       "id": "A11",
@@ -56,7 +59,8 @@
       "status": "provisional",
       "dependsOn": [
         "A10"
-      ]
+      ],
+      "priority": "first-pep-compiler-component"
     },
     {
       "id": "A12",
@@ -90,5 +94,9 @@
         "A14"
       ]
     }
-  ]
+  ],
+  "nextRecommendedDesignGate": "A10",
+  "roadmapDecision": "lexer-first compiler foundations after A8; A9 deferred; no A10 implementation authorised",
+  "research": "docs/COMPILER_RESEARCH_AND_DECISIONS_2026-10.md",
+  "baselineMasterAtReview": "4132d3f953a370b0837d9a20fc73067f7f0c666f"
 }

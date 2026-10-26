@@ -1,22 +1,27 @@
-# A11: Pep-written lexer
-**PROVISIONAL / NOT YET AUTHORISED.** Depends on A10 byte/text/Result facilities.
+# A11: First real Pep-written compiler component, the lexer
 
-## Objective
-Port the language's **lexer algorithm** into ordinary Pep. Execute it under the OCaml interpreter first, using the current OCaml scanner as a differential oracle; never pass pre-tokenised OCaml output to the Pep lexer.
+**PROVISIONAL / NOT AUTHORISED.** Depends on a *verified* A10 byte-input and efficient token-accumulation slice; a planned packet or abstract library is not sufficient.
 
-## Contract
-- Return typed token kinds, values, original UTF-8 half-open byte spans and structured lexical errors.
-- Accept exact original source bytes, preserving LF/CRLF distinctions and documented Unicode column semantics; reject malformed UTF-8 and invalid escapes deterministically.
-- Cover implemented syntax, not a fantasy grammar: identifiers, keywords, numbers and overflow, strings and escapes, comments, operators, typed holes, Lists/control flow, functions, records, variants and patterns.
-- Separate decoding, token scanning and source-position calculation only where useful. Ordinary Pep data structures and explicit error values; no hidden host lexer, grammar generator or AI parser.
+## Outcome
 
-## Acceptance
-Golden corpus for every token class, invalid number/escape, EOF boundaries, comments between declarations, multi-byte UTF-8, LF/CRLF, invalid bytes, typed holes and nested expressions. Differential comparisons against OCaml for token kind/value/start-end byte spans/diagnostic kind. Store any counterexample and settle semantic disagreements explicitly. Real Pep source plus interpreter invocation are required; document performance on representative files and budget behavior.
+In ordinary `.pep` source, scan the original input bytes into typed tokens and structured errors, with the OCaml lexer supplying only the differential oracle. No host-computed token stream. OCaml remains the operational compiler authority during the staged transition.
 
-## Stop/non-scope
-No parser, type checker, native backend, new syntax for convenience or host-only lexical shortcuts. If Pep lacks a required primitive, return an evidenced minimal A10 repair instead of writing the scanner in OCaml.
+## Representation and performance rules
 
-## Standing acceptance and authority
-Before implementation inspect latest repository, AGENTS.md, docs/DESIGN.md, the real tests, Founding Design v0.3 and TR001/TR002. One Pep semantic authority; deterministic source-byte spans, typed holes, immutable revisions and versioned tool contracts. The host is trusted local, **not** a hostile-code sandbox. Preserve explicit host capabilities and resource limits. TR002 overrides earlier future C11 references with a **Pep-written C23 generator**, Clang primary and GCC independent verification.
+- Carry source document/revision and original half-open UTF-8 byte spans through every token/error. Preserve LF vs CRLF, invalid encoding behavior and the current language's line/column semantics separately from byte offsets.
+- Use the efficient A10 accumulation path proved by measurement. Avoid repeated immutable `append` when it would copy the growing token list. Keep public results immutable and tool transport bounded.
+- Represent token kinds/values with a small, inspectable typed model. Investigate compact token-kind IDs and integer offsets instead of repeating source substrings, but do not invent opaque process-global IDs or break revision-local identities.
+- Scanner must exercise implemented Pep grammar (not prospective features): names, keywords, i64 literals and overflow, strings and escapes, comments, operators, holes, Lists, loops, records, variants and match patterns.
+- Explicit error/no-progress guarantees at EOF and malformed input. Account for scanning, allocation, token materialization and transport work in budgets; do not hide large loops inside free host builtins.
 
-Use focused evidence during work, then full clean Windows suite (report OCaml/MoonBit separately), real examples, negative and adversarial tests, documentation, git diff --check, secret/path review. Publish verified work as a distinct commit to public master; preserve unrelated work, never force-push, report actual SHA/commands/results/limitations. Do not change CURRENT for an unaccepted phase. **This packet remains a provisional design draft until expressly authorised after A8 review.**
+## Differential acceptance
+
+Run real Pep lexer over a corpus of complete, incomplete and invalid source with escaped strings, adjacent tokens, long strings, integer limits, comments, nested syntax, source positions under Unicode and LF/CRLF, malformed UTF-8 and EOF. Compare token kinds, decoded token values, spans and relevant lexical diagnostics against the existing OCaml lexer. If the seed lacks a suitable token-output hook, add **test-only read-only instrumentation**, not a second production lexer or a runtime bypass.
+
+Measure at multiple file sizes and token densities; report wall-clock/steps/memory where available and growth ratios without inventing claims. Preserve counterexamples, make reference-behavior ambiguities explicit, and fix language inconsistencies by separately accepted resolution, not by copying a bug.
+
+## Exit / stop
+
+A fully checked Pep-written scanner runs in the interpreter and matches the defined corpus with evidence. This **does not** make Pep self-hosting or replace the OCaml production lexer. A12 parser remains a separate approval gate. If Pep lacks a primitive, return a narrow evidenced A10 change. No forced conversion to Tree-sitter or wholesale grammar replacement.
+
+For standing authority and verification, read [CURRENT](CURRENT.md), [packet index](README.md), [research](../COMPILER_RESEARCH_AND_DECISIONS_2026-10.md), AGENTS, DESIGN, session protocol and TR001/TR002. Record tested commit SHAs, real suite counts and limitations; push development slices without treating checkpoints as merge approval.
