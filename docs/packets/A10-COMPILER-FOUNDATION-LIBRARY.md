@@ -1,22 +1,36 @@
-# A10: Compiler-capable Pep library and bounded input
-**PROVISIONAL / NOT YET AUTHORISED.** Depends on evidence from accepted A6–A8; A9 may provide useful additional requirements but is not inherently prerequisite.
+# A10: Lexer-driven compiler foundations
 
-## Objective
-Equip Pep with the small set of data, text and fallible operations genuinely necessary to write its lexer, parser, checker and C23 generator **in Pep**, rather than disguising them as large OCaml builtins.
+**PROVISIONAL DESIGN GATE / NOT YET AUTHORISED TO IMPLEMENT.** This replaces the earlier broad foundation-library wish list with a bounded, executable goal. A8 is accepted; A9 is not a prerequisite. The destination is [A11, a Pep-written lexer](A11-PEP-WRITTEN-LEXER.md).
 
-## Candidate scope
-- Add compiler-privileged **Map[K,V]**, **Option[T]**, **Result[T,E]** only with documented key/equality constraints, immutable semantics and fully defined typing. List[T] originates at A6. No arbitrary user generics or undocumented type-class system.
-- Provide explicit **Str vs Bytes** semantics, byte slicing, UTF-8 decoding/errors, concatenation or bounded builders, integer conversion and raw original-byte offsets. Errors should be typed results, not silent sentinels.
-- A minimal, explicit **host source-input** operation, ideally supplying immutable source snapshots from an authorised session. Avoid ambient filesystem, network, environment or process access. If real file read is necessary, make it host granted, bounded, auditable and non-ambient.
-- Resource-budget limits for collection operations, source decoding, string construction and structured serialization. A compiler written in Pep needs scalable but predictable allocations, not an unaccounted built-in escape.
+## Objective and falsifier
 
-## Acceptance
-Write an ordinary Pep function that accepts source bytes, decodes a representative input, constructs token-like records using collections and returns a structured result/error with correct original UTF-8 spans. Test invalid encodings, denied input, oversized data, duplicate Map keys where defined, missing Option, Result propagation, nested containers and LF/CRLF positions. Verify type errors and backwards compatibility with A5/A7 extension protocols. Demonstrate every blessed primitive's concrete compiler use case.
+Equip ordinary Pep code to read an explicitly authorised original source-byte snapshot and construct a small, accurate token stream with errors in **time and memory that scale reasonably with input size**. Prove the facilities on a real Pep-written lexer slice rather than speculative standard-library completeness. The host may transport bytes and enforce budgets, but must not lex, pre-tokenize, decode away source positions or decide syntax.
 
-## Design gate
-First list language gaps observed in A8/A9 (where available). Remove any primitive without a demonstrated need; choose syntax, host signature and complexity before implementation. This is a library foundation, not a standard library ecosystem.
+## First inspect, then choose
 
-## Standing acceptance and authority
-Before implementation inspect latest repository, AGENTS.md, docs/DESIGN.md, the real tests, Founding Design v0.3 and TR001/TR002. One Pep semantic authority; deterministic source-byte spans, typed holes, immutable revisions and versioned tool contracts. The host is trusted local, **not** a hostile-code sandbox. Preserve explicit host capabilities and resource limits. TR002 overrides earlier future C11 references with a **Pep-written C23 generator**, Clang primary and GCC independent verification.
+Before changing compiler code:
+1. Inventory OCaml scanner API/diagnostics, Pep `List[T]` / `Str` / record / variant behavior, tool protocol v1/v2, interpreter steps and constraints, and tests.
+2. Establish corpus and baseline: byte length, token count, cold process startup, warm parse/check latency, run steps/peak memory if measurable, host/message cost and error latency. Distinguish source size from token count and report environment.
+3. **Demonstrate or rule out quadratic token construction**: A6 `append(list, item)` is O(n), so repeated append is O(n²) in item count. Compare small alternatives (reverse accumulation / one-pass builder / bounded compiler-known temporary collection / chunked representation) before selecting. Expose an immutable result at the public boundary and explicitly account for work, allocation and serialization. A temporary builder need not imply general mutable lists.
+4. Define exact `Bytes` / `Str` contract: original input bytes are the source coordinate system; avoid conflating byte length, Unicode scalar count and display column. Decide how malformed UTF-8 becomes an explicit error, and how LF/CRLF, BOM if supported and embedded NUL are treated from current lexer evidence.
+5. Choose minimal fallible operations and typed error representation. `Result[T,E]`, `Option[T]`, `Map[K,V]`, general generics and string builders remain **candidates**, not automatic scope; prefer existing tagged unions/records when adequate.
+6. Identify host authority: a revision-selected immutable source-byte value is explicit and bounded, with exact document/revision, no ambient filesystem, network, subprocess or access by guessed ID. Preserve typed holes and incomplete/invalid distinctions.
 
-Use focused evidence during work, then full clean Windows suite (report OCaml/MoonBit separately), real examples, negative and adversarial tests, documentation, git diff --check, secret/path review. Publish verified work as a distinct commit to public master; preserve unrelated work, never force-push, report actual SHA/commands/results/limitations. Do not change CURRENT for an unaccepted phase. **This packet remains a provisional design draft until expressly authorised after A8 review.**
+## Allowed scope after design approval
+
+Only the proven source-byte, scan, error and accumulation primitives needed for an ordinary Pep lexer vertical slice; checked signatures, consistent parser/checker/interpreter behavior, bounded runtime and versioned typed transport. Split into smaller coherent slices if beneficial. Changes must not silently alter A5 v1 scalar tools, A7 v2 semantic snapshots, A8 analyser, immutable document revisions or host-enforced grants.
+
+## Acceptance gate (to be finalised before implementation)
+
+- A **real Pep source** demonstration scans representative bytes into typed token-like records with accurate half-open original UTF-8 spans; no hidden OCaml tokenization.
+- Explicit errors for invalid encoding/escapes and EOF boundaries as applicable; Unicode and LF/CRLF fixtures, denied/stale target, oversized input, wrong values/versions and exhausted budget fail deterministically.
+- Validated token construction on at least three increasing input sizes (example: 1, 4, 16 KiB) with time and/or charged-work data; distinguish a proven asymptotic failure from noisy wall-clock effects. No unsupported promises of linearity or speed.
+- Lexer slice is usable through real checked Pep execution, not a mock JSON array. Test list/record serialization and preserve historical revision identity.
+- Full existing Windows suite, separate OCaml / historical MoonBit counts, CLI and JSONL negative paths, byte preservation, git diff --check, secret/path review, evidence capsule and documented new tool limits. Compare changed semantics to the current seed and settle disagreements explicitly.
+- Report the chosen construction strategy, rejected alternatives, observed measurements, revisions and what future A11 work remains.
+
+## Non-scope and stop
+
+No big compiler framework, mandatory Salsa/Tree-sitter dependency, full Map/Option/Result ecosystem, arbitrary mutable collections, cross-revision incremental compiler, concurrency, grammar redesign, general IO, native backend or self-hosting. If a dependency/representation materially changes Pep semantics or the authority boundary, stop for a consequential design decision. No code starts solely because this packet exists.
+
+Read [compiler research disposition](../COMPILER_RESEARCH_AND_DECISIONS_2026-10.md), [CURRENT](CURRENT.md), [AGENTS](../../AGENTS.md), [DESIGN](../DESIGN.md), [session protocol](../SESSION_PROTOCOL.md), Founding v0.3, TR001 and TR002 before implementation.
