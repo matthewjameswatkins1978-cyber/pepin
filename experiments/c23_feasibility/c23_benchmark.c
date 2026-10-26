@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #define PEP_BENCHMARK_MAX_SIZE (UINTMAX_C(1024) * UINTMAX_C(1024))
 
@@ -22,10 +25,37 @@ static bool parse_size(const char *text, size_t *out) {
     return true;
 }
 
-static uintmax_t wall_ns(void) {
+static bool monotonic_ns(uintmax_t *out) {
+#ifdef _WIN32
+    LARGE_INTEGER counter = { 0 };
+    LARGE_INTEGER frequency = { 0 };
+    if (!QueryPerformanceCounter(&counter) || !QueryPerformanceFrequency(&frequency) ||
+        counter.QuadPart < 0 || frequency.QuadPart <= 0) {
+        return false;
+    }
+    uintmax_t ticks = (uintmax_t)counter.QuadPart;
+    uintmax_t hz = (uintmax_t)frequency.QuadPart;
+    uintmax_t seconds = ticks / hz;
+    uintmax_t remainder = ticks % hz;
+    if (seconds > UINTMAX_MAX / UINTMAX_C(1000000000) ||
+        remainder > UINTMAX_MAX / UINTMAX_C(1000000000)) {
+        return false;
+    }
+    uintmax_t result = seconds * UINTMAX_C(1000000000);
+    uintmax_t fraction = (remainder * UINTMAX_C(1000000000)) / hz;
+    if (fraction > UINTMAX_MAX - result) return false;
+    *out = result + fraction;
+    return true;
+#else
     struct timespec stamp = { 0 };
-    if (timespec_get(&stamp, TIME_UTC) != TIME_UTC) return 0;
-    return (uintmax_t)stamp.tv_sec * UINTMAX_C(1000000000) + (uintmax_t)stamp.tv_nsec;
+    if (timespec_get(&stamp, TIME_UTC) != TIME_UTC || stamp.tv_sec < 0) return false;
+    uintmax_t seconds = (uintmax_t)stamp.tv_sec;
+    if (seconds > UINTMAX_MAX / UINTMAX_C(1000000000)) return false;
+    uintmax_t result = seconds * UINTMAX_C(1000000000);
+    if ((uintmax_t)stamp.tv_nsec > UINTMAX_MAX - result) return false;
+    *out = result + (uintmax_t)stamp.tv_nsec;
+    return true;
+#endif
 }
 
 static bool checked_operations(size_t size, size_t iterations, size_t *out) {
@@ -204,7 +234,8 @@ int main(int argc, char **argv) {
     uintmax_t checksum = 0;
     size_t bytes = 0;
     size_t reserved = 0;
-    uintmax_t start = wall_ns();
+    uintmax_t start = 0;
+    if (!monotonic_ns(&start)) return fail("clock unavailable");
     int status = 0;
     if (strcmp(name, "arithmetic") == 0) status = run_arithmetic(size, iterations, &checksum, &bytes, &reserved);
     else if (strcmp(name, "record") == 0) status = run_records(size, iterations, &checksum, &bytes, &reserved);
@@ -215,9 +246,15 @@ int main(int argc, char **argv) {
     else if (strcmp(name, "utf8") == 0) status = run_utf8(size, iterations, &checksum, &bytes, &reserved);
     else return fail("unknown benchmark case");
     if (status != 0) return status;
-    uintmax_t finish = wall_ns();
-    uintmax_t elapsed = finish >= start ? finish - start : 0;
-    printf("BENCH|case=%s|size=%zu|iterations=%zu|operations=%zu|checksum=%" PRIuMAX "|bytes=%zu|reserved=%zu|elapsed_ns=%" PRIuMAX "\n",
-           name, size, iterations, operations, checksum, bytes, reserved, elapsed);
+    uintmax_t finish = 0;
+    if (!monotonic_ns(&finish) || finish < start) return fail("clock moved backwards");
+    uintmax_t elapsed = finish - start;
+#ifdef _WIN32
+    const char *clock_name = "qpc";
+#else
+    const char *clock_name = "timespec_get_utc";
+#endif
+    printf("BENCH|case=%s|size=%zu|iterations=%zu|operations=%zu|checksum=%" PRIuMAX "|bytes=%zu|reserved=%zu|elapsed_ns=%" PRIuMAX "|clock=%s\n",
+           name, size, iterations, operations, checksum, bytes, reserved, elapsed, clock_name);
     return 0;
 }

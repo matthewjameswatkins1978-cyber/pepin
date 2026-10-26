@@ -47,6 +47,13 @@ static bool pep_allocator_valid(const pep_allocator *allocator) {
     return allocator != NULL && allocator->allocate != NULL && allocator->deallocate != NULL;
 }
 
+static bool pep_allocator_equal(const pep_allocator *left, const pep_allocator *right) {
+    return pep_allocator_valid(left) && pep_allocator_valid(right) &&
+        left->allocate == right->allocate &&
+        left->deallocate == right->deallocate &&
+        left->context == right->context;
+}
+
 const char *pep_status_name(pep_status status) {
     switch (status) {
     case PEP_OK: return "ok";
@@ -108,7 +115,7 @@ static bool pep_utf8_valid(const unsigned char *data, size_t len) {
 }
 
 pep_status pep_str_from_bytes(const unsigned char *data, size_t len, pep_str *out) {
-    if (len != 0 && data == NULL) {
+    if (out == NULL || (len != 0 && data == NULL)) {
         return PEP_ERR_RANGE;
     }
     if (!pep_utf8_valid(data, len)) {
@@ -320,6 +327,7 @@ pep_status pep_list_from_array_with_allocator(const int64_t *items, size_t len,
                                                const pep_allocator *allocator) {
     pep_allocator selected = pep_allocator_default();
     if (out == NULL) return PEP_ERR_RANGE;
+    if (out->items != NULL || out->len != 0) return PEP_ERR_RANGE;
     if (allocator != NULL) {
         if (!pep_allocator_valid(allocator)) return PEP_ERR_RANGE;
         selected = *allocator;
@@ -345,6 +353,7 @@ pep_status pep_list_append_with_allocator(const pep_i64_list *input, int64_t val
                                           const pep_allocator *allocator) {
     if (input == NULL || (input->len != 0 && input->items == NULL)) return PEP_ERR_RANGE;
     if (out == NULL || out == input) return PEP_ERR_RANGE;
+    if (out->items != NULL || out->len != 0) return PEP_ERR_RANGE;
     pep_allocator selected = pep_allocator_default();
     if (allocator != NULL) {
         if (!pep_allocator_valid(allocator)) return PEP_ERR_RANGE;
@@ -388,19 +397,27 @@ pep_status pep_list_sum(const pep_i64_list *list, int64_t *out) {
 }
 
 void pep_list_dispose(pep_i64_list *list) {
-    pep_list_dispose_with_allocator(list, NULL);
+    (void)pep_list_dispose_with_allocator(list, NULL);
 }
 
-void pep_list_dispose_with_allocator(pep_i64_list *list, const pep_allocator *allocator) {
-    if (list == NULL) return;
+pep_status pep_list_dispose_with_allocator(pep_i64_list *list, const pep_allocator *allocator) {
+    if (list == NULL) return PEP_ERR_RANGE;
     pep_allocator selected = list->allocator;
-    if (allocator != NULL && pep_allocator_valid(allocator)) selected = *allocator;
-    if (list->items != NULL && pep_allocator_valid(&selected)) {
+    if (list->items == NULL && list->len != 0) return PEP_ERR_RANGE;
+    if (!pep_allocator_valid(&selected)) {
+        if (list->items != NULL) return PEP_ERR_RANGE;
+        selected = pep_allocator_default();
+    }
+    if (allocator != NULL && !pep_allocator_equal(&selected, allocator)) {
+        return PEP_ERR_RANGE;
+    }
+    if (list->items != NULL) {
         selected.deallocate(selected.context, list->items);
     }
     list->items = NULL;
     list->len = 0;
     list->allocator = pep_allocator_default();
+    return PEP_OK;
 }
 
 pep_status pep_factorial(int64_t value, size_t depth, size_t max_depth, int64_t *out) {

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -166,10 +167,69 @@ class BenchmarkTests(unittest.TestCase):
         result = run(["python", str(ROOT / "benchmark_runtime.py"), "--compiler", "clang", "--trials", "2"])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads(result.stdout)
-        self.assertEqual(report["schema"], 1)
+        self.assertEqual(report["schema"], 2)
+        self.assertEqual(report["status"], "passed")
         self.assertEqual(len(report["compilers"]), 1)
         self.assertEqual(len(report["compilers"][0]["rows"]), 21)
-        self.assertTrue(all(row["checksum"] >= 0 for row in report["compilers"][0]["rows"]))
+        self.assertTrue(all(row["validation"] == "passed" for row in report["compilers"][0]["rows"]))
+        self.assertTrue(all(row["clock"] == "qpc" for row in report["compilers"][0]["rows"]))
+        self.assertTrue(all(row["warmup_checksum"] == row["expected_checksum"] for row in report["compilers"][0]["rows"]))
+        self.assertTrue(all(row["observed_checksums"] == [row["expected_checksum"]] * 2 for row in report["compilers"][0]["rows"]))
+
+    def test_benchmark_oracle_negative_controls(self):
+        import benchmark_runtime
+
+        expected = benchmark_runtime.expected_case("list", 8, 100)
+        valid = {
+            **expected,
+            "bytes": 0,
+            "reserved": 0,
+            "elapsed_ns": 1,
+            "clock": "qpc",
+        }
+
+        for phase, trial in (("warmup", None), ("trial", 1), ("trial", 2)):
+            with self.subTest(control=f"wrong {phase} checksum"):
+                corrupted = {**valid, "checksum": valid["checksum"] + 1}
+                with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                    benchmark_runtime.validate_record(corrupted, expected, "clang", phase, trial)
+
+        with self.subTest(control="missing checksum"):
+            missing = {key: value for key, value in valid.items() if key != "checksum"}
+            with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                benchmark_runtime.validate_record(missing, expected, "clang", "trial", 1)
+
+        with self.subTest(control="wrong operation count"):
+            wrong_operations = {**valid, "operations": valid["operations"] + 1}
+            with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                benchmark_runtime.validate_record(wrong_operations, expected, "clang", "trial", 1)
+
+        with self.subTest(control="malformed output"):
+            malformed = subprocess.CompletedProcess([], 0, "BENCH|case=list|bad\n", "")
+            with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                benchmark_runtime.parse_record(malformed, {"compiler": "clang", "case": "list"})
+
+        with self.subTest(control="unexpected process exit"):
+            failed = subprocess.CompletedProcess([], 7, "", "synthetic failure")
+            with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                benchmark_runtime.parse_record(failed, {"compiler": "clang", "case": "list"})
+
+        def row(checksums):
+            return {"case": "list", "size": 8, "iterations": 100, "observed_checksums": checksums}
+
+        with self.subTest(control="compiler disagreement"):
+            reports = [
+                {"compiler": "clang", "rows": [row([expected["checksum"], expected["checksum"]])]},
+                {"compiler": "gcc", "rows": [row([expected["checksum"] + 1, expected["checksum"] + 1])]},
+            ]
+            with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+                benchmark_runtime.validate_cross_compiler(reports)
+
+    def test_benchmark_process_timeout_is_failure(self):
+        import benchmark_runtime
+
+        with self.assertRaises(benchmark_runtime.BenchmarkFailure):
+            benchmark_runtime.timed_run([sys.executable, "-c", "import time; time.sleep(1)"], timeout_seconds=0.05)
 
 
 class NativeProofTests(unittest.TestCase):

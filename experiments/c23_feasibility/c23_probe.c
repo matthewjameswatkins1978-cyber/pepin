@@ -86,6 +86,10 @@ int main(void) {
     check_status("utf8_embedded_zero", pep_str_from_bytes(embedded_zero, sizeof(embedded_zero), &text), PEP_OK);
     check_true("utf8_embedded_zero_length", text.len == sizeof(embedded_zero));
     check_true("utf8_embedded_zero_identity", pep_str_equal(text, (pep_str){ embedded_zero, sizeof(embedded_zero) }));
+    pep_str unchanged = { embedded_zero, 77 };
+    check_status("utf8_rejects_null_output", pep_str_from_bytes(embedded_zero, sizeof(embedded_zero), NULL), PEP_ERR_RANGE);
+    check_status("utf8_rejects_invalid_without_mutating", pep_str_from_bytes(invalid_utf8, sizeof(invalid_utf8), &unchanged), PEP_ERR_INVALID_UTF8);
+    check_true("utf8_failure_preserves_output", unchanged.data == embedded_zero && unchanged.len == 77);
     check_status("utf8_reject_overlong", pep_str_from_bytes(invalid_utf8, sizeof(invalid_utf8), &text), PEP_ERR_INVALID_UTF8);
     check_status("utf8_reject_truncated", pep_str_from_bytes(truncated_utf8, sizeof(truncated_utf8), &text), PEP_ERR_INVALID_UTF8);
     check_status("utf8_reject_surrogate", pep_str_from_bytes(surrogate_utf8, sizeof(surrogate_utf8), &text), PEP_ERR_INVALID_UTF8);
@@ -144,6 +148,7 @@ int main(void) {
     check_status("list_copy", pep_list_from_array(source_items, 3, &original), PEP_OK);
     check_status("list_append", pep_list_append(&original, 7, &extended), PEP_OK);
     check_status("list_rejects_aliasing_append", pep_list_append(&original, 7, &original), PEP_ERR_RANGE);
+    check_status("list_rejects_occupied_output", pep_list_from_array(source_items, 3, &original), PEP_ERR_RANGE);
     check_status("list_sum_original", pep_list_sum(&original, &value), PEP_OK);
     check_i64("list_sum_original_result", value, 42);
     check_status("list_sum_extended", pep_list_sum(&extended, &value), PEP_OK);
@@ -164,6 +169,18 @@ int main(void) {
     check_status("list_allocator_recovery", pep_list_from_array_with_allocator(source_items, 3, &failed_list, &failing_allocator), PEP_OK);
     pep_list_dispose(&failed_list);
     check_true("list_allocator_disposes_recovered_buffer", allocation_state.deallocations == 4);
+
+    fail_allocator_state owner_state = { 1, 0, 0 };
+    fail_allocator_state other_state = { 1, 0, 0 };
+    pep_allocator owner_allocator = { fail_allocate, fail_deallocate, &owner_state };
+    pep_allocator other_allocator = { fail_allocate, fail_deallocate, &other_state };
+    pep_i64_list owned_by_owner = { 0 };
+    check_status("list_owner_setup", pep_list_from_array_with_allocator(source_items, 3, &owned_by_owner, &owner_allocator), PEP_OK);
+    check_status("list_rejects_mismatched_disposer", pep_list_dispose_with_allocator(&owned_by_owner, &other_allocator), PEP_ERR_RANGE);
+    check_true("list_mismatch_does_not_free", owned_by_owner.items != NULL && owner_state.deallocations == 0 && other_state.deallocations == 0);
+    check_status("list_accepts_matching_disposer", pep_list_dispose_with_allocator(&owned_by_owner, &owner_allocator), PEP_OK);
+    check_true("list_matching_disposer_frees_owner", owner_state.deallocations == 1 && other_state.deallocations == 0);
+
     pep_list_dispose(&original);
     pep_list_dispose(&extended);
 

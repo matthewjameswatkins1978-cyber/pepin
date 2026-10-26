@@ -106,7 +106,7 @@ pep_status pep_list_append_with_allocator(const pep_i64_list *input, int64_t val
 pep_status pep_list_get(const pep_i64_list *list, size_t index, int64_t *out);
 pep_status pep_list_sum(const pep_i64_list *list, int64_t *out);
 void pep_list_dispose(pep_i64_list *list);
-void pep_list_dispose_with_allocator(pep_i64_list *list, const pep_allocator *allocator);
+pep_status pep_list_dispose_with_allocator(pep_i64_list *list, const pep_allocator *allocator);
 
 pep_status pep_factorial(int64_t value, size_t depth, size_t max_depth, int64_t *out);
 pep_status pep_sum_to(int64_t limit, int64_t *out);
