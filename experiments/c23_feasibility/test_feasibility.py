@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,16 @@ def run(command, cwd=REPO, env=None):
     return subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=False, env=env)
 
 
+def expand_candidate(candidate, environ=None):
+    environ = os.environ if environ is None else environ
+    expanded = candidate
+    for name in re.findall(r"\$\{([^}]+)\}", candidate):
+        if name not in environ:
+            return None
+        expanded = expanded.replace("${" + name + "}", environ[name])
+    return os.path.expandvars(expanded)
+
+
 def resolve_compiler(name, environ=None, path_lookup=shutil.which, path_exists=Path.exists, known=None):
     environ = os.environ if environ is None else environ
     override_name = "PEP_C23_CLANG" if name == "clang" else "PEP_C23_GCC"
@@ -27,9 +38,19 @@ def resolve_compiler(name, environ=None, path_lookup=shutil.which, path_exists=P
     discovered = path_lookup(name)
     if discovered:
         return discovered
-    for candidate in (MANIFEST if known is None else known).get(name, []):
-        if path_exists(Path(candidate)):
+    for raw_candidate in (MANIFEST if known is None else known).get(name, []):
+        candidate = expand_candidate(raw_candidate, environ)
+        if candidate and path_exists(Path(candidate)):
             return str(Path(candidate))
+    return None
+
+
+def asan_runtime_dir(compiler):
+    result = run([compiler, "--print-resource-dir"])
+    if result.returncode == 0 and result.stdout.strip():
+        candidate = Path(result.stdout.strip()) / "lib" / "windows"
+        if (candidate / "clang_rt.asan_dynamic-x86_64.dll").exists():
+            return candidate
     return None
 
 
@@ -61,6 +82,24 @@ class CorpusPolicyTests(unittest.TestCase):
         for path in ROOT.glob("*.c"):
             self.assertNotIn("pep_ocaml", path.read_text(encoding="utf-8"))
         self.assertFalse((REPO / "runtime" / "pep_runtime.c").samefile(ROOT / "c23_runtime.c"))
+
+    def test_toolchain_manifest_has_no_machine_home(self):
+        manifest = (ROOT / "toolchain_paths.json").read_text(encoding="utf-8")
+        self.assertNotIn("C:\\Users\\", manifest)
+
+
+class FeatureSupportTests(unittest.TestCase):
+    def test_named_nullptr_typedef_support_is_explicit(self):
+        source = ROOT / "c23_named_nullptr_probe.c"
+        for name in ("clang", "gcc"):
+            compiler = resolve_compiler(name)
+            self.assertIsNotNone(compiler, name)
+            result = run([compiler, "-std=c23", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-fsyntax-only", str(source)])
+            if name == "clang":
+                self.assertEqual(result.returncode, 0, result.stderr)
+            else:
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("nullptr_t", result.stderr)
 
 
 class DiscoveryMatrixTests(unittest.TestCase):
@@ -181,12 +220,23 @@ class NativeProofTests(unittest.TestCase):
     def test_clang_address_sanitizer_proof(self):
         result = build_with("clang", sanitize=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        llvm_runtime = Path(r"C:\Users\Matmus\scoop\apps\llvm\current\lib\clang\23\lib\windows")
+        compiler = resolve_compiler("clang")
+        llvm_runtime = asan_runtime_dir(compiler)
+        self.assertIsNotNone(llvm_runtime, result.stdout)
         env = os.environ.copy()
         env["PATH"] = str(llvm_runtime) + os.pathsep + env.get("PATH", "")
         proof = run([str(executable("clang", sanitize=True))], env=env)
         self.assertEqual(proof.returncode, 0, proof.stdout + proof.stderr)
         self.assertIn("SUMMARY|failures=0", proof.stdout)
+
+    def test_missing_asan_runtime_is_not_success(self):
+        compiler = resolve_compiler("clang")
+        llvm_runtime = asan_runtime_dir(compiler)
+        self.assertIsNotNone(llvm_runtime)
+        env = os.environ.copy()
+        env["PATH"] = os.pathsep.join(part for part in env.get("PATH", "").split(os.pathsep) if Path(part).resolve() != llvm_runtime.resolve())
+        proof = run([str(executable("clang", sanitize=True))], env=env)
+        self.assertNotEqual(proof.returncode, 0)
 
 
 if __name__ == "__main__":

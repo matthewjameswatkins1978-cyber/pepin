@@ -29,6 +29,24 @@ static bool size_mul_overflow(size_t left, size_t right, size_t *out) {
     return false;
 }
 
+static void *pep_default_allocate(void *context, size_t size) {
+    (void)context;
+    return malloc(size);
+}
+
+static void pep_default_deallocate(void *context, void *pointer) {
+    (void)context;
+    free(pointer);
+}
+
+pep_allocator pep_allocator_default(void) {
+    return (pep_allocator){ pep_default_allocate, pep_default_deallocate, NULL };
+}
+
+static bool pep_allocator_valid(const pep_allocator *allocator) {
+    return allocator != NULL && allocator->allocate != NULL && allocator->deallocate != NULL;
+}
+
 const char *pep_status_name(pep_status status) {
     switch (status) {
     case PEP_OK: return "ok";
@@ -164,26 +182,52 @@ pep_status pep_checked_neg(int64_t value, int64_t *out) {
     return PEP_OK;
 }
 
-pep_status pep_arena_init(pep_arena *arena, size_t initial_capacity) {
+pep_status pep_arena_init_with_allocator(pep_arena *arena, size_t initial_capacity,
+                                          const pep_allocator *allocator) {
+    if (arena == NULL) return PEP_ERR_RANGE;
+    arena->first = NULL;
+    arena->next_capacity = 0;
+    arena->reserved_bytes = 0;
+    arena->allocator = pep_allocator_default();
+    if (allocator == NULL) {
+        arena->allocator = pep_allocator_default();
+    } else if (!pep_allocator_valid(allocator)) {
+        return PEP_ERR_RANGE;
+    } else {
+        arena->allocator = *allocator;
+    }
     arena->first = NULL;
     arena->next_capacity = initial_capacity == 0 ? 256 : initial_capacity;
+    arena->reserved_bytes = 0;
     return PEP_OK;
 }
 
+pep_status pep_arena_init(pep_arena *arena, size_t initial_capacity) {
+    return pep_arena_init_with_allocator(arena, initial_capacity, NULL);
+}
+
 void pep_arena_dispose(pep_arena *arena) {
+    if (arena == NULL) return;
+    pep_allocator selected = pep_allocator_valid(&arena->allocator) ?
+        arena->allocator : pep_allocator_default();
     pep_arena_block *block = arena->first;
     while (block != NULL) {
         pep_arena_block *next = block->next;
-        free(block->data);
-        free(block);
+        selected.deallocate(selected.context, block->data);
+        selected.deallocate(selected.context, block);
         block = next;
     }
     arena->first = NULL;
     arena->next_capacity = 0;
+    arena->reserved_bytes = 0;
+    arena->allocator = pep_allocator_default();
 }
 
 void *pep_arena_alloc(pep_arena *arena, size_t size, size_t alignment) {
-    if (size == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0) {
+    if (arena == NULL || !pep_allocator_valid(&arena->allocator) || size == 0 ||
+        size > PEP_MAX_ALLOCATION_SIZE ||
+        alignment == 0 || alignment > _Alignof(max_align_t) ||
+        (alignment & (alignment - 1)) != 0) {
         return NULL;
     }
     pep_arena_block *block = arena->first;
@@ -207,21 +251,31 @@ void *pep_arena_alloc(pep_arena *arena, size_t size, size_t alignment) {
     if (capacity < needed) {
         capacity = needed;
     }
-    pep_arena_block *new_block = malloc(sizeof(*new_block));
+    pep_arena_block *new_block = arena->allocator.allocate(arena->allocator.context, sizeof(*new_block));
     if (new_block == NULL) {
         return NULL;
     }
-    new_block->data = malloc(capacity);
+    new_block->data = arena->allocator.allocate(arena->allocator.context, capacity);
     if (new_block->data == NULL) {
-        free(new_block);
+        arena->allocator.deallocate(arena->allocator.context, new_block);
+        return NULL;
+    }
+    if (capacity > SIZE_MAX - arena->reserved_bytes) {
+        arena->allocator.deallocate(arena->allocator.context, new_block->data);
+        arena->allocator.deallocate(arena->allocator.context, new_block);
         return NULL;
     }
     new_block->capacity = capacity;
     new_block->used = 0;
     new_block->next = arena->first;
     arena->first = new_block;
+    arena->reserved_bytes += capacity;
     arena->next_capacity = capacity > SIZE_MAX / 2 ? capacity : capacity * 2;
     return pep_arena_alloc(arena, size, alignment);
+}
+
+size_t pep_arena_reserved(const pep_arena *arena) {
+    return arena == NULL ? 0 : arena->reserved_bytes;
 }
 
 pep_expr *pep_expr_number(pep_arena *arena, int64_t value) {
@@ -243,7 +297,7 @@ pep_expr *pep_expr_add(pep_arena *arena, const pep_expr *left, const pep_expr *r
 
 pep_status pep_expr_eval(const pep_expr *expression, size_t depth, size_t max_depth, int64_t *out) {
     if (expression == NULL) return PEP_ERR_RANGE;
-    if (depth > max_depth) return PEP_ERR_DEPTH;
+    if (depth > max_depth || depth == SIZE_MAX) return PEP_ERR_DEPTH;
     switch (expression->tag) {
     case PEP_EXPR_NUMBER:
         *out = expression->as.number;
@@ -261,30 +315,59 @@ pep_status pep_expr_eval(const pep_expr *expression, size_t depth, size_t max_de
     return PEP_ERR_INVALID_VARIANT;
 }
 
-pep_status pep_list_from_array(const int64_t *items, size_t len, pep_i64_list *out) {
+pep_status pep_list_from_array_with_allocator(const int64_t *items, size_t len,
+                                               pep_i64_list *out,
+                                               const pep_allocator *allocator) {
+    pep_allocator selected = pep_allocator_default();
+    if (out == NULL) return PEP_ERR_RANGE;
+    if (allocator != NULL) {
+        if (!pep_allocator_valid(allocator)) return PEP_ERR_RANGE;
+        selected = *allocator;
+    }
     size_t bytes = 0;
     if (len != 0 && items == NULL) return PEP_ERR_RANGE;
-    if (size_mul_overflow(len, sizeof(*items), &bytes)) return PEP_ERR_ALLOCATION;
-    out->items = bytes == 0 ? NULL : malloc(bytes);
-    if (bytes != 0 && out->items == NULL) return PEP_ERR_ALLOCATION;
-    if (bytes != 0) memcpy(out->items, items, bytes);
+    if (size_mul_overflow(len, sizeof(*items), &bytes) || bytes > PEP_MAX_ALLOCATION_SIZE) return PEP_ERR_ALLOCATION;
+    int64_t *new_items = bytes == 0 ? NULL : selected.allocate(selected.context, bytes);
+    if (bytes != 0 && new_items == NULL) return PEP_ERR_ALLOCATION;
+    if (bytes != 0) memcpy(new_items, items, bytes);
+    out->items = new_items;
     out->len = len;
+    out->allocator = selected;
     return PEP_OK;
 }
 
-pep_status pep_list_append(const pep_i64_list *input, int64_t value, pep_i64_list *out) {
+pep_status pep_list_from_array(const int64_t *items, size_t len, pep_i64_list *out) {
+    return pep_list_from_array_with_allocator(items, len, out, NULL);
+}
+
+pep_status pep_list_append_with_allocator(const pep_i64_list *input, int64_t value,
+                                          pep_i64_list *out,
+                                          const pep_allocator *allocator) {
     if (input == NULL || (input->len != 0 && input->items == NULL)) return PEP_ERR_RANGE;
+    if (out == NULL || out == input) return PEP_ERR_RANGE;
+    pep_allocator selected = pep_allocator_default();
+    if (allocator != NULL) {
+        if (!pep_allocator_valid(allocator)) return PEP_ERR_RANGE;
+        selected = *allocator;
+    }
     if (input->len == SIZE_MAX) return PEP_ERR_ALLOCATION;
     size_t new_length = input->len + 1;
     size_t bytes = 0;
     if (new_length > SIZE_MAX / sizeof(*input->items)) return PEP_ERR_ALLOCATION;
     bytes = new_length * sizeof(*input->items);
-    out->items = malloc(bytes);
-    if (out->items == NULL) return PEP_ERR_ALLOCATION;
-    if (input->len != 0) memcpy(out->items, input->items, input->len * sizeof(*input->items));
-    out->items[input->len] = value;
+    if (bytes > PEP_MAX_ALLOCATION_SIZE) return PEP_ERR_ALLOCATION;
+    int64_t *new_items = selected.allocate(selected.context, bytes);
+    if (new_items == NULL) return PEP_ERR_ALLOCATION;
+    if (input->len != 0) memcpy(new_items, input->items, input->len * sizeof(*input->items));
+    new_items[input->len] = value;
+    out->items = new_items;
     out->len = new_length;
+    out->allocator = selected;
     return PEP_OK;
+}
+
+pep_status pep_list_append(const pep_i64_list *input, int64_t value, pep_i64_list *out) {
+    return pep_list_append_with_allocator(input, value, out, NULL);
 }
 
 pep_status pep_list_get(const pep_i64_list *list, size_t index, int64_t *out) {
@@ -305,15 +388,24 @@ pep_status pep_list_sum(const pep_i64_list *list, int64_t *out) {
 }
 
 void pep_list_dispose(pep_i64_list *list) {
+    pep_list_dispose_with_allocator(list, NULL);
+}
+
+void pep_list_dispose_with_allocator(pep_i64_list *list, const pep_allocator *allocator) {
     if (list == NULL) return;
-    free(list->items);
+    pep_allocator selected = list->allocator;
+    if (allocator != NULL && pep_allocator_valid(allocator)) selected = *allocator;
+    if (list->items != NULL && pep_allocator_valid(&selected)) {
+        selected.deallocate(selected.context, list->items);
+    }
     list->items = NULL;
     list->len = 0;
+    list->allocator = pep_allocator_default();
 }
 
 pep_status pep_factorial(int64_t value, size_t depth, size_t max_depth, int64_t *out) {
     if (value < 0) return PEP_ERR_RANGE;
-    if (depth > max_depth) return PEP_ERR_DEPTH;
+    if (depth > max_depth || depth == SIZE_MAX) return PEP_ERR_DEPTH;
     if (value == 0) {
         *out = 1;
         return PEP_OK;
