@@ -1,57 +1,56 @@
-# Next packet: Structured values and pattern matching (A4)
+# Next packet: The first living Pep tool extension (A5)
 
-A3 added revision-bound semantic filling of one named typed hole. This packet grows Pep's ordinary language with the smallest coherent data model needed to write recursive algorithms and semantic tools in Pep itself.
+A4 added immutable nominal records, recursive tagged unions, checked constructors and field access, exhaustive pattern matching, and typed holes inside match arms. This packet adds the first host-managed tool extension to the in-process OCaml seed. It does not add special Pep syntax, rebuild the compiler, or claim that extensions are sandboxed.
 
 ## Objective
 
-Implement monomorphic records, recursive tagged unions, and expression-level pattern matching through the existing lexer, parser, checker, checked tree, JSON inspection, hole-query model, and interpreter. The same compiler remains the only semantic authority.
+An ordinary Pep function can be exported as a local tool, validated, explicitly activated, invoked through a versioned JSON message, changed, revalidated, and hot replaced without restarting the session process. The checker remains the authority for function signatures and the interpreter remains the authority for execution.
 
-## Required language forms
+## Registration and signature
 
-Records:
+- Register a tool name against an exported Pep function, its document and exact source revision, its checked parameter and return types, a description, and its activation status.
+- Derive the signature from the checked function declaration; clients cannot supply or override it.
+- The first milestone exposes only scalar parameters and results: Int, Bool, Str, and Unit. Records and tagged unions remain internal to Pep and do not cross the tool message boundary.
+- Keep the registry in memory for the lifetime of the existing session process. Preserve each registered entry's source revision and function identity.
+- Use explicit states: Registered, Validated, Active, Rejected, and Superseded. A registered or validated function is not callable.
 
-```pep
-type Point {
-    x: Int
-    y: Int
-}
+## Validation and activation
 
-let p = Point { x: 20, y: 22 }
-say(int_text(p.x + p.y))
-```
+Activation is an explicit request and requires all of the following: complete checked source at the registered revision, a supported scalar signature, host policy approval, real interpreter test vectors, and an activation request. A source containing holes, invalid code, or an unsupported type must never become active. Test vectors use typed inputs and expected results and are executed by the Pep interpreter before activation.
 
-Tagged unions and recursive values:
+Do not make registration itself imply activation. Return structured, versioned validation and activation results with stable status and diagnostic information.
 
-```pep
-type Expr = Number(Int) | Add(Expr, Expr)
+## Invocation message boundary
 
-fn evaluate(expr: Expr) -> Int {
-    return match expr {
-        Number(n) => n
-        Add(a, b) => evaluate(a) + evaluate(b)
-    }
-}
-```
+- Add versioned JSONL operations for tool registration, validation, activation, listing, and invocation within the existing session protocol.
+- Resolve invocation by active tool identity and its immutable revision-bound entry. Validate argument count and types before evaluation.
+- Encode Int values as signed 64-bit decimal strings. Encode Bool, Str, and Unit as JSON boolean, string, and null values inside the typed versioned envelope.
+- Do not accept raw ASTs, document references, or caller-supplied type declarations as invocation arguments. Do not expose records or variants on this boundary.
+- Keep protocol output as valid JSONL; Pep output cannot inject unframed text into the protocol stream.
 
-## Semantics and limits
+## Runtime limits and trust boundary
 
-- Record declarations have named, explicitly typed, immutable fields. Check construction field names, duplicates, missing fields, and field value types statically.
-- Tagged unions have named constructors, statically checked arity and argument types, and recursive definitions without recursive allocation.
-- Match is an expression. Support constructor patterns, nested patterns, pattern-bound variables, and `_` wildcard patterns.
-- Check match-arm result types, duplicate/unreachable arms, and exhaustiveness for the declared variants. Pattern `_` is distinct from Pep's expression hole syntax.
-- Preserve checked declaration identities and spans through inspection and evaluation; the runtime must not repeat name resolution by string lookup.
-- Holes inside arms inherit a determinable expected result type and expose only bindings in their arm's lexical scope.
-- Values are immutable. Do not add field mutation, lists, maps, classes, general user-defined generics, traits, macros, reflection, or a native backend.
+This is a trusted local prototype, not a sandbox. The tool host provides no arbitrary filesystem, network, environment-variable, or process access. Exported computations are pure Pep functions and may call permitted Pep functions. Enforce call-depth and execution-step budgets in the interpreter. Reject say, including direct or transitive calls to say, from exported computations so tool execution cannot write to the session output stream. Document the trust boundary clearly; do not claim isolation from hostile code.
+
+## Hot replacement
+
+A replacement is checked against the active tool's supported external signature. Run its real test vectors before activation. If the replacement is invalid, incomplete, incompatible, or fails validation, reject it and keep the last active revision callable. On success, activate the replacement atomically and mark the prior entry Superseded. Calls resolve to one immutable revision identity; an in-flight call, if supported, must keep that identity for its duration. No concurrency support is required for this milestone.
+
+## Listing and discovery
+
+tool_list returns tool names, parameter and result types, descriptions, active revision, status, and whether the entry is callable. Registered, validated, rejected, and superseded entries are not callable. Only an active compatible entry can be invoked.
 
 ## Acceptance
 
-- A record construction and field-access example evaluates to `42`.
-- A recursive `Expr`/`evaluate` example with `Number(20)` and `Number(22)` evaluates to `42`.
-- A match example with typed holes returns `Int` expectations and arm-local bindings (`n: Int` or `a: Expr`, `b: Expr`).
-- Negative tests cover malformed declarations, missing/duplicate/unknown fields, wrong types, unknown constructors, arity and constructor argument errors, non-exhaustive and duplicate/unreachable arms, branch type mismatch, and pattern-binding scope.
-- Deterministic AST and typed-tree JSON preserve Unicode, original UTF-8 offsets, LF/CRLF semantics, and existing incomplete/invalid/complete distinctions.
-- Existing OCaml and MoonBit suites pass. No incomplete program executes.
+Automate the full scenario through the real session JSONL interface:
 
-## Boundary
+1. Open a document containing an ordinary Pep function such as calculate_fee.
+2. Inspect its checker-derived scalar signature.
+3. Register, validate with real test vectors, and explicitly activate it.
+4. List the tool and invoke it with typed JSON arguments; parse every output line as JSON.
+5. Edit the function in a new document revision, validate a compatible replacement, activate it, and observe a different invocation result.
+6. Attempt an invalid or incompatible replacement and prove the previous active revision remains callable.
+7. Verify rejected, incomplete, unsupported-signature, and side-effecting functions never become callable.
+8. Verify argument count/type errors, call-depth and step limits, and direct plus transitive say rejection.
 
-Do not start A5 until records, recursive variants, match checking, hole queries, and interpreter evaluation pass this gate. Keep the A3 structural edit and its revision protocol intact. The A5 tool registry will expose only scalar arguments and results; records and variants remain internal until a separate message contract is designed.
+Keep all prior A3 revision-bound hole filling and A4 language behavior intact. Run the complete OCaml and historical MoonBit suites, plus focused real-session JSONL acceptance checks. Update describe, README, session and design documentation to state the implemented boundary accurately. Update this packet to the next milestone only after A5 passes its gate.

@@ -468,8 +468,131 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(description["session"]["schemaVersion"], 3)
         self.assertFalse(description["session"]["crossRevisionReuse"])
         self.assertIn("semantic_hole_fill", description["features"])
+        self.assertIn("records", description["features"])
+        self.assertIn("tagged_unions", description["features"])
+        self.assertIn("pattern_matching", description["features"])
         self.assertIn("fill_hole", description["session"]["operations"])
 
+
+    def test_records_are_checked_resolved_and_interpreted(self):
+        source = (
+            "type Point {\n x: Int\n y: Int\n}\n"
+            "fn sum(point: Point) -> Int { return point.x + point.y }\n"
+            "let point = Point { x: 20, y: 22 }\n"
+            "say(int_text(sum(point)))\n"
+        )
+        path = self.source(source)
+        checked = invoke("check", path, "--json")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        value = json.loads(checked.stdout)
+        self.assertEqual(value["status"], "valid")
+        self.assertEqual(value["typedTree"]["types"][0]["name"], "Point")
+        self.assertEqual([field["name"] for field in value["typedTree"]["types"][0]["fields"]], ["x", "y"])
+        binary = value["typedTree"]["functions"][0]["body"][0]["value"]["expression"]
+        field_accesses = [node["expression"]["fieldId"] for node in (binary["left"], binary["right"])]
+        self.assertEqual(field_accesses, [0, 1])
+        self.assertEqual(invoke("run", path).stdout, "42\n")
+
+    def test_record_declaration_and_construction_errors(self):
+        cases = [
+            ("type Point { x: Int x: Bool }\n", "PEP_DUPLICATE_FIELD"),
+            ("type Point { x: Int }\nlet p = Point { x: 1, x: 2 }\n", "PEP_DUPLICATE_FIELD"),
+            ("type Point { x: Int }\nlet p = Point { y: 1 }\n", "PEP_MISSING_FIELD"),
+            ("type Point { x: Int }\nlet p = Point { x: 1, y: 2 }\n", "PEP_UNKNOWN_FIELD"),
+            ("type Point { x: Int }\nlet p = Point { x: true }\n", "PEP_TYPE_MISMATCH"),
+            ("type Point { x: Missing }\n", "PEP_UNKNOWN_TYPE"),
+            ("type Say = say(Str)\n", "PEP_RESERVED_CONSTRUCTOR"),
+            ("type Point { x: Int }\nlet p = Point { x: 1 }\nlet n: Int = p.y\n", "PEP_UNKNOWN_FIELD"),
+        ]
+        for source, code in cases:
+            with self.subTest(code=code, source=source):
+                result = invoke("check", self.source(source), "--json")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], code)
+
+    def test_recursive_tagged_union_match_and_checked_evaluation(self):
+        source = (
+            "type Expr = Number(Int) | Add(Expr, Expr)\n"
+            "fn evaluate(expr: Expr) -> Int {\n"
+            " return match expr { Number(n) => n Add(a, b) => evaluate(a) + evaluate(b) }\n"
+            "}\n"
+            "say(int_text(evaluate(Add(Number(20), Number(22)))))\n"
+        )
+        path = self.source(source)
+        first = invoke("check", path, "--json")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        value = json.loads(first.stdout)
+        self.assertEqual(value["status"], "valid")
+        union = value["typedTree"]["types"][0]
+        self.assertEqual(union["kind"], "union")
+        self.assertEqual([variant["name"] for variant in union["variants"]], ["Number", "Add"])
+        self.assertEqual(value["typedTree"]["functions"][0]["body"][0]["value"]["expression"]["kind"], "match")
+        pattern = value["typedTree"]["functions"][0]["body"][0]["value"]["expression"]["arms"][0]["pattern"]
+        self.assertEqual(pattern["kind"], "constructor")
+        self.assertEqual(pattern["span"]["start"]["offset"], source.index("Number(n)"))
+        second = invoke("check", path, "--json")
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(invoke("run", path).stdout, "42\n")
+
+    def test_nested_patterns_and_constructor_runtime(self):
+        source = (
+            "type Expr = Number(Int) | Add(Expr, Expr)\n"
+            "fn leftmost(expr: Expr) -> Int {\n"
+            " return match expr { Number(n) => n Add(Number(n), _) => n Add(_, _) => 0 }\n"
+            "}\n"
+            "say(int_text(leftmost(Add(Number(7), Number(9)))))\n"
+        )
+        result = invoke("run", self.source(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "7\n")
+
+    def test_match_holes_have_expected_types_and_arm_local_bindings(self):
+        source = (
+            "type Expr = Number(Int) | Add(Expr, Expr)\n"
+            "fn evaluate(expr: Expr) -> Int {\n"
+            " return match expr { Number(n) => ?number_case Add(a, b) => ?addition_case }\n"
+            "}\n"
+        )
+        result = invoke("query", self.source(source), "--holes", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        holes = json.loads(result.stdout)["holes"]
+        self.assertEqual([hole["expectedType"] for hole in holes], ["Int", "Int"])
+        self.assertEqual(holes[0]["identity"], "number_case")
+        self.assertIn(("n", "Int"), [(b["name"], b["type"]) for b in holes[0]["bindings"]])
+        self.assertEqual(holes[1]["identity"], "addition_case")
+        self.assertIn(("a", "Expr"), [(b["name"], b["type"]) for b in holes[1]["bindings"]])
+        self.assertIn(("b", "Expr"), [(b["name"], b["type"]) for b in holes[1]["bindings"]])
+        self.assertEqual(invoke("run", self.source(source)).returncode, 1)
+
+    def test_match_infers_result_type_for_earlier_holes(self):
+        source = (
+            "type Maybe = Some(Int) | None()\n"
+            "let maybe: Maybe = Some(5)\n"
+            "let selected = match maybe { Some(n) => ?selected_value None() => 1 }\n"
+        )
+        result = invoke("query", self.source(source), "--holes", "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hole = json.loads(result.stdout)["holes"][0]
+        self.assertEqual(hole["expectedType"], "Int")
+        self.assertIn(("n", "Int"), [(b["name"], b["type"]) for b in hole["bindings"]])
+
+    def test_union_constructor_and_match_errors(self):
+        prefix = "type Expr = Number(Int) | Add(Expr, Expr)\n"
+        cases = [
+            (prefix + "let x = Missing(1)\n", "PEP_UNKNOWN_CONSTRUCTOR"),
+            (prefix + "let x = Number()\n", "PEP_ARGUMENT_COUNT"),
+            (prefix + "let x = Number(true)\n", "PEP_TYPE_MISMATCH"),
+            (prefix + "fn f(x: Expr) -> Int { return match x { Number(n) => n } }\n", "PEP_NON_EXHAUSTIVE_MATCH"),
+            (prefix + "fn f(x: Expr) -> Int { return match x { Number(n) => n Number(m) => m Add(a,b) => 0 } }\n", "PEP_DUPLICATE_MATCH_ARM"),
+            (prefix + "fn f(x: Expr) -> Int { return match x { _ => 0 Number(n) => n } }\n", "PEP_UNREACHABLE_MATCH_ARM"),
+            (prefix + "fn f(x: Expr) -> Int { return match x { Number(n) => n Add(a,b) => false } }\n", "PEP_MATCH_ARM_TYPE_MISMATCH"),
+            (prefix + "fn f(x: Expr) -> Int { return match x { Number(n) => missing Add(a,b) => 0 } }\n", "PEP_UNKNOWN_VARIABLE"),
+        ]
+        for source, code in cases:
+            with self.subTest(code=code):
+                result = invoke("check", self.source(source), "--json")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], code)
 
     def test_recursive_factorial_runs(self):
         source = 'fn factorial(n: Int) -> Int {\n return if n <= 1 { 1 } else { n * factorial(n - 1) }\n}\nsay(int_text(factorial(6)))\n'
@@ -509,7 +632,7 @@ class PepCliTests(unittest.TestCase):
         cases = [
             ('say(int_text(missing(1)))\n', "PEP_UNKNOWN_FUNCTION"),
             ('fn f(n: Int) -> Int { return n } let x: Int = f("bad")\n', "PEP_TYPE_MISMATCH"),
-            ('let old_name: String = "legacy"\n', "PEP_PARSE_TYPE"),
+            ('let old_name: String = "legacy"\n', "PEP_UNKNOWN_TYPE"),
             ('fn f() -> Int { return "bad" }\n', "PEP_TYPE_MISMATCH"),
             ('fn f() -> Int { let x: Int = 1 }\n', "PEP_MISSING_RETURN"),
             ('fn f() -> Int { return absent }\n', "PEP_UNKNOWN_VARIABLE"),

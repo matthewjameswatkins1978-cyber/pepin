@@ -54,4 +54,4 @@ Use the exact document and revision returned by the process. `doc-1` is illustra
 
 ## Implemented limits and next step
 
-This A3 protocol is in-process and ephemeral. It provides raw byte-range edits and one compiler-backed structural operation: revision-bound filling of a uniquely named typed hole. All changed revisions are fully re-analysed. It does not provide persistence, a network service, extension activation, parametric containers, a native backend, or self-hosting. The next work packet is [records, recursive tagged unions, and pattern matching](NEXT_PACKET.md).
+This A3 protocol is in-process and ephemeral. It provides raw byte-range edits and one compiler-backed structural operation: revision-bound filling of a uniquely named typed hole. All changed revisions are fully re-analysed. It does not provide persistence, a network service, extension activation, parametric containers, a native backend, or self-hosting. The next work packet is [the first local Pep tool extension](NEXT_PACKET.md); it adds a registry and activation boundary without changing this session protocol.

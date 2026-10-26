@@ -2,7 +2,7 @@
 
 Pep is a small, statically typed, AI-first programming language intended to become self-hosting. Its canonical v0.3 vision is [Founding Design v0.3](docs/FOUNDING_DESIGN_v0.3.md), and binding technical decisions are in [Technical Resolution 001](docs/TECHNICAL_RESOLUTION_001.md). These design documents include planned capabilities; they are not a claim that those features are implemented.
 
-The primary compiler seed is OCaml 5.5.2. Pep source is ordinary plaintext `.pep` files. The current seed is a small interpreter with types `Int`, `Bool`, `Str`, and `Unit`, functions, lexical scopes, integer operations, conditionals, built-in calls, and typed or unconstrained holes. Its exact limits are in [the seed-language note](docs/SEED_LANGUAGE.md) and [the implementation-status index](docs/DESIGN.md).
+The primary compiler seed is OCaml 5.5.2. Pep source is ordinary plaintext `.pep` files. The current interpreter supports built-in types `Int`, `Bool`, `Str`, and `Unit`; immutable nominal records; recursive tagged unions; constructor pattern matching; functions, lexical scopes, integer operations, conditionals, built-in calls, and typed or unconstrained holes. Examples cover [records](examples/point_sum.pep), [recursive unions](examples/recursive_expr.pep), and [typed match holes](examples/match_holes.pep). Exact limits are in [the seed-language note](docs/SEED_LANGUAGE.md) and [implementation-status index](docs/DESIGN.md).
 
 ## Build, inspect, check, and run
 Requirements: PowerShell 7, opam, and the Pepin-specific OCaml 5.5.2 switch. By default the CLI uses the standard opam root; set `PEPIN_OPAM_ROOT` if the switch is installed in another root.
@@ -14,6 +14,9 @@ Requirements: PowerShell 7, opam, and the Pepin-specific OCaml 5.5.2 switch. By 
 .\pep.ps1 check examples/hello.pep --json
 .\pep.ps1 query examples/fill_double_hole.pep --holes --json
 .\pep.ps1 run examples/hello.pep
+.\pep.ps1 run examples/point_sum.pep
+.\pep.ps1 run examples/recursive_expr.pep
+.\pep.ps1 query examples/match_holes.pep --holes --json
 python -m unittest discover -s tests -v
 ```
 
@@ -26,7 +29,7 @@ The in-process semantic session reads and writes JSON Lines over standard input/
 - [Implementation status](docs/DESIGN.md): what is implemented versus planned.
 - [Session protocol v3](docs/SESSION_PROTOCOL.md): ephemeral revision-aware JSONL interface and its limits.
 - [Seed-language decision](docs/SEED_LANGUAGE.md): OCaml seed choice and current limits.
-- [Next implementation packet](docs/NEXT_PACKET.md): records, recursive tagged unions, and pattern matching (A4).
+- [Next implementation packet](docs/NEXT_PACKET.md): the first live Pep tool extension (A5).
 - [Historical A0 MoonBit design](docs/HISTORICAL_DESIGN_A0.md): retained prototype record; not the primary compiler feature list.
 
 The original MoonBit compiler remains available as `pep-moonbit.ps1` with its separate tests for historical/reference use. The current bootstrap instructions are in [BOOTSTRAP.md](docs/BOOTSTRAP.md).

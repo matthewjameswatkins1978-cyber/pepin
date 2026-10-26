@@ -19,7 +19,7 @@ From the repository root:
 '{"schemaVersion":3,"op":"open","name":"hello","source":"say(\"hello\")\n"}' | .\pep.ps1 session --jsonl
 ```
 
-`pep.ps1` compiles `pep_ocaml.ml` with `ocamlopt` when the source changes, placing generated files under the ignored `_build/ocaml/` directory. The OCaml seed parses Pep source, checks it into a typed representation, reports holes and diagnostics, and interprets complete checked programs. `run` does not invoke a native Pep code generator.
+`pep.ps1` compiles `pep_ocaml.ml` with `ocamlopt` when the source changes, placing generated files under the ignored `_build/ocaml/` directory. The OCaml seed parses Pep source, checks it into a typed representation, reports holes and diagnostics, and interprets complete checked programs. It supports immutable records, recursive tagged unions, constructor patterns, exhaustive matching, and typed holes inside match arms. `run` does not invoke a native Pep code generator.
 
 `session --jsonl` keeps revisioned source snapshots only in the current process. Its request and response contract is schema v3 in [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md); the existing file-oriented commands remain schema v2. The `fill_hole` operation previews or applies one revision-bound named-hole replacement through the existing parser and checker. See [the example](../examples/fill_double_hole.pep). Each changed revision is fully parsed and checked, so this feature is not incremental compilation.
 
