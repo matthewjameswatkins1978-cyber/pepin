@@ -8,6 +8,8 @@ explicitly selects the harness self-tests.
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
@@ -82,6 +84,38 @@ class HarnessContractTests(unittest.TestCase):
         other["response"] = {"status": "runtime_error", "diagnostics": [{"code": "PEP_RUNTIME_CALL_DEPTH"}]}
         with patch.object(harness, "cli_case", side_effect=[check, other]):
             self.assertFalse(harness.replay_finding(finding, b"case", "runtime-case"))
+
+    def test_reduce_findings_reruns_oracle_and_writes_only_preserved_bytes(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            corpus = output / "corpus"
+            corpus.mkdir()
+            (corpus / "invalid-case.pep").write_bytes(b"prefix-FAIL-suffix")
+            finding = {"caseId": "invalid-case", "kind": "invalid-generator", "classification": "confirmed-bug"}
+
+            def fake_cli(case_id: str, raw: bytes, command: str = "check") -> dict[str, object]:
+                return {"status": "completed", "returncode": 0 if b"FAIL" in raw else 1,
+                        "response": {"status": "valid" if b"FAIL" in raw else "invalid"},
+                        "stdout": "", "stderr": ""}
+
+            with patch.object(harness, "ROOT", output), patch.object(harness, "OUT", output), patch.object(harness, "cli_case", side_effect=fake_cli):
+                harness.reduce_findings([finding], max_cases=1)
+            reduced = (output / "counterexamples" / "invalid-case.pep").read_bytes()
+            self.assertEqual(reduced, b"FAIL")
+            self.assertEqual(finding["reduction"]["status"], "reduced")
+            self.assertLessEqual(finding["reduction"]["attempts"], 80)
+
+    def test_unsupported_finding_retains_original_without_counterexample(self) -> None:
+        with TemporaryDirectory() as directory:
+            output = Path(directory)
+            corpus = output / "corpus"
+            corpus.mkdir()
+            (corpus / "session-case.pep").write_bytes(b"original")
+            finding = {"caseId": "session-case", "kind": "session", "classification": "confirmed-bug"}
+            with patch.object(harness, "OUT", output):
+                harness.reduce_findings([finding], max_cases=1)
+            self.assertEqual(finding["reduction"]["status"], "unsupported")
+            self.assertFalse((output / "counterexamples").exists())
 
     def test_session_case_records_malformed_lines_without_crashing(self) -> None:
         fake = {"status": "completed", "returncode": 0, "stdout": "not-json\n{\"status\":\"valid\"}\n", "stderr": "", "elapsedMs": 1}
