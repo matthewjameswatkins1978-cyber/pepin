@@ -34,7 +34,8 @@ ignored `_build/conformance/`, and produces:
 - `_build/conformance/corpus/` — exact inputs used;
 - `_build/conformance/counterexamples/` — reduced byte-for-byte reproducers.
 
-The command returns non-zero only when a fresh run records a confirmed bug.
+The command returns non-zero when a fresh run records a confirmed bug or an
+infrastructure failure.
 `missing-test` entries are successful coverage observations, not correctness
 claims. Every finding retains its exact corpus file, case identifier, seed in
 the identifier, and replay commands in `results.json`.
