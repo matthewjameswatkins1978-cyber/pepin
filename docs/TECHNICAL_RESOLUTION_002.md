@@ -26,6 +26,16 @@ This applies to Pep's host tools, native backend, runtime, type-checking approac
 - C23 is a **backend target**, not a declaration that C is forever the ideal IR. A future better-supported backend may be adopted through another measured decision.
 - The Pep-written generator, native backend, and self-hosting are **not yet implemented**. Public capability discovery must continue to report only shipped capabilities.
 
+## Native compiler choice: Clang primary, GCC cross-check
+
+- **Primary:** Clang/LLVM, starting with the latest verified stable release at the October 2026 decision point (**23.1.4**, published 2026-10-20). This is a baseline for the first C23 backend acceptance gate, not a permanent version ceiling. Verify the actual installed binary/version and C23 feature support before compiling.
+- **Independent conformance cross-check:** GCC 16 (or a later stable, verified GCC release), compiling the same generated C23 outputs during acceptance/CI. Tests must demonstrate equivalent observable Pep behaviour and investigate differences rather than declaring Clang or GCC automatically authoritative.
+- **Windows integration:** Prefer the MSYS2 **CLANG64** toolchain (MinGW-w64/UCRT) for native Windows builds. Do not assume native MSVC or historical TinyCC accepts full C23. Confirm the exact installed toolchain and runtime before declaring the backend operational.
+- **Invocation policy:** Use explicit strict standard mode `-std=c23`, suitable warnings and diagnostics, and documented/verified linker configuration. Do not silently switch to `gnu23` or depend on compiler extensions. Compile C23 feature-probes for every required language/library feature, not merely a `-std=c23` smoke test.
+- **Reassessment:** Adopt newer stable, supported Clang versions under the founding technology rule after testing. Revisit compiler preference if GCC or another standards-conforming toolchain measurably better serves Pep. Neither toolchain is the semantic authority: Pep's checker/interpreter and conformance contract remain the source of truth.
+
+This is a **toolchain decision**, not evidence that Clang/GCC have been installed locally or that Pep can currently generate C23.
+
 ## Record of change
 
 Historical A0 MoonBit code that generated C11 remains untouched. Technical Resolution 001 remains for provenance, with its old C11 target explicitly overridden here. Other decisions in Resolution 001 remain binding.
