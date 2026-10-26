@@ -1,4 +1,4 @@
-# Next packet: The first living Pep tool extension (A5)
+# Implementation packet A5: The first living Pep tool extension
 
 A4 added immutable nominal records, recursive tagged unions, checked constructors and field access, exhaustive pattern matching, and typed holes inside match arms. This packet adds the first host-managed tool extension to the in-process OCaml seed. It does not add special Pep syntax, rebuild the compiler, or claim that extensions are sandboxed.
 
@@ -53,4 +53,8 @@ Automate the full scenario through the real session JSONL interface:
 7. Verify rejected, incomplete, unsupported-signature, and side-effecting functions never become callable.
 8. Verify argument count/type errors, call-depth and step limits, and direct plus transitive say rejection.
 
-Keep all prior A3 revision-bound hole filling and A4 language behavior intact. Run the complete OCaml and historical MoonBit suites, plus focused real-session JSONL acceptance checks. Update describe, README, session and design documentation to state the implemented boundary accurately. Update this packet to the next milestone only after A5 passes its gate.
+## A5 implementation status
+
+A5 passed its acceptance gate on 2026-10-26. The full repository suite passed 56 tests: 45 OCaml CLI tests and 11 historical MoonBit tests. Real session JSONL tests cover registration, checker-derived signatures, scalar values, test-vector validation, explicit activation, invocation, hot replacement, failed replacement preservation, incomplete and unsupported functions, direct and transitive say rejection, argument errors, call-depth limits, and execution-step limits. The registry is process-local and trusted; it is not a sandbox. No later implementation packet is specified here.
+
+The A5 acceptance gate required complete OCaml and historical MoonBit suites and focused real-session JSONL checks. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the implemented request boundary and runtime limits.

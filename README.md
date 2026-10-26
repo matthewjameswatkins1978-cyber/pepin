@@ -22,14 +22,14 @@ python -m unittest discover -s tests -v
 
 `inspect` returns a source-spanned AST. `check` returns the checked tree and hole information. `query` selects holes and compatible in-scope bindings; `--offset` accepts an original UTF-8 byte offset. `run` executes only complete, successfully checked programs. `describe --json` reports implemented capabilities only.
 
-The in-process semantic session reads and writes JSON Lines over standard input/output and keeps documents only until the process exits. Schema-v3 `fill_hole` resolves one named hole by document, current revision, scope, and name; it previews or applies exactly one expression after whole-program checking. See [the example hole](examples/fill_double_hole.pep) and [SESSION_PROTOCOL.md](docs/SESSION_PROTOCOL.md) for the multi-request contract. Existing file-oriented JSON commands remain schema v2.
+The in-process semantic session reads and writes JSON Lines over standard input/output and keeps documents and tool registrations only until the process exits. Schema-v3 supports revision-bound queries, byte edits, and named-hole fills. Tool protocol v1 adds checker-derived registration, test-vector validation, explicit activation, scalar typed invocation, listing, and hot replacement. The trusted-local interpreter blocks say and enforces call-depth and step budgets; it is not a sandbox. See [the hole example](examples/fill_double_hole.pep) and [SESSION_PROTOCOL.md](docs/SESSION_PROTOCOL.md) for message shapes and limits. Existing file-oriented JSON commands remain schema v2.
 ## Design and history
 - [Founding Design v0.3](docs/FOUNDING_DESIGN_v0.3.md): language vision.
 - [Technical Resolution 001](docs/TECHNICAL_RESOLUTION_001.md): binding technical decisions and acceptance requirements.
 - [Implementation status](docs/DESIGN.md): what is implemented versus planned.
 - [Session protocol v3](docs/SESSION_PROTOCOL.md): ephemeral revision-aware JSONL interface and its limits.
 - [Seed-language decision](docs/SEED_LANGUAGE.md): OCaml seed choice and current limits.
-- [Next implementation packet](docs/NEXT_PACKET.md): the first live Pep tool extension (A5).
+- [A5 implementation packet](docs/NEXT_PACKET.md): acceptance scope and implementation status for the first local Pep tool extension.
 - [Historical A0 MoonBit design](docs/HISTORICAL_DESIGN_A0.md): retained prototype record; not the primary compiler feature list.
 
 The original MoonBit compiler remains available as `pep-moonbit.ps1` with its separate tests for historical/reference use. The current bootstrap instructions are in [BOOTSTRAP.md](docs/BOOTSTRAP.md).

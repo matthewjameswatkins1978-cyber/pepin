@@ -52,6 +52,29 @@ Complete, incomplete, and invalid remain distinct states. Incomplete trees can b
 
 Use the exact document and revision returned by the process. `doc-1` is illustrative; clients must not assume IDs are stable across sessions.
 
-## Implemented limits and next step
+## Implemented session behavior
 
-This A3 protocol is in-process and ephemeral. It provides raw byte-range edits and one compiler-backed structural operation: revision-bound filling of a uniquely named typed hole. All changed revisions are fully re-analysed. It does not provide persistence, a network service, extension activation, parametric containers, a native backend, or self-hosting. The next work packet is [the first local Pep tool extension](NEXT_PACKET.md); it adds a registry and activation boundary without changing this session protocol.
+This session is in-process and ephemeral. It retains immutable revisions, provides raw byte-range edits and revision-bound filling of a uniquely named typed hole, and fully re-analyses changed source. It does not provide persistence, a network service, parametric containers, a native backend, or self-hosting.
+
+## Local tool protocol v1 (A5)
+
+Tool operations use the existing session envelope with schemaVersion 3 and require toolProtocolVersion 1. Every request and response is one JSON object per line. Error responses for tool operations carry the same tool protocol version.
+
+Registration names a tool, document, exact retained source revision, ordinary Pep function, and optional description. The checker derives the function signature. The first boundary accepts only Int, Bool, Str, and Unit parameters and results; records and variants remain internal. Registry states are Registered, Validated, Active, Rejected, and Superseded. Only Active entries are callable.
+
+Validation requires complete checked source, host-policy approval, and at least one test vector executed by the real interpreter. A vector has an arguments array and an expected result, each encoded as a typed value object. Int uses a signed 64-bit decimal string, Bool a JSON boolean, Str a JSON string, and Unit null. Activation is a separate operation and only succeeds for a Validated entry.
+
+A tool invocation resolves the active entry and its immutable document revision. It accepts typed scalar arguments, checks count and types, and returns a typed scalar result. A successful replacement becomes active atomically and marks the prior registration Superseded. An invalid, incomplete, incompatible, or failed replacement does not change the current active entry.
+
+The host exposes no Pep operations for filesystem, network, environment, or process access. It blocks say both through reachable-call validation and an interpreter runtime check. Execution is limited to 100,000 interpreter steps and 128 function-call depth. This is a trusted-local prototype, not a sandbox. Registry state ends with the session process.
+
+A registration and validation exchange has this shape; use the exact revision returned by open or apply_edit:
+
+```jsonl
+{"schemaVersion":3,"toolProtocolVersion":1,"op":"tool_register","tool":"fee","document":"doc-1","revision":"sha256:<revision>","function":"calculate_fee","description":"Calculate the fee"}
+{"schemaVersion":3,"toolProtocolVersion":1,"op":"tool_validate","tool":"fee","document":"doc-1","revision":"sha256:<revision>","testVectors":[{"arguments":[{"type":"Int","value":"20"}],"expect":{"type":"Int","value":"22"}}]}
+{"schemaVersion":3,"toolProtocolVersion":1,"op":"tool_activate","tool":"fee","document":"doc-1","revision":"sha256:<revision>"}
+{"schemaVersion":3,"toolProtocolVersion":1,"op":"tool_invoke","tool":"fee","arguments":[{"type":"Int","value":"20"}]}
+```
+
+The invocation response contains the active revision and a typed result. tool_list reports each registration's status, callability, signature, description, and activeRevision for its tool name. The placeholder revision above is illustrative; clients must use the exact returned revision.

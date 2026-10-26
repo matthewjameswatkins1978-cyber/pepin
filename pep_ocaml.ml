@@ -519,10 +519,16 @@ let checked_bin op a b sp =
  |"/"->if b=0L then runtime "PEP_RUNTIME_DIVISION_BY_ZERO" "Division by zero" sp else if a=Int64.min_int&&b= -1L then runtime "PEP_RUNTIME_OVERFLOW" "Integer division overflow" sp else VInt(Int64.div a b)
  |"neg"->if b=Int64.min_int then runtime "PEP_RUNTIME_OVERFLOW" "Integer negation overflow" sp else VInt(Int64.neg b)
  |_ ->assert false
-let execute c =
+let execute ?(entry=None) ?(allow_say=true) ?(step_limit=max_int) ?(max_depth=512) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
- let max_depth=512 in
- let rec eval env callstack e = match e.node with
+ let remaining_steps = ref step_limit in
+ let tick sp =
+   decr remaining_steps;
+   if !remaining_steps < 0 then runtime "PEP_RUNTIME_STEP_LIMIT" "Execution step budget exceeded" sp
+ in
+ let rec eval env callstack e =
+  tick e.espan;
+  match e.node with
   |XInt n->VInt n|XBool b->VBool b|XStr s->VStr s
   |XVar id->(try List.assoc id env with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked binding is missing at runtime" e.espan)
   |XHole _->runtime "PEP_RUNTIME_HOLE" "Cannot execute an incomplete expression" e.espan
@@ -538,7 +544,7 @@ let execute c =
   |XBin(op,a,b)->let va=int_value(eval env callstack a) and vb=int_value(eval env callstack b) in checked_bin op va vb e.espan
   |XIf(c,y,n)->(match eval env callstack c with VBool true->eval env callstack y|VBool false->eval env callstack n|_->assert false)
   |XCall(fid,name,args)->let values=List.map(eval env callstack)args in
-    if name="say" then (match values with [VStr s]->print_endline s;VUnit|_->assert false)
+    if name="say" then (if not allow_say then runtime "PEP_RUNTIME_TOOL_EFFECT" "say is unavailable during tool execution" e.espan else match values with [VStr s]->print_endline s;VUnit|_->assert false)
     else if name="int_text" then (match values with [VInt n]->VStr(Int64.to_string n)|_->assert false)
     else match fid with None->runtime "PEP_RUNTIME_UNKNOWN_CALL" ("Unknown checked call '"^name^"'") e.espan|Some id->
       if List.length callstack>=max_depth then runtime "PEP_RUNTIME_CALL_DEPTH" "Maximum function call depth exceeded" e.espan;
@@ -552,11 +558,22 @@ let execute c =
   |TPConstructor _,_->None
  and exec_stmts env stack = function
   |[]->None
-  |TLet(b,e)::rest->let v=eval env stack e in exec_stmts ((b.bid,v)::env) stack rest
-  |TReturn e::_->Some(eval env stack e)
-  |TBlock xs::rest->(match exec_stmts env stack xs with Some v->Some v|None->exec_stmts env stack rest)
-  |TExpr e::rest->ignore(eval env stack e);exec_stmts env stack rest
- in ignore(exec_stmts [] [] c.tops)
+  |stmt::rest->
+    tick (match stmt with TLet(b,_)->b.bspan|TReturn e->e.espan|TBlock _->mkspan 0 0 1 1|TExpr e->e.espan);
+    (match stmt with
+     |TLet(b,e)->let v=eval env stack e in exec_stmts ((b.bid,v)::env) stack rest
+     |TReturn e->Some(eval env stack e)
+     |TBlock xs->(match exec_stmts env stack xs with Some v->Some v|None->exec_stmts env stack rest)
+     |TExpr e->ignore(eval env stack e);exec_stmts env stack rest)
+ in
+ match entry with
+ |None -> ignore(exec_stmts [] [] c.tops); VUnit
+ |Some (function_id,arguments) ->
+   let f = match List.find_opt (fun f -> f.sig_.fid=function_id) c.functions with
+     |Some f -> f |None -> runtime "PEP_RUNTIME_UNKNOWN_FUNCTION" "Checked tool function is missing" (mkspan 0 0 1 1) in
+   if List.length arguments <> List.length f.tparams then runtime "PEP_RUNTIME_ARGUMENT_COUNT" "Tool argument count did not match the checked function" f.sig_.decl.fspan;
+   let env = List.map2 (fun binding value -> binding.bid,value) f.tparams arguments in
+   match exec_stmts env [f.sig_.name] f.tbody with Some value -> value |None -> VUnit
 
 (* Session protocol v3. Revisions are content-addressed and each analysis is
    immutable; only a document's current-revision pointer changes. *)
@@ -890,34 +907,6 @@ let session_hole_json document revision hole =
     bindings actions (span_json hole.hspan)
 
 let session_documents : (string, session_document) Hashtbl.t = Hashtbl.create 8
-
-let session_response operation document revision analysis ?offset ?(extra="") () =
-  let holes = match analysis.checked with
-    | None -> []
-    | Some checked ->
-        (match offset with
-         | None -> checked.holes
-         | Some byte -> List.filter (fun hole -> hole.hspan.lo = byte) checked.holes)
-  in
-  let ast = match analysis.parsed with None -> "null" | Some tops -> ast_json tops in
-  let typed = match analysis.checked with None -> "null" | Some checked -> typed_json checked in
-  let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
-  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s%s}"
-    (json_string operation) (json_string document)
-    (match Hashtbl.find_opt session_documents document with
-     | Some doc -> (match doc.document_name with None -> "null" | Some name -> json_string name)
-     | None -> "null")
-    (json_string revision) (json_string (session_status analysis)) ast typed
-    (String.concat "," (List.map (session_hole_json document revision) holes)) diagnostics extra
-
-let session_error_json operation code message ?document ?current_revision () =
-  let optional key = function None -> "" | Some value -> ",\"" ^ key ^ "\":" ^ json_string value in
-  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"error\",\"operation\":%s,\"error\":{\"code\":%s,\"message\":%s}%s%s,\"metrics\":%s}"
-    (match operation with None -> "null" | Some op -> json_string op)
-    (json_string code) (json_string message)
-    (optional "document" document) (optional "currentRevision" current_revision)
-    (session_metrics_json ())
-
 let session_member fields key = List.assoc_opt key fields
 
 let session_required_string fields key = match session_member fields key with
@@ -950,6 +939,272 @@ let session_get_revision document revision =
   match Hashtbl.find_opt document.revisions revision with
   | Some analysis -> analysis
   | None -> raise (Session_error ("PEP_REVISION_NOT_FOUND", "Revision is not retained in this session"))
+
+type tool_entry = {
+  tool_key:string;
+  tool_name:string;
+  tool_document:string;
+  tool_revision:string;
+  tool_function:string;
+  tool_function_id:int option;
+  tool_parameters:ty list option;
+  tool_result:ty option;
+  tool_description:string;
+  mutable tool_status:string;
+  mutable tool_failure:string option;
+}
+
+let session_tools : (string, tool_entry) Hashtbl.t = Hashtbl.create 16
+let session_active_tools : (string, string) Hashtbl.t = Hashtbl.create 8
+let tool_step_budget = 100_000
+let tool_call_depth_budget = 128
+
+let session_tool_version fields =
+  match session_member fields "toolProtocolVersion" with
+  | Some (JNumber "1") -> ()
+  | Some _ -> raise (Session_error ("PEP_TOOL_PROTOCOL_VERSION", "toolProtocolVersion must be 1"))
+  | None -> raise (Session_error ("PEP_SESSION_FIELD_REQUIRED", "Missing integer field 'toolProtocolVersion'"))
+
+let session_tool_entry name document revision =
+  let key = name ^ "\000" ^ document ^ "\000" ^ revision in
+  match Hashtbl.find_opt session_tools key with
+  | Some entry -> entry
+  | None -> raise (Session_error ("PEP_TOOL_NOT_REGISTERED", "No tool registration matches this name and revision"))
+
+let session_tool_signature_json entry =
+  let parameters = match entry.tool_parameters with
+    | None -> "null"
+    | Some types -> "[" ^ String.concat "," (List.map (fun ty -> json_string (type_name ty)) types) ^ "]"
+  in
+  let result = match entry.tool_result with None -> "null" | Some ty -> json_string (type_name ty) in
+  "{\"parameters\":" ^ parameters ^ ",\"returns\":" ^ result ^ "}"
+
+let session_tool_registration_json operation entry outcome =
+  Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":1,\"outcome\":%s,\"operation\":%s,\"tool\":%s,\"document\":%s,\"revision\":%s,\"function\":%s,\"signature\":%s,\"status\":%s,\"description\":%s,\"callable\":%s,\"error\":%s}"
+    (json_string outcome) (json_string operation) (json_string entry.tool_name)
+    (json_string entry.tool_document) (json_string entry.tool_revision)
+    (json_string entry.tool_function) (session_tool_signature_json entry)
+    (json_string entry.tool_status) (json_string entry.tool_description)
+    (if entry.tool_status = "Active" then "true" else "false")
+    (match entry.tool_failure with None -> "null" | Some message -> json_string message)
+
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | Named _ -> false
+
+let tool_value_json ty value =
+  let encoded = match ty,value with
+    | Int,VInt number -> json_string (Int64.to_string number)
+    | Bool,VBool boolean -> if boolean then "true" else "false"
+    | Str,VStr text -> json_string text
+    | Unit,VUnit -> "null"
+    | _ -> raise (Session_error ("PEP_TOOL_RESULT_TYPE", "Interpreter result did not match the checked tool return type"))
+  in
+  "{\"type\":" ^ json_string (type_name ty) ^ ",\"value\":" ^ encoded ^ "}"
+
+let session_tool_value expected = function
+  | JObject fields ->
+      let actual = session_required_string fields "type" in
+      if actual <> type_name expected then
+        raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
+      let value = match expected,session_member fields "value" with
+        | Int,Some (JString decimal) ->
+            let digits = if String.length decimal>0 && decimal.[0]='-' then String.sub decimal 1 (String.length decimal-1) else decimal in
+            if digits="" || not (String.for_all (fun c -> c>='0' && c<='9') digits) then
+              raise (Session_error ("PEP_TOOL_INTEGER_FORMAT", "Int values must be signed 64-bit decimal strings"));
+            (try VInt (Int64.of_string decimal) with _ -> raise (Session_error ("PEP_TOOL_INTEGER_FORMAT", "Int values must be signed 64-bit decimal strings")))
+        | Bool,Some (JBool boolean) -> VBool boolean
+        | Str,Some (JString text) -> VStr text
+        | Unit,Some JNull -> VUnit
+        | _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "Tool argument value did not match its declared scalar type"))
+      in value
+  | _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "Each tool argument must be a typed value object"))
+
+let rec tool_expr_calls expression =
+  let child_calls = match expression.node with
+    | XCall (_,_,args) -> List.concat_map tool_expr_calls args
+    | XBin (_,left,right) -> tool_expr_calls left @ tool_expr_calls right
+    | XIf (condition,yes,no) -> tool_expr_calls condition @ tool_expr_calls yes @ tool_expr_calls no
+    | XRecord (_,fields) -> List.concat_map (fun (_,value) -> tool_expr_calls value) fields
+    | XField (_,value) -> tool_expr_calls value
+    | XConstructor (_,_,_,args) -> List.concat_map tool_expr_calls args
+    | XMatch (subject,arms) -> tool_expr_calls subject @ List.concat_map (fun arm -> tool_expr_calls arm.tresult) arms
+    | XInt _ | XBool _ | XStr _ | XVar _ | XHole _ -> []
+  in
+  let own = match expression.node with XCall (id,name,_) -> [id,name] | _ -> [] in
+  own @ child_calls
+
+let rec tool_stmt_calls = function
+  | TLet (_,expression) | TReturn expression | TExpr expression -> tool_expr_calls expression
+  | TBlock statements -> List.concat_map tool_stmt_calls statements
+
+let tool_reaches_say checked function_id =
+  let functions = Hashtbl.create 16 in
+  List.iter (fun function_ -> Hashtbl.replace functions function_.sig_.fid function_) checked.functions;
+  let rec visit seen id =
+    if List.mem id seen then false
+    else match Hashtbl.find_opt functions id with
+      | None -> false
+      | Some function_ ->
+          let calls = List.concat_map tool_stmt_calls function_.tbody in
+          List.exists (fun (_,name) -> name="say") calls ||
+          List.exists (function Some child,_ -> visit (id::seen) child | None,_ -> false) calls
+  in visit [] function_id
+
+let tool_host_policy checked entry =
+  match entry.tool_parameters,entry.tool_result,entry.tool_function_id with
+  | Some parameters,Some result,Some function_id ->
+      if not (List.for_all session_tool_scalar (result::parameters)) then Some "Only Int, Bool, Str, and Unit may cross the tool boundary"
+      else if tool_reaches_say checked function_id then Some "Exported function reaches say and is not permitted for tool execution"
+      else None
+  | _ -> Some "Tool has no checked function signature"
+
+let tool_replacement_policy entry =
+  match Hashtbl.find_opt session_active_tools entry.tool_name with
+  | None -> None
+  | Some active_key when active_key=entry.tool_key -> None
+  | Some active_key ->
+      (match Hashtbl.find_opt session_tools active_key with
+       | Some active when active.tool_parameters=entry.tool_parameters && active.tool_result=entry.tool_result -> None
+       | Some _ -> Some "Replacement signature is incompatible with the active tool"
+       | None -> None)
+
+let tool_find_function checked name = List.find_opt (fun function_ -> function_.sig_.name=name) checked.functions
+
+let session_tool_register fields =
+  session_tool_version fields;
+  let name = session_required_string fields "tool" in
+  let document = session_document fields in
+  let revision = session_required_string fields "revision" in
+  let function_name = session_required_string fields "function" in
+  let description = match session_member fields "description" with None -> "" | Some (JString value) -> value | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field 'description' must be a string")) in
+  let analysis = session_get_revision document revision in
+  let key = name ^ "\000" ^ document.document_id ^ "\000" ^ revision in
+  let entry = match analysis.checked with
+    | None -> {tool_key=key;tool_name=name;tool_document=document.document_id;tool_revision=revision;tool_function=function_name;tool_function_id=None;tool_parameters=None;tool_result=None;tool_description=description;tool_status="Rejected";tool_failure=Some "Source is invalid and has no checked function signature"}
+    | Some checked ->
+        (match tool_find_function checked function_name with
+         | None -> raise (Session_error ("PEP_TOOL_FUNCTION_NOT_FOUND", "No checked function with this name exists at the registered revision"))
+         | Some function_ ->
+             {tool_key=key;tool_name=name;tool_document=document.document_id;tool_revision=revision;tool_function=function_name;tool_function_id=Some function_.sig_.fid;tool_parameters=Some (List.map snd function_.sig_.params);tool_result=Some function_.sig_.result;tool_description=description;tool_status="Registered";tool_failure=None})
+  in
+  if Hashtbl.mem session_tools key then raise (Session_error ("PEP_TOOL_ALREADY_REGISTERED", "This tool name and source revision are already registered"));
+  Hashtbl.add session_tools key entry;
+  session_tool_registration_json "tool_register" entry (if entry.tool_status="Rejected" then "rejected" else "ok")
+
+let session_tool_test_vector checked entry vector =
+  let fields = session_object vector in
+  let args = match session_member fields "arguments" with Some (JArray values) -> values | _ -> raise (Session_error ("PEP_TOOL_TEST_VECTOR", "Each test vector requires an arguments array")) in
+  let expected = match entry.tool_parameters,entry.tool_result,entry.tool_function_id with
+    |Some parameters,Some result,Some function_id ->
+       if List.length parameters <> List.length args then raise (Session_error ("PEP_TOOL_ARGUMENT_COUNT", "Test vector argument count did not match the function signature"));
+       let values = List.map2 session_tool_value parameters args in
+       let expected_json = match session_member fields "expect" with Some value -> value | None -> raise (Session_error ("PEP_TOOL_TEST_VECTOR", "Each test vector requires an expect value")) in
+       let expected_value = session_tool_value result expected_json in
+       let actual = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget checked in
+       if actual <> expected_value then raise (Session_error ("PEP_TOOL_TEST_FAILED", "Interpreter result did not match the expected test vector"));
+       ()
+    | _ -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Tool has no checked function signature"))
+  in ignore expected
+
+let session_tool_validate fields =
+  session_tool_version fields;
+  let entry = session_tool_entry (session_required_string fields "tool") (session_required_string fields "document") (session_required_string fields "revision") in
+  if entry.tool_status="Active" || entry.tool_status="Superseded" then
+    raise (Session_error ("PEP_TOOL_STATE", "Active and superseded registrations cannot be revalidated"));
+  let analysis = session_get_revision (session_document ["document",JString entry.tool_document]) entry.tool_revision in
+  let reject message = entry.tool_status <- "Rejected"; entry.tool_failure <- Some message in
+  (match analysis.checked with
+   | None -> reject "Source is invalid and cannot be validated"
+   | Some checked when session_status analysis <> "valid" -> reject "Incomplete source cannot be activated"
+   | Some checked ->
+       (match tool_host_policy checked entry with
+        | Some reason -> reject reason
+        | None -> (match tool_replacement_policy entry with
+            | Some reason -> reject reason
+            | None -> (match session_member fields "testVectors" with
+                | Some (JArray (_::_ as vectors)) ->
+                    (try List.iter (session_tool_test_vector checked entry) vectors; entry.tool_status <- "Validated"; entry.tool_failure <- None
+                     with Session_error (_,message) -> reject message | Runtime (_,message,_) -> reject message)
+                | _ -> reject "Validation requires at least one real interpreter test vector"))));
+  session_tool_registration_json "tool_validate" entry (if entry.tool_status="Validated" then "ok" else "rejected")
+
+let session_tool_activate fields =
+  session_tool_version fields;
+  let entry = session_tool_entry (session_required_string fields "tool") (session_required_string fields "document") (session_required_string fields "revision") in
+  if entry.tool_status <> "Validated" then raise (Session_error ("PEP_TOOL_NOT_VALIDATED", "Only a successfully validated tool can be activated"));
+  (match Hashtbl.find_opt session_active_tools entry.tool_name with
+   | Some previous_key when previous_key <> entry.tool_key ->
+       (match Hashtbl.find_opt session_tools previous_key with Some previous -> previous.tool_status <- "Superseded" | None -> ())
+   | _ -> ());
+  entry.tool_status <- "Active";
+  entry.tool_failure <- None;
+  Hashtbl.replace session_active_tools entry.tool_name entry.tool_key;
+  session_tool_registration_json "tool_activate" entry "ok"
+
+let session_tool_list fields =
+  session_tool_version fields;
+  let entries = Hashtbl.fold (fun _ entry acc -> entry::acc) session_tools [] |> List.sort (fun a b -> compare (a.tool_name,a.tool_revision) (b.tool_name,b.tool_revision)) in
+  let rows = List.map (fun entry ->
+    let active_revision = match Hashtbl.find_opt session_active_tools entry.tool_name with
+      | Some key -> (match Hashtbl.find_opt session_tools key with Some active -> json_string active.tool_revision | None -> "null")
+      | None -> "null" in
+    Printf.sprintf "{\"tool\":%s,\"document\":%s,\"revision\":%s,\"activeRevision\":%s,\"function\":%s,\"signature\":%s,\"description\":%s,\"status\":%s,\"callable\":%s}"
+      (json_string entry.tool_name) (json_string entry.tool_document) (json_string entry.tool_revision)
+      active_revision (json_string entry.tool_function) (session_tool_signature_json entry) (json_string entry.tool_description)
+      (json_string entry.tool_status) (if entry.tool_status="Active" then "true" else "false")) entries in
+  Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":1,\"outcome\":\"ok\",\"operation\":\"tool_list\",\"tools\":[%s]}" (String.concat "," rows)
+
+let session_tool_invoke fields =
+  session_tool_version fields;
+  let name = session_required_string fields "tool" in
+  let key = match Hashtbl.find_opt session_active_tools name with Some key -> key | None -> raise (Session_error ("PEP_TOOL_NOT_ACTIVE", "No active tool has this name")) in
+  let entry = match Hashtbl.find_opt session_tools key with Some entry when entry.tool_status="Active" -> entry | _ -> raise (Session_error ("PEP_TOOL_NOT_ACTIVE", "Tool does not have an active registry entry")) in
+  let args = match session_member fields "arguments" with Some (JArray values) -> values | _ -> raise (Session_error ("PEP_TOOL_ARGUMENTS", "Invocation requires an arguments array")) in
+  let values = match entry.tool_parameters with
+    | Some parameters when List.length parameters=List.length args -> List.map2 session_tool_value parameters args
+    | Some _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_COUNT", "Tool argument count did not match its signature"))
+    | None -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked signature"))
+  in
+  let analysis = session_get_revision (session_document ["document",JString entry.tool_document]) entry.tool_revision in
+  let checked = match analysis.checked,entry.tool_function_id with Some checked,Some _ -> checked | _ -> raise (Session_error ("PEP_TOOL_SOURCE_UNAVAILABLE", "Active tool source revision is unavailable")) in
+  let result = match entry.tool_function_id,entry.tool_result with
+    | Some function_id,Some result_type ->
+        let value = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget checked in
+        tool_value_json result_type value
+    | _ -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked function signature"))
+  in
+  Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":1,\"outcome\":\"ok\",\"operation\":\"tool_invoke\",\"tool\":%s,\"revision\":%s,\"result\":%s}"
+    (json_string entry.tool_name) (json_string entry.tool_revision) result
+
+let session_response operation document revision analysis ?offset ?(extra="") () =
+  let holes = match analysis.checked with
+    | None -> []
+    | Some checked ->
+        (match offset with
+         | None -> checked.holes
+         | Some byte -> List.filter (fun hole -> hole.hspan.lo = byte) checked.holes)
+  in
+  let ast = match analysis.parsed with None -> "null" | Some tops -> ast_json tops in
+  let typed = match analysis.checked with None -> "null" | Some checked -> typed_json checked in
+  let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s%s}"
+    (json_string operation) (json_string document)
+    (match Hashtbl.find_opt session_documents document with
+     | Some doc -> (match doc.document_name with None -> "null" | Some name -> json_string name)
+     | None -> "null")
+    (json_string revision) (json_string (session_status analysis)) ast typed
+    (String.concat "," (List.map (session_hole_json document revision) holes)) diagnostics extra
+
+let session_error_json operation code message ?document ?current_revision () =
+  let optional key = function None -> "" | Some value -> ",\"" ^ key ^ "\":" ^ json_string value in
+  let tool_version = match operation with
+    | Some ("tool_register" | "tool_validate" | "tool_activate" | "tool_list" | "tool_invoke") -> ",\"toolProtocolVersion\":1"
+    | _ -> ""
+  in
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"error\",\"operation\":%s%s,\"error\":{\"code\":%s,\"message\":%s}%s%s,\"metrics\":%s}"
+    (match operation with None -> "null" | Some op -> json_string op)
+    tool_version (json_string code) (json_string message)
+    (optional "document" document) (optional "currentRevision" current_revision)
+    (session_metrics_json ())
 
 let session_revision source = "sha256:" ^ sha256_hex source
 
@@ -1098,6 +1353,11 @@ let session_process request =
   | "fill_hole" ->
       let document = session_document fields in
       session_fill_hole document fields
+  | "tool_register" -> session_tool_register fields
+  | "tool_validate" -> session_tool_validate fields
+  | "tool_activate" -> session_tool_activate fields
+  | "tool_list" -> session_tool_list fields
+  | "tool_invoke" -> session_tool_invoke fields
   | "metrics" ->
       Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":\"metrics\",\"metrics\":%s}"
         (session_metrics_json ())
@@ -1119,7 +1379,10 @@ let run_session_jsonl () =
                session_error_json (session_operation_hint request) code message ()
            | Session_document_error (code, message, document, revision) ->
                session_error_json (session_operation_hint request) code message
-                 ~document ~current_revision:revision ())
+                 ~document ~current_revision:revision ()
+           | Runtime (code,message,span) ->
+               session_error_json (session_operation_hint request) code
+                 (Printf.sprintf "%s at %d:%d" message span.line span.column) ())
         with Json_parse_error message -> session_error_json None "PEP_SESSION_MALFORMED_JSON" message ()
       in
       print_endline response;
@@ -1135,7 +1398,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"metrics\"]},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in
@@ -1149,7 +1412,7 @@ let () =
       print_endline("{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"holes\":["^String.concat ","(List.map hole_json selected)^"]}"))
     else if command="check" then (print_endline(check_json tops checked);if checked.holes<>[] then exit 1)
     else if checked.holes<>[] then (if List.mem "--json" flags then print_endline(check_json tops checked) else prerr_endline "incomplete: unresolved typed holes";exit 1)
-    else execute checked
+    else ignore (execute checked)
   |_ ->usage()
  with
  |Error d->if Array.exists((=)"--json")Sys.argv then print_endline(diag_json d) else prerr_endline(Printf.sprintf "%s:%d:%d: %s: %s" (List.hd(Array.to_list Sys.argv)) d.at.line d.at.column d.code d.message);exit 1

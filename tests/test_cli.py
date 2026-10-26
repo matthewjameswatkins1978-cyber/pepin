@@ -25,6 +25,184 @@ def invoke_session(requests):
 
 
 class PepCliTests(unittest.TestCase):
+    @staticmethod
+    def tool_request(op, **fields):
+        return {"schemaVersion": 3, "toolProtocolVersion": 1, "op": op, **fields}
+
+    def test_tool_registry_validates_activates_invokes_and_hot_replaces(self):
+        source = "fn calculate_fee(amount: Int) -> Int { return amount + 2 }\n"
+        revision1 = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        source2 = source.replace("+ 2", "+ 3")
+        revision2 = "sha256:" + hashlib.sha256(source2.encode()).hexdigest()
+        source3 = source2.replace("amount + 3", '"bad"')
+        revision3 = "sha256:" + hashlib.sha256(source3.encode()).hexdigest()
+        source4 = 'fn calculate_fee(amount: Str) -> Int { return 23 }\n'
+        revision4 = "sha256:" + hashlib.sha256(source4.encode()).hexdigest()
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            self.tool_request("tool_register", tool="fee", document="doc-1", revision=revision1,
+                              function="calculate_fee", description="Calculate the fee"),
+            self.tool_request("tool_validate", tool="fee", document="doc-1", revision=revision1,
+                              testVectors=[{"arguments":[{"type":"Int","value":"20"}],
+                                            "expect":{"type":"Int","value":"22"}}]),
+            self.tool_request("tool_activate", tool="fee", document="doc-1", revision=revision1),
+            self.tool_request("tool_list"),
+            self.tool_request("tool_invoke", tool="fee", arguments=[{"type":"Int","value":"20"}]),
+            {"schemaVersion":3,"op":"apply_edit","document":"doc-1","expected_revision":revision1,
+             "start_byte":source.index("+ 2"),"end_byte":source.index("+ 2")+3,"replacement":"+ 3"},
+            self.tool_request("tool_register", tool="fee", document="doc-1", revision=revision2,
+                              function="calculate_fee", description="Calculate the fee"),
+            self.tool_request("tool_validate", tool="fee", document="doc-1", revision=revision2,
+                              testVectors=[{"arguments":[{"type":"Int","value":"20"}],
+                                            "expect":{"type":"Int","value":"23"}}]),
+            self.tool_request("tool_activate", tool="fee", document="doc-1", revision=revision2),
+            self.tool_request("tool_list"),
+            self.tool_request("tool_invoke", tool="fee", arguments=[{"type":"Int","value":"20"}]),
+            {"schemaVersion":3,"op":"open","source":source3},
+            self.tool_request("tool_register", tool="fee", document="doc-2", revision=revision3,
+                              function="calculate_fee", description="Invalid replacement"),
+            self.tool_request("tool_validate", tool="fee", document="doc-2", revision=revision3,
+                              testVectors=[{"arguments":[{"type":"Int","value":"20"}],
+                                            "expect":{"type":"Int","value":"23"}}]),
+            self.tool_request("tool_list"),
+            self.tool_request("tool_invoke", tool="fee", arguments=[{"type":"Int","value":"20"}]),
+            self.tool_request("tool_invoke", tool="fee", arguments=[{"type":"Str","value":"20"}]),
+            self.tool_request("tool_invoke", tool="fee", arguments=[]),
+            self.tool_request("tool_invoke", tool="fee", arguments=[{"type":"Int","value":"0x14"}]),
+            {"schemaVersion":3,"op":"open","source":source4},
+            self.tool_request("tool_register",tool="fee",document="doc-3",revision=revision4,function="calculate_fee"),
+            self.tool_request("tool_validate",tool="fee",document="doc-3",revision=revision4,
+                              testVectors=[{"arguments":[{"type":"Str","value":"20"}],"expect":{"type":"Int","value":"23"}}]),
+            self.tool_request("tool_list"),
+            self.tool_request("tool_invoke",tool="fee",arguments=[{"type":"Int","value":"20"}]),
+        ]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(responses), len(requests))
+        self.assertEqual(responses[1]["status"], "Registered")
+        self.assertEqual(responses[1]["signature"], {"parameters":["Int"],"returns":"Int"})
+        self.assertEqual(responses[2]["status"], "Validated")
+        self.assertEqual(responses[3]["status"], "Active")
+        self.assertTrue(responses[4]["tools"][0]["callable"])
+        self.assertEqual(responses[5]["result"], {"type":"Int","value":"22"})
+        self.assertEqual(responses[8]["status"], "Validated")
+        self.assertEqual(responses[9]["status"], "Active")
+        listed_statuses = {tool["status"] for tool in responses[10]["tools"]}
+        self.assertEqual(listed_statuses, {"Superseded", "Active"})
+        self.assertEqual(responses[11]["result"], {"type":"Int","value":"23"})
+        self.assertEqual(responses[12]["revision"], revision3)
+        self.assertEqual(responses[13]["status"], "Rejected")
+        self.assertEqual(responses[14]["status"], "Rejected")
+        self.assertEqual([tool["status"] for tool in responses[15]["tools"]].count("Active"), 1)
+        self.assertTrue(all(not tool["callable"] for tool in responses[15]["tools"] if tool["status"] == "Rejected"))
+        self.assertEqual(responses[16]["result"], {"type":"Int","value":"23"})
+        self.assertEqual(responses[17]["error"]["code"], "PEP_TOOL_ARGUMENT_TYPE")
+        self.assertEqual(responses[18]["error"]["code"], "PEP_TOOL_ARGUMENT_COUNT")
+        self.assertEqual(responses[19]["error"]["code"], "PEP_TOOL_INTEGER_FORMAT")
+        self.assertEqual(responses[22]["status"], "Rejected")
+        self.assertIn("incompatible", responses[22]["error"])
+        self.assertEqual([tool["status"] for tool in responses[23]["tools"]].count("Active"), 1)
+        self.assertTrue(all(tool["activeRevision"] == revision2 for tool in responses[23]["tools"]))
+        self.assertEqual(responses[24]["result"], {"type":"Int","value":"23"})
+
+    def test_tool_validation_rejects_incomplete_unsupported_effectful_and_over_budget_functions(self):
+        source = (
+            'fn direct() -> Int { say("blocked"); return 1 }\n'
+            'fn helper() -> Int { say("blocked"); return 1 }\n'
+            'fn transitive() -> Int { return helper() }\n'
+            'type Box { value: Int }\n'
+            'fn unsupported(box: Box) -> Int { return box.value }\n'
+            'fn fib(n: Int) -> Int { return if n <= 1 { n } else { fib(n - 1) + fib(n - 2) } }\n'
+            'fn deep(n: Int) -> Int { return deep(n + 1) }\n'
+        )
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        requests = [{"schemaVersion":3,"op":"open","source":source}]
+        cases = [
+            ("direct", [{"arguments":[],"expect":{"type":"Int","value":"1"}}]),
+            ("transitive", [{"arguments":[],"expect":{"type":"Int","value":"1"}}]),
+            ("unsupported", [{"arguments":[{"type":"Box","value":{}}],"expect":{"type":"Int","value":"1"}}]),
+            ("fib", [{"arguments":[{"type":"Int","value":"30"}],"expect":{"type":"Int","value":"832040"}}]),
+            ("deep", [{"arguments":[{"type":"Int","value":"1"}],"expect":{"type":"Int","value":"1"}}]),
+        ]
+        for name, vectors in cases:
+            requests.append(self.tool_request("tool_register",tool=name,document="doc-1",revision=revision,function=name))
+            requests.append(self.tool_request("tool_validate",tool=name,document="doc-1",revision=revision,testVectors=vectors))
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        validations = responses[2::2]
+        self.assertEqual([item["status"] for item in validations], ["Rejected"] * len(cases))
+        self.assertNotIn("blocked", result.stdout.splitlines())
+        self.assertIn("say", validations[0]["error"])
+        self.assertIn("say", validations[1]["error"])
+        self.assertIn("Only Int", validations[2]["error"])
+        self.assertIn("budget", validations[3]["error"])
+        self.assertIn("depth", validations[4]["error"])
+
+        incomplete = 'fn unfinished(value: Int) -> Int { return ?hole }\n'
+        incomplete_revision = "sha256:" + hashlib.sha256(incomplete.encode()).hexdigest()
+        incomplete_result = invoke_session([
+            {"schemaVersion":3,"op":"open","source":incomplete},
+            self.tool_request("tool_register",tool="unfinished",document="doc-1",revision=incomplete_revision,function="unfinished"),
+            self.tool_request("tool_validate",tool="unfinished",document="doc-1",revision=incomplete_revision,
+                              testVectors=[{"arguments":[{"type":"Int","value":"1"}],"expect":{"type":"Int","value":"1"}}]),
+        ])
+        incomplete_responses = [json.loads(line) for line in incomplete_result.stdout.splitlines()]
+        self.assertEqual(incomplete_responses[1]["status"], "Registered")
+        self.assertEqual(incomplete_responses[2]["status"], "Rejected")
+        self.assertIn("Incomplete", incomplete_responses[2]["error"])
+
+    def test_tool_scalar_message_types_round_trip(self):
+        source = (
+            'fn echo_bool(value: Bool) -> Bool { return value }\n'
+            'fn echo_text(value: Str) -> Str { return value }\n'
+            'fn no_result() -> Unit { }\n'
+        )
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        requests = [{"schemaVersion":3,"op":"open","source":source}]
+        definitions = [
+            ("bool", "echo_bool", ["Bool"], "Bool", [{"arguments":[{"type":"Bool","value":True}],"expect":{"type":"Bool","value":True}}], [{"type":"Bool","value":False}]),
+            ("text", "echo_text", ["Str"], "Str", [{"arguments":[{"type":"Str","value":"hello"}],"expect":{"type":"Str","value":"hello"}}], [{"type":"Str","value":"Pep"}]),
+            ("unit", "no_result", [], "Unit", [{"arguments":[],"expect":{"type":"Unit","value":None}}], []),
+        ]
+        for name, function, _, _, vectors, args in definitions:
+            requests.extend([
+                self.tool_request("tool_register",tool=name,document="doc-1",revision=revision,function=function),
+                self.tool_request("tool_validate",tool=name,document="doc-1",revision=revision,testVectors=vectors),
+                self.tool_request("tool_activate",tool=name,document="doc-1",revision=revision),
+                self.tool_request("tool_invoke",tool=name,arguments=args),
+            ])
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual([responses[index]["status"] for index in (2,6,10)], ["Validated"] * 3)
+        self.assertEqual(responses[4]["result"], {"type":"Bool","value":False})
+        self.assertEqual(responses[8]["result"], {"type":"Str","value":"Pep"})
+        self.assertEqual(responses[12]["result"], {"type":"Unit","value":None})
+
+    def test_tool_protocol_requires_version_one(self):
+        missing_version = {"schemaVersion":3,"op":"tool_list"}
+        unsupported_version = self.tool_request("tool_list")
+        unsupported_version["toolProtocolVersion"] = 2
+        responses = [json.loads(line) for line in invoke_session([missing_version,unsupported_version]).stdout.splitlines()]
+        self.assertEqual(responses[0]["error"]["code"], "PEP_SESSION_FIELD_REQUIRED")
+        self.assertEqual(responses[1]["error"]["code"], "PEP_TOOL_PROTOCOL_VERSION")
+        self.assertEqual(responses[1]["toolProtocolVersion"], 1)
+
+    def test_registered_tools_are_listed_but_not_callable_before_activation(self):
+        source = 'fn plus_one(value: Int) -> Int { return value + 1 }\n'
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        responses = [json.loads(line) for line in invoke_session([
+            {"schemaVersion":3,"op":"open","source":source},
+            self.tool_request("tool_register",tool="plus",document="doc-1",revision=revision,function="plus_one"),
+            self.tool_request("tool_list"),
+        ]).stdout.splitlines()]
+        self.assertEqual(responses[1]["status"], "Registered")
+        self.assertFalse(responses[1]["callable"])
+        self.assertEqual(responses[2]["tools"][0]["status"], "Registered")
+        self.assertFalse(responses[2]["tools"][0]["callable"])
+
     def test_session_fill_hole_previews_applies_and_preserves_history(self):
         source = (
             "# retain this header\n"
@@ -465,8 +643,11 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(description["types"], ["Int", "Bool", "Str", "Unit"])
         self.assertIn("query_holes", description["features"])
         self.assertIn("jsonl_session", description["features"])
+        self.assertIn("tool_hot_replacement", description["features"])
         self.assertEqual(description["session"]["schemaVersion"], 3)
         self.assertFalse(description["session"]["crossRevisionReuse"])
+        self.assertEqual(description["session"]["toolProtocolVersion"], 1)
+        self.assertFalse(description["session"]["toolRuntime"]["sandboxed"])
         self.assertIn("semantic_hole_fill", description["features"])
         self.assertIn("records", description["features"])
         self.assertIn("tagged_unions", description["features"])
