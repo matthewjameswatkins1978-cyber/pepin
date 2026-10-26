@@ -29,6 +29,7 @@ SCHEMA = "pepin-conformance/v1"
 DEFAULT_SEEDS = [20261026, 1101, 1201]
 PROCESS_TIMEOUT = 8.0
 MAX_TOOL_MESSAGE_BYTES = 1024 * 1024
+FAILED_FINDING_CLASSIFICATIONS = {"confirmed-bug", "infrastructure-failure"}
 
 RUNTIME_EXPECTED_CODES = {
     "division by zero": ("PEP_RUNTIME_DIVISION_BY_ZERO",),
@@ -464,6 +465,10 @@ def append_finding(findings: list[dict[str, Any]], stats: dict[str, Any], findin
     findings.append(finding)
 
 
+def failed_finding_count(findings: list[dict[str, Any]]) -> int:
+    return sum(1 for finding in findings if finding.get("classification") in FAILED_FINDING_CLASSIFICATIONS)
+
+
 def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     for case_id, raw, expected in valid_sources(seed, count):
         stats["validGenerated"] += 1
@@ -512,27 +517,29 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
     for case_id, raw, reason in runtime_sources(seed, count):
         stats["runtimeGenerated"] += 1
         check = cli_case(case_id, raw, "check")
-        run = cli_case(case_id, raw, "run")
         response = check.get("response") if isinstance(check.get("response"), dict) else {}
         check_ok, check_detail = check_result_contract(check, expected_status="valid")
-        if not check_ok and check.get("status") == "completed" and isinstance(response, dict) and response.get("status") in {"invalid", "incomplete"}:
-            append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "missing-test",
-                             "detail": "Runtime stress source was rejected before execution", "reason": reason,
-                             "response": response})
-        else:
-            if not check_ok:
+        if not check_ok:
+            if check.get("status") == "completed" and response.get("status") in {"invalid", "incomplete"}:
+                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
+                                 "detail": "Intentionally valid runtime program was rejected before execution",
+                                 "reason": reason, "expectedStatus": "valid", "response": response,
+                                 "evidence": check})
+            else:
                 append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": transport_failure_classification(check),
                                  "detail": "Runtime check transport failed", "reason": reason,
                                  "contract": check_detail, "evidence": check})
-                continue
-            oracle = classify_runtime_result(run, RUNTIME_EXPECTED_CODES[reason])
-            if oracle["classification"] == "expected-rejection":
-                stats["controlledRuntimeFailures"] += 1
-                note_classification(stats, "expected-rejection")
-            else:
-                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
-                                 "detail": oracle["detail"], "reason": reason, "oracle": oracle,
-                                 "expectedCodes": list(RUNTIME_EXPECTED_CODES[reason])})
+            continue
+        run = cli_case(case_id, raw, "run")
+        oracle = classify_runtime_result(run, RUNTIME_EXPECTED_CODES[reason])
+        if oracle["classification"] == "expected-rejection":
+            stats["controlledRuntimeFailures"] += 1
+            note_classification(stats, "expected-rejection")
+        else:
+            append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator",
+                             "classification": oracle["classification"], "detail": oracle["detail"],
+                             "reason": reason, "oracle": oracle,
+                             "expectedCodes": list(RUNTIME_EXPECTED_CODES[reason])})
 
 
 def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
@@ -878,8 +885,7 @@ def main() -> int:
         parser.error("timeouts must be positive")
     PROCESS_TIMEOUT = args.timeout
     result = run_lab(args)
-    failed_findings = sum(1 for item in result["findings"]
-                          if item.get("classification") in {"confirmed-bug", "infrastructure-failure"})
+    failed_findings = failed_finding_count(result["findings"])
     print(json.dumps({"schema": SCHEMA, "stats": result["stats"],
                       "confirmedFindings": sum(1 for item in result["findings"]
                                                 if item.get("classification") == "confirmed-bug"),

@@ -17,6 +17,76 @@ from . import harness
 
 
 class HarnessContractTests(unittest.TestCase):
+    @staticmethod
+    def _runner_stats() -> dict[str, object]:
+        return {"validGenerated": 0, "invalidGenerated": 0, "runtimeGenerated": 0,
+                "expectedRejection": 0, "controlledRuntimeFailures": 0,
+                "classificationCounts": {}}
+
+    @staticmethod
+    def _runner_report(findings: list[dict[str, object]], stats: dict[str, object]) -> str:
+        return harness.report_text({"revision": "test", "branch": "test", "seeds": [1],
+                                    "timeoutSeconds": 1, "stats": stats, "findings": findings,
+                                    "inheritedA11": None})
+
+    def test_runner_rejected_valid_runtime_case_is_fatal(self) -> None:
+        source = b"say(int_text(1 / 0))\n"
+        check = {"status": "completed", "returncode": 1,
+                 "response": {"status": "invalid", "diagnostics": [{"code": "PEP_PARSE"}]}}
+        findings: list[dict[str, object]] = []
+        stats = self._runner_stats()
+        with patch.object(harness, "valid_sources", return_value=[]), \
+             patch.object(harness, "invalid_sources", return_value=[]), \
+             patch.object(harness, "runtime_sources", return_value=[("runtime-1-0000", source, "division by zero")]), \
+             patch.object(harness, "cli_case", return_value=check) as cli:
+            harness.run_generated(1, 1, findings, stats)
+        self.assertEqual(cli.call_count, 1)
+        self.assertEqual(findings[0]["classification"], "confirmed-bug")
+        self.assertEqual(harness.failed_finding_count(findings), 1)
+        self.assertIn("**confirmed-bug**", self._runner_report(findings, stats))
+
+    def test_runner_propagates_runtime_infrastructure_failure_and_fails(self) -> None:
+        source = b"say(int_text(1 / 0))\n"
+        check = {"status": "completed", "returncode": 0,
+                 "response": {"status": "valid"}, "stdout": "", "stderr": ""}
+        launch = {"status": "launch-error", "returncode": None, "stdout": "", "stderr": "",
+                  "error": {"type": "FileNotFoundError", "message": "pwsh"}}
+        findings: list[dict[str, object]] = []
+        stats = self._runner_stats()
+        with patch.object(harness, "valid_sources", return_value=[]), \
+             patch.object(harness, "invalid_sources", return_value=[]), \
+             patch.object(harness, "runtime_sources", return_value=[("runtime-1-0000", source, "division by zero")]), \
+             patch.object(harness, "cli_case", side_effect=[check, launch]):
+            harness.run_generated(1, 1, findings, stats)
+        self.assertEqual(findings[0]["classification"], "infrastructure-failure")
+        self.assertEqual(harness.failed_finding_count(findings), 1)
+        report = self._runner_report(findings, stats)
+        self.assertIn("**infrastructure-failure**", report)
+        self.assertNotIn("**confirmed-bug**", report)
+
+    def test_runner_keeps_wrong_diagnostic_fatal_and_expected_runtime_rejection(self) -> None:
+        source = b"say(int_text(1 / 0))\n"
+        check = {"status": "completed", "returncode": 0,
+                 "response": {"status": "valid"}, "stdout": "", "stderr": ""}
+        wrong = {"status": "completed", "returncode": 1, "stdout": "", "stderr": "",
+                 "response": {"status": "runtime_error", "diagnostics": [{"code": "PEP_RUNTIME_OVERFLOW"}]}}
+        expected = {"status": "completed", "returncode": 1, "stdout": "", "stderr": "",
+                    "response": {"status": "runtime_error", "diagnostics": [{"code": "PEP_RUNTIME_DIVISION_BY_ZERO"}]}}
+        for execution, expected_classification in ((wrong, "confirmed-bug"), (expected, None)):
+            findings: list[dict[str, object]] = []
+            stats = self._runner_stats()
+            with patch.object(harness, "valid_sources", return_value=[]), \
+                 patch.object(harness, "invalid_sources", return_value=[]), \
+                 patch.object(harness, "runtime_sources", return_value=[("runtime-1-0000", source, "division by zero")]), \
+                 patch.object(harness, "cli_case", side_effect=[check, execution]):
+                harness.run_generated(1, 1, findings, stats)
+            if expected_classification:
+                self.assertEqual(findings[0]["classification"], expected_classification)
+                self.assertEqual(harness.failed_finding_count(findings), 1)
+            else:
+                self.assertEqual(findings, [])
+                self.assertEqual(stats["controlledRuntimeFailures"], 1)
+
     def test_timeout_bytes_are_decoded(self) -> None:
         timeout = subprocess.TimeoutExpired(["fake"], 0.01, output=b"partial\xff", stderr=b"err\xfe")
         with patch.object(harness.subprocess, "run", side_effect=timeout):
