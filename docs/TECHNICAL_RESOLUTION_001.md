@@ -1,5 +1,7 @@
 # PEPIN: Technical Resolution 001
 
+> **Superseded backend target:** [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md) replaces the original C11 target below with **C23 (ISO/IEC 9899:2024)** and establishes Pep's modern-by-default technology rule. The original C11 wording is retained for historical provenance, not as the active backend decision. All other decisions remain binding.
+
 ## Response to Argon's v0.3 architectural review
 
 **Status:** Binding technical decisions for the v0.3 design direction. This resolution supplements [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md). It does not claim these mechanisms are already implemented.
