@@ -520,6 +520,38 @@ class A12ParserDifferentialTests(unittest.TestCase):
         self.assertEqual(scalar(result_fields["document"]), target["document"])
         self.assertEqual(scalar(result_fields["revision"]), target["revision"])
 
+    def test_malformed_delimiters_match_ocaml_diagnostics(self):
+        corpus = [
+            ("missing_else", "fn f() -> Int { if true { return 1 } }", "PEP_PARSE_ELSE", "invalid"),
+            ("mismatched_group", "fn f() -> Int { return (1 }", "PEP_PARSE_EXPECTED", "invalid"),
+            ("mismatched_list", "fn f() -> Int { return [1 }", "PEP_PARSE_EXPECTED", "invalid"),
+            ("truncated_union", "type X = A(Int) |", "PEP_PARSE_NAME", "incomplete"),
+            ("missing_function_brace", "fn f() -> Int { return 1", "PEP_PARSE_EXPECTED", "incomplete"),
+        ]
+        probe = BUILD / "malformed_parser_probe.pep"
+        for name, source, expected_code, expected_status in corpus:
+            with self.subTest(name=name):
+                raw = source.encode("utf-8")
+                _, result = self.parse(raw, metadata_only=True)
+                parser_fields = fields(result)
+                probe.write_bytes(raw)
+                oracle_run = subprocess.run(
+                    ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
+                     "check", str(probe), "--json"],
+                    cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
+                    capture_output=True, text=True, encoding="utf-8", check=False,
+                )
+                oracle = json.loads(oracle_run.stdout)
+                self.assertEqual(scalar(parser_fields["status"]), expected_status)
+                self.assertEqual(scalar(parser_fields["errorCode"]), expected_code)
+                self.assertEqual(oracle["status"], "invalid")
+                diagnostic = oracle["diagnostics"][0]
+                self.assertEqual(scalar(parser_fields["errorCode"]), diagnostic["code"])
+                self.assertEqual(scalar(parser_fields["errorStart"]),
+                                 diagnostic["span"]["start"]["offset"])
+                self.assertEqual(scalar(parser_fields["errorEnd"]),
+                                 diagnostic["span"]["endOffset"])
+
     def test_repository_examples_match_ocaml_parser_ast(self):
         matched = 0
         skipped_oversize = []
