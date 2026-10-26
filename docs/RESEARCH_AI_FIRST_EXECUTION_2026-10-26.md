@@ -8,7 +8,7 @@ This note extends [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md) without changi
 
 ## 1. Design intent
 
-**A beautiful, compact, general-purpose Pep surface with an unusually capable, inspectable compiler and runtime.** Its primary intended programmer/operator is a *capable AI agent*; skilled human programmers use **the same Pep language and the same semantic authority**, with different presentations where appropriate. AI-first means compiler-backed discovery, diagnosis, planning and checked actions, **not** hidden prompt-based semantics or a second AI-only grammar.
+**A beautiful, compact, general-purpose Pep surface with an unusually capable, inspectable compiler and runtime.** Its **primary intended programmer/operator is a capable AI agent**. Humans should be able to use Pep well, but they are explicitly the **secondary audience**: where a genuine, unavoidable design trade-off pits agent-native ergonomics or operability against human-oriented convenience, favour the intelligent AI operator, without sacrificing correctness, safety, deterministic semantics, or legitimate human authority. Both audiences can still use **the same Pep language and the same semantic authority**, with different presentations where appropriate. AI-first means compiler-backed discovery, diagnosis, planning and checked actions, **not** hidden prompt-based semantics or a second AI-only grammar.
 
 The desired experience is: state essential requirements once; the compiler establishes safe opportunities and refuses invalid ones; libraries expose verifiable contracts; the runtime makes implementation choices within those contracts; humans and agents can inspect the choice, cost and evidence. A complex compiler is acceptable. Unpredictable *program semantics* are not.
 
