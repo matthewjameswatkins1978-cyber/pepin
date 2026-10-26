@@ -751,6 +751,93 @@ class A12ParserDifferentialTests(unittest.TestCase):
         })
         self.assertEqual(valid.get("outcome"), "ok", valid)
 
+    def test_parser_cursor_is_cooperative_and_host_target_remains_authoritative(self):
+        raw = b"let value: Int = 7;"
+        opened = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "cursor-authority", "bytes": list(raw),
+        })
+        self.assertEqual(opened.get("outcome"), "ok", opened)
+        semantic_target = {
+            "document": opened["document"], "revision": opened["revision"], "entryFunctions": [],
+        }
+        started = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser-start", "arguments": [], "semanticTarget": semantic_target,
+        })
+        self.assertEqual(started.get("outcome"), "ok", started)
+
+        forged_terminal = parser_cursor_value(
+            opened["document"], opened["revision"], done=True, lex_done=True, lex_stage="done",
+        )
+        skipped = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser-step", "arguments": [forged_terminal],
+            "semanticTarget": semantic_target,
+        })
+        self.assertEqual(skipped.get("outcome"), "ok", skipped)
+        skipped_fields = fields(skipped["result"])
+        self.assertEqual(scalar(skipped_fields["status"]), "complete")
+        self.assertEqual(skipped_fields["nodes"]["value"], [])
+        self.assertNotEqual(forged_terminal, started["result"],
+                            "a complete status is trusted only after consuming the start/step chain")
+
+        inconsistent = parser_cursor_value(
+            opened["document"], opened["revision"], lex_stage="scan",
+        )
+        nested = fields(fields(fields(inconsistent)["stream"])["lexCursor"])
+        nested["document"]["value"] = "doc-forged"
+        nested["revision"]["value"] = "sha256:" + "f" * 64
+        rejected = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser-step", "arguments": [inconsistent],
+            "semanticTarget": semantic_target,
+        })
+        self.assertEqual(rejected.get("outcome"), "ok", rejected)
+        rejected_fields = fields(rejected["result"])
+        self.assertEqual(scalar(rejected_fields["errorCode"]), "PEP_LEXER_CURSOR_REVISION")
+        self.assertEqual(scalar(rejected_fields["document"]), opened["document"])
+        self.assertEqual(scalar(rejected_fields["revision"]), opened["revision"])
+
+        target, recovered = self.parse(raw)
+        self.assertNotEqual(target["document"], opened["document"])
+        self.assertEqual(scalar(fields(recovered)["status"]), "complete")
+
+    def test_open_bytes_source_limit_is_explicit_and_does_not_allocate_a_document(self):
+        self.assertGreater(PARSER.stat().st_size, 65536,
+                           "standalone parser source exceeds the open_bytes limit")
+        oversized = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "oversized",
+            "bytes": [0] * 65537,
+        })
+        self.assertEqual(oversized.get("outcome"), "error", oversized)
+        self.assertEqual(oversized["error"]["code"], "PEP_SOURCE_BYTE_LIMIT")
+        accepted = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "after-oversized", "bytes": [],
+        })
+        self.assertEqual(accepted.get("outcome"), "ok", accepted)
+        self.assertEqual(accepted["document"], "doc-3",
+                         "rejected source must not consume a document identity")
+
+    def test_malformed_utf8_has_original_span_and_session_recovers(self):
+        raw = b"let text: Str = \xff"
+        bad_offset = raw.index(b"\xff")
+        target, result = self.parse(raw, metadata_only=True)
+        self.assertEqual(target.get("outcome"), "ok", target)
+        self.assertEqual(target.get("status"), "invalid")
+        diagnostic = target["diagnostics"][0]
+        self.assertEqual(diagnostic["code"], "PEP_INVALID_UTF8")
+        self.assertEqual(diagnostic["span"]["start"]["offset"], bad_offset)
+        self.assertEqual(diagnostic["span"]["endOffset"], bad_offset + 1)
+        result_fields = fields(result)
+        self.assertEqual(scalar(result_fields["status"]), "invalid")
+        self.assertEqual(scalar(result_fields["errorCode"]), "PEP_INVALID_UTF8")
+        self.assertEqual(scalar(result_fields["errorStart"]), bad_offset)
+        self.assertEqual(scalar(result_fields["errorEnd"]), bad_offset + 1)
+
+        recovered_target, recovered = self.parse(b"fn recovered() -> Int { return 1 }")
+        self.assertEqual(recovered_target.get("status"), "valid")
+        self.assertEqual(scalar(fields(recovered)["status"]), "complete")
+
     def test_incremental_parser_processes_actual_lexer_source(self):
         raw = LEXER.read_bytes()
         target, result = self.parse(raw, metadata_only=True)

@@ -5,6 +5,9 @@
 Demonstrate that Pep can state and enforce its **own semantic rules** in Pep rather than depending permanently on OCaml's checker.
 
 ## Contract
+
+The existing A12 syntax node fields, topology, source-span limits, and cooperative cursor-consumption contract are documented in [A12–A13 Flat AST and continuation contract](A12-A13-FLAT-AST-CONTRACT.md).
+
 - Reproduce lexical binding/function identity, scopes, shadowing, call resolution (including forward and recursive calls), constructor-vs-function distinctions, fields and pattern variables.
 - Implement explicit **synth(env, expr)** and **check(env, expr, expected)** operations, without pretending a general Hindley–Milner engine is required. Propagate expected types into annotated let, call arguments, return positions, match arms and lists.
 - Produce partial checked expressions with typed/named holes, visible compatible bindings and original source spans; preserve valid/incomplete/invalid distinction and refusal to execute incomplete programs.
