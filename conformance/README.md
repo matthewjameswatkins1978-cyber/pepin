@@ -39,6 +39,10 @@ The command returns non-zero only when a fresh run records a confirmed bug.
 claims. Every finding retains its exact corpus file, case identifier, seed in
 the identifier, and replay commands in `results.json`.
 
+Launch failures and missing or malformed process output are recorded as
+`infrastructure-failure`; they still make the command fail, but are not
+mislabelled as Pep compiler defects.
+
 ## Coverage
 
 The fixed corpus is every repository `.pep` example. Each configured seed then
@@ -77,6 +81,8 @@ new harness evidence.
 
 - `confirmed-bug`: the public contract or an independent expected result was
   contradicted, or the bounded process failed to make a required response;
+- `infrastructure-failure`: the harness could not launch or decode the bounded
+  process; this is a failed run, not evidence of a compiler defect;
 - `language-ambiguity`: reserved for a future reviewed finding where the
   specification and implementation disagree without a determined answer;
 - `missing-test`: the case passed the current checks and is retained as a

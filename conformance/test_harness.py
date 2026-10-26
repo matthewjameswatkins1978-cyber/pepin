@@ -26,6 +26,43 @@ class HarnessContractTests(unittest.TestCase):
         self.assertIsInstance(result["stderr"], str)
         self.assertIn("partial", result["stdout"])
 
+    def test_launch_exception_is_structured_and_fails_as_infrastructure(self) -> None:
+        error = FileNotFoundError(2, "No such file or directory", "pwsh")
+        with patch.object(harness.subprocess, "run", side_effect=error):
+            result = harness.run_bounded(["pwsh", "missing"], timeout=0.01)
+        self.assertEqual(result["status"], "launch-error")
+        self.assertEqual(result["error"]["type"], "FileNotFoundError")
+        self.assertEqual(harness.transport_failure_classification(result), "infrastructure-failure")
+
+    def test_invalid_check_classifier_rejects_tuple_truthiness_false_passes(self) -> None:
+        rejected = {"status": "completed", "returncode": 1,
+                    "response": {"status": "invalid", "diagnostics": [{"code": "PEP_PARSE"}]}}
+        self.assertEqual(harness.classify_invalid_check(rejected)["classification"], "expected-rejection")
+        for malformed in (
+            {"status": "completed", "returncode": 1, "response": None},
+            {"status": "completed", "returncode": 0,
+             "response": {"status": "invalid", "diagnostics": [{"code": "PEP_PARSE"}]}},
+            {"status": "launch-error", "returncode": None, "response": None},
+        ):
+            self.assertNotEqual(harness.classify_invalid_check(malformed)["classification"], "expected-rejection")
+
+    def test_empty_and_malformed_diagnostics_are_rejected_without_index_error(self) -> None:
+        empty = {"status": "completed", "returncode": 1,
+                 "response": {"status": "invalid", "diagnostics": []}}
+        malformed = {"status": "completed", "returncode": 1,
+                     "response": {"status": "invalid", "diagnostics": {"code": "PEP_PARSE"}}}
+        self.assertFalse(harness.check_result_contract(empty)[0])
+        self.assertFalse(harness.check_result_contract(malformed)[0])
+        runtime = {"status": "completed", "returncode": 1, "stdout": "", "stderr": "",
+                   "response": {"status": "runtime_error", "diagnostics": []}}
+        self.assertEqual(harness.classify_runtime_result(runtime, ["PEP_RUNTIME_OVERFLOW"])["outcome"], "wrong-diagnostic")
+
+    def test_large_response_wrong_error_fails_and_documented_error_passes(self) -> None:
+        wrong = {"status": "completed", "returncode": 0, "stdout": "{}", "responses": [{"error": {"code": "PEP_OTHER"}}]}
+        correct = {"status": "completed", "returncode": 0, "stdout": "{}", "responses": [{"error": {"code": "PEP_TOOL_MESSAGE_TOO_LARGE"}}]}
+        self.assertEqual(harness.classify_large_response(wrong)["classification"], "confirmed-bug")
+        self.assertEqual(harness.classify_large_response(correct)["classification"], "expected-rejection")
+
     def test_malformed_output_is_not_a_response(self) -> None:
         self.assertIsNone(harness.response_from_stdout(b"not json\n{\"bad\":\n"))
         result = {
@@ -33,7 +70,7 @@ class HarnessContractTests(unittest.TestCase):
             "stderr": "pwsh: command not found\n", "response": None,
         }
         classified = harness.classify_runtime_result(result, ["PEP_RUNTIME_DIVISION_BY_ZERO"])
-        self.assertEqual(classified["classification"], "confirmed-bug")
+        self.assertEqual(classified["classification"], "infrastructure-failure")
         self.assertEqual(classified["outcome"], "launcher-or-malformed-output")
         self.assertIn("stderr", classified["evidence"])
 

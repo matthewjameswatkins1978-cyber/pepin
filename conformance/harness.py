@@ -28,6 +28,7 @@ OUT = ROOT / "_build" / "conformance"
 SCHEMA = "pepin-conformance/v1"
 DEFAULT_SEEDS = [20261026, 1101, 1201]
 PROCESS_TIMEOUT = 8.0
+MAX_TOOL_MESSAGE_BYTES = 1024 * 1024
 
 RUNTIME_EXPECTED_CODES = {
     "division by zero": ("PEP_RUNTIME_DIVISION_BY_ZERO",),
@@ -71,6 +72,12 @@ def run_bounded(args: list[str], *, cwd: Path = ROOT, input_text: str | None = N
         return {
             "status": "timeout", "returncode": None,
             "stdout": decode_output(exc.stdout), "stderr": decode_output(exc.stderr),
+            "elapsedMs": round((time.perf_counter() - started) * 1000, 2),
+        }
+    except OSError as exc:
+        return {
+            "status": "launch-error", "returncode": None, "stdout": "", "stderr": "",
+            "error": {"type": type(exc).__name__, "errno": exc.errno, "message": str(exc)},
             "elapsedMs": round((time.perf_counter() - started) * 1000, 2),
         }
 
@@ -125,7 +132,7 @@ def session_case(requests: list[Any], timeout: float | None = None) -> dict[str,
 
 
 def normalized_analysis(response: dict[str, Any] | None) -> dict[str, Any]:
-    if not response:
+    if not isinstance(response, dict) or not response:
         return {"status": "no-response"}
     status = response.get("status")
     # File-oriented invalid JSON intentionally omits the partial AST and
@@ -133,8 +140,11 @@ def normalized_analysis(response: dict[str, Any] | None) -> dict[str, Any]:
     # the common diagnostic contract in that state.
     if status == "invalid":
         return {"status": status, "diagnostics": response.get("diagnostics", [])}
+    raw_holes = response.get("holes", [])
+    if not isinstance(raw_holes, list) or any(not isinstance(hole, dict) for hole in raw_holes):
+        return {"status": status, "malformed": "holes"}
     holes = []
-    for hole in response.get("holes", []):
+    for hole in raw_holes:
         normalized = dict(hole)
         # Session identities are revision-bound objects; the file CLI uses a
         # compact string for the same named-hole identity.
@@ -161,12 +171,59 @@ def check_result_contract(result: dict[str, Any], *, expected_status: str | None
     status = response.get("status")
     if status not in {"valid", "invalid", "incomplete"}:
         return False, f"check returned unexpected status {status!r}"
+    shape_error = response_shape_error(response)
+    if shape_error:
+        return False, shape_error
     expected_returncode = 0 if status == "valid" else 1
     if result.get("returncode") != expected_returncode:
         return False, f"check status {status!r} had returncode {result.get('returncode')!r}"
     if expected_status is not None and status != expected_status:
         return False, f"expected check status {expected_status!r}, got {status!r}"
     return True, "check response and exit contract are valid"
+
+
+def response_shape_error(response: Any) -> str | None:
+    """Return a diagnostic rather than raising on adversarial JSON shapes."""
+    if not isinstance(response, dict):
+        return "response is not a JSON object"
+    if response.get("_malformedResponse") is not None:
+        return "response contains a malformed-output marker"
+    status = response.get("status")
+    if status in {"invalid", "runtime_error"}:
+        diagnostics = response.get("diagnostics")
+        if not isinstance(diagnostics, list):
+            return f"{status} response diagnostics is not a list"
+        if not diagnostics:
+            return f"{status} response has an empty diagnostic list"
+        if any(not isinstance(item, dict) or not isinstance(item.get("code"), str) for item in diagnostics):
+            return f"{status} response contains a malformed diagnostic"
+    if "holes" in response and not isinstance(response.get("holes"), list):
+        return "response holes field is not a list"
+    return None
+
+
+def transport_failure_classification(result: dict[str, Any]) -> str:
+    """Separate launch/shape failures from a completed compiler contradiction."""
+    if result.get("status") == "launch-error":
+        return "infrastructure-failure"
+    if result.get("status") == "completed":
+        response = result.get("response")
+        if not isinstance(response, dict) or response_shape_error(response):
+            return "infrastructure-failure"
+    return "confirmed-bug"
+
+
+def classify_invalid_check(result: dict[str, Any]) -> dict[str, Any]:
+    """Classify one invalid-program check without relying on tuple truthiness."""
+    response = result.get("response")
+    if isinstance(response, dict) and response.get("status") in {"valid", "incomplete"} and result.get("status") == "completed":
+        return {"classification": "confirmed-bug", "detail": "Intentionally malformed or ill-typed program was accepted"}
+    valid, detail = check_result_contract(result)
+    if not valid:
+        return {"classification": transport_failure_classification(result),
+                "detail": "Invalid-program check did not satisfy its rejection contract",
+                "contract": detail}
+    return {"classification": "expected-rejection", "detail": "Invalid program was rejected by the check contract"}
 
 
 def check_failure_signature(result: dict[str, Any]) -> dict[str, Any]:
@@ -181,8 +238,18 @@ def check_failure_signature(result: dict[str, Any]) -> dict[str, Any]:
 def diagnostic_codes(response: dict[str, Any] | None) -> list[str]:
     if not isinstance(response, dict):
         return []
-    return [item.get("code") for item in response.get("diagnostics", [])
+    diagnostics = response.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        return []
+    return [item.get("code") for item in diagnostics
             if isinstance(item, dict) and isinstance(item.get("code"), str)]
+
+
+def response_error_code(response: Any) -> str | None:
+    if not isinstance(response, dict) or not isinstance(response.get("error"), dict):
+        return None
+    code = response["error"].get("code")
+    return code if isinstance(code, str) else None
 
 
 def classify_runtime_result(result: dict[str, Any], expected_codes: Iterable[str]) -> dict[str, Any]:
@@ -197,6 +264,8 @@ def classify_runtime_result(result: dict[str, Any], expected_codes: Iterable[str
     }
     if result.get("status") == "timeout":
         return {"classification": "confirmed-bug", "outcome": "timeout", "detail": "runtime process exceeded bounded timeout", "evidence": evidence}
+    if result.get("status") == "launch-error":
+        return {"classification": "infrastructure-failure", "outcome": "launch-error", "detail": "runtime launcher could not start the requested process", "evidence": evidence}
     if result.get("status") != "completed":
         return {"classification": "confirmed-bug", "outcome": "process-failure", "detail": "runtime process did not complete", "evidence": evidence}
     response = result.get("response")
@@ -215,8 +284,30 @@ def classify_runtime_result(result: dict[str, Any], expected_codes: Iterable[str
     else:
         detail = f"runtime diagnostic codes {actual_codes!r} did not match expected {expected!r}"
         outcome = "wrong-diagnostic"
-    return {"classification": "confirmed-bug", "outcome": outcome, "detail": detail,
+    classification = "infrastructure-failure" if outcome == "launcher-or-malformed-output" else "confirmed-bug"
+    return {"classification": classification, "outcome": outcome, "detail": detail,
             "expectedCodes": expected, "actualCodes": actual_codes, "evidence": evidence}
+
+
+def classify_large_response(result: dict[str, Any]) -> dict[str, Any]:
+    """Require the documented cap error or verify a genuinely bounded success."""
+    responses = result.get("responses", [])
+    response = responses[0] if len(responses) == 1 else None
+    if (result.get("status") != "completed" or result.get("returncode") != 0 or
+            len(responses) != 1 or not isinstance(response, dict)):
+        return {"classification": transport_failure_classification(result),
+                "detail": "Large valid source did not receive one bounded session response",
+                "response": response}
+    if response_error_code(response) == "PEP_TOOL_MESSAGE_TOO_LARGE":
+        return {"classification": "expected-rejection", "detail": "documented response cap rejected the oversized message"}
+    response_bytes = len(decode_output(result.get("stdout")).encode("utf-8"))
+    if (response.get("status") in {"valid", "incomplete"} and
+            response_shape_error(response) is None and response_bytes <= MAX_TOOL_MESSAGE_BYTES):
+        return {"classification": "missing-test", "detail": "large response completed within the documented message limit",
+                "responseBytes": response_bytes}
+    return {"classification": "confirmed-bug", "detail": "Large valid source returned an unrelated error or an unverified response",
+            "expectedCode": "PEP_TOOL_MESSAGE_TOO_LARGE", "response": response,
+            "responseBytes": response_bytes}
 
 
 def analysis_pair(case_id: str, raw: bytes) -> dict[str, Any]:
@@ -227,12 +318,15 @@ def analysis_pair(case_id: str, raw: bytes) -> dict[str, Any]:
         return {"caseId": case_id, "kind": "cli-session", "classification": "unsupported-feature",
                 "detail": "The text CLI cannot carry malformed UTF-8; open_bytes is tested separately."}
     opened = session_case([{"schemaVersion": 3, "op": "open", "source": source}])
-    if not check_result_contract(cli)[0]:
-        return {"caseId": case_id, "kind": "cli-session", "classification": "confirmed-bug",
-                "detail": check_result_contract(cli)[1], "cliEvidence": cli}
+    cli_valid, cli_detail = check_result_contract(cli)
+    if not cli_valid:
+        return {"caseId": case_id, "kind": "cli-session", "classification": transport_failure_classification(cli),
+                "detail": cli_detail, "cliEvidence": cli}
     if (opened.get("status") != "completed" or opened.get("returncode") != 0 or
-            len(opened.get("responses", [])) != 1 or not isinstance(opened["responses"][0], dict)):
-        return {"caseId": case_id, "kind": "cli-session", "classification": "confirmed-bug",
+            len(opened.get("responses", [])) != 1 or not isinstance(opened["responses"][0], dict) or
+            opened["responses"][0].get("status") not in {"valid", "invalid", "incomplete"} or
+            response_shape_error(opened["responses"][0])):
+        return {"caseId": case_id, "kind": "cli-session", "classification": transport_failure_classification(opened),
                 "detail": "session open did not produce one completed JSON object response",
                 "sessionEvidence": opened}
     session_response = opened["responses"][0]
@@ -377,7 +471,7 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
         response = check.get("response") or {}
         valid_check, check_detail = check_result_contract(check, expected_status="valid")
         if not valid_check:
-            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-generator", "classification": "confirmed-bug",
+            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-generator", "classification": transport_failure_classification(check),
                              "detail": "Generated valid program was not accepted or check transport failed",
                              "contract": check_detail, "response": response, "evidence": check,
                              "oracle": {"kind": "check-failure", "signature": check_failure_signature(check)}})
@@ -388,7 +482,7 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
                              "detail": "Generated valid program exceeded bounded runtime", "timeoutSeconds": PROCESS_TIMEOUT,
                              "oracle": {"kind": "valid-output", "mode": "timeout", "expected": expected}})
         elif run["returncode"] != 0 or run["stdout"] != expected:
-            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-runtime", "classification": "confirmed-bug",
+            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-runtime", "classification": "infrastructure-failure" if run.get("status") == "launch-error" else "confirmed-bug",
                              "detail": "Generated valid program did not produce its independent expected output",
                              "expected": expected, "actual": run["stdout"], "stderr": run["stderr"],
                              "oracle": {"kind": "valid-output", "mode": "output-mismatch", "expected": expected}})
@@ -400,18 +494,16 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
     for case_id, raw, reason in invalid_sources(seed, count):
         stats["invalidGenerated"] += 1
         check = cli_case(case_id, raw, "check")
-        response = check.get("response") or {}
-        if response.get("status") in ("valid", "incomplete") and check.get("status") == "completed":
-            append_finding(findings, stats, {"caseId": case_id, "kind": "invalid-generator", "classification": "confirmed-bug",
-                             "detail": "Intentionally malformed or ill-typed program was accepted",
-                             "reason": reason, "response": response})
-        elif not check_result_contract(check):
-            append_finding(findings, stats, {"caseId": case_id, "kind": "invalid-generator", "classification": "confirmed-bug",
-                             "detail": "Invalid-program check transport failed",
-                             "reason": reason, "contract": check_result_contract(check)[1], "evidence": check})
-        else:
+        response = check.get("response") if isinstance(check.get("response"), dict) else {}
+        invalid_outcome = classify_invalid_check(check)
+        if invalid_outcome["classification"] == "expected-rejection":
             stats["expectedRejection"] += 1
             note_classification(stats, "expected-rejection")
+        else:
+            append_finding(findings, stats, {"caseId": case_id, "kind": "invalid-generator",
+                             "classification": invalid_outcome["classification"],
+                             "detail": invalid_outcome["detail"], "reason": reason,
+                             "response": response, **{key: value for key, value in invalid_outcome.items() if key not in {"classification", "detail"}}})
         pair = analysis_pair(case_id, raw)
         if pair["classification"] != "missing-test":
             append_finding(findings, stats, pair)
@@ -421,7 +513,7 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
         stats["runtimeGenerated"] += 1
         check = cli_case(case_id, raw, "check")
         run = cli_case(case_id, raw, "run")
-        response = check.get("response") or {}
+        response = check.get("response") if isinstance(check.get("response"), dict) else {}
         check_ok, check_detail = check_result_contract(check, expected_status="valid")
         if not check_ok and check.get("status") == "completed" and isinstance(response, dict) and response.get("status") in {"invalid", "incomplete"}:
             append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "missing-test",
@@ -429,7 +521,7 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
                              "response": response})
         else:
             if not check_ok:
-                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
+                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": transport_failure_classification(check),
                                  "detail": "Runtime check transport failed", "reason": reason,
                                  "contract": check_detail, "evidence": check})
                 continue
@@ -467,20 +559,22 @@ def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) ->
     responses = result["responses"]
     if (result["status"] != "completed" or result.get("returncode") != 0 or
             len(responses) != len(requests) or any(not isinstance(item, dict) for item in responses)):
-        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "session", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "session", "classification": transport_failure_classification(result),
                          "detail": "JSONL session did not return one bounded response per request",
                          "returncode": result["returncode"], "responseCount": len(responses)})
         return
     if normalized_analysis(responses[1]) != normalized_analysis(responses[2]):
         append_finding(findings, stats, {"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
                          "detail": "Repeated same-revision analysis changed its semantic result"})
-    if responses[3].get("metrics", {}).get("cache_hits", 0) < 2:
+    metrics = responses[3].get("metrics")
+    cache_hits = metrics.get("cache_hits") if isinstance(metrics, dict) else None
+    if not isinstance(cache_hits, int) or cache_hits < 2:
         append_finding(findings, stats, {"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
                          "detail": "Repeated same-revision queries did not report cache hits", "response": responses[3]})
-    if responses[5].get("error", {}).get("code") != "PEP_STALE_REVISION":
+    if response_error_code(responses[5]) != "PEP_STALE_REVISION":
         append_finding(findings, stats, {"caseId": "session-invariants", "kind": "revision", "classification": "confirmed-bug",
                          "detail": "Stale edit was not rejected", "response": responses[5]})
-    if responses[7].get("error", {}).get("code") != "PEP_SESSION_MALFORMED_JSON" or responses[8].get("status") != "valid":
+    if response_error_code(responses[7]) != "PEP_SESSION_MALFORMED_JSON" or responses[8].get("status") != "valid":
         append_finding(findings, stats, {"caseId": "session-invariants", "kind": "recovery", "classification": "confirmed-bug",
                          "detail": "Malformed JSON did not preserve session recovery", "responses": responses[7:9]})
 
@@ -491,14 +585,22 @@ def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) ->
     ])
     stats["sessionRequests"] += 3
     if invalid["status"] != "completed" or len(invalid["responses"]) != 3:
-        findings.append({"caseId": "session-open-bytes", "kind": "session", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-open-bytes", "kind": "session", "classification": transport_failure_classification(invalid),
                          "detail": "open_bytes adversarial inputs did not receive bounded responses"})
     else:
         stats["malformedInputs"] += 3
         expected_codes = ["PEP_INVALID_UTF8", "PEP_SOURCE_BYTE_VALUE", "PEP_SOURCE_BYTE_LIMIT"]
         for index, expected_code in enumerate(expected_codes):
             response = invalid["responses"][index]
-            actual_code = response.get("diagnostics", [{}])[0].get("code") if response.get("status") == "invalid" else response.get("error", {}).get("code")
+            if not isinstance(response, dict):
+                actual_code = None
+            elif response.get("status") == "invalid":
+                diagnostics = response.get("diagnostics")
+                first = diagnostics[0] if isinstance(diagnostics, list) and diagnostics else {}
+                actual_code = first.get("code") if isinstance(first, dict) else None
+            else:
+                error = response.get("error")
+                actual_code = error.get("code") if isinstance(error, dict) else None
             if actual_code != expected_code:
                 append_finding(findings, stats, {"caseId": "session-open-bytes", "kind": "utf8" if index == 0 else "source-boundary",
                                  "classification": "confirmed-bug",
@@ -513,18 +615,16 @@ def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) ->
     write_case("session-large-response", large_source.encode("utf-8"))
     large = session_case([{"schemaVersion": 3, "op": "open", "source": large_source}], timeout=20.0)
     stats["largeResponseProbes"] += 1
-    large_response = large["responses"][0] if large["responses"] else {}
-    if large["status"] != "completed" or len(large["responses"]) != 1:
-        append_finding(findings, stats, {"caseId": "session-large-response", "kind": "transport", "classification": "confirmed-bug",
-                         "detail": "Large valid source did not receive one bounded session response",
-                         "returncode": large["returncode"], "status": large["status"]})
-    elif large_response.get("error", {}).get("code") == "PEP_TOOL_MESSAGE_TOO_LARGE":
+    large_outcome = classify_large_response(large)
+    if large_outcome["classification"] == "expected-rejection":
         stats["largeResponseLimitRejections"] += 1
         note_classification(stats, "expected-rejection")
+    elif large_outcome["classification"] == "missing-test":
+        stats["largeResponseSuccessfulWithinLimit"] += 1
+        note_classification(stats, "missing-test")
     else:
-        append_finding(findings, stats, {"caseId": "session-large-response", "kind": "transport", "classification": "missing-test",
-                         "detail": "Large valid source completed without the response-limit rejection",
-                         "responseBytes": len(large["stdout"].encode("utf-8"))})
+        append_finding(findings, stats, {"caseId": "session-large-response", "kind": "transport",
+                         "classification": large_outcome["classification"], **large_outcome})
 
 
 def inherited_a11_evidence(timeout: float) -> dict[str, Any]:
@@ -575,7 +675,7 @@ def replay_finding(finding: dict[str, Any], raw: bytes, case_id: str) -> bool | 
     kind = finding.get("kind")
     if kind == "invalid-generator":
         result = cli_case(case_id + "-reduce", raw, "check")
-        response = result.get("response") or {}
+        response = result.get("response") if isinstance(result.get("response"), dict) else {}
         return result.get("status") == "completed" and response.get("status") in {"valid", "incomplete"}
     if kind == "valid-generator":
         result = cli_case(case_id + "-reduce", raw, "check")
@@ -630,12 +730,11 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
             continue
         original = path.read_bytes()
         original_reproduces = replay_finding(finding, original, case_id)
+        if original_reproduces is None:
+            finding["reduction"] = {"status": "unsupported", "reason": f"finding kind {finding.get('kind')!r} has no reliable oracle"}
+            continue
         if original_reproduces is not True:
             finding["reduction"] = {"status": "unsupported", "reason": "original failure oracle did not reproduce"}
-            continue
-        supported = replay_finding(finding, original, case_id)
-        if supported is None:
-            finding["reduction"] = {"status": "unsupported", "reason": f"finding kind {finding.get('kind')!r} has no reliable oracle"}
             continue
         minimized, attempts = reduce_bytes(original, lambda candidate: replay_finding(finding, candidate, case_id) is True)
         if replay_finding(finding, minimized, case_id) is not True:
@@ -678,6 +777,7 @@ def report_text(result: dict[str, Any]) -> str:
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
         ("largeResponseLimitRejections", "large-response limit rejections"),
+        ("largeResponseSuccessfulWithinLimit", "large-response successful-within-limit responses"),
     ]:
         lines.append(f"| {label} | {stats.get(key, 0)} |")
     lines += ["", "## Findings", ""]
@@ -704,6 +804,7 @@ def report_text(result: dict[str, Any]) -> str:
         "- Generated valid programs are checked and run against independently computed expected output.",
         "- Generated invalid programs must not be accepted as valid or incomplete.",
         "- Runtime stress cases require return code 1, status `runtime_error`, and the exact expected diagnostic code; launcher errors, malformed output and timeouts are findings.",
+        "- Launch failures and missing/malformed process output are classified as `infrastructure-failure` and fail the run without being misreported as Pep compiler defects.",
         "- Reduction reruns the finding-specific oracle and retains the original input when the oracle is unsupported or does not survive.",
         "- Existing A11 OCaml-vs-Pep lexer tests are separate evidence and are not counted as fresh lab cases.",
         f"- Inherited A11 differential evidence: `{result['inheritedA11']['status'] if result.get('inheritedA11') else 'not requested'}`"
@@ -723,7 +824,8 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         "repositoryExamples": 0, "validGenerated": 0, "invalidGenerated": 0,
         "runtimeGenerated": 0, "expectedRejection": 0, "controlledRuntimeFailures": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
-        "largeResponseLimitRejections": 0, "classificationCounts": {},
+        "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
+        "classificationCounts": {},
     }
     findings: list[dict[str, Any]] = []
     example_paths = sorted((ROOT / "examples").glob("*.pep"))
@@ -776,11 +878,14 @@ def main() -> int:
         parser.error("timeouts must be positive")
     PROCESS_TIMEOUT = args.timeout
     result = run_lab(args)
+    failed_findings = sum(1 for item in result["findings"]
+                          if item.get("classification") in {"confirmed-bug", "infrastructure-failure"})
     print(json.dumps({"schema": SCHEMA, "stats": result["stats"],
                       "confirmedFindings": sum(1 for item in result["findings"]
                                                 if item.get("classification") == "confirmed-bug"),
+                      "failedFindings": failed_findings,
                       "report": str(OUT / "report.md")}, indent=2))
-    return 1 if any(item.get("classification") == "confirmed-bug" for item in result["findings"]) else 0
+    return 1 if failed_findings else 0
 
 
 if __name__ == "__main__":
