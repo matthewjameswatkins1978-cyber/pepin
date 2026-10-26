@@ -1,6 +1,6 @@
 # Pep C23 backend feasibility corpus
 
-This directory is an isolated research corpus for `PEP-C23-RESEARCH-01`.
+This directory is an isolated research corpus for `PEP-C23-ABI-03`.
 It is not production Pep runtime code, an emitter, an A14 implementation, or
 evidence that Pep has a native backend.
 
@@ -13,6 +13,11 @@ evidence that Pep has a native backend.
 - `c23_probe.c`: executable representation and runtime proof cases.
 - `c23_language_probe.c`: strict C23 language-feature probe. It is deliberately
   separate from the runtime so a compiler can report feature support precisely.
+- `c23_named_nullptr_probe.c`: focused `<stddef.h>` `nullptr_t` portability
+  probe; it exposes the current MinGW header gap.
+- `c23_benchmark.c` / `benchmark_runtime.py`: standalone native runtime
+  benchmarks with one warmup, repeated trials, checksums and separate process
+  startup timing. They do not measure peak RSS.
 - `build.ps1`: strict `-std=c23` build, discovery and probe driver. It never
   falls back to `c11` or `gnu23`.
 - `toolchain_paths.json`: shared known-location manifest used by the driver and
@@ -31,6 +36,7 @@ evidence that Pep has a native backend.
 .\build.ps1 -Compiler all -Probe
 python .\test_feasibility.py -v
 python .\compare_semantics.py
+python .\benchmark_runtime.py --trials 3 --output ..\..\_build\c23-feasibility\benchmark-report.json
 ```
 
 `build.ps1` returns exit code 2 when a requested compiler is not installed.
@@ -40,6 +46,12 @@ report paths and versions without compiling, `PEP_C23_CLANG` or `PEP_C23_GCC`
 for explicit paths, and `-Sanitize` for the Clang AddressSanitizer build. On
 Windows, run the ASan executable with LLVM's `lib\clang\23\lib\windows`
 directory on `PATH`.
+
+Use `-Benchmark` with `build.ps1` to compile the benchmark executable. The
+benchmark report records native operation wall time separately from Python
+process wall time, which includes executable startup. `arena_reserved_bytes`
+is reserved arena capacity and `bytes` is a case-size estimate; neither is a
+peak resident-memory measurement.
 
 The intended native commands are:
 
