@@ -134,6 +134,9 @@ fn make_progress(
   }
 }
 
+// Cursor values are cooperative continuation state, not proof of prior steps.
+// A complete token stream requires the caller to retain and chain the exact
+// results from lexer_start through lexer_step for one host-selected revision.
 fn lexer_start() -> LexCursor {
   let info = semantic_snapshot()
   return make_cursor(info.document, info.revision, info.status, "validate",

@@ -302,6 +302,9 @@ class A11DifferentialTests(unittest.TestCase):
             self.assertEqual(result["revision"]["value"], target["revision"])
             tokens.extend(result["tokens"]["value"])
             code = result["errorCode"]["value"]
+            if not result["done"]["value"]:
+                self.assertNotEqual(result["cursor"], cursor,
+                                    f"lexer continuation made no progress on {raw.hex()}")
             if result["done"]["value"]:
                 error = None
                 if code:
@@ -482,6 +485,67 @@ class A11DifferentialTests(unittest.TestCase):
         self.assertTrue(finished_fields["done"]["value"])
         self.assertEqual([record_fields(item)["kind"]["value"] for item in finished_fields["tokens"]["value"]],
                          ["identifier", "eof"])
+
+    def test_caller_made_cursors_are_not_validation_or_completion_proofs(self):
+        invalid_raw = b"\xffname"
+        opened = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "forged-scan", "bytes": list(invalid_raw),
+        })
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        forged_scan = self.cursor_value(
+            target["document"], target["revision"], "scan", offset=1, line=1, column=2,
+        )
+        scanned = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "lexer-step", "arguments": [forged_scan], "semanticTarget": target,
+        })
+        scanned_fields = record_fields(scanned["result"])
+        self.assertTrue(scanned_fields["done"]["value"])
+        self.assertEqual(scanned_fields["errorCode"]["value"], "")
+        self.assertEqual(
+            [record_fields(item)["kind"]["value"] for item in scanned_fields["tokens"]["value"]],
+            ["identifier", "eof"],
+        )
+
+        valid_raw = b"name"
+        valid_opened = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "forged-done", "bytes": list(valid_raw),
+        })
+        valid_target = {
+            "document": valid_opened["document"],
+            "revision": valid_opened["revision"],
+            "entryFunctions": [],
+        }
+        forged_done = self.cursor_value(valid_target["document"], valid_target["revision"], "done")
+        skipped = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "lexer-step", "arguments": [forged_done], "semanticTarget": valid_target,
+        })
+        skipped_fields = record_fields(skipped["result"])
+        self.assertTrue(skipped_fields["done"]["value"])
+        self.assertEqual(skipped_fields["errorCode"]["value"], "")
+        self.assertEqual(skipped_fields["tokens"]["value"], [])
+
+    def test_32_byte_boundary_fixtures_match_ocaml_and_progress(self):
+        fixtures = [
+            ("utf8 scalar crosses work edge", b" " * 30 + b'"\xf0\x9f\x98\x80"'),
+            ("malformed continuation at edge", b" " * 30 + b"\xe2(\xa1"),
+            ("truncated scalar at edge", b" " * 31 + b"\xe2\x82"),
+            ("two-byte operator crosses edge", b" " * 31 + b"=="),
+            ("named hole crosses edge", b" " * 30 + b"?slot name"),
+            ("identifier begins at edge", b" " * 31 + b"alpha"),
+            ("escape payload begins after edge", b" " * 27 + b'"abc\\n"'),
+            ("closing quote after edge", b" " * 30 + b'"x"'),
+            ("unterminated string crosses edge", b" " * 31 + b'"open' + b"x" * 40),
+            ("maximum integer crosses edge", b" " * 29 + b"9223372036854775807 "),
+            ("overflow integer crosses edge", b" " * 29 + b"9223372036854775808 "),
+            ("comment LF after edge", b"#" + b"x" * 31 + b"\nname"),
+            ("comment CRLF crosses edge", b"#" + b"x" * 30 + b"\r\nname"),
+            ("EOF exactly at work edge", b" " * 31 + b"x"),
+        ]
+        for label, raw in fixtures:
+            with self.subTest(boundary=label, length=len(raw)):
+                self.assert_differential(raw)
 
 
 if __name__ == "__main__":
