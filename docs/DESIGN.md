@@ -18,6 +18,10 @@ The primary compiler is `pep_ocaml.ml`, invoked by the PowerShell 7 CLI `pep.ps1
 Hole filling requires a unique scope-qualified target at the current revision, parses one expression, checks the entire candidate, preserves unrelated bytes, and retains historical revisions. Invalid candidates and stale or ambiguous targets do not advance the document. A8's `unused_functions.pep` is a self-development proof: it computes call-graph reachability in Pep from checker-produced facts and reports only functions unreachable under the selected root policy. It is an example registered through the session tool protocol, not a built-in CLI analysis command or a self-hosted compiler. The local tool host is trusted and is not a sandbox.
 
 Edited revisions are fully parsed and checked; this is not cross-revision incremental compilation. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the exact interface, [SEED_LANGUAGE.md](SEED_LANGUAGE.md) for the seed limits, and [packets/CURRENT.md](packets/CURRENT.md) for the current implementation task. The [A5](packets/archive/A5-ACCEPTANCE-RECORD.md) and [A6](packets/archive/A6-ACCEPTANCE-RECORD.md) acceptance records preserve their published evidence. The historical MoonBit A0 design remains in [HISTORICAL_DESIGN_A0.md](HISTORICAL_DESIGN_A0.md).
+## A10 review branch (pending milestone acceptance)
+
+The A10 development branch adds `byte_length`, checked unsigned `byte_at`, UTF-8-boundary-checked `byte_slice`, O(1) `prepend`, O(n) `reverse`, and v2-only `source_bytes()` bound to the host-granted `semanticTarget` revision. `open_bytes` retains and hashes up to 65,536 exact bytes, including malformed UTF-8. [`lexer_fragment.pep`](../examples/lexer_fragment.pep) demonstrates Pep scanning authorised bytes into typed tokens with original UTF-8 byte spans. It is a bounded fragment, not the complete A11 lexer; the 100,000-step tool budget and typed-result limits constrain practical input size. A10 is not accepted by this branch update.
+
 ## Designed or planned, not implemented in this seed
 The following v0.3 commitments are not current compiler capabilities:
 

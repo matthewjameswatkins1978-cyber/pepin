@@ -17,6 +17,18 @@ Record values use `{"type":"RecordName","fields":[{"name":"fieldName","value":..
 
 V2 bounds typed values to nesting depth 16 and 10,000 value nodes. A JSONL input or response line is limited to 1,048,576 UTF-8 bytes. Tool execution remains limited to 100,000 interpreter steps and 128 call depth. Limit failures return structured JSONL errors.
 
+## Original source bytes and bounded construction
+
+The A10 implementation adds the following Pep builtins without changing the typed-value schema:
+
+- `byte_length(Str) -> Int` counts original bytes.
+- `byte_at(Str, Int) -> Int` returns an unsigned byte and reports `PEP_RUNTIME_BYTE_RANGE` outside the half-open source range.
+- `byte_slice(Str, Int, Int) -> Str` copies `[start, end)`, charges copied bytes to the interpreter step budget, rejects out-of-range spans, and rejects boundaries inside a valid UTF-8 sequence with `PEP_RUNTIME_BYTE_BOUNDARY`.
+- `prepend(List[T], T) -> List[T]` constructs an immutable list head in O(1); `reverse(List[T]) -> List[T]` copies in O(n). Repeated `append` remains O(n) per call.
+- `source_bytes() -> Str` returns the exact bytes of the same retained document revision named by the host-provided `semanticTarget`. It has no document-ID lookup or ambient filesystem access and is available only under v2 host context. A target opened with `open_bytes` may contain invalid UTF-8; Pep can inspect it bytewise, but an invalid UTF-8 `Str` result is rejected before JSON serialization.
+
+`open_bytes` accepts at most 65,536 unsigned byte values. The JSONL line and v2 result budgets remain 1 MiB and 10,000 typed nodes; tool execution remains at 100,000 interpreter steps and 128 call depth. These limits can be reached before the source-byte transport cap.
+
 ## Compiler semantic snapshot
 
 `semantic_snapshot() -> ProgramInfo` is a compiler-known, zero-argument Pep builtin. It is available only during an explicitly host-authorised v2 tool invocation (or validation vector) with a `semanticTarget`. Calling it from ordinary `run`, or without the host grant, produces a runtime error. Pep code cannot choose a target through ambient access.
