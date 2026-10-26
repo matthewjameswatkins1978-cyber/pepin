@@ -15,8 +15,8 @@ Every request has `schemaVersion: 3` and a string `op`. Unknown versions, malfor
 
 Supported operations:
 
-- `open`: required UTF-8 `source` string; optional `name` string or null. Returns a generated session-local document ID and the initial revision.
-- `open_bytes`: required `bytes` array of unsigned integers from 0 through 255; optional `name` string or null. The exact byte sequence is retained and hashed without newline conversion, including malformed UTF-8. Input is limited to 65,536 bytes; malformed encoding returns an `invalid` analysis with a `PEP_INVALID_UTF8` byte span.
+- `open`: required UTF-8 `source` string; optional `name` string or null. Returns a generated session-local document ID and the initial revision. Optional `metadataOnly: true` omits the potentially large `ast` and `typedTree` values and adds `analysisOmitted: true`; status, revision, holes, and diagnostics remain available. The default response is unchanged.
+- `open_bytes`: required `bytes` array of unsigned integers from 0 through 255; optional `name` string or null. The exact byte sequence is retained and hashed without newline conversion, including malformed UTF-8. Input is limited to 65,536 bytes; malformed encoding returns an `invalid` analysis with a `PEP_INVALID_UTF8` byte span. It accepts the same optional `metadataOnly` flag and response behavior as `open`.
 - `query` and `inspect`: required `document` and retained `revision`; optional nonnegative `offset` selects a hole beginning at that original byte offset. Both use the same existing semantic data and include the source-spanned AST, checked tree where available, diagnostics, and holes.
 - `apply_edit`: required `document`, `expected_revision`, `start_byte`, `end_byte`, and `replacement`. The range is half-open `[start_byte, end_byte)` in original UTF-8 bytes. This low-level operation may create an invalid revision so callers can inspect and repair it.
 - `fill_hole`: required `document`, `expected_revision`, `scope`, `name`, `replacement`, and `mode` (`preview` or `apply`). The scope and name must identify exactly one current named hole. No caller-supplied byte offset is accepted.

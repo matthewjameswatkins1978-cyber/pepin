@@ -60,3 +60,7 @@ A v2 registration signature and validation vector follow the standard operations
 ```
 
 Registration still derives signatures from checked Pep functions, validation executes real vectors through the interpreter, and activation remains explicit. `say` remains forbidden transitively. Tool activation and rollback semantics are unchanged. The local host is trusted, not a security sandbox; these read grants constrain the session API and do not create an OS security boundary.
+
+## Pep-written parser continuation example
+
+The current A12 `parser_start`/`parser_step` example consumes host-authorised source and emits `FlatAstNode` chunks. Cursor values are cooperative continuation data, not proof that validation or parsing occurred. See the [A12–A13 Flat AST and continuation contract](packets/A12-A13-FLAT-AST-CONTRACT.md) before consuming this experimental syntax result.
