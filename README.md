@@ -33,6 +33,7 @@ The in-process semantic session reads and writes JSON Lines over standard input/
 - [Technical Resolution 001](docs/TECHNICAL_RESOLUTION_001.md): founding technical decisions and acceptance requirements.
 - [Technical Resolution 002](docs/TECHNICAL_RESOLUTION_002.md): modern-by-default rule and current C23 native target.
 - [Implementation status](docs/DESIGN.md): what is implemented versus planned.
+- [AI-first execution and resource-boundary research (26 October 2026)](docs/RESEARCH_AI_FIRST_EXECUTION_2026-10-26.md): provisional analysis of concurrency, leases, real-time memory, GPU lifetimes and semantic library contracts; not implementation authority.
 - [Session protocol v3](docs/SESSION_PROTOCOL.md): ephemeral revision-aware JSONL interface and its limits.
 - [Seed-language decision](docs/SEED_LANGUAGE.md): OCaml seed choice and current limits.
 - [Current implementation packet](docs/packets/CURRENT.md): stable agent entry; [all packets](docs/packets/README.md): A6–A15 roadmap.
