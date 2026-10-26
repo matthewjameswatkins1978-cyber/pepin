@@ -21,13 +21,13 @@ V2 bounds typed values to nesting depth 16 and 10,000 value nodes. A JSONL input
 
 The A10 implementation adds the following Pep builtins without changing the typed-value schema:
 
-- `byte_length(Str) -> Int` counts original bytes.
-- `byte_at(Str, Int) -> Int` returns an unsigned byte and reports `PEP_RUNTIME_BYTE_RANGE` outside the half-open source range.
-- `byte_slice(Str, Int, Int) -> Str` copies `[start, end)`, charges copied bytes to the interpreter step budget, rejects out-of-range spans, and rejects boundaries inside a valid UTF-8 sequence with `PEP_RUNTIME_BYTE_BOUNDARY`.
+- `byte_length(SourceBytes) -> Int` counts original bytes.
+- `byte_at(SourceBytes, Int) -> Int` returns an unsigned byte and reports `PEP_RUNTIME_BYTE_RANGE` outside the half-open source range.
+- `byte_slice(SourceBytes, Int, Int) -> SourceBytes` copies any checked half-open byte range, including ranges that split UTF-8 sequences, and charges copied bytes to the interpreter step budget. `utf8_slice(SourceBytes, Int, Int) -> Str` is the explicit conversion: it checks bounds, UTF-8 boundaries, and the selected bytes, reporting `PEP_RUNTIME_BYTE_RANGE`, `PEP_RUNTIME_BYTE_BOUNDARY`, or `PEP_RUNTIME_INVALID_UTF8`.
 - `prepend(List[T], T) -> List[T]` constructs an immutable list head in O(1); `reverse(List[T]) -> List[T]` copies in O(n). Repeated `append` remains O(n) per call.
-- `source_bytes() -> Str` returns the exact bytes of the same retained document revision named by the host-provided `semanticTarget`. It has no document-ID lookup or ambient filesystem access and is available only under v2 host context. A target opened with `open_bytes` may contain invalid UTF-8; Pep can inspect it bytewise, but an invalid UTF-8 `Str` result is rejected before JSON serialization.
+- `source_bytes() -> SourceBytes` returns the exact bytes of the same retained document revision named by the host-provided `semanticTarget`. `SourceBytes` is opaque: only byte builtins inspect its contents; it has no text or equality operations. Pep may hold it in local records/lists, but the type cannot cross a tool parameter/result boundary or appear inside a transportable record/list. It has no document-ID lookup or ambient filesystem access and is available only under v2 host context. A target opened with `open_bytes` may contain invalid UTF-8; only a successful `utf8_slice` can produce a `Str`.
 
-`open_bytes` accepts at most 65,536 unsigned byte values. The JSONL line and v2 result budgets remain 1 MiB and 10,000 typed nodes; tool execution remains at 100,000 interpreter steps and 128 call depth. These limits can be reached before the source-byte transport cap.
+`open_bytes` accepts at most 65,536 unsigned byte values. The JSONL line and v2 result budgets remain 1 MiB and 10,000 typed nodes; tool execution remains at 100,000 interpreter steps and 128 call depth. These limits can be reached before the source-byte input cap. The A10 Pep scanner fragment is bounded by the 100,000-step limit; complete large-file support is an A11 concern, not an implied consequence of the 65,536-byte input cap.
 
 ## Compiler semantic snapshot
 

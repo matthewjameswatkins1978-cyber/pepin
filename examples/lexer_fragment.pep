@@ -15,7 +15,7 @@ fn ascii_continue(byte: Int) -> Bool {
 
 type SourcePosition { line: Int, column: Int }
 
-fn byte_position(source: Str, target: Int) -> SourcePosition {
+fn byte_position(source: SourceBytes, target: Int) -> SourcePosition {
   var i = 0
   var line = 1
   var column = 1
@@ -26,7 +26,7 @@ fn byte_position(source: Str, target: Int) -> SourcePosition {
   return SourcePosition { line: line, column: column }
 }
 
-fn utf8_error(source: Str) -> Int {
+fn utf8_error(source: SourceBytes) -> Int {
   var i = 0
   let length = byte_length(source)
   while !(length <= i) {
@@ -62,8 +62,8 @@ fn utf8_error(source: Str) -> Int {
   }
   return -1
 }
-fn make_token(source: Str, kind: Str, start: Int, finish: Int, line: Int, column: Int) -> LexToken {
-  return LexToken { kind: kind, startByte: start, endByte: finish, line: line, column: column, lexeme: byte_slice(source, start, finish) }
+fn make_token(source: SourceBytes, kind: Str, start: Int, finish: Int, line: Int, column: Int) -> LexToken {
+  return LexToken { kind: kind, startByte: start, endByte: finish, line: line, column: column, lexeme: utf8_slice(source, start, finish) }
 }
 
 fn make_report(info: ProgramInfo, tokens: List[LexToken], code: Str, start: Int, finish: Int, line: Int, column: Int) -> LexReport {
