@@ -1,6 +1,6 @@
 # Pep C23 backend feasibility corpus
 
-This directory is an isolated research corpus for `PEP-C23-ABI-03`.
+This directory is an isolated research corpus for `PEP-C23-ABI-04`.
 It is not production Pep runtime code, an emitter, an A14 implementation, or
 evidence that Pep has a native backend.
 
@@ -16,8 +16,15 @@ evidence that Pep has a native backend.
 - `c23_named_nullptr_probe.c`: focused `<stddef.h>` `nullptr_t` portability
   probe; it exposes the current MinGW header gap.
 - `c23_benchmark.c` / `benchmark_runtime.py`: standalone native runtime
-  benchmarks with one warmup, repeated trials, checksums and separate process
-  startup timing. They do not measure peak RSS.
+  benchmarks with one warmup, repeated trials, independently calculated
+  checksums, bounded subprocesses, monotonic Windows timing and separate
+  process startup timing. They do not measure peak RSS.
+- `fixtures/abi_fixture_types.h`, `abi_fixture_module.c` and
+  `abi_fixture_main.c`: separately compiled ABI/layout fixtures covering
+  records, recursive unions, calls across translation units, embedded NUL
+  strings, checked failures and allocator ownership.
+- `abi_fixture.py`: machine-readable fixture receipt including semantic
+  equality, per-toolchain layout values and object/executable sizes.
 - `build.ps1`: strict `-std=c23` build, discovery and probe driver. It never
   falls back to `c11` or `gnu23`.
 - `toolchain_paths.json`: shared known-location manifest used by the driver and
@@ -26,7 +33,7 @@ evidence that Pep has a native backend.
 - `compare_semantics.py`: deterministic machine-readable interpreter/native
   comparison.
 - `test_feasibility.py`: automated discovery, interpreter-oracle, strict native,
-  failure-propagation and sanitizer checks.
+  failure-propagation, ABI fixture and sanitizer checks.
 - `REPORT.md`: current evidence, rejected alternatives, and the proposed A14
   starting contract.
 
@@ -36,6 +43,7 @@ evidence that Pep has a native backend.
 .\build.ps1 -Compiler all -Probe
 python .\test_feasibility.py -v
 python .\compare_semantics.py
+python .\abi_fixture.py --output ..\..\_build\c23-feasibility\abi-fixture-report.json
 python .\benchmark_runtime.py --trials 3 --output ..\..\_build\c23-feasibility\benchmark-report.json
 ```
 
@@ -52,6 +60,11 @@ benchmark report records native operation wall time separately from Python
 process wall time, which includes executable startup. `arena_reserved_bytes`
 is reserved arena capacity and `bytes` is a case-size estimate; neither is a
 peak resident-memory measurement.
+
+Use `-Fixtures` to compile the ABI fixture's three translation units separately
+before linking. The fixture receipt compares semantic/error fields across
+compilers, but treats numeric layout and artifact sizes as per-toolchain facts;
+it does not require Clang and GCC to choose identical padding or linker output.
 
 The intended native commands are:
 

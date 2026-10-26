@@ -88,7 +88,9 @@ static int run_records(size_t size, size_t iterations, uintmax_t *checksum, size
             int64_t next = 0;
             pep_status status = pep_checked_add(point.x, point.y, &next);
             if (status != PEP_OK) return fail("record status");
-            total += next;
+            status = pep_checked_add(total, next, &next);
+            if (status != PEP_OK) return fail("record total overflow");
+            total = next;
         }
     }
     *checksum = (uintmax_t)total;
@@ -114,7 +116,12 @@ static int run_union(size_t size, size_t iterations, uintmax_t *checksum, size_t
         int64_t value = 0;
         pep_status status = pep_expr_eval(expression, 0, size + 1, &value);
         if (status != PEP_OK) { pep_arena_dispose(&arena); return fail("union evaluation"); }
-        total += value;
+        int64_t updated = 0;
+        if (pep_checked_add(total, value, &updated) != PEP_OK) {
+            pep_arena_dispose(&arena);
+            return fail("union total overflow");
+        }
+        total = updated;
         if (pep_arena_reserved(&arena) > peak_reserved) peak_reserved = pep_arena_reserved(&arena);
         pep_arena_dispose(&arena);
     }
@@ -192,7 +199,12 @@ static int run_recursive(size_t size, size_t iterations, uintmax_t *checksum, si
             pep_arena_dispose(&arena);
             return fail("recursive evaluation");
         }
-        total += value;
+        int64_t updated = 0;
+        if (pep_checked_add(total, value, &updated) != PEP_OK) {
+            pep_arena_dispose(&arena);
+            return fail("recursive total overflow");
+        }
+        total = updated;
     }
     *checksum = (uintmax_t)total;
     *bytes = (size + size + 1) * sizeof(pep_expr);

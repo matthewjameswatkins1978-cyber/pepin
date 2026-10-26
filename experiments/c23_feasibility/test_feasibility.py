@@ -78,6 +78,10 @@ def benchmark_executable(name):
     return REPO / "_build" / "c23-feasibility" / name / "benchmark" / "pep_c23_benchmark.exe"
 
 
+def fixture_executable(name):
+    return REPO / "_build" / "c23-feasibility" / name / "fixtures" / "pep_c23_abi_fixture.exe"
+
+
 class CorpusPolicyTests(unittest.TestCase):
     def test_strict_c23_only(self):
         build = (ROOT / "build.ps1").read_text(encoding="utf-8")
@@ -233,6 +237,55 @@ class BenchmarkTests(unittest.TestCase):
 
 
 class NativeProofTests(unittest.TestCase):
+    def test_separate_translation_unit_abi_fixtures(self):
+        observations = {}
+        for name in ("clang", "gcc"):
+            build = run([
+                "pwsh", "-NoProfile", "-File", str(ROOT / "build.ps1"),
+                "-Compiler", name, "-Fixtures",
+            ])
+            self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+            commands = [line for line in build.stdout.splitlines() if line.startswith("COMMAND|")]
+            self.assertEqual(len(commands), 4)
+            self.assertEqual(sum(" -c " in line for line in commands), 3)
+            proof = run([str(fixture_executable(name))])
+            self.assertEqual(proof.returncode, 0, proof.stdout + proof.stderr)
+            lines = proof.stdout.splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertTrue(lines[0].startswith("ABI|compiler="))
+            self.assertTrue(lines[1].startswith("LAYOUT|"))
+            self.assertTrue(lines[2].startswith("ERRORS|"))
+            parsed = {}
+            for line in lines:
+                fields = line.split("|")
+                parsed[fields[0]] = dict(field.split("=", 1) for field in fields[1:])
+            self.assertEqual(parsed["ABI"]["status"], "ok")
+            self.assertEqual(parsed["ABI"]["point_sum"], "42")
+            self.assertEqual(parsed["ABI"]["tree_sum"], "42")
+            self.assertEqual(parsed["ABI"]["list_sum"], "49")
+            self.assertEqual(parsed["ABI"]["utf8_len"], "3")
+            self.assertEqual(parsed["ERRORS"], {
+                "overflow": "overflow",
+                "invalid_tag": "invalid_variant",
+                "owner_mismatch": "range",
+                "owner_recovery": "ok",
+            })
+            layout = parsed["LAYOUT"]
+            self.assertEqual(layout["point_y_offset"], "8")
+            self.assertGreaterEqual(int(layout["point_size"]), 16)
+            self.assertGreaterEqual(int(layout["tree_size"]), 24)
+            observations[name] = {
+                "semantic": parsed["ABI"],
+                "errors": parsed["ERRORS"],
+                "layout": layout,
+                "executable_bytes": fixture_executable(name).stat().st_size,
+            }
+        self.assertEqual(
+            {key: value for key, value in observations["clang"]["semantic"].items() if key != "compiler"},
+            {key: value for key, value in observations["gcc"]["semantic"].items() if key != "compiler"},
+        )
+        self.assertEqual(observations["clang"]["errors"], observations["gcc"]["errors"])
+
     def test_native_proof_when_compilers_exist(self):
         statuses = {}
         for name in ("clang", "gcc"):

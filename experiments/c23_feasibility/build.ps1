@@ -4,7 +4,8 @@ param(
     [switch] $Probe,
     [switch] $Discover,
     [switch] $Sanitize,
-    [switch] $Benchmark
+    [switch] $Benchmark,
+    [switch] $Fixtures
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,7 +15,9 @@ $buildRoot = Join-Path $repoRoot '_build\c23-feasibility'
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $manifestPath = Join-Path $root 'toolchain_paths.json'
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-if ($Probe -and $Benchmark) { throw '-Probe and -Benchmark are mutually exclusive' }
+if (($Probe -and $Benchmark) -or ($Fixtures -and ($Probe -or $Benchmark -or $Sanitize))) {
+    throw 'Probe, Benchmark, Fixtures and Sanitize modes are mutually exclusive where combined'
+}
 
 function Expand-C23Candidate([string] $candidate) {
     $expanded = $candidate
@@ -71,8 +74,34 @@ foreach ($name in $requested) {
     $outDir = Join-Path $buildRoot $name
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     $flags = @('-std=c23', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2', '-I', $root)
-    if ($Sanitize) { $flags += @('-fsanitize=address') }
     $runtime = Join-Path $root 'c23_runtime.c'
+    if ($Fixtures) {
+        $fixtureRoot = Join-Path $root 'fixtures'
+        $fixtureOut = Join-Path $outDir 'fixtures'
+        New-Item -ItemType Directory -Force -Path $fixtureOut | Out-Null
+        $runtimeObject = Join-Path $fixtureOut 'c23_runtime.o'
+        $moduleObject = Join-Path $fixtureOut 'abi_fixture_module.o'
+        $mainObject = Join-Path $fixtureOut 'abi_fixture_main.o'
+        $output = Join-Path $fixtureOut $(if ($IsWindows) { 'pep_c23_abi_fixture.exe' } else { 'pep_c23_abi_fixture' })
+        $compileInputs = @(
+            @($runtime, $runtimeObject),
+            @((Join-Path $fixtureRoot 'abi_fixture_module.c'), $moduleObject),
+            @((Join-Path $fixtureRoot 'abi_fixture_main.c'), $mainObject)
+        )
+        foreach ($pair in $compileInputs) {
+            $source = $pair[0]
+            $object = $pair[1]
+            Write-Output "COMMAND|$path $($flags -join ' ') -c $source -o $object"
+            & $path @flags '-c' $source '-o' $object
+            if ($LASTEXITCODE -ne 0) { throw "$name failed strict C23 fixture compilation" }
+        }
+        Write-Output "COMMAND|$path $($flags -join ' ') $runtimeObject $moduleObject $mainObject -o $output"
+        & $path @flags $runtimeObject $moduleObject $mainObject '-o' $output
+        if ($LASTEXITCODE -ne 0) { throw "$name failed strict C23 fixture linking" }
+        Write-Output "BUILT|$name|$output"
+        continue
+    }
+    if ($Sanitize) { $flags += @('-fsanitize=address') }
     $probeSource = if ($Benchmark) { Join-Path $root 'c23_benchmark.c' } elseif ($Probe) { Join-Path $root 'c23_language_probe.c' } else { Join-Path $root 'c23_probe.c' }
     $outputName = if ($Benchmark) { 'pep_c23_benchmark' } elseif ($Probe) { 'pep_c23_language_probe' } else { 'pep_c23_probe' }
     if ($Benchmark) { $outDir = Join-Path $outDir 'benchmark'; New-Item -ItemType Directory -Force -Path $outDir | Out-Null }

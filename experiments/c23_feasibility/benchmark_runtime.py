@@ -60,12 +60,17 @@ def timed_run(command, timeout_seconds=PROCESS_TIMEOUT_SECONDS):
             timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired as error:
+        def tail(value):
+            if isinstance(value, bytes):
+                value = value.decode(errors="replace")
+            return (value or "")[-512:]
+
         raise BenchmarkFailure(
             "process timeout",
             command=[str(part) for part in command],
             timeout_seconds=timeout_seconds,
-            stdout=(error.stdout or "")[-512:],
-            stderr=(error.stderr or "")[-512:],
+            stdout=tail(error.stdout),
+            stderr=tail(error.stderr),
         ) from error
     return result, time.perf_counter_ns() - start
 

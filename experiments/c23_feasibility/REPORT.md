@@ -1,163 +1,176 @@
-# Pep C23 runtime ABI hardening and benchmark report
+# Pep C23 runtime ABI-04 report
 
-Mission: `PEP-C23-ABI-03`
-Accepted research base: `6a41f0e8d62e8fb3d82bb5d6bc13a338bc4762ec`
-Branch: `exp/c23-feasibility`
-Benchmark/comparison slice: `3d027ed4f7174ca898b4c46f1b7109a7eae81022`
+Mission: `PEP-C23-ABI-04`  
+Branch: `exp/c23-feasibility`  
+Scope: isolated C23 runtime and ABI experiments only. This is not an A14
+emitter, a native Pep compiler, a language-semantics change, or an A15 step.
 
-## Result
+## RESULT
 
-The isolated corpus has compiled and executed strict C23 runtime proofs on
-Windows with both the Technical Resolution 002 compiler choices. The runtime
-ownership and allocation seam is adversarially exercised, native results are
-compared with the current Pep interpreter for comparable cases, and a
-repeatable benchmark report is produced. This remains feasibility research:
-there is no production A14 emitter, no native Pep compiler claim, and no Pep
-language-semantics change.
+The ABI-04 corpus now has compiled, executed evidence for ownership recovery,
+independent benchmark oracles, bounded measurement, and a separate-translation-
+unit ABI/layout gauntlet. Strict C23 Clang and GCC builds produce equivalent
+observable fixture semantics and errors. Per-toolchain artifact sizes and
+layout values are recorded without being mistaken for a portable byte-level
+ABI. The branch remains an experimental research candidate pending Lucy's
+independent review.
 
-## Toolchains and portability
+## TOOLCHAINS
 
-Evidence was collected on 2026-10-26 using Windows PowerShell 7.6.9. Both
-compilers are user-scoped Scoop installations; no system configuration or
-administrator privilege is required.
+Evidence was collected on 2026-10-26 with Windows PowerShell 7.6.9.
 
-| Compiler | Executable and actual version | Result |
+| Compiler | Installation and version | Strict result |
 |---|---|---|
-| Clang | `C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe`, LLVM/Clang 23.1.4, target `x86_64-pc-windows-msvc` | strict C23 probe, runtime proof and benchmark pass |
-| GCC | `C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe`, MinGW-Builds GCC 16.2.0, `x86_64-posix-seh-rev1` | strict C23 probe, runtime proof and benchmark pass |
+| Clang | `C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe`; LLVM/Clang 23.1.4, target `x86_64-pc-windows-msvc` | C23 language/runtime/benchmark/fixture builds and executions pass |
+| GCC | `C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe`; MinGW-Builds GCC 16.2.0, `x86_64-posix-seh-rev1` | C23 language/runtime/benchmark/fixture builds and executions pass |
 
-The build contract is:
+Every native build uses:
 
 ```text
-<compiler> -std=c23 -Wall -Wextra -Wpedantic -Werror -O2
+-std=c23 -Wall -Wextra -Wpedantic -Werror -O2
 ```
 
-Discovery order is explicit `PEP_C23_CLANG`/`PEP_C23_GCC` override, PATH, then
-the environment-relative `toolchain_paths.json` manifest. A missing compiler
-returns `UNAVAILABLE|name` with exit code 2. An invoked compiler failure is a
-different nonzero result and is never reported as an unavailable skip.
+Discovery is explicit `PEP_C23_CLANG`/`PEP_C23_GCC` override, PATH, then the
+environment-relative manifest. Missing compilers return exit 2 and
+`UNAVAILABLE|name`; a found compiler that fails compilation is a different
+nonzero result. The MinGW headers still lack the named `nullptr_t` typedef;
+the corpus records that gap and uses `typeof_unqual(nullptr)` only in the
+cross-compiler probe.
 
-The language probe confirms C23 mode under both compilers. Clang accepts the
-standard named `nullptr_t` typedef from `<stddef.h>`; the current MinGW header
-does not, although GCC accepts `nullptr` and `typeof_unqual`. The dedicated
-probe records this portability difference rather than hiding it. The shared
-corpus uses `typeof_unqual(nullptr)` for the cross-compiler proof.
+## OWNERSHIP
 
-## Runtime correctness evidence
+`pep_i64_list` stores the exact allocate/deallocate/context triple that owns
+its items. Disposal with an alternate allocator returns `PEP_ERR_RANGE` and
+does not free. Disposal with the stored allocator frees and resets the list.
+List constructors reject occupied output objects, preventing accidental
+overwrites of a live owner. String construction rejects null output pointers,
+and failed UTF-8 validation leaves the output object unchanged.
 
-The runtime proof covers checked signed `int64_t` arithmetic, division by zero
-and minimum-integer division, valid UTF-8 with embedded zero bytes, immutable
-records, recursive tagged unions, immutable list copies, recursion, loops,
-invalid tags, depth-limit and depth-counter overflow, alignment, size
-overflow, deterministic allocator failure/recovery and disposal accounting.
+The separately compiled fixture exercises a valid owner, a same-function but
+different-context mismatch, and recovery with the original owner. Both
+compilers report `owner_mismatch=range` and `owner_recovery=ok`. The contract
+is intentionally strict: callers must retain the owner triple or use the
+no-argument disposal wrapper; an arbitrary equivalent-looking allocator is
+not sufficient.
 
-All checked operations validate before performing C arithmetic. Allocation
-sizes are checked for multiplication/addition overflow and against
-`PEP_MAX_ALLOCATION_SIZE`; failed arena growth does not publish a partial
-block. Lists carry their allocator, append copies rather than aliases, and
-disposal uses the owning allocator. Strings carry `(data, len)` and never
-depend on NUL termination. Invalid tags and failure statuses propagate through
-explicit `pep_status` values and out parameters.
+## BENCHMARK ORACLES
 
-One real ASan defect was found and fixed: a `SIZE_MAX` arena request reached
-the system allocator before the portable allocation guard existed. Clang ASan
-is now clean when its LLVM runtime directory is on `PATH`. The installed MinGW
-GCC sanitizer build is incomplete: linking `-fsanitize=address` fails because
-this installation has no `-lasan`; this is recorded as an unavailable sanitizer
-capability, not suppressed.
+`benchmark_runtime.py` computes each expected checksum independently in Python,
+checks operation count and signed-64-bit range, validates the warmup and every
+measured trial, and requires identical observed checksum sequences for Clang
+and GCC. Wrong warmup, trial, operation-count, missing-field, malformed-output,
+timeout and cross-compiler disagreement negative controls are tested and fail
+closed. Trials are bounded to 2..20; build and process execution have separate
+deadlines.
 
-## Native/interpreter comparison
+The Windows benchmark clock uses `QueryPerformanceCounter` with checked
+conversion to nanoseconds. The non-Windows fallback is explicitly reported as
+`timespec_get_utc`; it is not presented as a monotonic guarantee. Benchmark
+operation totals use the checked runtime arithmetic helpers where signed
+overflow is possible. The report records operation time separately from
+process startup time and records arena reserved capacity, not peak RSS.
 
-`compare_semantics.py` emits deterministic JSON for each compiler. It contains
-six successful observable rows: expression/record/list values, factorial and
-loop summation. It also contains three comparable controlled failures:
+## ARTIFACTS
 
-| Semantic case | Native status | Pep interpreter diagnostic |
-|---|---|---|
-| signed integer overflow | `overflow` | `PEP_RUNTIME_OVERFLOW` |
-| division by zero | `division_by_zero` | `PEP_RUNTIME_DIVISION_BY_ZERO` |
-| recursive call depth | `depth` | `PEP_RUNTIME_CALL_DEPTH` |
+`abi_fixture.py` builds and runs three separately compiled translation units:
 
-Both Clang and GCC have zero comparable counterexamples. Invalid variant tags,
-malformed UTF-8 bytes and injected allocator failure are included as explicit
-`not_representable` native-only rows because the current Pep surface cannot
-express those invalid runtime states or allocator injections. They are not
-counted as interpreter equivalence.
+1. `c23_runtime.c` provides the isolated runtime;
+2. `fixtures/abi_fixture_module.c` owns record, recursive union, list, UTF-8,
+   checked-error and allocator cases;
+3. `fixtures/abi_fixture_main.c` is an independent caller that validates
+   layout invariants and prints the machine-readable receipt.
 
-## Benchmark evidence
+The current receipt has schema 1, `separate_translation_units=true`, semantic
+and error equality true, and records object/executable byte sizes. On this
+Windows run the Clang fixture executable was 155,648 bytes and GCC's was
+64,429 bytes. Runtime and fixture object sizes are also retained in the JSON
+receipt. These are useful implementation measurements, not generated-Pep
+size claims or cross-compiler ABI requirements.
 
-`benchmark_runtime.py --trials 3` performs one warmup and three measured
-processes for each of seven cases at three sizes (21 rows per compiler). It
-records compiler version, strict flags, compile elapsed time, C23 operation
-wall time, separate process wall time, operation count, checksums and arena
-reserved capacity. The current report has zero checksum mismatches across both
-compilers and all 42 rows.
+## ABI GAUNTLET
 
-Representative largest-size medians from the pushed JSON report:
+The fixture proves across independently compiled boundaries:
 
-| Case | Size | Clang native ns | GCC native ns | Clang process ns | GCC process ns |
-|---|---:|---:|---:|---:|---:|
-| arithmetic | 2048 | 4,427,900 | 4,011,300 | 14,280,900 | 13,001,500 |
-| record | 64 | 996,400 | 981,900 | 11,015,300 | 9,711,900 |
-| union | 64 | 112,600 | 108,500 | 10,061,600 | 10,355,300 |
-| arena | 256 | 220,600 | 224,800 | 9,763,100 | 10,328,300 |
-| list | 256 | 52,800 | 56,700 | 9,963,400 | 10,218,000 |
-| recursive | 64 | 77,300 | 57,400 | 10,104,300 | 10,901,800 |
-| UTF-8 | 4096 | 492,100 | 1,501,700 | 10,332,300 | 12,572,400 |
+- fixed-width `int64_t` record fields and field offsets;
+- a recursive tagged union with explicit tag dispatch and invalid-tag failure;
+- function calls returning a status plus an out-parameter report;
+- embedded NUL bytes in a length-delimited UTF-8 value;
+- checked overflow and deterministic allocator-owner mismatch/recovery.
 
-Process startup dominates the small cases. `arena_reserved_bytes` is not RSS,
-and no peak RSS claim is made. The benchmark is evidence for representation
-trade-offs, not a generated-Pep performance claim.
+Both compilers reported `point_sum=42`, `tree_sum=42`, `list_sum=49`,
+`utf8_len=3`, `overflow=overflow`, `invalid_tag=invalid_variant`,
+`owner_mismatch=range`, and `owner_recovery=ok`. Both independently reported
+`point_size=16`, `point_align=8`, `point_y_offset=8`, `tree_size=24`,
+`tree_align=8`, and `tree_payload_offset=8` on this host. The acceptance rule
+does not require those numeric values to remain universal: the emitter must
+avoid depending on undocumented padding and the generated program must be
+checked under each target compiler.
 
-## Provisional A14 contract
+## A14 STARTING CONTRACT
 
-The future emitter should accept only an approved checked AST containing:
+The future emitter may consume only a reviewed checked-AST contract containing:
 
-1. stable node/statement tags and source spans;
-2. resolved binding and call IDs, types and recursion edges;
-3. nominal record IDs, ordered fields and checked field types;
-4. nominal union and constructor IDs, payload types and exhaustive match trees;
-5. homogeneous list element types, including explicit empty-list typing;
-6. validated UTF-8 bytes and lengths, never C fragments;
-7. explicit checked-error sites for overflow, division and allocation failure;
-8. a supported-feature set so unsupported nodes fail before emission.
+1. stable node/statement tags, source spans, and resolved binding/call IDs;
+2. checked scalar and nominal record/union/list types, ordered fields and
+   constructor IDs;
+3. exhaustive checked match trees and explicit recursion edges;
+4. validated UTF-8 byte spans and lengths, never C fragments;
+5. explicit checked-error sites for overflow, division, allocation, invalid
+   variant and depth failures;
+6. an explicit supported-feature set and deterministic unsupported-feature
+   diagnostic boundary;
+7. ownership/lifetime annotations sufficient to decide borrowed versus owned
+   string/list/recursive values without emitter inference.
 
-The runtime ABI candidate is fixed-width values, length-delimited UTF-8,
-ordinary structs, explicit union tags, arena-owned immutable recursive graphs,
-fresh owned list results, and enumerated status/out-parameter failures. The
-emitter must not infer types, lower unsupported nodes silently, use global
-mutable state, rely on host allocation behaviour, or emit compiler extensions.
+The runtime model is fixed-width values, length-delimited strings, ordinary
+structs, explicit tagged unions, arena-owned recursive graphs, fresh immutable
+list results, allocator identity carried with owned storage, and enumerated
+status/out-parameter failures. A14 must fail closed before emitting C23 when
+the checked AST omits any required identity, type, ownership or support fact.
 
-For identical checked input, emitted C23 bytes must be canonical: stable
-declaration/helper/field ordering, stable formatting, no timestamps or absolute
-paths. Acceptance must compile those bytes with strict Clang and GCC and
-compare both executables with the checked interpreter, including deterministic
-failures.
+For identical checked input, output bytes must be canonical: stable helper,
+declaration, field and case ordering; stable formatting; no timestamps,
+absolute paths, host addresses or incidental compiler output. The runtime may
+be statically embedded or linked from a version-pinned support object, but the
+choice must be deterministic and include an ABI version constant. Generated
+artifacts are accepted only after strict Clang and GCC compilation, execution,
+and checked-interpreter comparison.
 
-## Remaining blockers and next gate
+## A13 DEPENDENCIES
 
-- Decide whether A14 avoids named `nullptr_t` or requires a MinGW header
-  baseline that supplies it.
-- Define reproducible Windows ASan DLL deployment; GCC sanitizer coverage is
-  currently unavailable with this MinGW distribution.
-- A13 must supply a reviewed checked-AST topology and ownership contract;
-  this corpus does not authorize parser/checker changes.
-- Peak RSS, generated C code size and a production emitter remain unmeasured.
-- Cross-compiler layout of future emitted records/unions still requires
-  generated-artifact tests rather than this standalone runtime corpus.
+This corpus does not define the A13 checked AST. A13 must review and provide
+the node topology, nominal identity, ownership annotations, error sites and
+unsupported-feature set above. The current parser/flat AST observations are
+not sufficient evidence for emitter consumption. The fixture is a contract
+test candidate, not permission to change A12 or A13.
 
-The next gate is Lucy's independent review of this pushed branch and approval
-of the provisional runtime/emitter contract. No merge, master change, packet
-pointer update or A15/self-hosting work is requested.
+## SANITIZERS AND HAZARDS
 
-## Evidence receipt
+Clang AddressSanitizer passes when LLVM's `lib\windows` runtime directory is
+on `PATH`. GCC AddressSanitizer remains incomplete: this MinGW installation's
+linker reports `cannot find -lasan`. That is a toolchain limitation, not a
+suppressed test. Remaining hazards include target-specific allocator and
+linker behavior, portable object layout/padding, recursion depth/stack limits,
+and the absence of a generated-artifact differential test.
 
-- C23 targeted suite: **19/19 passed**.
-- Strict Clang language/runtime/benchmark builds and executions: pass, exit 0.
-- Strict GCC language/runtime/benchmark builds and executions: pass, exit 0.
+## TEST RECEIPT
+
+- ABI-04 focused suite: 22/22 passed, including separate-TU fixture tests.
+- Strict Clang and GCC language/runtime/benchmark builds: pass, exit 0.
+- Strict Clang and GCC separate-TU fixture builds: pass, exit 0.
+- Fixture semantic/error comparison: equal; layout checked per compiler.
 - Clang ASan runtime proof: pass, exit 0, `SUMMARY|failures=0`.
-- GCC ASan: incomplete; linker reports missing `-lasan`.
-- Native/interpreter comparison: six successes plus three comparable failures
-  per compiler, zero comparable counterexamples.
-- Benchmark: 42 rows, one warmup plus three trials, zero checksum mismatches.
-- Full repository regression: **104/104 passed**, `python -m unittest discover -s tests -v`.
+- GCC ASan: incomplete, linker lacks `-lasan`.
+- Interpreter/native comparison: six successes plus three comparable failures
+  per compiler, with zero comparable counterexamples; native-only invalid
+  states remain explicitly non-comparable.
+- Full repository regression is required at the final consequential boundary
+  and is reported in the final mission receipt.
+
+## NEXT GATE
+
+Lucy should independently review the pushed ABI-04 slice and the generated
+fixture/benchmark receipts. The next acceptance gate is a checked-AST fixture
+with canonical generated C23 bytes, strict dual-compiler execution, and
+interpreter equivalence. No production emitter, merge, master change,
+milestone update, or A15 self-hosting work is authorized by this report.
