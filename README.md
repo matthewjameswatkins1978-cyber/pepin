@@ -2,7 +2,7 @@
 
 Pep is a small, statically typed, AI-first programming language intended to become self-hosting. Its canonical v0.3 vision is [Founding Design v0.3](docs/FOUNDING_DESIGN_v0.3.md), and binding technical decisions are in [Technical Resolution 001](docs/TECHNICAL_RESOLUTION_001.md) as amended by [Technical Resolution 002](docs/TECHNICAL_RESOLUTION_002.md). These design documents include planned capabilities; they are not a claim that those features are implemented.
 
-The primary compiler seed is OCaml 5.5.2. Pep follows a **modern-by-default, evidence-driven upgrade policy**; its planned native backend is a **Pep-written C23 generator** (ISO/IEC 9899:2024), using **Clang as the primary native compiler and GCC for independent checks**, not yet implemented. Pep source is ordinary plaintext `.pep` files. The current interpreter supports built-in types `Int`, `Bool`, `Str`, and `Unit`; immutable nominal records; recursive tagged unions; constructor pattern matching; functions, lexical scopes, integer operations, conditionals, built-in calls, and typed or unconstrained holes. Examples cover [records](examples/point_sum.pep), [recursive unions](examples/recursive_expr.pep), and [typed match holes](examples/match_holes.pep). Exact limits are in [the seed-language note](docs/SEED_LANGUAGE.md) and [implementation-status index](docs/DESIGN.md).
+The primary compiler seed is OCaml 5.5.2. Pep follows a **modern-by-default, evidence-driven upgrade policy**; its planned native backend is a **Pep-written C23 generator** (ISO/IEC 9899:2024), using **Clang as the primary native compiler and GCC for independent checks**, not yet implemented. Pep source is ordinary plaintext `.pep` files. The current interpreter supports `Int`, `Bool`, `Str`, and `Unit`; immutable nominal records and recursive tagged unions; `List[T]` with homogeneous literals, contextual empty lists and typed element holes; functions, lexical scopes, fixed-type mutable `var` bindings, integer operations, conditional blocks and expressions, `for-in`, `while`, scalar equality and short-circuit Boolean operators; built-in `length`, immutable `append`, scalar-only `contains`, `say` and `int_text`; and typed or unconstrained holes. Examples cover [records](examples/point_sum.pep), [recursive unions](examples/recursive_expr.pep), [typed match holes](examples/match_holes.pep), and [A6 collections and control flow](examples/a6_collections_control.pep). Exact limits are in [the seed-language note](docs/SEED_LANGUAGE.md) and [implementation-status index](docs/DESIGN.md).
 
 ## For implementation agents
 
@@ -20,6 +20,7 @@ Requirements: PowerShell 7, opam, and the Pepin-specific OCaml 5.5.2 switch. By 
 .\pep.ps1 run examples/hello.pep
 .\pep.ps1 run examples/point_sum.pep
 .\pep.ps1 run examples/recursive_expr.pep
+.\pep.ps1 run examples/a6_collections_control.pep
 .\pep.ps1 query examples/match_holes.pep --holes --json
 python -m unittest discover -s tests -v
 ```

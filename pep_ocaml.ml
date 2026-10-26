@@ -1,24 +1,25 @@
-type ty = Int | Bool | Str | Unit | Named of string
+type ty = Int | Bool | Str | Unit | Named of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int }
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
 type token = { kind:token_kind; at:span }
 type expr =
   | EInt of int64*span | EBool of bool*span | EStr of string*span
   | EName of string*span | EHole of string option*span
-  | ECall of string*expr list*span | EBin of string*expr*expr*span | EIf of expr*expr*expr*span
+  | ECall of string*expr list*span | EBin of string*expr*expr*span | EUnary of string*expr*span | EList of expr list*span | EIf of expr*expr*expr*span
   | ERecord of string*(string*expr*span) list*span | EField of expr*string*span
   | EMatch of expr*match_arm list*span
 and pattern = PWildcard of span | PBind of string*span | PConstructor of string*pattern list*span
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
-type stmt = SLet of string*ty option*expr*span | SReturn of expr*span | SBlock of stmt list*span | SExpr of expr*span
+type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
 type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
 type top = TopFun of func | TopStmt of stmt | TopType of type_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 
-let type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | Unit->"Unit" | Named n->n
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
+let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan lo hi line column = {lo;hi;line;column}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
 let json_string s =
@@ -34,8 +35,19 @@ let json_string s =
   Buffer.add_char b '"'; Buffer.contents b
 let pos_json s = Printf.sprintf "{\"offset\":%d,\"line\":%d,\"column\":%d}" s.lo s.line s.column
 let span_json s = Printf.sprintf "{\"start\":%s,\"endOffset\":%d}" (pos_json s) s.hi
-let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)->s
-let stmt_span = function SLet(_,_,_,s)|SReturn(_,s)|SBlock(_,s)|SExpr(_,s)->s
+let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)->s
+let rec contains_empty_list = function
+ |EList([],_) -> true
+ |EList(items,_) -> List.exists contains_empty_list items
+ |ECall(_,args,_) -> List.exists contains_empty_list args
+ |EBin(_,left,right,_) -> contains_empty_list left || contains_empty_list right
+ |EUnary(_,value,_) -> contains_empty_list value
+ |EIf(condition,yes,no,_) -> contains_empty_list condition || contains_empty_list yes || contains_empty_list no
+ |ERecord(_,fields,_) -> List.exists(fun(_,value,_)->contains_empty_list value)fields
+ |EField(value,_,_) -> contains_empty_list value
+ |EMatch(subject,arms,_) -> contains_empty_list subject || List.exists(fun (arm:match_arm)->contains_empty_list arm.result)arms
+ |EInt _|EBool _|EStr _|EName _|EHole _ -> false
+let stmt_span = function SLet(_,_,_,s)|SVar(_,_,_,s)|SAssign(_,_,s)|SReturn(_,s)|SBlock(_,s)|SIf(_,_,_,s)|SFor(_,_,_,s)|SWhile(_,_,s)|SExpr(_,s)->s
 let is_digit c = c>='0'&&c<='9'
 let is_alpha c = c>='a'&&c<='z'||c>='A'&&c<='Z'||c='_'
 let is_alnum c = is_alpha c || is_digit c
@@ -81,9 +93,13 @@ let lex source =
         add (Hole(Some(String.sub source (lo+1) (!i-lo-1)))) lo ln cl)
       else add (Hole None) lo ln cl; loop())
     else if c='<' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "<=") lo ln cl;loop())
+    else if c='=' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "==") lo ln cl;loop())
+    else if c='!' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "!=") lo ln cl;loop())
+    else if c='&' && !i+1<n && source.[!i+1]='&' then (ignore(advance());ignore(advance());add (Sym "&&") lo ln cl;loop())
+    else if c='|' && !i+1<n && source.[!i+1]='|' then (ignore(advance());ignore(advance());add (Sym "||") lo ln cl;loop())
     else if c='-' && !i+1<n && source.[!i+1]='>' then (ignore(advance());ignore(advance());add (Sym "->") lo ln cl;loop())
     else if c='=' && !i+1<n && source.[!i+1]='>' then (ignore(advance());ignore(advance());add (Sym "=>") lo ln cl;loop())
-    else if List.mem c ['(';')';'{';'}';',';':';';';'+';'-';'*';'/';'=';'.';'|'] then
+    else if List.mem c ['(';')';'{';'}';'[';']';',';':';';';'+';'-';'*';'/';'=';'.';'|';'&';'!'] then
       (ignore(advance());add (Sym(String.make 1 c)) lo ln cl;loop())
     else fail "PEP_UNEXPECTED_CHARACTER" (Printf.sprintf "Unexpected character %C" c) (mkspan lo (lo+1) ln cl) ()
   in loop(); Array.of_list(List.rev !tokens)
@@ -97,8 +113,9 @@ let keyword p s = match (peek p).kind with Id x when x=s->true|_->false
 let accept_sym p s = if symbol p s then (ignore(take p);true) else false
 let expect_sym p s = if not(accept_sym p s) then fail "PEP_PARSE_EXPECTED" ("Expected '"^s^"'") (at p) ()
 let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "Expected a name" t.at ()
-let parse_type p = match take p with
+let rec parse_type p = match take p with
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "Unit";_}->Unit
+  |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
   |{kind=Id name;_}->Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
 let combine a b = mkspan a.lo b.hi a.line a.column
@@ -146,7 +163,14 @@ let rec parse_expr p min_prec =
   let lhs=match first.kind with
     |Number n->EInt(n,first.at)|Text s->EStr(s,first.at)|Hole h->EHole(h,first.at)
     |Id "true"->EBool(true,first.at)|Id "false"->EBool(false,first.at)
-    |Id "if" -> let condition=parse_expr p 0 in expect_sym p "{"; let yes=parse_expr p 0 in ignore(at p); expect_sym p "}";
+    |Sym "[" -> let items=ref [] in
+        if not(symbol p "]") then (items := [parse_expr p 0]; while accept_sym p "," do if not(symbol p "]") then items := !items @ [parse_expr p 0] done);
+        let ending=at p in expect_sym p "]"; EList(!items,combine first.at ending)
+    |Sym "!" -> let rhs=parse_expr p 30 in EUnary("!",rhs,combine first.at (expr_span rhs))
+    |Id "if" ->
+        let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
+        let condition=parse_expr p 0 in p.record_literals_allowed<-previous;
+        expect_sym p "{"; let yes=parse_expr p 0 in ignore(at p); expect_sym p "}";
         if not(keyword p "else") then fail "PEP_PARSE_ELSE" "Expected else after the true branch" (at p) ();
         ignore(take p); expect_sym p "{"; let no=parse_expr p 0 in let ending=at p in expect_sym p "}"; EIf(condition,yes,no,combine first.at ending)
     |Id "match" ->
@@ -172,29 +196,62 @@ let rec parse_expr p min_prec =
         let close=at p in expect_sym p "}"; ERecord(name,!fields,combine first.at close)
       ) else EName(name,first.at)
     |Sym "(" ->let e=parse_expr p 0 in let close=at p in expect_sym p ")";
-        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EBin(o,l,r,_)->EBin(o,l,r,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s))
+        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EBin(o,l,r,_)->EBin(o,l,r,s)|EUnary(o,x,_)->EUnary(o,x,s)|EList(xs,_)->EList(xs,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s))
     |Sym "-" -> let rhs=parse_expr p 30 in EBin("neg",EInt(0L,first.at),rhs,combine first.at (expr_span rhs))
     |t->fail "PEP_PARSE_EXPRESSION" "Expected an expression" first.at () in
   parse_tail p min_prec lhs
 and parse_tail p min_prec lhs =
   if symbol p "." then (ignore (take p); let field_token=peek p in let field=expect_id p in parse_tail p min_prec (EField(lhs,field,combine (expr_span lhs) field_token.at)))
-  else let op,prec=match (peek p).kind with Sym "<="->"<=",5|Sym "+"->"+",10|Sym "-"->"-",10|Sym "*"->"*",20|Sym "/"->"/",20|_->"",-1 in
+  else let op,prec=match (peek p).kind with Sym "||"->"||",1|Sym "&&"->"&&",2|Sym "=="->"==",3|Sym "!="->"!=",3|Sym "<="->"<=",5|Sym "+"->"+",10|Sym "-"->"-",10|Sym "*"->"*",20|Sym "/"->"/",20|_->"",-1 in
   if prec<min_prec then lhs else (ignore(take p); let rhs=parse_expr p (prec+1) in parse_tail p min_prec (EBin(op,lhs,rhs,combine (expr_span lhs) (expr_span rhs))))
 let rec parse_stmt p =
-  if keyword p "let" then (
-    let start=(take p).at in let name=expect_id p in
+  let parse_body () =
+    expect_sym p "{";
+    let body=ref [] in
+    while not(symbol p "}") && (peek p).kind<>Eof do body:=parse_stmt p :: !body done;
+    let ending=at p in expect_sym p "}";
+    List.rev !body,ending
+  in
+  if keyword p "let" || keyword p "var" then (
+    let mutable_binding=keyword p "var" in let start=(take p).at in let name=expect_id p in
     let annotation=if accept_sym p ":" then Some(parse_type p) else None in
     expect_sym p "="; let value=parse_expr p 0 in ignore(accept_sym p ";");
-    SLet(name,annotation,value,combine start (expr_span value)))
+    if mutable_binding then SVar(name,annotation,value,combine start (expr_span value))
+    else SLet(name,annotation,value,combine start (expr_span value)))
   else if keyword p "return" then (
     let start=(take p).at in let value=parse_expr p 0 in ignore(accept_sym p ";");
     SReturn(value,combine start (expr_span value)))
+  else if keyword p "if" then (
+    let start=(take p).at in
+    let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
+    let condition=parse_expr p 0 in p.record_literals_allowed<-previous;
+    let yes,yes_end=parse_body () in
+    if not(keyword p "else") then fail "PEP_PARSE_ELSE" "Expected else after if block" (at p) ();
+    ignore(take p);let no,no_end=parse_body () in SIf(condition,yes,no,combine start no_end))
+  else if keyword p "while" then (
+    let start=(take p).at in
+    let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
+    let condition=parse_expr p 0 in p.record_literals_allowed<-previous;
+    let body,ending=parse_body () in SWhile(condition,body,combine start ending))
+  else if keyword p "for" then (
+    let start=(take p).at in let name=expect_id p in
+    if not(keyword p "in") then fail "PEP_PARSE_FOR_IN" "Expected 'in' after the loop variable" (at p) ();
+    ignore(take p);
+    let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
+    let values=parse_expr p 0 in p.record_literals_allowed<-previous;
+    let body,ending=parse_body () in
+    SFor(name,values,body,combine start ending))
   else if symbol p "{" then (
     let start=(take p).at in let body=ref [] in
     while not(symbol p "}") && (peek p).kind<>Eof do body:=parse_stmt p :: !body done;
     let ending=at p in expect_sym p "}"; SBlock(List.rev !body,combine start ending))
   else (
-    let e=parse_expr p 0 in ignore(accept_sym p ";"); SExpr(e,expr_span e))
+    let e=parse_expr p 0 in
+    match e with
+    |EName(name,_) when accept_sym p "=" ->
+        let value=parse_expr p 0 in let sp=combine (expr_span e) (expr_span value) in
+        ignore(accept_sym p ";");SAssign(name,value,sp)
+    |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
 let parse_func p =
   let start=(take p).at in let name=expect_id p in expect_sym p "(";
   let params=ref [] in
@@ -217,14 +274,14 @@ let parse_single_expression source =
   | Eof -> expression
   | _ -> fail "PEP_REPLACEMENT_TRAILING_INPUT" "Replacement must contain exactly one expression" (peek p).at ()
 
-type binding = { bid:int; bname:string; bty:ty option; bspan:span }
+type binding = { bid:int; bname:string; bty:ty option; bspan:span; mutable_:bool }
 type signature = { fid:int; name:string; params:(string*ty) list; result:ty; decl:func }
 type texpr = { node:texpr_node; ety:ty option; espan:span }
-and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XIf of texpr*texpr*texpr
+and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XUnary of string*texpr|XList of texpr list|XIf of texpr*texpr*texpr
   | XRecord of int*(int*texpr) list | XField of int*texpr | XConstructor of int*int*string*texpr list | XMatch of texpr*tmatch_arm list
 and tpattern = TPWildcard of span | TPBind of binding | TPConstructor of int*tpattern list*span
 and tmatch_arm = { tpattern:tpattern; tresult:texpr }
-type tstmt = TLet of binding*texpr|TReturn of texpr|TBlock of tstmt list|TExpr of texpr
+type tstmt = TLet of binding*texpr|TVar of binding*texpr|TAssign of binding*texpr*span|TReturn of texpr|TBlock of tstmt list|TIf of texpr*tstmt list*tstmt list*span|TFor of binding*texpr*tstmt list*span|TWhile of texpr*tstmt list*span|TExpr of texpr
 type tfunc = { sig_:signature; tparams:binding list; tbody:tstmt list }
 type hole = { hid:string option; hscope:string; hty:ty option; hspan:span; hbindings:binding list }
 type record_info = { record_id:int; record_name:string; record_fields:(int*string*ty*span) list; record_span:span }
@@ -244,6 +301,8 @@ let rec ast_expr_json e = let s=span_json(expr_span e) in match e with
  |EHole(h,_)->"{\"kind\":\"hole\",\"name\":"^(match h with None->"null"|Some x->json_string x)^",\"span\":"^s^"}"
  |ECall(n,args,_)->"{\"kind\":\"call\",\"name\":"^json_string n^",\"arguments\":["^String.concat ","(List.map ast_expr_json args)^"],\"span\":"^s^"}"
  |EBin(o,a,b,_)->"{\"kind\":\"binary\",\"operator\":"^json_string o^",\"left\":"^ast_expr_json a^",\"right\":"^ast_expr_json b^",\"span\":"^s^"}"
+ |EUnary(o,x,_)->"{\"kind\":\"unary\",\"operator\":"^json_string o^",\"operand\":"^ast_expr_json x^",\"span\":"^s^"}"
+ |EList(xs,_)->"{\"kind\":\"list\",\"elements\":["^String.concat ","(List.map ast_expr_json xs)^"],\"span\":"^s^"}"
  |EIf(c,y,n,_)->"{\"kind\":\"if\",\"condition\":"^ast_expr_json c^",\"then\":"^ast_expr_json y^",\"else\":"^ast_expr_json n^",\"span\":"^s^"}"
  |ERecord(n,fields,_)->"{\"kind\":\"record\",\"typeName\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(name,e,sp)->"{\"name\":"^json_string name^",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}") fields)^"] ,\"span\":"^s^"}"
  |EField(e,n,_)->"{\"kind\":\"field_access\",\"value\":"^ast_expr_json e^",\"field\":"^json_string n^",\"span\":"^s^"}"
@@ -254,8 +313,13 @@ and ast_pattern_json = function
  |PConstructor(n,args,sp)->"{\"kind\":\"constructor_pattern\",\"name\":"^json_string n^",\"arguments\":["^String.concat "," (List.map ast_pattern_json args)^"] ,\"span\":"^span_json sp^"}"
 let rec ast_stmt_json s=match s with
  |SLet(n,t,e,sp)->"{\"kind\":\"let\",\"name\":"^json_string n^",\"annotation\":"^(match t with None->"null"|Some t->json_string(type_name t))^",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
+ |SVar(n,t,e,sp)->"{\"kind\":\"var\",\"name\":"^json_string n^",\"annotation\":"^(match t with None->"null"|Some t->json_string(type_name t))^",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
+ |SAssign(n,e,sp)->"{\"kind\":\"assignment\",\"name\":"^json_string n^",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
  |SReturn(e,sp)->"{\"kind\":\"return\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
  |SBlock(xs,sp)->"{\"kind\":\"block\",\"statements\":["^String.concat ","(List.map ast_stmt_json xs)^"],\"span\":"^span_json sp^"}"
+ |SIf(c,y,n,sp)->"{\"kind\":\"if_statement\",\"condition\":"^ast_expr_json c^",\"then\":["^String.concat ","(List.map ast_stmt_json y)^"],\"else\":["^String.concat ","(List.map ast_stmt_json n)^"],\"span\":"^span_json sp^"}"
+ |SFor(name,values,body,sp)->"{\"kind\":\"for_in\",\"name\":"^json_string name^",\"iterable\":"^ast_expr_json values^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
+ |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
 let ast_json tops = "["^String.concat ","(List.map(function
  |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
@@ -273,24 +337,25 @@ let check tops =
   let records=ref [] and unions=ref [] in
   List.iter(function
     |TopType (RecordDecl(name,fields,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ids=Hashtbl.create 8 in
         let resolved=List.map(fun(field,ty,fsp)->if Hashtbl.mem ids field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add ids field ();fresh_field(),field,ty,fsp) fields in
         let info={record_id=fresh_type();record_name=name;record_fields=resolved;record_span=sp} in
         Hashtbl.add type_table name (`Record info); records:=info::!records
     |TopType (UnionDecl(name,variants,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ctor_ids=Hashtbl.create 8 in
         let resolved=List.map(fun(ctor,args,csp)->
-          if ctor="say" || ctor="int_text" then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
+          if List.mem ctor ["say";"int_text";"length";"append";"contains"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
           if Hashtbl.mem ctor_ids ctor || Hashtbl.mem constructor_table ctor then fail "PEP_DUPLICATE_CONSTRUCTOR" ("Duplicate constructor '"^ctor^"'") csp ();
           Hashtbl.add ctor_ids ctor ();
           let item=(fresh_ctor(),ctor,args,csp) in Hashtbl.add constructor_table ctor (name,item); item) variants in
         let info={union_id=fresh_type();union_name=name;union_variants=resolved;union_span=sp} in
         Hashtbl.add type_table name (`Union info); unions:=info::!unions
     |_->()) tops;
-  let valid_type ty sp = match ty with
+  let rec valid_type ty sp = match ty with
     |Named name when not (Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
+    |List element -> valid_type element sp
     |_ -> () in
   List.iter (function
     |TopType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
@@ -299,7 +364,7 @@ let check tops =
     |TopStmt _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
-  List.iter(function TopFun f->if f.fname="say" || f.fname="int_text" || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
+  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"contains"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
@@ -317,7 +382,7 @@ let check tops =
     |PWildcard sp -> TPWildcard sp,true
     |PBind(name,sp) ->
         if List.exists(fun b->b.bname=name)!local then fail "PEP_DUPLICATE_PATTERN_BINDING" ("Duplicate pattern binding '"^name^"'") sp ();
-        let b={bid=fresh();bname=name;bty=Some expected;bspan=sp} in local:=b::!local;TPBind b,true
+        let b={bid=fresh();bname=name;bty=Some expected;bspan=sp;mutable_=false} in local:=b::!local;TPBind b,true
     |PConstructor(name,args,sp) ->
         let owner,(cid,_,arg_types,_) = match Hashtbl.find_opt constructor_table name with
           |None->fail "PEP_UNKNOWN_CONSTRUCTOR" ("Unknown constructor '"^name^"'") sp ()
@@ -332,6 +397,9 @@ let check tops =
    |EInt(n,s)->{node=XInt n;ety=Some Int;espan=s}
    |EBool(v,s)->{node=XBool v;ety=Some Bool;espan=s}
    |EStr(v,s)->{node=XStr v;ety=Some Str;espan=s}
+   |EList(items,s)->list_expr env scope None items s
+   |EUnary("!",value,s)->let checked=check_expr env scope (Some Bool) value in {node=XUnary("!",checked);ety=Some Bool;espan=s}
+   |EUnary(operator,_,s)->fail "PEP_UNKNOWN_UNARY_OPERATOR" ("Unsupported unary operator '"^operator^"'") s ()
    |EHole(id,s)->record_hole env scope id None s;{node=XHole id;ety=None;espan=s}
    |EName(n,s)->(match lookup env n with None->fail "PEP_UNKNOWN_VARIABLE" ("Unknown variable '"^n^"'") s ()
       |Some b->(match b.bty with None->fail "PEP_UNCONSTRAINED_BINDING" ("Binding '"^n^"' has no known type") s ()
@@ -358,6 +426,16 @@ let check tops =
    |EMatch(subject,arms,s)->match_expr env scope None subject arms s
    |EBin("<=",a,b,s)->let ta=check_expr env scope (Some Int) a and tb=check_expr env scope (Some Int) b in
       {node=XBin("<=",ta,tb);ety=Some Bool;espan=s}
+   |EBin(("&&"|"||") as op,a,b,s)->let ta=check_expr env scope (Some Bool) a and tb=check_expr env scope (Some Bool) b in
+      {node=XBin(op,ta,tb);ety=Some Bool;espan=s}
+   |EBin(("=="|"!=") as op,a,b,s)->
+      let ta=synth env scope a in
+      let equality_type=match ta.ety with
+        |Some ty when scalar_equality_type ty->ty
+        |Some ty->fail "PEP_EQUALITY_UNSUPPORTED" ("Equality is not defined for "^type_name ty) (expr_span a) ()
+        |None->fail "PEP_EQUALITY_UNTYPED" "Equality requires a typed left operand" (expr_span a) () in
+      let tb=check_expr env scope (Some equality_type) b in
+      {node=XBin(op,ta,tb);ety=Some Bool;espan=s}
    |EBin(op,a,b,s)->let ta=check_expr env scope (Some Int) a and tb=check_expr env scope (Some Int) b in
       {node=XBin(op,ta,tb);ety=Some Int;espan=s}
    |EIf(c,y,n,s)->let tc=check_expr env scope (Some Bool) c in
@@ -368,7 +446,25 @@ let check tops =
        |_->let th=synth env scope y in th,check_expr env scope th.ety n in
       (match then_expr.ety,else_expr.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,then_expr,else_expr);ety=(match then_expr.ety with Some _ as t->t|None->else_expr.ety);espan=s}
+  and list_expr env scope expected_element items sp =
+    let element_type=match expected_element with Some ty->Some ty|None->
+      let saved_holes= !holes in holes:=[];
+      let rec find = function
+        |[]->None
+        |EHole _::rest|EList([],_)::rest->find rest
+        |item::rest->match (synth env scope item).ety with Some ty->Some ty|None->find rest
+      in
+      let inferred=try find items with error->holes:=saved_holes;raise error in
+      holes:=saved_holes;inferred
+    in
+    match element_type,items with
+    |None,[]->fail "PEP_EMPTY_LIST_NEEDS_TYPE" "An empty list needs an expected List element type" sp ()
+    |None,_->
+      if List.exists contains_empty_list items then fail "PEP_EMPTY_LIST_NEEDS_TYPE" "An empty list needs an expected List element type" sp ();
+      let checked=List.map(synth env scope)items in {node=XList checked;ety=None;espan=sp}
+    |Some ty,_->let checked=List.map(check_expr env scope (Some ty))items in {node=XList checked;ety=Some(List ty);espan=sp}
   and check_expr env scope expected e = match e with
+   |EList(items,sp)->(match expected with Some(List ty)->list_expr env scope (Some ty) items sp|_->list_expr env scope None items sp)
    |EHole(id,s)->record_hole env scope id expected s;{node=XHole id;ety=expected;espan=s}
    |EIf(c,y,n,s)->let tc=check_expr env scope (Some Bool) c in let ty=check_expr env scope expected y and en=check_expr env scope expected n in
       (match ty.ety,en.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
@@ -376,22 +472,49 @@ let check tops =
    |EMatch(subject,arms,s)->match_expr env scope expected subject arms s
    |_->let t=synth env scope e in (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
   and call env scope name args s =
-    (match Hashtbl.find_opt constructor_table name with
-     |Some (owner,(cid,_,params,_))->
-        if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
-        let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg) args params in
-        let uid=match Hashtbl.find type_table owner with `Union info->info.union_id|_->assert false in
-        {node=XConstructor(uid,cid,name,checked);ety=Some(Named owner);espan=s}
-     |None->
-    let params,result,fid = if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
-      match Hashtbl.find_opt signatures name with None->
-        let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
-        let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
-        fail code ((if constructor_like then "Unknown constructor '" else "Unknown function '")^name^"'") s ()
-       |Some f->List.map snd f.params,f.result,Some f.fid in
-    if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Function '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
-    let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg)args params in
-    {node=XCall(fid,name,checked);ety=Some result;espan=s})
+    match Hashtbl.find_opt constructor_table name with
+    |Some (owner,(cid,_,params,_))->
+       if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
+       let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg) args params in
+       let uid=match Hashtbl.find type_table owner with `Union info->info.union_id|_->assert false in
+       {node=XConstructor(uid,cid,name,checked);ety=Some(Named owner);espan=s}
+    |None->
+       let check_arity expected =
+         if List.length args<>expected then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Builtin '%s' expects %d argument(s), found %d" name expected (List.length args)) s ()
+       in
+       let list_argument expression =
+         let checked=synth env scope expression in
+         match checked.ety with
+         |Some(List element)->checked,element
+         |Some ty->fail "PEP_LIST_EXPECTED" (Printf.sprintf "Builtin '%s' expects a List, found %s" name (type_name ty)) (expr_span expression) ()
+         |None->fail "PEP_LIST_UNTYPED" (Printf.sprintf "Builtin '%s' requires a list with a known element type" name) (expr_span expression) ()
+       in
+       if name="length" then (
+         check_arity 1;
+         let collection,_=list_argument (List.hd args) in
+         {node=XCall(None,name,[collection]);ety=Some Int;espan=s}
+       ) else if name="append" then (
+         check_arity 2;
+         let collection,element=list_argument (List.nth args 0) in
+         let value=check_expr env scope (Some element) (List.nth args 1) in
+         {node=XCall(None,name,[collection;value]);ety=Some(List element);espan=s}
+       ) else if name="contains" then (
+         check_arity 2;
+         let collection,element=list_argument (List.hd args) in
+         if not(scalar_equality_type element) then fail "PEP_MEMBERSHIP_UNSUPPORTED" ("Membership is not defined for "^type_name element) (expr_span (List.hd args)) ();
+         let value=check_expr env scope (Some element) (List.nth args 1) in
+         {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
+       ) else (
+         let params,result,fid = if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+           match Hashtbl.find_opt signatures name with None->
+             let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
+             let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
+             fail code ((if constructor_like then "Unknown constructor '" else "Unknown function '")^name^"'") s ()
+            |Some f->List.map snd f.params,f.result,Some f.fid in
+         if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Function '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
+         let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg)args params in
+         {node=XCall(fid,name,checked);ety=Some result;espan=s}
+       )
   and match_expr env scope expected subject arms sp =
     if arms=[] then fail "PEP_EMPTY_MATCH" "A match expression must have at least one arm" sp ();
     let checked_subject=synth env scope subject in
@@ -439,21 +562,52 @@ let check tops =
        (match annotation with Some ty->valid_type ty sp|None->());
        let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
        let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
-       let b={bid=fresh();bname=name;bty=ty;bspan=sp} in
+       let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=false} in
        let env'=(match env with []->[[b]]|h::tl->(b::h)::tl) in
        loop env' (TLet(b,te)::acc) false rest
+     |SVar(name,annotation,e,sp)::rest ->
+       if has_current env name then fail "PEP_DUPLICATE_BINDING" ("Duplicate binding '"^name^"' in this scope") sp ();
+       (match annotation with Some ty->valid_type ty sp|None->());
+       let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
+       let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
+       let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=true} in
+       let env'=(match env with []->[[b]]|h::tl->(b::h)::tl) in
+       loop env' (TVar(b,te)::acc) false rest
+     |SAssign(name,e,sp)::rest->
+       let binding=match lookup env name with
+         |None->fail "PEP_UNKNOWN_VARIABLE" ("Unknown variable '"^name^"'") sp ()
+         |Some binding when not binding.mutable_->fail "PEP_ASSIGN_IMMUTABLE" ("Cannot assign to immutable binding '"^name^"'") sp ()
+         |Some binding->binding in
+       let expected_type=match binding.bty with Some ty->Some ty|None->fail "PEP_UNCONSTRAINED_BINDING" ("Cannot assign to binding '"^name^"' without a known type") sp () in
+       let value=check_expr env scope expected_type e in
+       loop env (TAssign(binding,value,sp)::acc) false rest
      |SReturn(e,sp)::rest ->
        if expected=None then fail "PEP_RETURN_OUTSIDE_FUNCTION" "return is only valid inside a function" sp ();
        let te=check_expr env scope expected e in loop env (TReturn te::acc) true rest
      |SExpr(e,_)::rest->let te=synth env scope e in loop env (TExpr te::acc) false rest
      |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected body in loop env (TBlock inner::acc) term rest
+     |SIf(condition,yes,no,sp)::rest->
+       let checked_condition=check_expr env scope (Some Bool) condition in
+       let checked_yes,_,yes_returns=check_stmts ([]::env) scope expected yes in
+       let checked_no,_,no_returns=check_stmts ([]::env) scope expected no in
+       loop env (TIf(checked_condition,checked_yes,checked_no,sp)::acc) (yes_returns && no_returns) rest
+     |SFor(name,values,body,sp)::rest->
+       let checked_values=synth env scope values in
+       let element_type=match checked_values.ety with Some(List ty)->ty|Some ty->fail "PEP_FOR_REQUIRES_LIST" ("for-in requires a List, found "^type_name ty) (expr_span values) ()|None->fail "PEP_FOR_REQUIRES_LIST" "for-in requires a list with a known element type" (expr_span values) () in
+       let binding={bid=fresh();bname=name;bty=Some element_type;bspan=sp;mutable_=false} in
+       let inner,_,_=check_stmts ([binding]::env) scope expected body in
+       loop env (TFor(binding,checked_values,inner,sp)::acc) false rest
+     |SWhile(condition,body,sp)::rest->
+       let checked_condition=check_expr env scope (Some Bool) condition in
+       let inner,_,_=check_stmts ([]::env) scope expected body in
+       loop env (TWhile(checked_condition,inner,sp)::acc) false rest
     in loop env [] false xs
   in
   let functions=ref [] in
   List.iter(function TopFun f->
     let sig_=Hashtbl.find signatures f.fname in
     let seen=Hashtbl.create 8 in
-    let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s})f.params in
+    let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s;mutable_=false})f.params in
     let typed,_,terminated=check_stmts [params] f.fname (Some f.result) f.body in
     if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
     functions:={sig_;tparams=params;tbody=typed}::!functions
@@ -472,6 +626,8 @@ let rec typed_expr_json e =
  |XHole h->"{\"kind\":\"hole\",\"name\":"^(match h with None->"null"|Some x->json_string x)^"}"
  |XCall(fid,n,args)->"{\"kind\":\"call\",\"name\":"^json_string n^",\"functionId\":"^(match fid with None->"null"|Some x->string_of_int x)^",\"arguments\":["^String.concat ","(List.map typed_expr_json args)^"]}"
  |XBin(op,a,b)->"{\"kind\":\"binary\",\"operator\":"^json_string op^",\"left\":"^typed_expr_json a^",\"right\":"^typed_expr_json b^"}"
+ |XUnary(op,value)->"{\"kind\":\"unary\",\"operator\":"^json_string op^",\"value\":"^typed_expr_json value^"}"
+ |XList(items)->"{\"kind\":\"list\",\"elements\":["^String.concat ","(List.map typed_expr_json items)^"]}"
  |XIf(c,y,n)->"{\"kind\":\"if\",\"condition\":"^typed_expr_json c^",\"then\":"^typed_expr_json y^",\"else\":"^typed_expr_json n^"}"
  |XRecord(id,fields)->"{\"kind\":\"record\",\"typeId\":"^string_of_int id^",\"fields\":["^String.concat "," (List.map(fun(fid,value)->"{\"fieldId\":"^string_of_int fid^",\"value\":"^typed_expr_json value^"}")fields)^"]}"
  |XField(id,value)->"{\"kind\":\"field_access\",\"fieldId\":"^string_of_int id^",\"value\":"^typed_expr_json value^"}"
@@ -480,12 +636,17 @@ let rec typed_expr_json e =
  "{\"type\":"^typ^",\"span\":"^span_json e.espan^",\"expression\":"^node^"}"
 and typed_pattern_json = function
  |TPWildcard sp->"{\"kind\":\"wildcard\",\"span\":"^span_json sp^"}"
- |TPBind binding->"{\"kind\":\"binding\",\"name\":"^json_string binding.bname^",\"bindingId\":"^string_of_int binding.bid^",\"span\":"^span_json binding.bspan^"}"
+ |TPBind binding->"{\"kind\":\"binding\",\"name\":"^json_string binding.bname^",\"bindingId\":"^string_of_int binding.bid^",\"mutable\":false,\"span\":"^span_json binding.bspan^"}"
  |TPConstructor(id,arguments,sp)->"{\"kind\":\"constructor\",\"constructorId\":"^string_of_int id^",\"arguments\":["^String.concat "," (List.map typed_pattern_json arguments)^"],\"span\":"^span_json sp^"}"
 let rec typed_stmt_json = function
- |TLet(b,e)->"{\"kind\":\"let\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"value\":"^typed_expr_json e^"}"
+ |TLet(b,e)->"{\"kind\":\"let\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"mutable\":false,\"value\":"^typed_expr_json e^"}"
+ |TVar(b,e)->"{\"kind\":\"var\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"mutable\":true,\"value\":"^typed_expr_json e^"}"
+ |TAssign(b,e,sp)->"{\"kind\":\"assignment\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"span\":"^span_json sp^",\"value\":"^typed_expr_json e^"}"
  |TReturn e->"{\"kind\":\"return\",\"value\":"^typed_expr_json e^"}"
  |TBlock xs->"{\"kind\":\"block\",\"statements\":["^String.concat ","(List.map typed_stmt_json xs)^"]}"
+ |TIf(c,y,n,sp)->"{\"kind\":\"if_statement\",\"condition\":"^typed_expr_json c^",\"then\":["^String.concat ","(List.map typed_stmt_json y)^"],\"else\":["^String.concat ","(List.map typed_stmt_json n)^"],\"span\":"^span_json sp^"}"
+ |TFor(b,values,body,sp)->"{\"kind\":\"for_in\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^",\"iterable\":"^typed_expr_json values^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
+ |TWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^typed_expr_json c^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |TExpr e->"{\"kind\":\"expression\",\"value\":"^typed_expr_json e^"}"
 let typed_json_base c =
  "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
@@ -496,17 +657,19 @@ let typed_json c =
  let base=typed_json_base c in
  "{\"types\":["^declarations^"],"^String.sub base 1 (String.length base-1)
 let hole_json h =
- let bindings="["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^"}")h.hbindings)^"]" in
+ let bindings="["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"mutable\":"^string_of_bool b.mutable_^"}")h.hbindings)^"]" in
  let actions=match h.hty with None->"[]"|Some ty->"[{\"kind\":\"fill_hole\",\"expectedType\":"^json_string(type_name ty)^",\"candidates\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^"}")(candidates ty h.hbindings))^"]}]" in
  "{\"identity\":"^(match h.hid with None->"null"|Some x->json_string x)^",\"scope\":"^json_string h.hscope^",\"expectedType\":"^(match h.hty with None->"null"|Some t->json_string(type_name t))^",\"bindings\":"^bindings^",\"actions\":"^actions^",\"span\":"^span_json h.hspan^"}"
 let diag_json d = "{\"schemaVersion\":2,\"status\":\"invalid\",\"diagnostics\":[{\"code\":"^json_string d.code^",\"severity\":\"error\",\"message\":"^json_string d.message^",\"expectedType\":"^(match d.expected with None->"null"|Some t->json_string(type_name t))^",\"span\":"^span_json d.at^"}]}"
 let program_status c = if c.holes=[] then "valid" else "incomplete"
 let check_json tops c = "{\"schemaVersion\":2,\"status\":"^json_string(program_status c)^",\"ast\":"^ast_json tops^",\"typedTree\":"^typed_json c^",\"holes\":["^String.concat ","(List.map hole_json c.holes)^"],\"diagnostics\":[]}"
 
-type value = VInt of int64|VBool of bool|VStr of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list
+type value = VInt of int64|VBool of bool|VStr of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
 exception Runtime of string*string*span
 let runtime code message sp=raise(Runtime(code,message,sp))
 let int_value = function VInt n->n|_->assert false
+let scalar_equal left right = match left,right with
+ |VInt a,VInt b->a=b|VBool a,VBool b->a=b|VStr a,VStr b->String.equal a b|VUnit,VUnit->true|_->false
 let checked_bin op a b sp =
  let add_over x y = y>0L && x>Int64.sub Int64.max_int y || y<0L && x<Int64.sub Int64.min_int y in
  let sub_over x y = y<0L && x>Int64.add Int64.max_int y || y>0L && x<Int64.add Int64.min_int y in
@@ -519,7 +682,7 @@ let checked_bin op a b sp =
  |"/"->if b=0L then runtime "PEP_RUNTIME_DIVISION_BY_ZERO" "Division by zero" sp else if a=Int64.min_int&&b= -1L then runtime "PEP_RUNTIME_OVERFLOW" "Integer division overflow" sp else VInt(Int64.div a b)
  |"neg"->if b=Int64.min_int then runtime "PEP_RUNTIME_OVERFLOW" "Integer negation overflow" sp else VInt(Int64.neg b)
  |_ ->assert false
-let execute ?(entry=None) ?(allow_say=true) ?(step_limit=max_int) ?(max_depth=512) c =
+let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
  let remaining_steps = ref step_limit in
  let tick sp =
@@ -530,8 +693,12 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=max_int) ?(max_depth=51
   tick e.espan;
   match e.node with
   |XInt n->VInt n|XBool b->VBool b|XStr s->VStr s
-  |XVar id->(try List.assoc id env with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked binding is missing at runtime" e.espan)
+  |XVar id->(try !(List.assoc id env) with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked binding is missing at runtime" e.espan)
   |XHole _->runtime "PEP_RUNTIME_HOLE" "Cannot execute an incomplete expression" e.espan
+  |XList items->
+    let rec collect acc=function []->VList(List.rev acc)|item::rest->let value=eval env callstack item in tick e.espan;collect(value::acc)rest in collect [] items
+  |XUnary("!",value)->(match eval env callstack value with VBool result->VBool(not result)|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical negation received a non-Bool value" e.espan)
+  |XUnary(operator,_)->runtime "PEP_RUNTIME_UNKNOWN_UNARY_OPERATOR" ("Unsupported checked unary operator '"^operator^"'") e.espan
   |XRecord(id,fields)->VRecord(id,List.map(fun(fid,value)->fid,eval env callstack value)fields)
   |XField(fid,value)->(match eval env callstack value with VRecord(_,fields)->(try List.assoc fid fields with Not_found->runtime "PEP_RUNTIME_MISSING_FIELD" "Checked record field is missing at runtime" e.espan)|_->runtime "PEP_RUNTIME_EXPECTED_RECORD" "Checked field access received a non-record value" e.espan)
   |XConstructor(type_id,ctor_id,_,args)->VVariant(type_id,ctor_id,List.map(eval env callstack)args)
@@ -541,30 +708,92 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=max_int) ?(max_depth=51
       |[]->runtime "PEP_RUNTIME_NONEXHAUSTIVE_MATCH" "No checked match arm accepted the value" e.espan
       |arm::rest->(match match_pattern [] arm.tpattern value with Some arm_env->eval (arm_env@env) callstack arm.tresult|None->select rest)
     in select arms
-  |XBin(op,a,b)->let va=int_value(eval env callstack a) and vb=int_value(eval env callstack b) in checked_bin op va vb e.espan
+  |XBin("&&",left,right)->(match eval env callstack left with VBool false->VBool false|VBool true->(match eval env callstack right with VBool result->VBool result|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical conjunction received a non-Bool value" e.espan)|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical conjunction received a non-Bool value" e.espan)
+  |XBin("||",left,right)->(match eval env callstack left with VBool true->VBool true|VBool false->(match eval env callstack right with VBool result->VBool result|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical disjunction received a non-Bool value" e.espan)|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical disjunction received a non-Bool value" e.espan)
+  |XBin(("=="|"!=") as op,left,right)->
+    let left_value=eval env callstack left in let right_value=eval env callstack right in
+    let equal=scalar_equal left_value right_value in VBool(if op="==" then equal else not equal)
+  |XBin(op,a,b)->let left=eval env callstack a in let right=eval env callstack b in checked_bin op (int_value left) (int_value right) e.espan
   |XIf(c,y,n)->(match eval env callstack c with VBool true->eval env callstack y|VBool false->eval env callstack n|_->assert false)
-  |XCall(fid,name,args)->let values=List.map(eval env callstack)args in
-    if name="say" then (if not allow_say then runtime "PEP_RUNTIME_TOOL_EFFECT" "say is unavailable during tool execution" e.espan else match values with [VStr s]->print_endline s;VUnit|_->assert false)
-    else if name="int_text" then (match values with [VInt n]->VStr(Int64.to_string n)|_->assert false)
-    else match fid with None->runtime "PEP_RUNTIME_UNKNOWN_CALL" ("Unknown checked call '"^name^"'") e.espan|Some id->
-      if List.length callstack>=max_depth then runtime "PEP_RUNTIME_CALL_DEPTH" "Maximum function call depth exceeded" e.espan;
-      let f=Hashtbl.find fs id in let env'=List.map2(fun b v->b.bid,v)f.tparams values in
-      (match exec_stmts env' (name::callstack) f.tbody with Some v->v|None->VUnit)
+  |XCall(fid,name,args)->
+    let values=List.fold_left(fun acc arg->let value=eval env callstack arg in value::acc)[]args |> List.rev in
+    if name="length" then (match values with
+      |[VList items]->let rec count total=function []->VInt(Int64.of_int total)|_::rest->tick e.espan;count (total+1) rest in count 0 items
+      |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked length received a non-list value" e.espan)
+    else if name="append" then (match values with
+      |[VList items;value]->
+        let rec copy reversed=function
+          |[]->tick e.espan;let tail=[value] in
+            let rec restore remaining result=match remaining with
+              |[]->VList result
+              |head::rest->tick e.espan;restore rest (head::result)
+            in restore reversed tail
+          |head::rest->tick e.espan;copy (head::reversed) rest
+        in copy [] items
+      |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked append received invalid arguments" e.espan)
+    else if name="contains" then (match values with
+      |[VList items;value]->
+        let rec find=function []->false|head::rest->tick e.espan;if scalar_equal head value then true else find rest in VBool(find items)
+      |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked contains received invalid arguments" e.espan)
+    else if name="say" then (if not allow_say then runtime "PEP_RUNTIME_TOOL_EFFECT" "say is unavailable during tool execution" e.espan else match values with [VStr text]->print_endline text;VUnit|_->runtime "PEP_RUNTIME_BUILTIN" "Checked say received invalid arguments" e.espan)
+    else if name="int_text" then (match values with [VInt number]->VStr(Int64.to_string number)|_->runtime "PEP_RUNTIME_BUILTIN" "Checked int_text received invalid arguments" e.espan)
+    else match fid with
+      |None->runtime "PEP_RUNTIME_UNKNOWN_CALL" ("Unknown checked call '"^name^"'") e.espan
+      |Some id->
+        if List.length callstack>=max_depth then runtime "PEP_RUNTIME_CALL_DEPTH" "Maximum function call depth exceeded" e.espan;
+        let function_=Hashtbl.find fs id in
+        let env'=List.map2(fun binding value->binding.bid,ref value)function_.tparams values in
+        (match exec_stmts env' (name::callstack) function_.tbody with Some value->value|None->VUnit)
  and match_pattern env pattern value = match pattern,value with
   |TPWildcard _,_->Some env
-  |TPBind binding,value->Some((binding.bid,value)::env)
+  |TPBind binding,value->Some((binding.bid,ref value)::env)
   |TPConstructor(cid,patterns,_),VVariant(_,actual,args) when cid=actual && List.length patterns=List.length args->
     List.fold_left2(fun result pattern value->match result with None->None|Some env->match_pattern env pattern value)(Some env)patterns args
   |TPConstructor _,_->None
  and exec_stmts env stack = function
   |[]->None
   |stmt::rest->
-    tick (match stmt with TLet(b,_)->b.bspan|TReturn e->e.espan|TBlock _->mkspan 0 0 1 1|TExpr e->e.espan);
+    let statement_span=match stmt with
+      |TLet(binding,_)|TVar(binding,_)->binding.bspan
+      |TAssign(_,_,span)|TIf(_,_,_,span)|TFor(_,_,_,span)|TWhile(_,_,span)->span
+      |TReturn expression|TExpr expression->expression.espan
+      |TBlock _->mkspan 0 0 1 1 in
+    tick statement_span;
     (match stmt with
-     |TLet(b,e)->let v=eval env stack e in exec_stmts ((b.bid,v)::env) stack rest
-     |TReturn e->Some(eval env stack e)
-     |TBlock xs->(match exec_stmts env stack xs with Some v->Some v|None->exec_stmts env stack rest)
-     |TExpr e->ignore(eval env stack e);exec_stmts env stack rest)
+     |TLet(binding,expression)|TVar(binding,expression)->
+       let value=eval env stack expression in
+       exec_stmts ((binding.bid,ref value)::env) stack rest
+     |TAssign(binding,expression,span)->
+       let value=eval env stack expression in
+       (try (List.assoc binding.bid env):=value with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked assignment target is missing at runtime" span);
+       exec_stmts env stack rest
+     |TReturn expression->Some(eval env stack expression)
+     |TBlock statements->(match exec_stmts env stack statements with Some value->Some value|None->exec_stmts env stack rest)
+     |TIf(condition,yes,no,span)->
+       (match eval env stack condition with
+        |VBool true->(match exec_stmts env stack yes with Some value->Some value|None->exec_stmts env stack rest)
+        |VBool false->(match exec_stmts env stack no with Some value->Some value|None->exec_stmts env stack rest)
+        |_ ->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked if condition received a non-Bool value" span)
+     |TFor(binding,iterable,body,span)->
+       (match eval env stack iterable with
+        |VList values->
+          let rec iterate=function
+            |[]->exec_stmts env stack rest
+            |value::remaining->
+              tick span;
+              (match exec_stmts ((binding.bid,ref value)::env) stack body with
+               |Some result->Some result
+               |None->iterate remaining)
+          in iterate values
+        |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked for-in received a non-list value" span)
+     |TWhile(condition,body,span)->
+       let rec repeat () =
+         match eval env stack condition with
+         |VBool false->exec_stmts env stack rest
+         |VBool true->tick span;(match exec_stmts env stack body with Some result->Some result|None->repeat())
+         |_ ->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked while condition received a non-Bool value" span
+       in repeat()
+     |TExpr expression->ignore(eval env stack expression);exec_stmts env stack rest)
  in
  match entry with
  |None -> ignore(exec_stmts [] [] c.tops); VUnit
@@ -572,7 +801,7 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=max_int) ?(max_depth=51
    let f = match List.find_opt (fun f -> f.sig_.fid=function_id) c.functions with
      |Some f -> f |None -> runtime "PEP_RUNTIME_UNKNOWN_FUNCTION" "Checked tool function is missing" (mkspan 0 0 1 1) in
    if List.length arguments <> List.length f.tparams then runtime "PEP_RUNTIME_ARGUMENT_COUNT" "Tool argument count did not match the checked function" f.sig_.decl.fspan;
-   let env = List.map2 (fun binding value -> binding.bid,value) f.tparams arguments in
+   let env = List.map2 (fun binding value -> binding.bid,ref value) f.tparams arguments in
    match exec_stmts env [f.sig_.name] f.tbody with Some value -> value |None -> VUnit
 
 (* Session protocol v3. Revisions are content-addressed and each analysis is
@@ -890,9 +1119,10 @@ let session_hole_json document revision hole =
           (json_string document) (json_string revision) (json_string hole.hscope) (json_string value)
   in
   let bindings = "[" ^ String.concat "," (List.map (fun binding ->
-    Printf.sprintf "{\"name\":%s,\"bindingId\":%d,\"type\":%s}"
+    Printf.sprintf "{\"name\":%s,\"bindingId\":%d,\"type\":%s,\"mutable\":%s}"
       (json_string binding.bname) binding.bid
-      (match binding.bty with None -> "null" | Some ty -> json_string (type_name ty))) hole.hbindings) ^ "]" in
+      (match binding.bty with None -> "null" | Some ty -> json_string (type_name ty))
+      (string_of_bool binding.mutable_)) hole.hbindings) ^ "]" in
   let actions = match hole.hty with
     | None -> "[]"
     | Some ty ->
@@ -988,7 +1218,7 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | Named _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | List _ | Named _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
@@ -1027,13 +1257,19 @@ let rec tool_expr_calls expression =
     | XField (_,value) -> tool_expr_calls value
     | XConstructor (_,_,_,args) -> List.concat_map tool_expr_calls args
     | XMatch (subject,arms) -> tool_expr_calls subject @ List.concat_map (fun arm -> tool_expr_calls arm.tresult) arms
+    | XUnary (_,value) -> tool_expr_calls value
+    | XList items -> List.concat_map tool_expr_calls items
     | XInt _ | XBool _ | XStr _ | XVar _ | XHole _ -> []
   in
   let own = match expression.node with XCall (id,name,_) -> [id,name] | _ -> [] in
   own @ child_calls
 
 let rec tool_stmt_calls = function
-  | TLet (_,expression) | TReturn expression | TExpr expression -> tool_expr_calls expression
+  | TLet (_,expression) | TVar (_,expression) | TReturn expression | TExpr expression -> tool_expr_calls expression
+  | TAssign (_,expression,_) -> tool_expr_calls expression
+  | TIf (condition,yes,no,_) -> tool_expr_calls condition @ List.concat_map tool_stmt_calls yes @ List.concat_map tool_stmt_calls no
+  | TFor (_,iterable,body,_) -> tool_expr_calls iterable @ List.concat_map tool_stmt_calls body
+  | TWhile (condition,body,_) -> tool_expr_calls condition @ List.concat_map tool_stmt_calls body
   | TBlock statements -> List.concat_map tool_stmt_calls statements
 
 let tool_reaches_say checked function_id =
@@ -1398,7 +1634,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in

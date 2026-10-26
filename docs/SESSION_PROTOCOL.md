@@ -40,7 +40,7 @@ Named-hole identity is returned as document, revision, scope, and name. A name d
 
 The first analysis parses and checks a newly opened source. Repeated requests for an already retained revision reuse its immutable analysis and increment `cache_hits`; semantic query JSON itself remains deterministic. A source edit is analysed with the existing full parser and checker. There is no cross-revision parse or type reuse, dependency graph, or incremental compilation claim. `metrics` is diagnostic instrumentation, not language semantics.
 
-Complete, incomplete, and invalid remain distinct states. Incomplete trees can be queried; the existing interpreter still refuses to run a program with any unresolved hole. This session adds no syntax and does not alter file-oriented command behavior.
+Complete, incomplete, and invalid remain distinct states. Incomplete trees can be queried; the existing interpreter still refuses to run a program with any unresolved hole. A6 adds typed lists and control flow to the shared Pep parser, checker, and interpreter; the schema-v3 session exposes those same source-spanned AST and typed-tree nodes without a separate semantic implementation. File-oriented commands use the same behavior. List construction, traversal, copying, membership, and loop iterations consume interpreter steps. Tool protocol parameters and results remain scalar-only, and its 100,000-step and 128-call-depth limits also cover internal A6 operations.
 
 ## Example
 
