@@ -1242,6 +1242,11 @@ let session_optional_string fields key = match session_member fields key with
   | Some (JString value) -> Some value
   | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be a string or null"))
 
+let session_optional_bool fields key = match session_member fields key with
+  | None -> false
+  | Some (JBool value) -> value
+  | Some _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be a boolean"))
+
 let session_integer fields key = match session_member fields key with
   | Some (JNumber number) ->
       (try int_of_string number with _ -> raise (Session_error ("PEP_SESSION_FIELD_TYPE", "Field '" ^ key ^ "' must be an integer")))
@@ -1722,7 +1727,7 @@ let session_tool_invoke fields =
   Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":%d,\"outcome\":\"ok\",\"operation\":\"tool_invoke\",\"tool\":%s,\"revision\":%s,\"result\":%s}"
     protocol (json_string entry.tool_name) (json_string entry.tool_revision) encoded_result
 
-let session_response operation document revision analysis ?offset ?(extra="") () =
+let session_response operation document revision analysis ?offset ?(extra="") ?(metadata_only=false) () =
   let holes = match analysis.checked with
     | None -> []
     | Some checked ->
@@ -1730,8 +1735,9 @@ let session_response operation document revision analysis ?offset ?(extra="") ()
          | None -> checked.holes
          | Some byte -> List.filter (fun hole -> hole.hspan.lo = byte) checked.holes)
   in
-  let ast = match analysis.parsed with None -> "null" | Some tops -> ast_json tops in
-  let typed = match analysis.checked with None -> "null" | Some checked -> typed_json checked in
+  let ast, typed = if metadata_only then ("null", "null") else
+    ((match analysis.parsed with None -> "null" | Some tops -> ast_json tops),
+     (match analysis.checked with None -> "null" | Some checked -> typed_json checked)) in
   let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
   Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s%s}"
     (json_string operation) (json_string document)
@@ -1865,6 +1871,7 @@ let session_process request =
   let operation = session_required_string fields "op" in
   match operation with
   | "open" ->
+      let metadata_only = session_optional_bool fields "metadataOnly" in
       let source = session_required_string fields "source" in
       if not (valid_utf8 source) then raise (Session_error ("PEP_INVALID_UTF8", "Source must contain valid UTF-8"));
       let name = session_optional_string fields "name" in
@@ -1875,8 +1882,10 @@ let session_process request =
       let document = { document_id; document_name = name; current_revision = analysis.revision; revisions = Hashtbl.create 8 } in
       Hashtbl.add document.revisions analysis.revision analysis;
       Hashtbl.add session_documents document_id document;
-      session_response operation document_id analysis.revision analysis ()
+      let extra = if metadata_only then ",\"analysisOmitted\":true" else "" in
+      session_response operation document_id analysis.revision analysis ~extra ~metadata_only ()
   | "open_bytes" ->
+      let metadata_only = session_optional_bool fields "metadataOnly" in
       let byte_values=match session_member fields "bytes" with
         |Some (JArray values)->values
         |_ ->raise (Session_error ("PEP_SOURCE_BYTES_TYPE", "open_bytes requires a bytes array of unsigned integers"))
@@ -1896,7 +1905,8 @@ let session_process request =
       let document={document_id;document_name=name;current_revision=analysis.revision;revisions=Hashtbl.create 8} in
       Hashtbl.add document.revisions analysis.revision analysis;
       Hashtbl.add session_documents document_id document;
-      session_response operation document_id analysis.revision analysis ()
+      let extra = if metadata_only then ",\"analysisOmitted\":true" else "" in
+      session_response operation document_id analysis.revision analysis ~extra ~metadata_only ()
   | "query" | "inspect" ->
       let document = session_document fields in
       let revision = session_required_string fields "revision" in

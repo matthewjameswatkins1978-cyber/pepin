@@ -1,0 +1,394 @@
+import json
+import os
+import pathlib
+import subprocess
+import unittest
+
+from tests.test_a11 import JsonLineClient, typed, typed_record, typed_list
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+LEXER = ROOT / "examples" / "pep_lexer.pep"
+PARSER = ROOT / "examples" / "pep_parser.pep"
+BUILD = ROOT / "_build" / "a12"
+
+
+def fields(value):
+    return {item["name"]: item["value"] for item in value["fields"]}
+
+
+def scalar(value):
+    if value["type"] == "Int":
+        return int(value["value"])
+    if value["type"] == "Bool":
+        return value["value"]
+    if value["type"] == "Str":
+        return value["value"]
+    raise AssertionError(f"unexpected typed scalar {value['type']}")
+
+
+def span(value):
+    return (value["start"]["offset"], value["endOffset"],
+            value["start"]["line"], value["start"]["column"])
+
+
+def pep_flat_nodes(result):
+    values = fields(result)
+    nodes = values["nodes"]["value"]
+    normalized = []
+    for node in nodes:
+        item = fields(node)
+        kind = scalar(item["kind"])
+        text = scalar(item["text"])
+        integer_value = int(scalar(item["integerValue"]))
+        boolean_value = scalar(item["booleanValue"])
+        string_parts = [scalar(part) for part in item["stringParts"]["value"]]
+        if kind in {"type_scalar", "type_named", "type_list"}:
+            node_span = None
+        else:
+            node_span = (int(scalar(item["startByte"])), int(scalar(item["endByte"])),
+                         int(scalar(item["line"])), int(scalar(item["column"])))
+        if kind == "integer":
+            value = integer_value
+        elif kind == "boolean":
+            value = boolean_value
+        elif kind == "string":
+            value = "".join(string_parts)
+        else:
+            value = text
+        normalized.append((kind, value, node_span))
+    return normalized
+
+
+def ocaml_type_nodes(name):
+    if name.startswith("List[") and name.endswith("]"):
+        inner = name[5:-1]
+        return [("type_list", "", None), *ocaml_type_nodes(inner)]
+    scalar_types = {"Int", "Bool", "Str", "SourceBytes", "Unit"}
+    return [("type_scalar" if name in scalar_types else "type_named", name, None)]
+
+
+def ocaml_flat_nodes(tops):
+    output = []
+
+    def add(kind, value, node_span):
+        output.append((kind, value, span(node_span) if node_span is not None else None))
+
+    def expression(node):
+        kind = node["kind"]
+        node_span = node["span"]
+        if kind == "int":
+            add("integer", node["value"], node_span)
+        elif kind == "bool":
+            add("boolean", node["value"], node_span)
+        elif kind == "string":
+            add("string", node["value"], node_span)
+        elif kind == "name":
+            add("name", node["name"], node_span)
+        elif kind == "hole":
+            add("hole", node["name"] or "", node_span)
+        elif kind == "call":
+            add("call", node["name"], node_span)
+            for child in node["arguments"]:
+                expression(child)
+        elif kind == "binary":
+            add("binary", node["operator"], node_span)
+            expression(node["left"])
+            expression(node["right"])
+        elif kind == "unary":
+            add("unary", node["operator"], node_span)
+            expression(node["operand"])
+        elif kind == "list":
+            add("list", "", node_span)
+            for child in node["elements"]:
+                expression(child)
+        elif kind == "if":
+            add("if_expression", "", node_span)
+            expression(node["condition"])
+            expression(node["then"])
+            expression(node["else"])
+        elif kind == "record":
+            add("record", node["typeName"], node_span)
+            for field in node["fields"]:
+                add("record_field", field["name"], field["span"])
+                expression(field["value"])
+        elif kind == "field_access":
+            add("field_access", node["field"], node_span)
+            expression(node["value"])
+        elif kind == "match":
+            add("match", "", node_span)
+            expression(node["value"])
+            for arm in node["arms"]:
+                add("match_arm", "", arm["span"])
+                pattern(arm["pattern"])
+                expression(arm["result"])
+        else:
+            raise AssertionError(f"unhandled OCaml expression kind {kind}")
+
+    def pattern(node):
+        kind = node["kind"]
+        if kind == "wildcard_pattern":
+            add(kind, "", node["span"])
+        elif kind == "binding_pattern":
+            add(kind, node["name"], node["span"])
+        elif kind == "constructor_pattern":
+            add(kind, node["name"], node["span"])
+            for child in node["arguments"]:
+                pattern(child)
+        else:
+            raise AssertionError(f"unhandled OCaml pattern kind {kind}")
+
+    def statement(node):
+        kind = node["kind"]
+        if kind == "expression":
+            add("expression_statement", "", node["span"])
+            expression(node["value"])
+        elif kind in {"let", "var"}:
+            add(kind, node["name"], node["span"])
+            if node["annotation"] is not None:
+                for type_node in ocaml_type_nodes(node["annotation"]):
+                    output.append(type_node)
+            expression(node["value"])
+        elif kind == "assignment":
+            add(kind, node["name"], node["span"])
+            expression(node["value"])
+        elif kind == "return":
+            add(kind, "", node["span"])
+            expression(node["value"])
+        elif kind == "block":
+            add(kind, "", node["span"])
+            for child in node["statements"]:
+                statement(child)
+        elif kind == "if_statement":
+            add(kind, "", node["span"])
+            expression(node["condition"])
+            for child in node["then"]:
+                statement(child)
+            for child in node["else"]:
+                statement(child)
+        elif kind == "for_in":
+            add(kind, node["name"], node["span"])
+            expression(node["iterable"])
+            for child in node["body"]:
+                statement(child)
+        elif kind == "while":
+            add(kind, "", node["span"])
+            expression(node["condition"])
+            for child in node["body"]:
+                statement(child)
+        else:
+            raise AssertionError(f"unhandled OCaml statement kind {kind}")
+
+    for node in tops:
+        kind = node["kind"]
+        if kind == "function":
+            add("function", node["name"], node["span"])
+            for parameter in node["parameters"]:
+                add("parameter", parameter["name"], parameter["span"])
+                output.extend(ocaml_type_nodes(parameter["type"]))
+            output.extend(ocaml_type_nodes(node["returnType"]))
+            for child in node["body"]:
+                statement(child)
+        elif kind == "record_declaration":
+            add(kind, node["name"], node["span"])
+            for field in node["fields"]:
+                add("field_declaration", field["name"], field["span"])
+                output.extend(ocaml_type_nodes(field["type"]))
+        elif kind == "union_declaration":
+            add(kind, node["name"], node["span"])
+            for variant in node["variants"]:
+                add("variant_declaration", variant["name"], variant["span"])
+                for argument in variant["arguments"]:
+                    output.extend(ocaml_type_nodes(argument))
+        else:
+            statement(node)
+    return output
+
+
+class A12ParserDifferentialTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        BUILD.mkdir(parents=True, exist_ok=True)
+        bundle = LEXER.read_text(encoding="utf-8") + "\n" + PARSER.read_text(encoding="utf-8")
+        cls.bundle_path = BUILD / "parser_bundle.pep"
+        cls.bundle_path.write_text(bundle, encoding="utf-8", newline="\n")
+
+    def setUp(self):
+        env = os.environ.copy()
+        env.setdefault("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")
+        self.session = JsonLineClient(
+            ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "session", "--jsonl"], ROOT, env,
+        )
+        opened = self.session.send({
+            "schemaVersion": 3, "op": "open", "name": "a12-parser-bundle",
+            "source": self.bundle_path.read_text(encoding="utf-8"), "metadataOnly": True,
+        })
+        self.assertEqual(opened.get("outcome"), "ok", opened)
+        self.assertTrue(opened.get("analysisOmitted"), opened)
+        self.assertEqual(opened.get("status"), "valid", opened)
+        self.tool_document = opened["document"]
+        self.tool_revision = opened["revision"]
+
+        empty = self.session.send({"schemaVersion": 3, "op": "open_bytes", "name": "empty", "bytes": []})
+        self.assertEqual(empty.get("outcome"), "ok", empty)
+        self.target_document = empty["document"]
+        self.target_revision = empty["revision"]
+        expected = typed_record("ParserProgress", [
+            ("document", typed("Str", self.target_document)),
+            ("revision", typed("Str", self.target_revision)),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        registered = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+            "tool": "pep-parser", "document": self.tool_document,
+            "revision": self.tool_revision, "function": "parser_parse_program",
+        })
+        self.assertEqual(registered.get("status"), "Registered", registered)
+        validated = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+            "tool": "pep-parser", "document": self.tool_document,
+            "revision": self.tool_revision,
+            "testVectors": [{"arguments": [], "expect": expected, "semanticTarget": {
+                "document": self.target_document, "revision": self.target_revision, "entryFunctions": [],
+            }}],
+        })
+        self.assertEqual(validated.get("status"), "Validated", validated)
+        activated = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+            "tool": "pep-parser", "document": self.tool_document, "revision": self.tool_revision,
+        })
+        self.assertEqual(activated.get("status"), "Active", activated)
+
+    def tearDown(self):
+        self.session.close()
+
+    def test_metadata_only_open_preserves_defaults_and_rejects_bad_flag_without_mutation(self):
+        normal = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "normal", "bytes": [],
+        })
+        self.assertEqual(normal.get("outcome"), "ok", normal)
+        self.assertEqual(normal.get("ast"), [])
+        self.assertIsNotNone(normal.get("typedTree"))
+        self.assertNotIn("analysisOmitted", normal)
+
+        omitted = self.session.send({
+            "schemaVersion": 3, "op": "open", "name": "metadata-only",
+            "source": "", "metadataOnly": True,
+        })
+        self.assertEqual(omitted.get("outcome"), "ok", omitted)
+        self.assertIsNone(omitted.get("ast"))
+        self.assertIsNone(omitted.get("typedTree"))
+        self.assertTrue(omitted.get("analysisOmitted"))
+        self.assertEqual(omitted.get("status"), "valid")
+
+        rejected = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "bad-metadata-only",
+            "bytes": [], "metadataOnly": "true",
+        })
+        self.assertEqual(rejected.get("outcome"), "error", rejected)
+        self.assertEqual(rejected["error"]["code"], "PEP_SESSION_FIELD_TYPE")
+
+        after_rejection = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "after-rejection", "bytes": [],
+        })
+        self.assertEqual(after_rejection.get("document"), "doc-5", after_rejection)
+
+    def parse(self, source):
+        raw = source if isinstance(source, bytes) else source.encode("utf-8")
+        target = self.session.send({
+            "schemaVersion": 3, "op": "open_bytes", "name": "parser-target",
+            "bytes": list(raw),
+        })
+        self.assertEqual(target.get("outcome"), "ok", target)
+        invoked = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser", "arguments": [], "semanticTarget": {
+                "document": target["document"], "revision": target["revision"], "entryFunctions": [],
+            },
+        })
+        self.assertEqual(invoked.get("outcome"), "ok", invoked)
+        self.assertEqual(invoked["revision"], self.tool_revision)
+        result = invoked["result"]
+        result_fields = fields(result)
+        self.assertEqual(scalar(result_fields["document"]), target["document"])
+        self.assertEqual(scalar(result_fields["revision"]), target["revision"])
+        return target, result
+
+    def assert_differential(self, source):
+        target, result = self.parse(source)
+        self.assertEqual(scalar(fields(result)["status"]), "complete")
+        actual = pep_flat_nodes(result)
+        expected = ocaml_flat_nodes(target["ast"])
+        self.assertEqual(actual, expected, source)
+        return actual
+
+    def test_expression_precedence_associativity_and_spans(self):
+        actual = self.assert_differential("1 + 2 * 3 - 4")
+        self.assertEqual([node[0] for node in actual], [
+            "expression_statement", "binary", "binary", "integer", "binary", "integer", "integer", "integer",
+        ])
+    def test_boolean_comparison_grouping_and_unary_precedence(self):
+        self.assert_differential("!true || false && 4 == 4 && 5 != 6 && 7 <= 8")
+        self.assert_differential("-(1 + 2) * 3 / 4")
+
+    def test_function_bindings_unary_and_typed_parameters(self):
+        self.assert_differential("fn main(x: Int) -> Int { let y: Int = -x; return y }")
+
+    def test_union_match_constructor_patterns_and_holes(self):
+        self.assert_differential(
+            "type Maybe = None() | Some(Int)\n"
+            "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => number } }"
+        )
+        self.assert_differential("fn unfinished() -> Int { return ?result }")
+
+    def test_record_type_literal_and_field_access(self):
+        self.assert_differential(
+            "type Point { x: Int, y: Int }\n"
+            "fn main() -> Int { let point = Point { x: 1, y: 2 }; return point.x }"
+        )
+
+    def test_conditional_statement_loops_and_assignment(self):
+        self.assert_differential(
+            "fn count(xs: List[Int]) -> Int { var total = 0; "
+            "for item in xs { total = total + item } "
+            "while total <= 10 { total = total + 1 } "
+            "if total <= 10 { return 0 } else { return total } }"
+        )
+
+    def test_incomplete_and_invalid_sources_return_structured_errors(self):
+        for raw in (b"fn main() -> Int { return (1 + 2", b"fn main() -> Int { return 1"):
+            target, result = self.parse(raw)
+            result_fields = fields(result)
+            self.assertEqual(scalar(result_fields["status"]), "incomplete")
+            self.assertTrue(scalar(result_fields["errorCode"]).startswith("PEP_PARSE_"))
+            self.assertEqual(target.get("status"), "invalid")
+        target, result = self.parse(b"fn main() -> Int { return @ }")
+        self.assertEqual(scalar(fields(result)["status"]), "invalid")
+        self.assertEqual(scalar(fields(result)["errorCode"]), "PEP_UNEXPECTED_CHARACTER")
+        self.assertEqual(target.get("status"), "invalid")
+
+
+    def test_calls_trailing_commas_strings_holes_and_if_expressions(self):
+        self.assert_differential("fn main() -> Int { let values = [1, 2,]; return choose(values, 0) }")
+        self.assert_differential(r'fn message(flag: Bool) -> Str { return if flag { "café\n" } else { ?label } }')
+        self.assert_differential("[]")
+
+    def test_nested_patterns_and_wildcards(self):
+        self.assert_differential(
+            "type Tree = Leaf(Int) | Node(Tree, Tree)\n"
+            "fn total(tree: Tree) -> Int { return match tree { "
+            "Leaf(number) => number Node(Leaf(_), right) => total(right) _ => 0 } }"
+        )
+
+    def test_unicode_crlf_byte_positions(self):
+        self.assert_differential(b'fn text() -> Str {\r\n  return "caf\xc3\xa9"\r\n}')
+
+if __name__ == "__main__":
+    unittest.main()
