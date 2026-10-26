@@ -23,9 +23,9 @@ The following v0.3 commitments are not current compiler capabilities:
 - structural edits beyond the supported named typed-hole fill; there is no general AST-targeted refactoring system;
 - cross-revision incremental parsing or type checking; each new source revision is fully analysed;
 - built-in parametric containers;
-- a Pep-written C11 generator or self-hosted compiler.
+- a Pep-written C23 generator (ISO/IEC 9899:2024) or self-hosted compiler.
 
-Same-revision cached analysis is implemented, but it does not constitute incremental compilation. Records, recursive tagged unions, constructors, checked pattern matching, and match-arm holes passed A4. A5 adds the in-process tool registry, test-vector validation, explicit activation, scalar invocation, side-effect rejection, runtime budgets, and hot replacement. The local tool host is trusted and is not a sandbox. A Pep-written C11 generator and self-hosting remain future work. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the versioned message boundary and [NEXT_PACKET.md](NEXT_PACKET.md) for the A5 acceptance record.
+Same-revision cached analysis is implemented, but it does not constitute incremental compilation. Records, recursive tagged unions, constructors, checked pattern matching, and match-arm holes passed A4. A5 adds the in-process tool registry, test-vector validation, explicit activation, scalar invocation, side-effect rejection, runtime budgets, and hot replacement. The local tool host is trusted and is not a sandbox. A Pep-written C23 generator and self-hosting remain future work. [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md) establishes the forward-looking C23 target; MoonBit A0's C11 generation is historical only. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the versioned message boundary and [NEXT_PACKET.md](NEXT_PACKET.md) for the A5 acceptance record.
 ## Historical A0 slice
 
 A0 was a small MoonBit-based `say("text")`-to-C11 proof of concept. It remains useful historical/reference work through `pep-moonbit.ps1` and the separate MoonBit tests. The current seed and bootstrap direction are OCaml-first; the A0 notes are preserved without merging their feature claims into the current implementation.
