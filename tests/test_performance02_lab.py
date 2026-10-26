@@ -89,6 +89,33 @@ class Performance02LabTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             lab.synthetic_checked_ast_fixture(0)
 
+    def test_fixed_estimated_and_feedback_strategies_preserve_budget(self):
+        fixed = lab.simulate_batch_strategy(strategy="fixed", units=100, steps_per_unit=2000, bytes_per_unit=100)
+        estimated = lab.simulate_batch_strategy(strategy="estimated", units=100, steps_per_unit=2000, bytes_per_unit=100)
+        feedback = lab.simulate_batch_strategy(strategy="feedback", units=100, steps_per_unit=2000, bytes_per_unit=100)
+        self.assertFalse(fixed["complete"])
+        self.assertTrue(estimated["complete"])
+        self.assertTrue(feedback["complete"])
+        for result in (fixed, estimated, feedback):
+            for batch in result["batches"]:
+                if batch["outcome"] == "success":
+                    self.assertLessEqual(batch["actualSteps"], lab.TOOL_STEP_BUDGET)
+                    self.assertLessEqual(batch["actualBytes"], lab.TOOL_MESSAGE_BUDGET)
+
+    def test_optimistic_estimator_records_bounded_failure_without_commit(self):
+        result = lab.simulate_batch_strategy(
+            strategy="estimated", units=500, steps_per_unit=5000, bytes_per_unit=100,
+            optimistic=True,
+        )
+        self.assertFalse(result["complete"])
+        self.assertLess(result["committedUnits"], 500)
+        self.assertEqual(result["batches"][-1]["outcome"], "bounded-failure")
+
+    def test_transport_scaling_contains_all_local_representations(self):
+        rows = lab.transport_scaling((8, 32))
+        self.assertEqual(len(rows), 6)
+        self.assertEqual({row["nodes"] for row in rows}, {8, 32})
+
 
 if __name__ == "__main__":
     unittest.main()

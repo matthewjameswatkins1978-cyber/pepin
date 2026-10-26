@@ -29,6 +29,8 @@ CLOCK_SOURCE = "python.time.perf_counter_ns"
 LAB_SCHEMA_VERSION = 1
 DEFAULT_MAX_TRIALS = 20
 DEFAULT_MAX_BYTES = 65_536
+TOOL_STEP_BUDGET = 100_000
+TOOL_MESSAGE_BUDGET = 1_048_576
 
 
 def elapsed_ms(start_ns: int, end_ns: int | None = None) -> float:
@@ -220,6 +222,139 @@ def provisional_a12_measurement(
         "protocolChanged": False,
         "clockSource": "candidate test_a12.py time.perf_counter (reported as elapsed wall time)",
     }
+
+
+def estimate_batch_width(
+    *,
+    target_width: int,
+    remaining_units: int,
+    remaining_steps: int,
+    remaining_bytes: int,
+    estimated_steps_per_unit: int,
+    estimated_bytes_per_unit: int,
+    safety: float = 0.8,
+    hard_max: int = 256,
+) -> int:
+    """Conservative test-only estimator using only observed/public counters."""
+
+    if not 0 < safety <= 1:
+        raise ValueError("safety must be in (0, 1]")
+    if min(target_width, remaining_units, remaining_steps, remaining_bytes) <= 0:
+        return 1
+    step_budget = int(remaining_steps * safety) // max(1, estimated_steps_per_unit)
+    byte_budget = int(remaining_bytes * safety) // max(1, estimated_bytes_per_unit)
+    return max(1, min(target_width, hard_max, remaining_units, step_budget, byte_budget))
+
+
+@dataclass
+class FeedbackBatcher:
+    """Bounded scheduler model; it never commits a failed batch."""
+
+    target_width: int = 256
+    min_width: int = 1
+    max_width: int = 256
+    safety: float = 0.8
+    width: int = 32
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.min_width <= self.max_width:
+            raise ValueError("invalid feedback width bounds")
+        if not 0 < self.safety <= 1:
+            raise ValueError("safety must be in (0, 1]")
+        self.width = max(self.min_width, min(self.max_width, self.width))
+
+    def propose(self, remaining_units: int, remaining_steps: int, remaining_bytes: int, estimate_steps: int, estimate_bytes: int) -> int:
+        bounded = estimate_batch_width(
+            target_width=min(self.target_width, self.width),
+            remaining_units=remaining_units,
+            remaining_steps=remaining_steps,
+            remaining_bytes=remaining_bytes,
+            estimated_steps_per_unit=estimate_steps,
+            estimated_bytes_per_unit=estimate_bytes,
+            safety=self.safety,
+            hard_max=self.max_width,
+        )
+        return max(self.min_width, bounded)
+
+    def observe(self, *, requested_units: int, actual_steps: int, actual_bytes: int, success: bool) -> None:
+        if requested_units <= 0:
+            raise ValueError("requested_units must be positive")
+        if not success:
+            # The failed batch is not committed; only the next proposal changes.
+            self.width = max(self.min_width, min(self.width // 2, requested_units // 2 or 1))
+            return
+        steps_per_unit = max(1, actual_steps // requested_units)
+        bytes_per_unit = max(1, actual_bytes // requested_units)
+        if steps_per_unit * requested_units <= int(TOOL_STEP_BUDGET * self.safety) and actual_bytes <= int(TOOL_MESSAGE_BUDGET * self.safety):
+            self.width = min(self.max_width, max(self.width + 1, self.width * 2))
+        else:
+            self.width = max(self.min_width, min(self.width, requested_units))
+
+
+def simulate_batch_strategy(
+    *,
+    strategy: str,
+    units: int,
+    steps_per_unit: int,
+    bytes_per_unit: int,
+    target_width: int = 256,
+    optimistic: bool = False,
+) -> dict[str, Any]:
+    """Simulate fixed, estimated and feedback scheduling at unchanged budgets."""
+
+    if strategy not in {"fixed", "estimated", "feedback"}:
+        raise ValueError("unknown batching strategy")
+    remaining = units
+    committed = 0
+    batches: list[dict[str, Any]] = []
+    feedback = FeedbackBatcher(target_width=target_width, width=min(32, target_width))
+    while remaining:
+        if strategy == "fixed":
+            width = min(target_width, remaining)
+        elif strategy == "estimated":
+            estimated_steps = steps_per_unit if not optimistic else max(1, steps_per_unit // 4)
+            estimated_bytes = bytes_per_unit if not optimistic else max(1, bytes_per_unit // 4)
+            width = estimate_batch_width(
+                target_width=target_width, remaining_units=remaining,
+                remaining_steps=TOOL_STEP_BUDGET, remaining_bytes=TOOL_MESSAGE_BUDGET,
+                estimated_steps_per_unit=estimated_steps, estimated_bytes_per_unit=estimated_bytes,
+            )
+        else:
+            width = feedback.propose(remaining, TOOL_STEP_BUDGET, TOOL_MESSAGE_BUDGET, steps_per_unit, bytes_per_unit)
+        actual_steps = width * steps_per_unit
+        actual_bytes = width * bytes_per_unit
+        success = actual_steps <= TOOL_STEP_BUDGET and actual_bytes <= TOOL_MESSAGE_BUDGET
+        row = {"requestedUnits": width, "actualSteps": actual_steps, "actualBytes": actual_bytes, "outcome": "success" if success else "bounded-failure"}
+        batches.append(row)
+        if not success:
+            if strategy == "feedback":
+                feedback.observe(requested_units=width, actual_steps=actual_steps, actual_bytes=actual_bytes, success=False)
+                if feedback.width == width:
+                    break
+                continue
+            break
+        committed += width
+        remaining -= width
+        if strategy == "feedback":
+            feedback.observe(requested_units=width, actual_steps=actual_steps, actual_bytes=actual_bytes, success=True)
+    return {
+        "strategy": strategy,
+        "units": units,
+        "stepsPerUnit": steps_per_unit,
+        "bytesPerUnit": bytes_per_unit,
+        "optimisticEstimator": optimistic,
+        "committedUnits": committed,
+        "complete": committed == units,
+        "batches": batches,
+    }
+
+
+def transport_scaling(counts: Iterable[int] = (8, 32, 128, 256)) -> list[dict[str, Any]]:
+    rows = []
+    for count in counts:
+        fixture = synthetic_checked_ast_fixture(count)
+        rows.extend(measure_representations(fixture))
+    return rows
 
 
 def median_stage(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -475,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--startup-timeout-s", type=float, default=10.0)
     parser.add_argument("--cleanup-timeout-s", type=float, default=2.0)
     parser.add_argument("--max-source-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    parser.add_argument("--transport-sizes", action="store_true", help="measure local AST representation scaling")
+    parser.add_argument("--batch-sim", action="store_true", help="emit bounded fixed/estimated/feedback simulations")
     args = parser.parse_args(argv)
     if args.trials < 1 or args.trials > DEFAULT_MAX_TRIALS:
         parser.error(f"--trials must be between 1 and {DEFAULT_MAX_TRIALS}")
@@ -483,6 +620,21 @@ def main(argv: list[str] | None = None) -> int:
     emitted = False
     if args.self_test or not args.a11:
         print(json.dumps(self_test(), ensure_ascii=False, separators=(",", ":")))
+        emitted = True
+    if args.transport_sizes:
+        print(json.dumps({"kind": "transport-scaling", "rows": transport_scaling()}, ensure_ascii=False, separators=(",", ":")))
+        emitted = True
+    if args.batch_sim:
+        scenarios = []
+        for density, steps, bytes_per_unit in (("identifier", 120, 180), ("punctuation", 900, 220), ("nested", 2200, 640)):
+            for strategy in ("fixed", "estimated", "feedback"):
+                scenarios.append({"density": density, "result": simulate_batch_strategy(
+                    strategy=strategy, units=1024, steps_per_unit=steps, bytes_per_unit=bytes_per_unit,
+                )})
+            scenarios.append({"density": density, "result": simulate_batch_strategy(
+                strategy="estimated", units=1024, steps_per_unit=steps, bytes_per_unit=bytes_per_unit, optimistic=True,
+            )})
+        print(json.dumps({"kind": "batch-simulation", "budgets": {"steps": TOOL_STEP_BUDGET, "messageBytes": TOOL_MESSAGE_BUDGET}, "scenarios": scenarios}, ensure_ascii=False, separators=(",", ":")))
         emitted = True
     if args.a11:
         raw = base.LEXER.read_bytes()

@@ -10,16 +10,17 @@ or A12/A13/A14 implementation status.
 `tests/performance02_lab.py` reuses the accepted R2 session client and lexer
 runner for a genuine A11 end-to-end profile. It also contains local-only cursor,
 AST, checker and C23-emitter fixtures. The latter are synthetic and are not
-measurements of an A12 parser, A13 checker or A14 emitter. The known A12 candidate
-`69a47fe77187666bdd045b8dc8a9f633a7dd49d7` remains provisional and is not imported
-into this branch.
+measurements of an A12 parser, A13 checker or A14 emitter. A12 is now accepted
+at exact SHA `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`, but its source remains
+isolated from this branch.
 
-A disposable worktree pinned to that candidate was independently exercised with
-the candidate's own differential test adapter. On the current 19,425-byte A11
-source it produced 2,030 flattened nodes through 567 parser continuations,
-4,183,287 request bytes and 6,100,090 response bytes. The largest request and
-response were 67,408 and 69,118 bytes respectively. This is candidate evidence,
-not accepted A12 behavior; the source cap and protocol remained unchanged.
+A disposable worktree pinned to that SHA was independently exercised with the
+parser's differential test adapter. On the current 19,425-byte A11 source it
+produced 2,030 flattened nodes through 567 parser continuations, 4,183,287
+request bytes and 6,100,090 response bytes. The largest request and response
+were 67,408 and 69,118 bytes respectively. This is accepted-version measurement
+evidence, not an import of A12 implementation files; the source cap and protocol
+remained unchanged.
 
 The lab records the clock source in every result. Python host timings use
 `time.perf_counter_ns`; the opt-in internal profile uses an isolated executable
@@ -84,10 +85,42 @@ The A11 command is bounded by the inherited build, startup, request and cleanup
 deadlines. Use `--trials 3` or more for a spread; do not treat one local sample as
 a stable performance claim.
 
-## Slice 1 disposition
+## Slice 1 and Slice 2 disposition
 
 The harness foundation is safe to extend because it is external and test-only.
 The measured A11 route is the authority for available compiler-stage evidence.
-Compact transport, adaptive batching, session reuse and parser-specific fixtures
-remain the next experimental slices; none is a production recommendation yet.
+The accepted A12 run is a separate disposable checkout and preserves the parser's
+exact cursor chain and flattened-node contract.
+
+The real fixed-width A11 campaign (one direct trial per row) measured the current
+19,425-byte source as follows:
+
+| width | calls | total ms | response bytes | outcome |
+|---:|---:|---:|---:|:---|
+| 32 | 1,216 | 5,671.7 | 4,114,973 | correct |
+| 64 | 609 | 3,978.8 | 2,938,516 | correct |
+| 128 | 305 | 3,165.9 | 2,349,319 | correct |
+| 256 | 153 | 2,742.1 | 2,054,715 | correct |
+| 512 | 77 | 2,506.5 | 1,907,379 | correct for A11; punctuation case hit `PEP_RUNTIME_STEP_LIMIT` |
+
+The local representation fixture shows the direction of transport scaling, not a
+wire-format recommendation. At eight nodes, existing typed JSON was 5,344 bytes,
+a flat array 1,468 bytes and an interned compact array 368 bytes. At 256 nodes,
+the corresponding sizes were 167,619, 45,695 and 9,868 bytes. All three round-trip
+through independent decoders and injected parent/span/revision mutations are
+rejected by the oracle. Full cursor JSON was 968 bytes; a minimal logical cursor
+retaining all resume and authority fields was 318 bytes; an opaque handle was 92
+bytes but is design-only and requires trusted lifecycle state.
+
+The fixed/estimated/feedback scheduler is a bounded simulator, not production
+batching. It uses only public observations and the unchanged 100,000-step and
+1 MiB message limits. Fixed width 256 fails high-density simulated work;
+conservative estimated and feedback schedules complete it. An intentionally
+optimistic estimator records a bounded failure without committing the batch.
+This supports adaptive scheduling as an experiment, but not a production batch
+change until real Pep parser/checker workloads are measured.
+
+Next work is session lifecycle and architecture comparison. No production
+batching, cursor format, protocol, revision cache or host-state mechanism has
+changed.
 
