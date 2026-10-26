@@ -37,7 +37,7 @@ class A6CollectionsAndControlTests(unittest.TestCase):
         self.assertEqual(description["runtime"], {"maxSteps": 1000000, "maxCallDepth": 512})
         for feature in ("typed_lists", "mutable_bindings", "for_in", "while", "short_circuit_boolean_logic", "scalar_equality"):
             self.assertIn(feature, description["features"])
-        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "contains"])
+        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "prepend", "reverse", "byte_length", "byte_at", "byte_slice", "utf8_slice", "source_bytes", "contains"])
 
     def test_list_and_binding_diagnostics(self):
         cases = {

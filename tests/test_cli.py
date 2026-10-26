@@ -640,7 +640,7 @@ class PepCliTests(unittest.TestCase):
         description = json.loads(result.stdout)
         self.assertEqual(description["language"], "Pep")
         self.assertEqual(description["schemaVersion"], 2)
-        self.assertEqual(description["types"], ["Int", "Bool", "Str", "Unit"])
+        self.assertEqual(description["types"], ["Int", "Bool", "Str", "SourceBytes", "Unit"])
         self.assertIn("query_holes", description["features"])
         self.assertIn("jsonl_session", description["features"])
         self.assertIn("tool_hot_replacement", description["features"])

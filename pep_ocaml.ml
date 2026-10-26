@@ -1,4 +1,4 @@
-type ty = Int | Bool | Str | Unit | Named of string | List of ty
+type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int }
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
 type token = { kind:token_kind; at:span }
@@ -18,7 +18,7 @@ type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan lo hi line column = {lo;hi;line;column}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -52,7 +52,48 @@ let is_digit c = c>='0'&&c<='9'
 let is_alpha c = c>='a'&&c<='z'||c>='A'&&c<='Z'||c='_'
 let is_alnum c = is_alpha c || is_digit c
 
+let invalid_utf8_offset text =
+  let length = String.length text in
+  let continuation byte = byte land 0xc0 = 0x80 in
+  let rec scan i =
+    if i = length then None
+    else
+      let first = Char.code text.[i] in
+      if first < 0x80 then scan (i + 1)
+      else
+        let width, minimum, initial_mask =
+          if first >= 0xc0 && first <= 0xdf then 2, 0x80, 0x1f
+          else if first >= 0xe0 && first <= 0xef then 3, 0x800, 0x0f
+          else if first >= 0xf0 && first <= 0xf7 then 4, 0x10000, 0x07
+          else 0, 0, 0
+        in
+        if width = 0 || i + width > length then Some i
+        else
+          let codepoint = ref (first land initial_mask) in
+          let invalid = ref None in
+          for j = 1 to width - 1 do
+            let byte = Char.code text.[i + j] in
+            if not (continuation byte) then (if !invalid = None then invalid := Some (i + j))
+            else codepoint := (!codepoint lsl 6) lor (byte land 0x3f)
+          done;
+          match !invalid with
+          | Some offset -> Some offset
+          | None when !codepoint < minimum || !codepoint > 0x10ffff || !codepoint >= 0xd800 && !codepoint <= 0xdfff -> Some i
+          | None -> scan (i + width)
+  in
+  scan 0
+
+let invalid_utf8_span text offset =
+  let line = ref 1 and column = ref 1 in
+  for i = 0 to offset - 1 do
+    if text.[i] = '\n' then (incr line; column := 1) else incr column
+  done;
+  mkspan offset (min (String.length text) (offset + 1)) !line !column
+
 let lex source =
+  (match invalid_utf8_offset source with
+   | Some offset -> fail "PEP_INVALID_UTF8" "Source contains invalid UTF-8" (invalid_utf8_span source offset) ()
+   | None -> ());
   let n=String.length source and i=ref 0 and line=ref 1 and col=ref 1 in
   let tokens=ref [] in
   let advance () = let c=source.[!i] in incr i; if c='\n' then (incr line;col:=1) else incr col; c in
@@ -114,7 +155,7 @@ let accept_sym p s = if symbol p s then (ignore(take p);true) else false
 let expect_sym p s = if not(accept_sym p s) then fail "PEP_PARSE_EXPECTED" ("Expected '"^s^"'") (at p) ()
 let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "Expected a name" t.at ()
 let rec parse_type p = match take p with
-  |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "Unit";_}->Unit
+  |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
   |{kind=Id name;_}->Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
@@ -352,16 +393,16 @@ let check tops =
   List.iter (fun info -> Hashtbl.add type_table info.record_name (`Record info)) semantic_record_infos;
   List.iter(function
     |TopType (RecordDecl(name,fields,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ids=Hashtbl.create 8 in
         let resolved=List.map(fun(field,ty,fsp)->if Hashtbl.mem ids field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add ids field ();fresh_field(),field,ty,fsp) fields in
         let info={record_id=fresh_type();record_name=name;record_fields=resolved;record_span=sp} in
         Hashtbl.add type_table name (`Record info); records:=info::!records
     |TopType (UnionDecl(name,variants,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ctor_ids=Hashtbl.create 8 in
         let resolved=List.map(fun(ctor,args,csp)->
-          if List.mem ctor ["say";"int_text";"length";"append";"contains";"semantic_snapshot"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
+          if List.mem ctor ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
           if Hashtbl.mem ctor_ids ctor || Hashtbl.mem constructor_table ctor then fail "PEP_DUPLICATE_CONSTRUCTOR" ("Duplicate constructor '"^ctor^"'") csp ();
           Hashtbl.add ctor_ids ctor ();
           let item=(fresh_ctor(),ctor,args,csp) in Hashtbl.add constructor_table ctor (name,item); item) variants in
@@ -379,7 +420,7 @@ let check tops =
     |TopStmt _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
-  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"contains";"semantic_snapshot"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
+  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
@@ -508,6 +549,36 @@ let check tops =
          check_arity 1;
          let collection,_=list_argument (List.hd args) in
          {node=XCall(None,name,[collection]);ety=Some Int;espan=s}
+       ) else if name="prepend" then (
+         check_arity 2;
+         let collection,element=list_argument (List.hd args) in
+         let value=check_expr env scope (Some element) (List.nth args 1) in
+         {node=XCall(None,name,[collection;value]);ety=Some(List element);espan=s}
+       ) else if name="reverse" then (
+         check_arity 1;
+         let collection,element=list_argument (List.hd args) in
+         {node=XCall(None,name,[collection]);ety=Some(List element);espan=s}
+       ) else if name="byte_length" then (
+         check_arity 1;
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
+         {node=XCall(None,name,[source]);ety=Some Int;espan=s}
+       ) else if name="byte_at" then (
+         check_arity 2;
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
+         let offset=check_expr env scope (Some Int) (List.nth args 1) in
+         {node=XCall(None,name,[source;offset]);ety=Some Int;espan=s}
+       ) else if name="byte_slice" then (
+         check_arity 3;
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
+         let start=check_expr env scope (Some Int) (List.nth args 1) in
+         let finish=check_expr env scope (Some Int) (List.nth args 2) in
+         {node=XCall(None,name,[source;start;finish]);ety=Some SourceBytes;espan=s}
+       ) else if name="utf8_slice" then (
+         check_arity 3;
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
+         let start=check_expr env scope (Some Int) (List.nth args 1) in
+         let finish=check_expr env scope (Some Int) (List.nth args 2) in
+         {node=XCall(None,name,[source;start;finish]);ety=Some Str;espan=s}
        ) else if name="append" then (
          check_arity 2;
          let collection,element=list_argument (List.nth args 0) in
@@ -520,7 +591,7 @@ let check tops =
          let value=check_expr env scope (Some element) (List.nth args 1) in
          {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
        ) else (
-         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
            match Hashtbl.find_opt signatures name with None->
              let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
              let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
@@ -679,7 +750,7 @@ let diag_json d = "{\"schemaVersion\":2,\"status\":\"invalid\",\"diagnostics\":[
 let program_status c = if c.holes=[] then "valid" else "incomplete"
 let check_json tops c = "{\"schemaVersion\":2,\"status\":"^json_string(program_status c)^",\"ast\":"^ast_json tops^",\"typedTree\":"^typed_json c^",\"holes\":["^String.concat ","(List.map hole_json c.holes)^"],\"diagnostics\":[]}"
 
-type value = VInt of int64|VBool of bool|VStr of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
+type value = VInt of int64|VBool of bool|VStr of string|VSourceBytes of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
 exception Runtime of string*string*span
 let runtime code message sp=raise(Runtime(code,message,sp))
 let int_value = function VInt n->n|_->assert false
@@ -697,7 +768,7 @@ let checked_bin op a b sp =
  |"/"->if b=0L then runtime "PEP_RUNTIME_DIVISION_BY_ZERO" "Division by zero" sp else if a=Int64.min_int&&b= -1L then runtime "PEP_RUNTIME_OVERFLOW" "Integer division overflow" sp else VInt(Int64.div a b)
  |"neg"->if b=Int64.min_int then runtime "PEP_RUNTIME_OVERFLOW" "Integer negation overflow" sp else VInt(Int64.neg b)
  |_ ->assert false
-let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) ?(semantic_snapshot_value=None) c =
+let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) ?(semantic_snapshot_value=None) ?(source_bytes_value=None) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
  let remaining_steps = ref step_limit in
  let tick sp =
@@ -735,6 +806,42 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
     if name="length" then (match values with
       |[VList items]->let rec count total=function []->VInt(Int64.of_int total)|_::rest->tick e.espan;count (total+1) rest in count 0 items
       |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked length received a non-list value" e.espan)
+    else if name="prepend" then (match values with
+      |[VList items;value]->tick e.espan;VList(value::items)
+      |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked prepend received invalid arguments" e.espan)
+    else if name="reverse" then (match values with
+      |[VList items]->
+        let rec copy result=function []->VList result|head::rest->tick e.espan;copy (head::result) rest in copy [] items
+      |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked reverse received invalid arguments" e.espan)
+    else if name="byte_length" then (match values with
+      |[VSourceBytes source]->VInt(Int64.of_int(String.length source))
+      |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_length received invalid arguments" e.espan)
+    else if name="byte_at" then (match values with
+      |[VSourceBytes source;VInt offset] when offset>=0L && offset<Int64.of_int(String.length source)->VInt(Int64.of_int(Char.code source.[Int64.to_int offset]))
+      |[VSourceBytes _;VInt _]->runtime "PEP_RUNTIME_BYTE_RANGE" "Byte offset is outside the source" e.espan
+      |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_at received invalid arguments" e.espan)
+    else if name="byte_slice" then (match values with
+      |[VSourceBytes source;VInt start;VInt finish]->
+        let length=Int64.of_int(String.length source) in
+        if start<0L || finish<start || finish>length then runtime "PEP_RUNTIME_BYTE_RANGE" "Byte slice must be a valid half-open source range" e.espan;
+        let first=Int64.to_int start and count=Int64.to_int(Int64.sub finish start) in
+        for _=1 to count do tick e.espan done;
+        VSourceBytes(String.sub source first count)
+      |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_slice received invalid arguments" e.espan)
+    else if name="utf8_slice" then (match values with
+      |[VSourceBytes source;VInt start;VInt finish]->
+        let length=Int64.of_int(String.length source) in
+        if start<0L || finish<start || finish>length then runtime "PEP_RUNTIME_BYTE_RANGE" "UTF-8 slice must be a valid half-open source range" e.espan;
+        let boundary offset=offset=0L || offset=length || Char.code source.[Int64.to_int offset] land 0xc0 <> 0x80 in
+        if not(boundary start && boundary finish) then runtime "PEP_RUNTIME_BYTE_BOUNDARY" "UTF-8 slice boundary splits a UTF-8 sequence" e.espan;
+        let first=Int64.to_int start and count=Int64.to_int(Int64.sub finish start) in
+        for _=1 to count do tick e.espan done;
+        let text=String.sub source first count in
+        (match invalid_utf8_offset text with Some offset->runtime "PEP_RUNTIME_INVALID_UTF8" (Printf.sprintf "UTF-8 slice contains invalid encoding at byte %d" offset) e.espan |None->VStr text)
+      |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked utf8_slice received invalid arguments" e.espan)
+    else if name="source_bytes" then (match source_bytes_value with
+      |Some source->VSourceBytes source
+      |None->runtime "PEP_RUNTIME_SOURCE_CONTEXT" "source_bytes is available only for a host-authorised v2 semanticTarget" e.espan)
     else if name="append" then (match values with
       |[VList items;value]->
         let rec copy reversed=function
@@ -836,37 +943,7 @@ exception Session_document_error of string * string * string * string
 
 let json_fail message = raise (Json_parse_error message)
 
-let valid_utf8 text =
-  let length = String.length text in
-  let continuation byte = byte land 0xc0 = 0x80 in
-  let rec scan i =
-    if i = length then true
-    else
-      let first = Char.code text.[i] in
-      if first < 0x80 then scan (i + 1)
-      else
-        let width, minimum, initial_mask =
-          if first >= 0xc0 && first <= 0xdf then 2, 0x80, 0x1f
-          else if first >= 0xe0 && first <= 0xef then 3, 0x800, 0x0f
-          else if first >= 0xf0 && first <= 0xf7 then 4, 0x10000, 0x07
-          else 0, 0, 0
-        in
-        if width = 0 || i + width > length then false
-        else
-          let codepoint = ref (first land initial_mask) in
-          let ok = ref true in
-          for j = 1 to width - 1 do
-            let byte = Char.code text.[i + j] in
-            if not (continuation byte) then ok := false
-            else codepoint := (!codepoint lsl 6) lor (byte land 0x3f)
-          done;
-          !ok
-          && !codepoint >= minimum
-          && !codepoint <= 0x10ffff
-          && not (!codepoint >= 0xd800 && !codepoint <= 0xdfff)
-          && scan (i + width)
-  in
-  scan 0
+let valid_utf8 text = invalid_utf8_offset text = None
 
 let add_utf8 buffer codepoint =
   if codepoint < 0 || codepoint > 0x10ffff || codepoint >= 0xd800 && codepoint <= 0xdfff then
@@ -1236,13 +1313,13 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | List _ | Named _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
     | Int,VInt number -> json_string (Int64.to_string number)
     | Bool,VBool boolean -> if boolean then "true" else "false"
-    | Str,VStr text -> json_string text
+    | Str,VStr text -> if not (valid_utf8 text) then raise (Session_error ("PEP_TOOL_RESULT_ENCODING", "Str result contains invalid UTF-8 bytes")) else json_string text
     | Unit,VUnit -> "null"
     | _ -> raise (Session_error ("PEP_TOOL_RESULT_TYPE", "Interpreter result did not match the checked tool return type"))
   in
@@ -1282,6 +1359,7 @@ let session_record_by_name checked name =
 let session_tool_transport_supported checked ty =
   let rec supports seen = function
     |Int|Bool|Str|Unit->true
+    |SourceBytes->false
     |List element->supports seen element
     |Named name->
         (match session_record_by_name checked name with
@@ -1294,7 +1372,7 @@ let session_scalar_json ty value =
   let encoded = match ty,value with
     | Int,VInt number -> json_string (Int64.to_string number)
     | Bool,VBool boolean -> if boolean then "true" else "false"
-    | Str,VStr text -> json_string text
+    | Str,VStr text -> if not (valid_utf8 text) then raise (Session_error ("PEP_TOOL_RESULT_ENCODING", "Str result contains invalid UTF-8 bytes")) else json_string text
     | Unit,VUnit -> "null"
     | _ -> raise (Session_error ("PEP_TOOL_RESULT_TYPE", "Interpreter result did not match the checked tool return type"))
   in
@@ -1344,6 +1422,7 @@ let session_tool_value_v2 checked expected payload =
        let actual=session_required_string fields "type" in
        if actual<>type_name ty then raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
        (match ty with
+        |SourceBytes -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "SourceBytes cannot cross the v2 tool boundary"))
         |Int|Bool|Str|Unit ->
            session_exact_fields fields ["type";"value"] "PEP_TOOL_VALUE_FIELDS";
            scalar ty (Option.value (session_member fields "value") ~default:JNull)
@@ -1476,9 +1555,10 @@ let session_semantic_target tool_checked target_message =
     raise(Session_error("PEP_SEMANTIC_BUDGET","Semantic snapshot exceeds the node budget"));
   Some(tool_semantic_record tool_checked "ProgramInfo"
     ["document",VStr document_id;"revision",VStr revision;"status",VStr status;
-     "functions",VList functions;"calls",VList calls;"roots",VList roots;"diagnostics",VList diagnostic_values])
+     "functions",VList functions;"calls",VList calls;"roots",VList roots;"diagnostics",VList diagnostic_values]),
+  Some analysis.source
 
-let tool_reaches_semantic_snapshot checked function_id =
+let tool_reaches_builtin checked function_id builtin =
   let functions=Hashtbl.create 16 in
   List.iter(fun function_->Hashtbl.replace functions function_.sig_.fid function_)checked.functions;
   let rec visit seen id =
@@ -1487,14 +1567,18 @@ let tool_reaches_semantic_snapshot checked function_id =
       |None->false
       |Some function_->
           let calls=List.concat_map tool_stmt_calls function_.tbody in
-          List.exists(fun(_,name)->name="semantic_snapshot")calls ||
+          List.exists(fun(_,name)->name=builtin)calls ||
           List.exists(function Some child,_->visit(id::seen)child|None,_->false)calls
   in visit [] function_id
+
+let tool_reaches_semantic_snapshot checked function_id = tool_reaches_builtin checked function_id "semantic_snapshot"
+let tool_reaches_source_bytes checked function_id = tool_reaches_builtin checked function_id "source_bytes"
 
 let tool_host_policy checked entry =
   match entry.tool_parameters,entry.tool_result,entry.tool_function_id with
   | Some parameters,Some result,Some function_id ->
       if entry.tool_protocol_version=1 && tool_reaches_semantic_snapshot checked function_id then Some "semantic_snapshot requires tool protocol version 2"
+      else if entry.tool_protocol_version=1 && tool_reaches_source_bytes checked function_id then Some "source_bytes requires tool protocol version 2"
       else if entry.tool_protocol_version=1 && not (List.for_all session_tool_scalar (result::parameters)) then Some "Only Int, Bool, Str, and Unit may cross the v1 tool boundary"
       else if entry.tool_protocol_version=2 && not (List.for_all (session_tool_transport_supported checked) (result::parameters)) then Some "Version 2 supports only scalar, List, and monomorphic record values"
       else if tool_reaches_say checked function_id then Some "Exported function reaches say and is not permitted for tool execution"
@@ -1544,8 +1628,8 @@ let session_tool_test_vector checked entry vector =
   in
   session_exact_fields fields expected_fields "PEP_TOOL_TEST_VECTOR";
   let args = match session_member fields "arguments" with Some (JArray values) -> values | _ -> raise (Session_error ("PEP_TOOL_TEST_VECTOR", "Each test vector requires an arguments array")) in
-  let snapshot=match session_member fields "semanticTarget" with
-    |None->None
+  let snapshot,source_bytes=match session_member fields "semanticTarget" with
+    |None->None,None
     |Some target->session_semantic_target checked target
   in
   match entry.tool_parameters,entry.tool_result,entry.tool_function_id with
@@ -1555,7 +1639,7 @@ let session_tool_test_vector checked entry vector =
      let values = List.map2 decode parameters args in
      let expected_json = match session_member fields "expect" with Some value -> value | None -> raise (Session_error ("PEP_TOOL_TEST_VECTOR", "Each test vector requires an expect value")) in
      let expected_value = decode result expected_json in
-     let actual = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot checked in
+     let actual = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot ~source_bytes_value:source_bytes checked in
      if actual <> expected_value then raise (Session_error ("PEP_TOOL_TEST_FAILED", "Interpreter result did not match the expected test vector"))
   | _ -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Tool has no checked function signature"))
 
@@ -1623,14 +1707,14 @@ let session_tool_invoke fields =
     | Some _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_COUNT", "Tool argument count did not match its signature"))
     | None -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked signature"))
   in
-  let snapshot=match session_member fields "semanticTarget" with
-    |None->None
+  let snapshot,source_bytes=match session_member fields "semanticTarget" with
+    |None->None,None
     |Some _ when protocol=1->raise(Session_error("PEP_TOOL_PROTOCOL_MISMATCH","semanticTarget requires tool protocol version 2"))
     |Some target->session_semantic_target checked target
   in
   let encoded_result = match entry.tool_function_id,entry.tool_result with
     | Some function_id,Some result_type ->
-        let value = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot checked in
+        let value = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot ~source_bytes_value:source_bytes checked in
         if protocol=1 then tool_value_json result_type value else tool_value_json_v2 checked result_type value
     | _ -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked function signature"))
   in
@@ -1792,6 +1876,27 @@ let session_process request =
       Hashtbl.add document.revisions analysis.revision analysis;
       Hashtbl.add session_documents document_id document;
       session_response operation document_id analysis.revision analysis ()
+  | "open_bytes" ->
+      let byte_values=match session_member fields "bytes" with
+        |Some (JArray values)->values
+        |_ ->raise (Session_error ("PEP_SOURCE_BYTES_TYPE", "open_bytes requires a bytes array of unsigned integers"))
+      in
+      if List.length byte_values>65536 then raise (Session_error ("PEP_SOURCE_BYTE_LIMIT", "Source byte input exceeds 65536 bytes"));
+      let buffer=Buffer.create (List.length byte_values) in
+      List.iter (function
+        |JNumber number->(try let byte=int_of_string number in if byte<0 || byte>255 then raise Exit;Buffer.add_char buffer (Char.chr byte)
+          with _->raise (Session_error ("PEP_SOURCE_BYTE_VALUE", "Each source byte must be an integer from 0 through 255")))
+        |_ ->raise (Session_error ("PEP_SOURCE_BYTE_VALUE", "Each source byte must be an integer from 0 through 255"))) byte_values;
+      let source=Buffer.contents buffer in
+      let name=session_optional_string fields "name" in
+      let next=(Hashtbl.length session_documents)+1 in
+      let document_id="doc-"^string_of_int next in
+      if Hashtbl.mem session_documents document_id then raise (Session_error ("PEP_DOCUMENT_ID_EXHAUSTED", "Could not allocate a session document identity"));
+      let analysis=analyse_session_source source in
+      let document={document_id;document_name=name;current_revision=analysis.revision;revisions=Hashtbl.create 8} in
+      Hashtbl.add document.revisions analysis.revision analysis;
+      Hashtbl.add session_documents document_id document;
+      session_response operation document_id analysis.revision analysis ()
   | "query" | "inspect" ->
       let document = session_document fields in
       let revision = session_required_string fields "revision" in
@@ -1875,7 +1980,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in
