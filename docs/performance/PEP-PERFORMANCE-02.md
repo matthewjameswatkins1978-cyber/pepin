@@ -1,6 +1,6 @@
 # PEP-PERFORMANCE-02 compiler pipeline laboratory
 
-Status: Slice 1 measurement foundations on the isolated `exp/pep-performance-02`
+Status: Slice 3 final laboratory evidence on the isolated `exp/pep-performance-02`
 branch. This report is experimental evidence only. It does not change Pep
 semantics, the JSONL schemas, execution budgets, source cap, revision authority,
 or A12/A13/A14 implementation status.
@@ -81,6 +81,13 @@ Genuine warm-session A11 stage profile (one trial):
 python tests/performance02_lab.py --a11 --mode direct --trials 1
 ```
 
+Session lifecycle and architecture evidence:
+
+```powershell
+python tests/performance02_lab.py --lifecycle --lifecycle-count 8 --lifecycle-invokes 4 --lifecycle-cold-trials 2
+python tests/performance02_lab.py --architecture
+```
+
 The A11 command is bounded by the inherited build, startup, request and cleanup
 deadlines. Use `--trials 3` or more for a spread; do not treat one local sample as
 a stable performance claim.
@@ -120,7 +127,79 @@ optimistic estimator records a bounded failure without committing the batch.
 This supports adaptive scheduling as an experiment, but not a production batch
 change until real Pep parser/checker workloads are measured.
 
-Next work is session lifecycle and architecture comparison. No production
-batching, cursor format, protocol, revision cache or host-state mechanism has
-changed.
+## Slice 3 lifecycle and architecture evidence
+
+The real typed-result session was measured with two cold trials and one reused
+session containing four invocations. Cold setup medians were 55.871 ms and
+cold invocation medians were 6.353 ms. The reused session reported 3.818 ms
+process spawn, 56.251 ms ready, 55.596 ms open/register/validate/activate setup,
+and 6.283 ms median invocation. The four warm results matched exactly. A real
+edit produced a new SHA-256 revision and replaying the old revision was rejected
+with `PEP_STALE_REVISION`; this is lifecycle evidence, not a cache claim.
+Peak private memory for the warm session was 7,639,040 bytes. The lifecycle
+sample is small and Windows process accounting is sampled, so it is directional.
+
+The architecture comparison keeps evidence and design separate:
+
+| model | round trips | response bytes | trust | status |
+|---|---:|---:|:---|:---|
+| separated A11 + A12 tools | 1,783 | 10,215,063 | low | measured components only |
+| composed Pep invocation | 567 | 6,100,090 | low | supported direction; checker/emitter not implemented |
+| hybrid retained host state | 567 | 1,525,022 estimated | high | design-only fixture ratio; no host state |
+
+The composed row uses the accepted disposable A12 measurement and the measured
+A11/A12 call counts; it is not a claim that a Pep-written checker or emitter
+already exists. The hybrid row applies the local compact-fixture ratio only and
+must not be read as a production transport forecast.
+
+## Bottleneck attribution and recommendations
+
+The measured A11 sample attributes 5,610.7 ms to host response waiting out of
+6,087.3 ms host elapsed. The internal elapsed profile was 489.7 ms: 237.5 ms
+interpreter execution including typed construction, 177.1 ms result encoding,
+56.1 ms revision/grant work, 10.5 ms request decode and 8.5 ms formatting. The
+host ledger and internal ledger overlap while the host waits, so these values
+are not additive CPU percentages. The dominant practical cost is repeated
+transport and response serialization, with interpreter dispatch and typed
+construction second in this sample. Typed construction is not separately
+instrumented; that remains an uncertainty. The typed-result boundary check at
+count 256 observed 1,027,410 setup-response bytes and 144,580 invocation-response
+bytes, preserving the existing response boundary rather than changing it.
+
+Ranked decisions:
+
+1. Prefer one bounded composed Pep invocation across adjacent compiler stages
+   where the language contract permits it. This removes measured continuation
+   boundaries while retaining explicit revisions, diagnostics and typed values.
+2. Keep continuation work bounded and introduce conservative feedback batching
+   only after real A12/A13 workloads exist. The simulator shows fixed width 256
+   failing high-density work, while conservative estimated and feedback plans
+   complete; an optimistic estimate fails closed without committing the batch.
+3. Investigate a flat/interned typed-result representation at a reviewed
+   protocol boundary. Local fixtures reduced 167,619 typed bytes at 256 nodes
+   to 45,695 flat bytes and 9,868 compact bytes, while independent decoders and
+   topology/span/revision mutation oracles preserved meaning. Do not change the
+   current wire schema in this mission.
+4. Do not adopt opaque cursor handles or host-retained hybrid state now. They
+   save bytes in the fixture but add authenticated lifecycle state, trust and
+   recovery complexity and have not been measured in a real compiler stage.
+
+No production batching, cursor format, protocol, revision cache, host-state
+mechanism, interpreter budget, source cap, A12 file or A13 file changed.
+
+## Verification receipt
+
+The focused PEP-PERFORMANCE-02 lab suite passed 14/14 after the Slice 3
+additions. The full repository suite passed 119/119 in 108.445 s; the A11
+differential suite passed 7/7; and the accepted A12 disposable checkout passed
+22/22 at SHA `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`. The direct bounded
+smoke (`pep.ps1 describe --json`) exited 0. Width 128 and 256 matched the
+width-32 reference across all four cases. Width 512 matched the successful
+cases and classified punctuation-dense as `PEP_RUNTIME_STEP_LIMIT`, not as a
+successful result. The typed-result boundary check preserved 1,027,410 setup
+response bytes and 144,580 invocation response bytes. The separate PowerShell
+A11 path exited 0 and measured 255.313 ms spawn, 1,268.526 ms ready and
+5,592.980 ms host elapsed. `python -m py_compile` and `git diff --check` passed.
+No production compiler semantics, protocol schema, budgets, source cap, A12
+files or A13 files changed.
 

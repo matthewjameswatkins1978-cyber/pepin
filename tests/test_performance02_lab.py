@@ -116,6 +116,23 @@ class Performance02LabTests(unittest.TestCase):
         self.assertEqual(len(rows), 6)
         self.assertEqual({row["nodes"] for row in rows}, {8, 32})
 
+    def test_architecture_comparison_keeps_hybrid_design_only(self):
+        rows = lab.architecture_comparison(
+            a11_calls=10, a11_response_bytes=100, a12_calls=4,
+            a12_response_bytes=80, compact_ratio=0.25,
+        )
+        self.assertEqual([row["model"] for row in rows], [
+            "separated-tools", "composed-Pep-invocation", "hybrid-retained-state",
+        ])
+        self.assertEqual(rows[0]["roundTrips"], 14)
+        self.assertEqual(rows[1]["roundTrips"], 4)
+        self.assertEqual(rows[2]["responseBytes"], 20)
+        self.assertTrue(rows[2]["status"].startswith("design-only"))
+
+    def test_lifecycle_input_validation_is_bounded(self):
+        with self.assertRaises(ValueError):
+            lab.run_session_lifecycle(count=0)
+
 
 if __name__ == "__main__":
     unittest.main()

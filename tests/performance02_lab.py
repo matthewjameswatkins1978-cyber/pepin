@@ -357,6 +357,144 @@ def transport_scaling(counts: Iterable[int] = (8, 32, 128, 256)) -> list[dict[st
     return rows
 
 
+def _timed_send(client: base.SessionClient, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], float]:
+    started = time.perf_counter_ns()
+    response, timing = client.send(request)
+    return response, timing, elapsed_ms(started)
+
+
+def run_session_lifecycle(
+    *,
+    count: int = 8,
+    repeated_invokes: int = 4,
+    cold_trials: int = 2,
+    timeout_s: float = 30.0,
+    startup_timeout_s: float = 10.0,
+    cleanup_timeout_s: float = 2.0,
+) -> dict[str, Any]:
+    """Measure cold setup versus same-session reuse on the real typed tool."""
+
+    if min(count, repeated_invokes, cold_trials) < 1:
+        raise ValueError("lifecycle counts must be positive")
+    source, expected = base.typed_result_source(count)
+    cold = []
+    for _ in range(cold_trials):
+        row = base.run_typed_result(
+            "direct", count, timeout_s=timeout_s,
+            startup_timeout_s=startup_timeout_s, cleanup_timeout_s=cleanup_timeout_s,
+        )
+        cold.append(row)
+
+    client = base.SessionClient(
+        "direct", timeout_s=timeout_s, startup_timeout_s=startup_timeout_s,
+        cleanup_timeout_s=cleanup_timeout_s,
+    )
+    try:
+        setup_rows: list[dict[str, Any]] = []
+        opened, timing, open_ms = _timed_send(client, {"schemaVersion": 3, "op": "open", "name": "lifecycle", "source": source})
+        setup_rows.append(timing)
+        document, source_revision = opened["document"], opened["revision"]
+        for request in [
+            base.tool_request("tool_register", tool="lifecycle-tool", document=document, revision=source_revision, function="build"),
+            base.tool_request("tool_validate", tool="lifecycle-tool", document=document, revision=source_revision,
+                              testVectors=[{"arguments": [], "expect": expected}]),
+            base.tool_request("tool_activate", tool="lifecycle-tool", document=document, revision=source_revision),
+        ]:
+            response, row, _ = _timed_send(client, request)
+            setup_rows.append(row)
+            if response.get("status") not in {"Registered", "Validated", "Active"}:
+                raise AssertionError(f"lifecycle setup failed: {response}")
+        invoke_rows = []
+        for _ in range(repeated_invokes):
+            response, timing, elapsed = _timed_send(client, base.tool_request("tool_invoke", tool="lifecycle-tool", arguments=[]))
+            if response.get("outcome") != "ok" or response.get("result") != expected:
+                raise AssertionError("same-session result changed")
+            invoke_rows.append({"wire": timing, "elapsedMs": elapsed})
+        edit, _, edit_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "apply_edit", "document": document,
+            "expected_revision": source_revision, "start_byte": 0, "end_byte": 0,
+            "replacement": " ",
+        })
+        stale, _, stale_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "apply_edit", "document": document,
+            "expected_revision": source_revision, "start_byte": 0, "end_byte": 0,
+            "replacement": " ",
+        })
+        stderr = client.close()
+        return {
+            "kind": "session-lifecycle",
+            "clockSource": CLOCK_SOURCE,
+            "count": count,
+            "coldTrials": cold,
+            "coldMedianSetupMs": statistics.median(row["setup"]["totalMs"] for row in cold),
+            "coldMedianInvokeMs": statistics.median(row["response"]["totalMs"] for row in cold),
+            "warmSession": {
+                "spawnMs": client.spawn_ms,
+                "readyMs": client.ready_ms,
+                "openMs": open_ms,
+                "setupMs": sum(float(row["totalMs"]) for row in setup_rows),
+                "invokeRows": invoke_rows,
+                "invokeMedianMs": statistics.median(row["elapsedMs"] for row in invoke_rows),
+                "peakMemory": base.peak_memory(client.samples),
+            },
+            "revisionLifecycle": {
+                "editOutcome": edit.get("outcome"),
+                "editElapsedMs": edit_ms,
+                "staleOutcome": stale.get("outcome"),
+                "staleCode": stale.get("error", {}).get("code"),
+                "staleRejected": stale.get("outcome") == "error",
+                "staleElapsedMs": stale_ms,
+                "oldRevision": source_revision,
+                "newRevision": edit.get("revision"),
+            },
+            "stderrProfileRecords": len(base.parse_profile(stderr)),
+        }
+    except BaseException:
+        client.close()
+        raise
+
+
+def architecture_comparison(
+    *,
+    a11_calls: int,
+    a11_response_bytes: int,
+    a12_calls: int,
+    a12_response_bytes: int,
+    compact_ratio: float,
+) -> list[dict[str, Any]]:
+    """Compare pipeline shapes without creating a host-state implementation."""
+
+    return [
+        {
+            "model": "separated-tools",
+            "measuredEvidence": "A11/A12 independent session routes",
+            "roundTrips": a11_calls + a12_calls,
+            "responseBytes": a11_response_bytes + a12_response_bytes,
+            "trustComplexity": "low",
+            "debuggability": "high",
+            "status": "measured-components-only",
+        },
+        {
+            "model": "composed-Pep-invocation",
+            "measuredEvidence": "A12 one-invocation lexer-to-parser boundary plus A11 profile",
+            "roundTrips": a12_calls,
+            "responseBytes": a12_response_bytes,
+            "trustComplexity": "low",
+            "debuggability": "medium",
+            "status": "supported-direction; checker/emitter not implemented",
+        },
+        {
+            "model": "hybrid-retained-state",
+            "measuredEvidence": "compact fixture ratio only; host state is design-only",
+            "roundTrips": a12_calls,
+            "responseBytes": int(a12_response_bytes * compact_ratio),
+            "trustComplexity": "high",
+            "debuggability": "low",
+            "status": "design-only; no production host state",
+        },
+    ]
+
+
 def median_stage(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         raise ValueError("cannot summarize an empty stage profile")
@@ -612,13 +750,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-source-bytes", type=int, default=DEFAULT_MAX_BYTES)
     parser.add_argument("--transport-sizes", action="store_true", help="measure local AST representation scaling")
     parser.add_argument("--batch-sim", action="store_true", help="emit bounded fixed/estimated/feedback simulations")
+    parser.add_argument("--lifecycle", action="store_true", help="measure cold and warm real-session lifecycle")
+    parser.add_argument("--architecture", action="store_true", help="emit separated/composed/hybrid architecture comparison")
+    parser.add_argument("--lifecycle-count", type=int, default=8)
+    parser.add_argument("--lifecycle-invokes", type=int, default=4)
+    parser.add_argument("--lifecycle-cold-trials", type=int, default=2)
     args = parser.parse_args(argv)
     if args.trials < 1 or args.trials > DEFAULT_MAX_TRIALS:
         parser.error(f"--trials must be between 1 and {DEFAULT_MAX_TRIALS}")
     if args.max_source_bytes <= 0:
         parser.error("--max-source-bytes must be positive")
     emitted = False
-    if args.self_test or not args.a11:
+    if args.self_test or not any((args.a11, args.transport_sizes, args.batch_sim, args.lifecycle, args.architecture)):
         print(json.dumps(self_test(), ensure_ascii=False, separators=(",", ":")))
         emitted = True
     if args.transport_sizes:
@@ -635,6 +778,31 @@ def main(argv: list[str] | None = None) -> int:
                 strategy="estimated", units=1024, steps_per_unit=steps, bytes_per_unit=bytes_per_unit, optimistic=True,
             )})
         print(json.dumps({"kind": "batch-simulation", "budgets": {"steps": TOOL_STEP_BUDGET, "messageBytes": TOOL_MESSAGE_BUDGET}, "scenarios": scenarios}, ensure_ascii=False, separators=(",", ":")))
+        emitted = True
+    if args.lifecycle:
+        if min(args.lifecycle_count, args.lifecycle_invokes, args.lifecycle_cold_trials) < 1:
+            parser.error("lifecycle counts must be positive")
+        base.ensure_build()
+        print(json.dumps(run_session_lifecycle(
+            count=args.lifecycle_count,
+            repeated_invokes=args.lifecycle_invokes,
+            cold_trials=args.lifecycle_cold_trials,
+            timeout_s=args.request_timeout_s,
+            startup_timeout_s=args.startup_timeout_s,
+            cleanup_timeout_s=args.cleanup_timeout_s,
+        ), ensure_ascii=False, separators=(",", ":")))
+        emitted = True
+    if args.architecture:
+        print(json.dumps({
+            "kind": "architecture-comparison",
+            "clockSource": CLOCK_SOURCE,
+            "models": architecture_comparison(
+                a11_calls=1216, a11_response_bytes=4114973,
+                a12_calls=567, a12_response_bytes=6100090,
+                compact_ratio=0.25,
+            ),
+            "inputs": {"a11": "one-trial direct profile", "a12": "accepted disposable checkout evidence", "compactRatio": 0.25},
+        }, ensure_ascii=False, separators=(",", ":")))
         emitted = True
     if args.a11:
         raw = base.LEXER.read_bytes()
