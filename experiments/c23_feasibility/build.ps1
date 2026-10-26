@@ -3,7 +3,8 @@ param(
     [string] $Compiler = 'all',
     [switch] $Probe,
     [switch] $Discover,
-    [switch] $Sanitize
+    [switch] $Sanitize,
+    [switch] $Benchmark
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,7 @@ $buildRoot = Join-Path $repoRoot '_build\c23-feasibility'
 New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
 $manifestPath = Join-Path $root 'toolchain_paths.json'
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+if ($Probe -and $Benchmark) { throw '-Probe and -Benchmark are mutually exclusive' }
 
 function Expand-C23Candidate([string] $candidate) {
     $expanded = $candidate
@@ -71,8 +73,9 @@ foreach ($name in $requested) {
     $flags = @('-std=c23', '-Wall', '-Wextra', '-Wpedantic', '-Werror', '-O2', '-I', $root)
     if ($Sanitize) { $flags += @('-fsanitize=address') }
     $runtime = Join-Path $root 'c23_runtime.c'
-    $probeSource = if ($Probe) { Join-Path $root 'c23_language_probe.c' } else { Join-Path $root 'c23_probe.c' }
-    $outputName = if ($Probe) { 'pep_c23_language_probe' } else { 'pep_c23_probe' }
+    $probeSource = if ($Benchmark) { Join-Path $root 'c23_benchmark.c' } elseif ($Probe) { Join-Path $root 'c23_language_probe.c' } else { Join-Path $root 'c23_probe.c' }
+    $outputName = if ($Benchmark) { 'pep_c23_benchmark' } elseif ($Probe) { 'pep_c23_language_probe' } else { 'pep_c23_probe' }
+    if ($Benchmark) { $outDir = Join-Path $outDir 'benchmark'; New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
     if ($Sanitize) { $outDir = Join-Path $outDir 'sanitize'; New-Item -ItemType Directory -Force -Path $outDir | Out-Null }
     $output = Join-Path $outDir $(if ($IsWindows) { "$outputName.exe" } else { $outputName })
     Write-Output "COMMAND|$path $($flags -join ' ') $runtime $probeSource -o $output"

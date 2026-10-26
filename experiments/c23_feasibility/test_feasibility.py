@@ -54,12 +54,14 @@ def asan_runtime_dir(compiler):
     return None
 
 
-def build_with(name, probe=False, env=None, sanitize=False):
+def build_with(name, probe=False, env=None, sanitize=False, benchmark=False):
     args = ["pwsh", "-NoProfile", "-File", str(ROOT / "build.ps1"), "-Compiler", name]
     if probe:
         args.append("-Probe")
     if sanitize:
         args.append("-Sanitize")
+    if benchmark:
+        args.append("-Benchmark")
     return run(args, env=env)
 
 
@@ -69,6 +71,10 @@ def executable(name, probe=False, sanitize=False):
     if sanitize:
         path = path / "sanitize"
     return path / f"{stem}.exe"
+
+
+def benchmark_executable(name):
+    return REPO / "_build" / "c23-feasibility" / name / "benchmark" / "pep_c23_benchmark.exe"
 
 
 class CorpusPolicyTests(unittest.TestCase):
@@ -155,6 +161,17 @@ class InterpreterOracleTests(unittest.TestCase):
         self.assertEqual(result.stdout.replace("\r\n", "\n"), "\n".join(str(value) for value in EXPECTED_SHARED) + "\n")
 
 
+class BenchmarkTests(unittest.TestCase):
+    def test_clang_benchmark_harness_smoke(self):
+        result = run(["python", str(ROOT / "benchmark_runtime.py"), "--compiler", "clang", "--trials", "2"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["schema"], 1)
+        self.assertEqual(len(report["compilers"]), 1)
+        self.assertEqual(len(report["compilers"][0]["rows"]), 21)
+        self.assertTrue(all(row["checksum"] >= 0 for row in report["compilers"][0]["rows"]))
+
+
 class NativeProofTests(unittest.TestCase):
     def test_native_proof_when_compilers_exist(self):
         statuses = {}
@@ -216,6 +233,14 @@ class NativeProofTests(unittest.TestCase):
         self.assertTrue(report["equal"])
         self.assertEqual([item["compiler"] for item in report["comparisons"]], ["clang", "gcc"])
         self.assertTrue(all(row["equal"] for item in report["comparisons"] for row in item["rows"]))
+        for item in report["comparisons"]:
+            comparable = [row for row in item["failures"] if row["comparable"]]
+            native_only = [row for row in item["failures"] if not row["comparable"]]
+            self.assertEqual(len(comparable), 3)
+            self.assertTrue(all(row["equal"] for row in comparable))
+            self.assertEqual(len(item["counterexamples"]), 0)
+            self.assertEqual(len(native_only), 3)
+            self.assertTrue(all(row["equal"] is None for row in native_only))
 
     def test_clang_address_sanitizer_proof(self):
         result = build_with("clang", sanitize=True)
