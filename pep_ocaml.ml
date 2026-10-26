@@ -144,6 +144,13 @@ let parse source =
     if keyword p "fn" then tops:=TopFun(parse_func p)::!tops else tops:=TopStmt(parse_stmt p)::!tops
   done; List.rev !tops
 
+let parse_single_expression source =
+  let p={ts=lex source;p=0} in
+  let expression=parse_expr p 0 in
+  match (peek p).kind with
+  | Eof -> expression
+  | _ -> fail "PEP_REPLACEMENT_TRAILING_INPUT" "Replacement must contain exactly one expression" (peek p).at ()
+
 type binding = { bid:int; bname:string; bty:ty option; bspan:span }
 type signature = { fid:int; name:string; params:(string*ty) list; result:ty; decl:func }
 type texpr = { node:texpr_node; ety:ty option; espan:span }
@@ -329,6 +336,7 @@ type json_value =
 
 exception Json_parse_error of string
 exception Session_error of string * string
+exception Session_document_error of string * string * string * string
 
 let json_fail message = raise (Json_parse_error message)
 
@@ -649,7 +657,7 @@ let session_hole_json document revision hole =
 
 let session_documents : (string, session_document) Hashtbl.t = Hashtbl.create 8
 
-let session_response operation document revision analysis ?offset () =
+let session_response operation document revision analysis ?offset ?(extra="") () =
   let holes = match analysis.checked with
     | None -> []
     | Some checked ->
@@ -660,13 +668,13 @@ let session_response operation document revision analysis ?offset () =
   let ast = match analysis.parsed with None -> "null" | Some tops -> ast_json tops in
   let typed = match analysis.checked with None -> "null" | Some checked -> typed_json checked in
   let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
-  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s}"
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s%s}"
     (json_string operation) (json_string document)
     (match Hashtbl.find_opt session_documents document with
      | Some doc -> (match doc.document_name with None -> "null" | Some name -> json_string name)
      | None -> "null")
     (json_string revision) (json_string (session_status analysis)) ast typed
-    (String.concat "," (List.map (session_hole_json document revision) holes)) diagnostics
+    (String.concat "," (List.map (session_hole_json document revision) holes)) diagnostics extra
 
 let session_error_json operation code message ?document ?current_revision () =
   let optional key = function None -> "" | Some value -> ",\"" ^ key ^ "\":" ^ json_string value in
@@ -724,6 +732,13 @@ let session_analyse_or_reuse document source =
 let session_is_boundary source offset =
   offset = 0 || offset = String.length source || Char.code source.[offset] land 0xc0 <> 0x80
 
+let session_splice_source source start_byte end_byte replacement =
+  let buffer = Buffer.create (String.length source - (end_byte - start_byte) + String.length replacement) in
+  Buffer.add_substring buffer source 0 start_byte;
+  Buffer.add_string buffer replacement;
+  Buffer.add_substring buffer source end_byte (String.length source - end_byte);
+  Buffer.contents buffer
+
 let session_apply_edit document fields =
   let expected = session_required_string fields "expected_revision" in
   if expected <> document.current_revision then
@@ -738,15 +753,74 @@ let session_apply_edit document fields =
     raise (Session_error ("PEP_INVALID_UTF8", "Replacement must contain valid UTF-8"));
   if not (session_is_boundary current.source start_byte && session_is_boundary current.source end_byte) then
     raise (Session_error ("PEP_UTF8_BOUNDARY", "Edit range splits a UTF-8 code point"));
-  let buffer = Buffer.create (source_length - (end_byte - start_byte) + String.length replacement) in
-  Buffer.add_substring buffer current.source 0 start_byte;
-  Buffer.add_string buffer replacement;
-  Buffer.add_substring buffer current.source end_byte (source_length - end_byte);
-  let new_source = Buffer.contents buffer in
+  let new_source = session_splice_source current.source start_byte end_byte replacement in
   let analysis = session_analyse_or_reuse document new_source in
   Hashtbl.replace document.revisions analysis.revision analysis;
   document.current_revision <- analysis.revision;
   session_response "apply_edit" document.document_id analysis.revision analysis ()
+
+let session_fill_rejection operation mode document base_revision candidate_revision candidate_status message source_diff diagnostics =
+  Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"rejected\",\"operation\":%s,\"mode\":%s,\"document\":%s,\"currentRevision\":%s,\"candidateRevision\":%s,\"candidateStatus\":%s,\"message\":%s,\"sourceDiff\":%s,\"diagnostics\":%s,\"metrics\":%s}"
+    (json_string operation) (json_string mode) (json_string document.document_id)
+    (json_string base_revision)
+    (match candidate_revision with None -> "null" | Some revision -> json_string revision)
+    (match candidate_status with None -> "null" | Some status -> json_string status)
+    (json_string message) source_diff diagnostics (session_metrics_json ())
+
+let session_fill_hole document fields =
+  let operation = "fill_hole" in
+  let expected = session_required_string fields "expected_revision" in
+  if expected <> document.current_revision then
+    session_error_json (Some operation) "PEP_STALE_REVISION"
+      "Structural edit expected a revision other than the document's current revision"
+      ~document:document.document_id ~current_revision:document.current_revision ()
+  else
+    let scope = session_required_string fields "scope" in
+    let name = session_required_string fields "name" in
+    let replacement = session_required_string fields "replacement" in
+    let mode = session_required_string fields "mode" in
+    if mode <> "preview" && mode <> "apply" then
+      raise (Session_document_error ("PEP_FILL_HOLE_MODE", "Mode must be 'preview' or 'apply'", document.document_id, document.current_revision));
+    if not (valid_utf8 replacement) then
+      raise (Session_document_error ("PEP_INVALID_UTF8", "Replacement must contain valid UTF-8", document.document_id, document.current_revision));
+    let current = session_get_revision document document.current_revision in
+    match current.checked with
+    | None ->
+        raise (Session_document_error ("PEP_DOCUMENT_INVALID", "Cannot structurally edit a document without a checked semantic tree", document.document_id, document.current_revision))
+    | Some checked ->
+        let matches = List.filter (fun hole -> hole.hscope = scope && hole.hid = Some name) checked.holes in
+        let hole = match matches with
+          | [] -> raise (Session_document_error ("PEP_HOLE_NOT_FOUND", "No named hole matches the supplied scope and name", document.document_id, document.current_revision))
+          | [hole] -> hole
+          | _ -> raise (Session_document_error ("PEP_HOLE_AMBIGUOUS", "More than one named hole matches the supplied scope and name", document.document_id, document.current_revision))
+        in
+        let start_byte = hole.hspan.lo and end_byte = hole.hspan.hi in
+        let old_text = String.sub current.source start_byte (end_byte - start_byte) in
+        let source_diff = Printf.sprintf "{\"startByte\":%d,\"endByte\":%d,\"removed\":%s,\"inserted\":%s}"
+          start_byte end_byte (json_string old_text) (json_string replacement) in
+        let candidate_source = session_splice_source current.source start_byte end_byte replacement in
+        (try
+           ignore (parse_single_expression replacement);
+           let candidate = analyse_session_source candidate_source in
+           let status = session_status candidate in
+           match candidate.diagnostic with
+           | Some diagnostic ->
+               session_fill_rejection operation mode document document.current_revision
+                 (Some candidate.revision) (Some status) diagnostic.message source_diff
+                 ("[" ^ session_diagnostic_json diagnostic ^ "]")
+           | None ->
+               let extra = Printf.sprintf ",\"mode\":%s,\"baseRevision\":%s,\"currentRevision\":%s,\"sourceDiff\":%s"
+                 (json_string mode) (json_string document.current_revision)
+                 (json_string (if mode = "apply" then candidate.revision else document.current_revision)) source_diff in
+               if mode = "preview" then
+                 session_response operation document.document_id candidate.revision candidate ~extra ()
+               else (
+                 Hashtbl.replace document.revisions candidate.revision candidate;
+                 document.current_revision <- candidate.revision;
+                 session_response operation document.document_id candidate.revision candidate ~extra ())
+         with Error diagnostic ->
+           session_fill_rejection operation mode document document.current_revision None (Some "invalid")
+             diagnostic.message source_diff ("[" ^ session_diagnostic_json diagnostic ^ "]"))
 
 let session_process request =
   let fields = session_object request in
@@ -787,6 +861,9 @@ let session_process request =
           "Edit expected a revision other than the document's current revision"
           ~document:document.document_id ~current_revision:document.current_revision ()
       else session_apply_edit document fields
+  | "fill_hole" ->
+      let document = session_document fields in
+      session_fill_hole document fields
   | "metrics" ->
       Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":\"metrics\",\"metrics\":%s}"
         (session_metrics_json ())
@@ -805,7 +882,10 @@ let run_session_jsonl () =
           let request = parse_json line in
           (try session_process request with
            | Session_error (code, message) ->
-               session_error_json (session_operation_hint request) code message ())
+               session_error_json (session_operation_hint request) code message ()
+           | Session_document_error (code, message, document, revision) ->
+               session_error_json (session_operation_hint request) code message
+                 ~document ~current_revision:revision ())
         with Json_parse_error message -> session_error_json None "PEP_SESSION_MALFORMED_JSON" message ()
       in
       print_endline response;
@@ -821,7 +901,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"operations\":[\"open\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"metrics\"]},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in

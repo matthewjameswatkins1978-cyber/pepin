@@ -25,6 +25,205 @@ def invoke_session(requests):
 
 
 class PepCliTests(unittest.TestCase):
+    def test_session_fill_hole_previews_applies_and_preserves_history(self):
+        source = (
+            "# retain this header\n"
+            "fn double(n: Int) -> Int {\n"
+            "    // keep before the target\n"
+            "    return ?calculation // keep after the target\n"
+            "}\n"
+            "# retain this footer\n"
+            "say(int_text(double(21)))\n"
+        )
+        old_revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        new_source = source.replace("?calculation", "n * 2")
+        new_revision = "sha256:" + hashlib.sha256(new_source.encode()).hexdigest()
+        fill = {
+            "schemaVersion": 3, "op": "fill_hole", "document": "doc-1",
+            "expected_revision": old_revision, "scope": "double", "name": "calculation",
+            "replacement": "n * 2", "mode": "preview",
+        }
+        requests = [
+            {"schemaVersion": 3, "op": "open", "name": "demo", "source": source},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": old_revision},
+            fill,
+            {**fill},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": old_revision},
+            {**fill, "mode": "apply"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": old_revision},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": new_revision},
+            {"schemaVersion": 3, "op": "metrics"},
+        ]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, initial, preview, repeated, before_apply, applied, old, new, metrics = [
+            json.loads(line) for line in result.stdout.splitlines()
+        ]
+        self.assertEqual(opened["revision"], old_revision)
+        self.assertEqual(initial["holes"][0]["expectedType"], "Int")
+        self.assertEqual(initial["holes"][0]["bindings"][0]["name"], "n")
+        self.assertEqual(preview, repeated)
+        self.assertEqual(preview["mode"], "preview")
+        self.assertEqual(preview["status"], "valid")
+        self.assertEqual(preview["revision"], new_revision)
+        self.assertEqual(preview["currentRevision"], old_revision)
+        self.assertEqual(preview["sourceDiff"]["removed"], "?calculation")
+        self.assertEqual(preview["sourceDiff"]["inserted"], "n * 2")
+        self.assertEqual(before_apply["revision"], old_revision)
+        self.assertEqual(applied["currentRevision"], new_revision)
+        self.assertEqual(old["status"], "incomplete")
+        self.assertEqual(old["holes"][0]["name"], "calculation")
+        self.assertEqual(new["status"], "valid")
+        self.assertEqual(new["holes"], [])
+        fresh = json.loads(invoke("check", self.source(new_source), "--json").stdout)
+        self.assertEqual(new["typedTree"], fresh["typedTree"])
+        start = len(source[:source.index("?calculation")].encode())
+        raw_result = invoke_session([
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": old_revision,
+             "start_byte": start, "end_byte": start + len("?calculation"), "replacement": "n * 2"},
+        ])
+        raw_open, raw_edit = [json.loads(line) for line in raw_result.stdout.splitlines()]
+        self.assertEqual(raw_open["revision"], old_revision)
+        self.assertEqual(raw_edit["revision"], new_revision)
+        self.assertEqual(raw_edit["typedTree"], new["typedTree"])
+        self.assertEqual(invoke("run", self.source(new_source)).stdout, "42\n")
+        self.assertEqual(metrics["metrics"]["parse_count"], 4)
+
+    def test_session_fill_hole_checks_replacement_and_rejects_injection(self):
+        source = "fn f(n: Int) -> Int { return ?target }\n"
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        replacements = [
+            ("true", "PEP_TYPE_MISMATCH"),
+            ('f("wrong")', "PEP_TYPE_MISMATCH"),
+            ("missing", "PEP_UNKNOWN_VARIABLE"),
+            ("n *", "PEP_PARSE_EXPRESSION"),
+            ("n\nlet injected = 1", "PEP_REPLACEMENT_TRAILING_INPUT"),
+        ]
+        requests = [{"schemaVersion": 3, "op": "open", "source": source}]
+        for replacement, _ in replacements:
+            requests.append({
+                "schemaVersion": 3, "op": "fill_hole", "document": "doc-1",
+                "expected_revision": revision, "scope": "f", "name": "target",
+                "replacement": replacement, "mode": "preview",
+            })
+        requests.append({"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": revision})
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        for response, (_, code) in zip(responses[1:-1], replacements):
+            self.assertEqual(response["outcome"], "rejected")
+            self.assertEqual(response["candidateStatus"], "invalid")
+            self.assertEqual(response["diagnostics"][0]["code"], code)
+            self.assertEqual(response["currentRevision"], revision)
+        self.assertEqual(responses[-1]["holes"][0]["name"], "target")
+
+    def test_session_fill_hole_resolves_scope_and_rejects_duplicates(self):
+        source = (
+            "fn first(n: Int) -> Int { return ?answer }\n"
+            "fn second(n: Int) -> Int { return ?answer }\n"
+        )
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": revision,
+             "scope": "second", "name": "answer", "replacement": "n + 1", "mode": "apply"},
+        ]
+        second_source = source.replace(
+            "fn second(n: Int) -> Int { return ?answer }",
+            "fn second(n: Int) -> Int { return n + 1 }",
+        )
+        second_revision = "sha256:" + hashlib.sha256(second_source.encode()).hexdigest()
+        requests.append({"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": second_revision})
+        duplicate_source = "fn dup(n: Int) -> Int { let a: Int = ?same return ?same }\n"
+        duplicate_revision = "sha256:" + hashlib.sha256(duplicate_source.encode()).hexdigest()
+        requests.extend([
+            {"schemaVersion": 3, "op": "open", "source": duplicate_source},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-2", "expected_revision": duplicate_revision,
+             "scope": "dup", "name": "same", "replacement": "n", "mode": "preview"},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-2", "expected_revision": duplicate_revision,
+             "scope": "absent", "name": "same", "replacement": "n", "mode": "preview"},
+        ])
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, applied, queried, duplicate_open, duplicate, missing = [
+            json.loads(line) for line in result.stdout.splitlines()
+        ]
+        self.assertEqual(opened["status"], "incomplete")
+        self.assertEqual(applied["status"], "incomplete")
+        self.assertEqual([hole["scope"] for hole in queried["holes"]], ["first"])
+        self.assertEqual(duplicate["error"]["code"], "PEP_HOLE_AMBIGUOUS")
+        self.assertEqual(missing["error"]["code"], "PEP_HOLE_NOT_FOUND")
+        self.assertEqual(missing["currentRevision"], duplicate_open["revision"])
+
+    def test_session_fill_hole_stale_apply_and_failed_apply_preserve_current_revision(self):
+        source = "fn f(n: Int) -> Int { return ?target }\n"
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        changed = "\n" + source
+        changed_revision = "sha256:" + hashlib.sha256(changed.encode()).hexdigest()
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": revision,
+             "scope": "f", "name": "target", "replacement": "n", "mode": "preview"},
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-1", "expected_revision": revision,
+             "start_byte": 0, "end_byte": 0, "replacement": "\n"},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": revision,
+             "scope": "f", "name": "target", "replacement": "n", "mode": "apply"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": changed_revision},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": changed_revision,
+             "scope": "f", "name": "target", "replacement": "true", "mode": "apply"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": changed_revision},
+        ]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        opened, preview, edit, stale, current, rejected, still_current = [
+            json.loads(line) for line in result.stdout.splitlines()
+        ]
+        self.assertEqual(preview["outcome"], "ok")
+        self.assertEqual(edit["revision"], changed_revision)
+        self.assertEqual(stale["error"]["code"], "PEP_STALE_REVISION")
+        self.assertEqual(stale["currentRevision"], changed_revision)
+        self.assertEqual(current["holes"][0]["name"], "target")
+        self.assertEqual(rejected["outcome"], "rejected")
+        self.assertEqual(rejected["candidateStatus"], "invalid")
+        self.assertEqual(still_current["revision"], changed_revision)
+        self.assertEqual(still_current["holes"], current["holes"])
+
+    def test_session_fill_hole_uses_original_utf8_lf_and_crlf_spans(self):
+        for newline in ("\n", "\r\n"):
+            source = f'say("café") // keep unicode comment{newline}fn f(n: Int) -> Int {{{newline} return ?target // preserve this{newline}}}{newline}'
+            revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+            expected_start = len(source[:source.index("?target")].encode())
+            result = invoke_session([
+                {"schemaVersion": 3, "op": "open", "source": source},
+                {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": revision,
+                 "scope": "f", "name": "target", "replacement": "n", "mode": "preview"},
+            ])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            opened, preview = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertEqual(opened["holes"][0]["span"]["start"]["offset"], expected_start)
+            self.assertEqual(preview["sourceDiff"]["startByte"], expected_start)
+            self.assertEqual(preview["sourceDiff"]["removed"], "?target")
+
+    def test_session_fill_hole_leaves_unrelated_holes_incomplete(self):
+        source = (
+            "fn f(n: Int) -> Int { return ?target }\n"
+            "fn g(n: Int) -> Int { return ?other }\n"
+        )
+        revision = "sha256:" + hashlib.sha256(source.encode()).hexdigest()
+        new_source = source.replace("?target", "n * 2")
+        new_revision = "sha256:" + hashlib.sha256(new_source.encode()).hexdigest()
+        result = invoke_session([
+            {"schemaVersion": 3, "op": "open", "source": source},
+            {"schemaVersion": 3, "op": "fill_hole", "document": "doc-1", "expected_revision": revision,
+             "scope": "f", "name": "target", "replacement": "n * 2", "mode": "apply"},
+            {"schemaVersion": 3, "op": "query", "document": "doc-1", "revision": new_revision},
+        ])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        _, applied, queried = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(applied["status"], "incomplete")
+        self.assertEqual([hole["name"] for hole in queried["holes"]], ["other"])
+
     def test_session_revision_hash_matches_sha256_for_multiblock_source(self):
         source = 'say("x")\n' * 12
         result = invoke_session([{"schemaVersion": 3, "op": "open", "source": source}])
@@ -268,6 +467,8 @@ class PepCliTests(unittest.TestCase):
         self.assertIn("jsonl_session", description["features"])
         self.assertEqual(description["session"]["schemaVersion"], 3)
         self.assertFalse(description["session"]["crossRevisionReuse"])
+        self.assertIn("semantic_hole_fill", description["features"])
+        self.assertIn("fill_hole", description["session"]["operations"])
 
 
     def test_recursive_factorial_runs(self):
