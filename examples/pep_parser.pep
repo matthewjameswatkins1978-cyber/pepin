@@ -41,6 +41,7 @@ type ParserCursor {
   functionColumn: Int,
   functionRootId: Int,
   functionChildIndex: Int,
+  topLevelChildIndex: Int,
   frames: List[ParserFrame]
 }
 type ParserFrame {
@@ -1330,8 +1331,9 @@ fn ast_set_span(value: AstValue, span: AstSpan) -> AstValue {
     AstAbsent() => AstAbsent()
   }
 }
-fn flatten_ast(value: AstValue) -> List[FlatAstNode] {
-  let state = flat_node(value, -1, 0, "root", FlatState { nextId: 0, nodesReversed: [] })
+fn flatten_ast(value: AstValue, topLevelChildIndex: Int) -> List[FlatAstNode] {
+  let state = flat_node(value, -1, topLevelChildIndex, "top_level",
+    FlatState { nextId: 0, nodesReversed: [] })
   return reverse(state.nodesReversed)
 }
 
@@ -1401,18 +1403,19 @@ fn parser_start() -> ParserCursor {
     stream: parser_stream(lexer_start()), nextNodeId: 0, done: false,
     functionActive: false, functionName: "", functionStartByte: 0,
     functionLine: 1, functionColumn: 1,
-    functionRootId: 0, functionChildIndex: 0, frames: []
+    functionRootId: 0, functionChildIndex: 0, topLevelChildIndex: 0, frames: []
   }
 }
 
 fn parser_emit_item(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
-  let nodes = flat_rebase_ids(flatten_ast(parsed.value), cursor.nextNodeId)
+  let nodes = flat_rebase_ids(flatten_ast(parsed.value, cursor.topLevelChildIndex), cursor.nextNodeId)
   let next = ParserCursor {
     document: cursor.document, revision: cursor.revision, stream: parsed.stream,
     nextNodeId: cursor.nextNodeId + length(nodes), done: false,
     functionActive: false, functionName: "", functionStartByte: 0,
     functionLine: 1, functionColumn: 1,
-    functionRootId: 0, functionChildIndex: 0, frames: []
+    functionRootId: 0, functionChildIndex: 0,
+    topLevelChildIndex: cursor.topLevelChildIndex + 1, frames: []
   }
   return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
@@ -1425,7 +1428,8 @@ fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
       functionActive: cursor.functionActive, functionName: cursor.functionName,
       functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
       functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
-      functionChildIndex: cursor.functionChildIndex, frames: cursor.frames
+      functionChildIndex: cursor.functionChildIndex,
+      topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames
     }
     return parser_chunk(failed, parser_error_status(parsed), [], true,
       parsed.errorCode, parsed.message, parsed.errorStart, parsed.errorEnd,
@@ -1437,7 +1441,8 @@ fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
       nextNodeId: cursor.nextNodeId, done: true,
       functionActive: false, functionName: "", functionStartByte: 0,
       functionLine: 1, functionColumn: 1,
-      functionRootId: 0, functionChildIndex: 0, frames: []
+      functionRootId: 0, functionChildIndex: 0,
+      topLevelChildIndex: cursor.topLevelChildIndex, frames: []
     }, "complete", [], true, "", "", 0, 0, 0, 0)
     _ => parser_emit_item(cursor, parsed)
   }
@@ -1475,7 +1480,8 @@ fn parser_validation_chunk(cursor: ParserCursor) -> ParserChunk {
     functionActive: cursor.functionActive, functionName: cursor.functionName,
     functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
     functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
-    functionChildIndex: cursor.functionChildIndex, frames: cursor.frames
+    functionChildIndex: cursor.functionChildIndex,
+    topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames
   }
   if failed {
     return parser_chunk(next, "invalid", [], true, stream.lexErrorCode,
@@ -1536,7 +1542,8 @@ fn parser_function_header_chunk(cursor: ParserCursor, stream: ParserStream, name
     nextNodeId: withResult.nextId, done: false, functionActive: true,
     functionName: name, functionStartByte: span.startByte,
     functionLine: span.line, functionColumn: span.column,
-    functionRootId: rootId, functionChildIndex: 0, frames: cursor.frames
+    functionRootId: rootId, functionChildIndex: 0,
+    topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames
   }
   return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
@@ -1589,7 +1596,8 @@ fn parser_consume_parent_slot(cursor: ParserCursor) -> ParserCursor {
       functionActive: cursor.functionActive, functionName: cursor.functionName,
       functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
       functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
-      functionChildIndex: cursor.functionChildIndex + 1, frames: cursor.frames }
+      functionChildIndex: cursor.functionChildIndex + 1,
+      topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames }
   } else { }
   let top = parser_frame_top(cursor.frames)
   let updated = ParserFrame { kind: top.kind, nodeId: top.nodeId, parentId: top.parentId,
@@ -1601,6 +1609,7 @@ fn parser_consume_parent_slot(cursor: ParserCursor) -> ParserCursor {
     functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
     functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
     functionChildIndex: cursor.functionChildIndex,
+    topLevelChildIndex: cursor.topLevelChildIndex,
     frames: parser_frame_replace_top(cursor.frames, updated) }
 }
 
@@ -1612,7 +1621,8 @@ fn parser_begin_frame(cursor: ParserCursor, stream: ParserStream, frame: ParserF
     functionActive: parent.functionActive, functionName: parent.functionName,
     functionStartByte: parent.functionStartByte, functionLine: parent.functionLine,
     functionColumn: parent.functionColumn, functionRootId: parent.functionRootId,
-    functionChildIndex: parent.functionChildIndex, frames: prepend(parent.frames, frame) }
+    functionChildIndex: parent.functionChildIndex,
+    topLevelChildIndex: parent.topLevelChildIndex, frames: prepend(parent.frames, frame) }
   return parser_chunk(next, "continuing", reverse(state.nodesReversed), false, "", "", 0, 0, 0, 0)
 }
 
@@ -1632,7 +1642,8 @@ fn parser_emit_frame(cursor: ParserCursor, frame: ParserFrame, stream: ParserStr
     functionActive: cursor.functionActive, functionName: cursor.functionName,
     functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
     functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
-    functionChildIndex: cursor.functionChildIndex, frames: parser_frame_pop(cursor.frames) }
+    functionChildIndex: cursor.functionChildIndex,
+    topLevelChildIndex: cursor.topLevelChildIndex, frames: parser_frame_pop(cursor.frames) }
   return parser_chunk(next, "continuing", [root], false, "", "", 0, 0, 0, 0)
 }
 
@@ -1656,6 +1667,7 @@ fn parser_close_frame(cursor: ParserCursor, frame: ParserFrame, close: TokenRead
         functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
         functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
         functionChildIndex: cursor.functionChildIndex,
+        topLevelChildIndex: cursor.topLevelChildIndex,
         frames: parser_frame_replace_top(cursor.frames, updated) }
       return parser_chunk(next, "continuing", [], false, "", "", 0, 0, 0, 0)
     } else {
@@ -1733,7 +1745,7 @@ fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
   if length(cursor.frames) == 0 && next.token.kind == "symbol" && next.token.text == "}" {
     let close = stream_take(next.stream)
     let root = FlatAstNode {
-      id: cursor.functionRootId, parentId: -1, childIndex: 0, role: "top_level",
+      id: cursor.functionRootId, parentId: -1, childIndex: cursor.topLevelChildIndex, role: "top_level",
       kind: "function", text: cursor.functionName, integerValue: 0,
       booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
       endByte: close.token.endByte, line: cursor.functionLine, column: cursor.functionColumn
@@ -1742,7 +1754,8 @@ fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
       document: cursor.document, revision: cursor.revision, stream: close.stream,
       nextNodeId: cursor.nextNodeId, done: false, functionActive: false,
       functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
-      functionRootId: 0, functionChildIndex: 0, frames: []
+      functionRootId: 0, functionChildIndex: 0,
+      topLevelChildIndex: cursor.topLevelChildIndex + 1, frames: []
     }
     return parser_chunk(doneCursor, "continuing", [root], false, "", "", 0, 0, 0, 0)
   } else { }
@@ -1774,7 +1787,7 @@ fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
     functionName: consumed.functionName, functionStartByte: consumed.functionStartByte,
     functionLine: consumed.functionLine, functionColumn: consumed.functionColumn,
     functionRootId: consumed.functionRootId, functionChildIndex: consumed.functionChildIndex,
-    frames: consumed.frames
+    topLevelChildIndex: consumed.topLevelChildIndex, frames: consumed.frames
   }
   return parser_chunk(nextCursor, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
@@ -1859,5 +1872,5 @@ fn parser_parse_expression() -> ParserProgress {
       "Replacement must contain exactly one expression", trailing.token.startByte,
       trailing.token.endByte, trailing.token.line, trailing.token.column)
   } else { }
-  return parser_progress("complete", flatten_ast(parsed.value), true, "", "", 0, 0, 0, 0)
+  return parser_progress("complete", flatten_ast(parsed.value, 0), true, "", "", 0, 0, 0, 0)
 }

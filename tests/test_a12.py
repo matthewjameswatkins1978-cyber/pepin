@@ -32,7 +32,7 @@ def span(value):
             value["start"]["line"], value["start"]["column"])
 
 
-def parser_cursor_value(document, revision, done=False, next_node_id=0, lex_done=False, lex_stage="validate"):
+def parser_cursor_value(document, revision, done=False, next_node_id=0, lex_done=False, lex_stage="validate", top_level_child_index=0):
     lex_cursor = typed_record("LexCursor", [
         ("document", typed("Str", document)), ("revision", typed("Str", revision)),
         ("status", typed("Str", "valid")), ("stage", typed("Str", lex_stage)),
@@ -56,7 +56,9 @@ def parser_cursor_value(document, revision, done=False, next_node_id=0, lex_done
         ("functionActive", typed("Bool", False)), ("functionName", typed("Str", "")),
         ("functionStartByte", typed("Int", "0")), ("functionLine", typed("Int", "1")),
         ("functionColumn", typed("Int", "1")), ("functionRootId", typed("Int", "0")),
-        ("functionChildIndex", typed("Int", "0")), ("frames", typed_list("ParserFrame", [])),
+        ("functionChildIndex", typed("Int", "0")),
+        ("topLevelChildIndex", typed("Int", str(top_level_child_index))),
+        ("frames", typed_list("ParserFrame", [])),
     ])
 
 
@@ -245,6 +247,214 @@ def ocaml_flat_nodes(tops):
     return output
 
 
+def pep_topology_nodes(result):
+    normalized = []
+    for node in fields(result)["nodes"]["value"]:
+        item = fields(node)
+        kind = scalar(item["kind"])
+        if kind == "integer":
+            value = int(scalar(item["integerValue"]))
+        elif kind == "boolean":
+            value = scalar(item["booleanValue"])
+        elif kind == "string":
+            value = "".join(scalar(part) for part in item["stringParts"]["value"])
+        else:
+            value = scalar(item["text"])
+        node_span = None if kind.startswith("type_") else (
+            int(scalar(item["startByte"])), int(scalar(item["endByte"])),
+            int(scalar(item["line"])), int(scalar(item["column"])),
+        )
+        normalized.append((
+            int(scalar(item["id"])), int(scalar(item["parentId"])),
+            int(scalar(item["childIndex"])), scalar(item["role"]), kind,
+            value, node_span,
+        ))
+    return normalized
+
+
+def ocaml_tree_nodes(tops):
+    """Derive wire topology independently from the OCaml parser's nested AST."""
+    output = []
+
+    def add(kind, value, node_span, parent_id, child_index, role):
+        node_id = len(output)
+        output.append((node_id, parent_id, child_index, role, kind, value,
+                       span(node_span) if node_span is not None else None))
+        return node_id
+
+    def type_node(name, parent_id, child_index, role):
+        if name.startswith("List[") and name.endswith("]"):
+            node_id = add("type_list", "", None, parent_id, child_index, role)
+            type_node(name[5:-1], node_id, 0, "element_type")
+        else:
+            scalar_types = {"Int", "Bool", "Str", "SourceBytes", "Unit"}
+            kind = "type_scalar" if name in scalar_types else "type_named"
+            add(kind, name, None, parent_id, child_index, role)
+
+    def expressions(node, parent_id, child_index, role):
+        kind = node["kind"]
+        node_span = node["span"]
+        if kind == "int":
+            add("integer", node["value"], node_span, parent_id, child_index, role)
+        elif kind == "bool":
+            add("boolean", node["value"], node_span, parent_id, child_index, role)
+        elif kind == "string":
+            add("string", node["value"], node_span, parent_id, child_index, role)
+        elif kind == "name":
+            add("name", node["name"], node_span, parent_id, child_index, role)
+        elif kind == "hole":
+            add("hole", node["name"] or "", node_span, parent_id, child_index, role)
+        elif kind in {"call", "list", "record", "field_access", "unary"}:
+            value = node.get("name", node.get("typeName", node.get("field", node.get("operator", ""))))
+            flat_kind = {"field_access": "field_access"}.get(kind, kind)
+            if kind == "call":
+                children = [(child, "argument") for child in node["arguments"]]
+            elif kind == "list":
+                children = [(child, "element") for child in node["elements"]]
+            elif kind == "record":
+                children = [(field, "field") for field in node["fields"]]
+            elif kind == "field_access":
+                children = [(node["value"], "value")]
+            else:
+                children = [(node["operand"], "operand")]
+            node_id = add(flat_kind, value, node_span, parent_id, child_index, role)
+            for index, (child, child_role) in enumerate(children):
+                if kind == "record":
+                    record_id = add("record_field", child["name"], child["span"], node_id, index, child_role)
+                    expressions(child["value"], record_id, 0, "value")
+                else:
+                    expressions(child, node_id, index, child_role)
+        elif kind == "binary":
+            node_id = add("binary", node["operator"], node_span, parent_id, child_index, role)
+            expressions(node["left"], node_id, 0, "left")
+            expressions(node["right"], node_id, 1, "right")
+        elif kind == "if":
+            node_id = add("if_expression", "", node_span, parent_id, child_index, role)
+            expressions(node["condition"], node_id, 0, "condition")
+            expressions(node["then"], node_id, 1, "then")
+            expressions(node["else"], node_id, 2, "else")
+        elif kind == "match":
+            node_id = add("match", "", node_span, parent_id, child_index, role)
+            expressions(node["value"], node_id, 0, "value")
+            for index, arm in enumerate(node["arms"]):
+                arm_id = add("match_arm", "", arm["span"], node_id, index, "arm")
+                patterns(arm["pattern"], arm_id, 0, "pattern")
+                expressions(arm["result"], arm_id, 1, "result")
+        else:
+            raise AssertionError(f"unhandled OCaml expression kind {kind}")
+
+    def patterns(node, parent_id, child_index, role):
+        kind = node["kind"]
+        if kind == "wildcard_pattern":
+            add(kind, "", node["span"], parent_id, child_index, role)
+        elif kind == "binding_pattern":
+            add(kind, node["name"], node["span"], parent_id, child_index, role)
+        elif kind == "constructor_pattern":
+            node_id = add(kind, node["name"], node["span"], parent_id, child_index, role)
+            for index, child in enumerate(node["arguments"]):
+                patterns(child, node_id, index, "argument")
+        else:
+            raise AssertionError(f"unhandled OCaml pattern kind {kind}")
+
+    def statements(node, parent_id, child_index, role):
+        kind = node["kind"]
+        node_id = add({"expression": "expression_statement"}.get(kind, kind),
+                      node.get("name", ""), node["span"], parent_id, child_index, role)
+        if kind == "expression":
+            expressions(node["value"], node_id, 0, "value")
+        elif kind in {"let", "var"}:
+            if node["annotation"] is not None:
+                type_node(node["annotation"], node_id, 0, "annotation")
+            expressions(node["value"], node_id, 0, "value")
+        elif kind == "assignment":
+            expressions(node["value"], node_id, 0, "value")
+        elif kind == "return":
+            expressions(node["value"], node_id, 0, "value")
+        elif kind == "block":
+            for index, child in enumerate(node["statements"]):
+                statements(child, node_id, index, "statement")
+        elif kind == "if_statement":
+            expressions(node["condition"], node_id, 0, "condition")
+            for index, child in enumerate(node["then"]):
+                statements(child, node_id, index, "then")
+            for index, child in enumerate(node["else"]):
+                statements(child, node_id, index, "else")
+        elif kind == "for_in":
+            expressions(node["iterable"], node_id, 0, "iterable")
+            for index, child in enumerate(node["body"]):
+                statements(child, node_id, index, "body")
+        elif kind == "while":
+            expressions(node["condition"], node_id, 0, "condition")
+            for index, child in enumerate(node["body"]):
+                statements(child, node_id, index, "body")
+        else:
+            raise AssertionError(f"unhandled OCaml statement kind {kind}")
+
+    for top_index, node in enumerate(tops):
+        kind = node["kind"]
+        if kind == "function":
+            node_id = add("function", node["name"], node["span"], -1, top_index, "top_level")
+            for index, parameter in enumerate(node["parameters"]):
+                parameter_id = add("parameter", parameter["name"], parameter["span"],
+                                   node_id, index, "parameter")
+                type_node(parameter["type"], parameter_id, 0, "type")
+            type_node(node["returnType"], node_id, 0, "return_type")
+            for index, child in enumerate(node["body"]):
+                statements(child, node_id, index, "statement")
+        elif kind == "record_declaration":
+            node_id = add(kind, node["name"], node["span"], -1, top_index, "top_level")
+            for index, field in enumerate(node["fields"]):
+                field_id = add("field_declaration", field["name"], field["span"],
+                               node_id, index, "field")
+                type_node(field["type"], field_id, 0, "type")
+        elif kind == "union_declaration":
+            node_id = add(kind, node["name"], node["span"], -1, top_index, "top_level")
+            for index, variant in enumerate(node["variants"]):
+                variant_id = add("variant_declaration", variant["name"], variant["span"],
+                                 node_id, index, "variant")
+                for arg_index, argument in enumerate(variant["arguments"]):
+                    type_node(argument, variant_id, arg_index, "field_type")
+        else:
+            statements(node, -1, top_index, "top_level")
+    return output
+
+
+def valid_tree_topology(nodes):
+    if [node[0] for node in nodes] != list(range(len(nodes))):
+        return False
+    by_id = {node[0]: node for node in nodes}
+    roots = []
+    siblings = {}
+    for node_id, parent_id, child_index, role, _kind, _value, _span in nodes:
+        if parent_id == -1:
+            if role != "top_level":
+                return False
+            roots.append(child_index)
+        elif parent_id not in by_id or parent_id >= node_id:
+            return False
+        siblings.setdefault((parent_id, role), []).append(child_index)
+    if roots != list(range(len(roots))):
+        return False
+    if any(index < 0 for indices in siblings.values() for index in indices):
+        return False
+    if any(len(indices) > 1 and sorted(indices) != list(range(len(indices)))
+           for indices in siblings.values()):
+        return False
+    for node in nodes:
+        seen = set()
+        current = node[0]
+        while current != -1:
+            if current in seen:
+                return False
+            seen.add(current)
+            current = by_id[current][1]
+    return True
+
+
+def topology_matches(actual, expected):
+    return valid_tree_topology(actual) and valid_tree_topology(expected) and actual == expected
+
+
 class A12ParserDifferentialTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -416,7 +626,48 @@ class A12ParserDifferentialTests(unittest.TestCase):
         actual = pep_flat_nodes(result)
         expected = ocaml_flat_nodes(target["ast"])
         self.assertEqual(actual, expected, source)
+        actual_tree = pep_topology_nodes(result)
+        expected_tree = ocaml_tree_nodes(target["ast"])
+        self.assertTrue(valid_tree_topology(actual_tree), source)
+        self.assertTrue(valid_tree_topology(expected_tree), source)
+        self.assertEqual(actual_tree, expected_tree, source)
         return actual
+
+    def test_topology_oracle_rejects_corrupted_parent_role_and_order(self):
+        source = "fn main() -> Int { if true { return 1 } else { return 2 } }"
+        target, result = self.parse(source)
+        actual = pep_topology_nodes(result)
+        expected = ocaml_tree_nodes(target["ast"])
+        self.assertTrue(topology_matches(actual, expected))
+
+        changed_parent = list(actual)
+        node = changed_parent[1]
+        changed_parent[1] = (node[0], 999, *node[2:])
+        self.assertFalse(topology_matches(changed_parent, expected))
+
+        changed_role = list(actual)
+        node = changed_role[1]
+        changed_role[1] = (*node[:3], "wrong_role", *node[4:])
+        self.assertFalse(topology_matches(changed_role, expected))
+
+        changed_child_order = list(actual)
+        node = changed_child_order[1]
+        changed_child_order[1] = (*node[:2], node[2] + 1, *node[3:])
+        self.assertFalse(topology_matches(changed_child_order, expected))
+
+        changed_node_order = list(actual)
+        changed_node_order[1], changed_node_order[2] = changed_node_order[2], changed_node_order[1]
+        self.assertFalse(topology_matches(changed_node_order, expected))
+
+    def test_flat_node_ids_are_unique_contiguous_and_deterministic(self):
+        source = "fn f(x: List[Int]) -> List[Int] { return x }"
+        _, first_result = self.parse(source)
+        _, second_result = self.parse(source)
+        first = pep_topology_nodes(first_result)
+        second = pep_topology_nodes(second_result)
+        self.assertEqual(first, second)
+        self.assertEqual([node[0] for node in first], list(range(len(first))))
+        self.assertTrue(valid_tree_topology(first))
 
     def test_expression_precedence_associativity_and_spans(self):
         actual = self.assert_differential("1 + 2 * 3 - 4")
