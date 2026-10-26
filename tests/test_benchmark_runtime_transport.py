@@ -1,6 +1,8 @@
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from tests import benchmark_runtime_transport as harness
 
@@ -161,6 +163,72 @@ class BenchmarkHarnessTests(unittest.TestCase):
         self.assertEqual(harness.bounded_batch_width(512, 1000, 10, 20, 500), 25)
         self.assertEqual(harness.bounded_batch_width(512, 1, 10, 20, 500), 1)
         self.assertEqual(harness.bounded_batch_width(512, 100000, 1, 1, 100000), 256)
+
+    def test_build_preflight_timeout_is_classified_and_bounded(self):
+        seen = {}
+
+        def timed_out_runner(*args, **kwargs):
+            seen.update(kwargs)
+            raise harness.subprocess.TimeoutExpired("pwsh", kwargs["timeout"])
+
+        with self.assertRaises(harness.BuildPreflightTimeout) as raised:
+            harness.ensure_build(timeout_s=0.01, runner=timed_out_runner)
+
+        self.assertEqual(raised.exception.kind, "build_timeout")
+        self.assertEqual(seen["timeout"], 0.01)
+
+    def test_build_preflight_failure_and_unavailable_are_distinct(self):
+        def failed_runner(*args, **kwargs):
+            return SimpleNamespace(returncode=7, stderr="compile failed", stdout="")
+
+        with self.assertRaises(harness.BuildPreflightFailed) as failed:
+            harness.ensure_build(runner=failed_runner)
+
+        self.assertEqual(failed.exception.kind, "build_failed")
+        self.assertIn("compile failed", str(failed.exception))
+
+        def unavailable_runner(*args, **kwargs):
+            raise FileNotFoundError("pwsh")
+
+        with self.assertRaises(harness.BuildPreflightUnavailable) as unavailable:
+            harness.ensure_build(runner=unavailable_runner)
+
+        self.assertEqual(unavailable.exception.kind, "build_unavailable")
+
+    def test_main_fails_with_structured_build_timeout(self):
+        with patch.object(
+            harness, "ensure_build",
+            side_effect=harness.BuildPreflightTimeout("preflight stalled"),
+        ), patch.object(harness, "emit") as emit, patch.object(
+            harness.sys, "argv", ["benchmark_runtime_transport.py"]
+        ):
+            self.assertEqual(harness.main(), 2)
+
+        emit.assert_called_once_with({
+            "kind": "benchmark-error",
+            "stage": "build-preflight",
+            "outcome": "build_timeout",
+            "error": "preflight stalled",
+        })
+
+    def test_deliberate_variant_mismatch_is_rejected(self):
+        expected = {
+            "tokens": [{"kind": "identifier", "value": "x"}],
+            "error": None,
+        }
+        actual = {
+            "tokens": [{"kind": "identifier", "value": "y"}],
+            "error": None,
+        }
+
+        diagnostic = harness.variant_mismatch_diagnostic(expected, actual)
+        self.assertIsNotNone(diagnostic)
+        self.assertEqual(diagnostic["firstDifferenceIndex"], 0)
+
+        with self.assertRaisesRegex(
+            harness.BenchmarkCorrectnessError, "width 128"
+        ):
+            harness.require_variant_match(128, "negative-control", expected, actual)
 
 
 if __name__ == "__main__":

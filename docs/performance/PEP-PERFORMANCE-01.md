@@ -99,6 +99,14 @@ Windows memory calls now declare pointer-width-safe argtypes/restype values and 
 
 R1 gate evidence after the hardening: harness self-tests 8/8; full repository regression 101/101 (including A11 differential 7/7); direct A8 569 ms and PowerShell A8 596 ms in the sampled runs; width 128 A11 3,240 ms, width 256 2,860 ms, and width 512 a classified PEP_RUNTIME_STEP_LIMIT; the 256-item typed boundary remained a 1,027,410-byte setup response and 144,580-byte invocation response.
 
+## R2 final acceptance gate
+
+The build preflight now accepts a configurable `--build-timeout-s` limit (default 120 seconds) and passes it to PowerShell `describe --json`. TimeoutExpired, failed build exit, missing PowerShell and missing resulting executable are reported as distinct `build_timeout`, `build_failed` and `build_unavailable` outcomes; the benchmark returns nonzero before opening a session.
+
+Completed chunk variants are now fail-closed. A mismatch against the width-32 normalized result emits `outcome=incorrect`, the case/input identity, token counts, first differing token and error fields, then returns exit 1. Expected `PEP_RUNTIME_STEP_LIMIT` remains `outcome=pep_step_budget` and does not become a correctness failure.
+
+R2 verification: focused harness tests 12/12; direct smoke width 128 and 256 matched the width-32 reference; width 512 produced the expected `PEP_RUNTIME_STEP_LIMIT`; the 256-item typed boundary remained a 1,027,410-byte setup response and 144,580-byte invoke response; A11 differential tests 7/7; full repository regression 105/105; `git diff --check` clean. No compiler, batching, protocol, interpreter-budget, A12 or milestone-pointer changes were made.
+
 ## Remaining uncertainty
 
 The memory numbers are sampled working-set/private-byte high-water values, not allocator traces. Profile phase totals use a generated executable and wall-clock timestamps. Typed construction is included in execution, not separately attributed. The current harness measures a Windows PowerShell process-creation sample but has no compiler-ready “session ready” handshake, so startup and first-response costs cannot be perfectly separated. No claim is made that a 128 or 256 batch is optimal for A12/A13; it is the measured candidate range on these A11 workloads.

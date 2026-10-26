@@ -29,6 +29,7 @@ PEP_EXE = ROOT / "_build" / "ocaml" / "pep.exe"
 PROFILE_EXE = ROOT / "_build" / "perf" / "pep-profile.exe"
 LEXER = ROOT / "examples" / "pep_lexer.pep"
 A8_ANALYSER = ROOT / "examples" / "unused_functions.pep"
+BUILD_TIMEOUT_S = 120.0
 
 
 def revision(raw: bytes) -> str:
@@ -159,6 +160,30 @@ class PepStepBudgetRejected(HarnessError):
         error = response.get("error", {})
         super().__init__(error.get("message", "Pep step budget rejected"))
         self.response = response
+
+
+class BuildPreflightError(HarnessError):
+    kind = "build_failed"
+
+
+class BuildPreflightTimeout(BuildPreflightError):
+    kind = "build_timeout"
+
+
+class BuildPreflightUnavailable(BuildPreflightError):
+    kind = "build_unavailable"
+
+
+class BuildPreflightFailed(BuildPreflightError):
+    kind = "build_failed"
+
+
+class BenchmarkCorrectnessError(HarnessError):
+    def __init__(self, width: int, case: str, diagnostic: dict[str, Any]):
+        super().__init__(f"chunk width {width} produced an incorrect result for {case}")
+        self.width = width
+        self.case = case
+        self.diagnostic = diagnostic
 
 
 def terminate_process(process: Any, timeout_s: float) -> None:
@@ -411,6 +436,49 @@ def bounded_batch_width(
     by_steps = remaining_steps // max(1, estimated_steps_per_item)
     by_output = output_budget // max(1, estimated_bytes_per_item)
     return max(1, min(target_width, hard_max, by_steps, by_output))
+
+
+def variant_mismatch_diagnostic(
+    expected: dict[str, Any], actual: dict[str, Any]
+) -> dict[str, Any] | None:
+    if expected == actual:
+        return None
+    expected_tokens = expected.get("tokens", [])
+    actual_tokens = actual.get("tokens", [])
+    limit = min(len(expected_tokens), len(actual_tokens))
+    first_difference = next(
+        (
+            index
+            for index in range(limit)
+            if expected_tokens[index] != actual_tokens[index]
+        ),
+        limit if len(expected_tokens) != len(actual_tokens) else None,
+    )
+    return {
+        "expectedTokenCount": len(expected_tokens),
+        "actualTokenCount": len(actual_tokens),
+        "firstDifferenceIndex": first_difference,
+        "expectedToken": (
+            expected_tokens[first_difference]
+            if first_difference is not None and first_difference < len(expected_tokens)
+            else None
+        ),
+        "actualToken": (
+            actual_tokens[first_difference]
+            if first_difference is not None and first_difference < len(actual_tokens)
+            else None
+        ),
+        "expectedError": expected.get("error"),
+        "actualError": actual.get("error"),
+    }
+
+
+def require_variant_match(
+    width: int, case: str, expected: dict[str, Any], actual: dict[str, Any]
+) -> None:
+    diagnostic = variant_mismatch_diagnostic(expected, actual)
+    if diagnostic is not None:
+        raise BenchmarkCorrectnessError(width, case, diagnostic)
 
 
 def normalize_lexer(tokens: list[dict[str, Any]], error: dict[str, Any] | None) -> dict[str, Any]:
@@ -717,13 +785,36 @@ def build_profile_exe() -> pathlib.Path:
     return PROFILE_EXE
 
 
-def ensure_build() -> None:
-    result = subprocess.run(
-        ["pwsh", "-NoProfile", "-File", str(PEP_SCRIPT), "describe", "--json"],
-        cwd=ROOT, capture_output=True, text=True, check=False,
-    )
-    if result.returncode != 0 or not PEP_EXE.exists():
-        raise RuntimeError(f"Pep build failed: {result.stderr}")
+def ensure_build(
+    timeout_s: float = BUILD_TIMEOUT_S,
+    runner: Any = subprocess.run,
+    executable: pathlib.Path = PEP_EXE,
+) -> None:
+    if timeout_s <= 0:
+        raise ValueError("build preflight timeout must be positive")
+    try:
+        result = runner(
+            ["pwsh", "-NoProfile", "-File", str(PEP_SCRIPT), "describe", "--json"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise BuildPreflightTimeout(
+            f"build preflight timed out after {timeout_s:.3f}s"
+        ) from exc
+    except (FileNotFoundError, OSError) as exc:
+        raise BuildPreflightUnavailable(
+            f"PowerShell build executable unavailable: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise BuildPreflightFailed(
+            f"Pep build failed with exit {result.returncode}: {detail}"
+        )
+    if not executable.exists():
+        raise BuildPreflightUnavailable(
+            f"Pep executable unavailable after successful build preflight: {executable}"
+        )
 
 
 def emit(row: dict[str, Any]) -> None:
@@ -738,8 +829,18 @@ def main() -> int:
     parser.add_argument("--request-timeout-s", type=float, default=30.0)
     parser.add_argument("--startup-timeout-s", type=float, default=10.0)
     parser.add_argument("--cleanup-timeout-s", type=float, default=2.0)
+    parser.add_argument("--build-timeout-s", type=float, default=BUILD_TIMEOUT_S)
     args = parser.parse_args()
-    ensure_build()
+    try:
+        ensure_build(timeout_s=args.build_timeout_s)
+    except BuildPreflightError as exc:
+        emit({
+            "kind": "benchmark-error",
+            "stage": "build-preflight",
+            "outcome": exc.kind,
+            "error": str(exc),
+        })
+        return 2
     modes = [item for item in args.modes.split(",") if item]
     session_kwargs = {
         "timeout_s": args.request_timeout_s,
@@ -807,6 +908,23 @@ def main() -> int:
                 })
                 continue
             assert variant_result is not None
+            try:
+                require_variant_match(width, name, baseline[name], variant_result)
+            except BenchmarkCorrectnessError as exc:
+                emit({
+                    "kind": "chunk-variant",
+                    "mode": "direct",
+                    "chunkWidth": width,
+                    "case": name,
+                    "bytes": len(raw),
+                    "inputSha256": hashlib.sha256(raw).hexdigest(),
+                    "inputUtf8": raw.decode("utf-8", errors="replace"),
+                    "trials": args.trials,
+                    "outcome": "incorrect",
+                    "correctAgainstWidth32": False,
+                    "diagnostic": exc.diagnostic,
+                })
+                return 1
             emit({
                 "kind": "chunk-variant", "mode": "direct", "chunkWidth": width,
                 "case": name, "bytes": len(raw), "tokens": len(variant_result["tokens"]),
@@ -817,7 +935,7 @@ def main() -> int:
                 "stepCalls": timings[0][0]["requests"]["count"],
                 "peakPrivateBytes": peak_memory_metric([item[1] for item in timings], "privateBytes"),
                 "peakWorkingSetBytes": peak_memory_metric([item[1] for item in timings], "workingSetBytes"),
-                "correctAgainstWidth32": variant_result == baseline[name],
+                "correctAgainstWidth32": True,
             })
 
     for mode in ("direct",):
