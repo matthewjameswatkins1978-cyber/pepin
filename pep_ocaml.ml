@@ -34,6 +34,8 @@ let json_string s =
     | c -> Buffer.add_char b c) s;
   Buffer.add_char b '"'; Buffer.contents b
 let profile_enabled = match Sys.getenv_opt "PEP_PROFILE" with Some "1" -> true | _ -> false
+let profile_now () = if profile_enabled then Some (Sys.time()) else None
+let profile_elapsed_us = function None -> 0 | Some started -> int_of_float((Sys.time()-.started)*.1e6)
 let pos_json s = Printf.sprintf "{\"offset\":%d,\"line\":%d,\"column\":%d}" s.lo s.line s.column
 let span_json s = Printf.sprintf "{\"start\":%s,\"endOffset\":%d}" (pos_json s) s.hi
 let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)->s
@@ -785,7 +787,7 @@ let checked_bin op a b sp =
  |_ ->assert false
 let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) ?(semantic_snapshot_value=None) ?(source_bytes_value=None) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
- profile_step_count := 0;
+ if profile_enabled then profile_step_count := 0;
  let remaining_steps = ref step_limit in
  let tick sp =
   if profile_enabled then incr profile_step_count;
@@ -1717,7 +1719,7 @@ let session_tool_invoke fields =
   let args = match session_member fields "arguments" with Some (JArray values) -> values | _ -> raise (Session_error ("PEP_TOOL_ARGUMENTS", "Invocation requires an arguments array")) in
   let analysis = session_get_revision (session_document ["document",JString entry.tool_document]) entry.tool_revision in
   let checked = match analysis.checked,entry.tool_function_id with Some checked,Some _ -> checked | _ -> raise (Session_error ("PEP_TOOL_SOURCE_UNAVAILABLE", "Active tool source revision is unavailable")) in
-  let decode_started=Sys.time() in
+  let decode_started=profile_now () in
   let values = match entry.tool_parameters with
     | Some parameters when List.length parameters=List.length args ->
         let decode=if protocol=1 then session_tool_value else session_tool_value_v2 checked in
@@ -1725,32 +1727,32 @@ let session_tool_invoke fields =
     | Some _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_COUNT", "Tool argument count did not match its signature"))
     | None -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked signature"))
   in
-  let decode_cpu_us=int_of_float((Sys.time()-.decode_started)*.1e6) in
-  let grant_started=Sys.time() in
+  let decode_cpu_us=profile_elapsed_us decode_started in
+  let grant_started=profile_now () in
   let snapshot,source_bytes=match session_member fields "semanticTarget" with
     |None->None,None
     |Some _ when protocol=1->raise(Session_error("PEP_TOOL_PROTOCOL_MISMATCH","semanticTarget requires tool protocol version 2"))
     |Some target->session_semantic_target checked target
   in
-  let grant_cpu_us=int_of_float((Sys.time()-.grant_started)*.1e6) in
+  let grant_cpu_us=profile_elapsed_us grant_started in
   let execute_cpu_us=ref 0 and encode_cpu_us=ref 0 and result_value_nodes=ref 0 in
   let encoded_result = match entry.tool_function_id,entry.tool_result with
     | Some function_id,Some result_type ->
-        let execute_started=Sys.time() in
+        let execute_started=profile_now () in
         let value = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot ~source_bytes_value:source_bytes checked in
-        execute_cpu_us:=int_of_float((Sys.time()-.execute_started)*.1e6);
+        execute_cpu_us:=profile_elapsed_us execute_started;
         if profile_enabled then result_value_nodes:=profile_value_nodes value;
-        let encode_started=Sys.time() in
+        let encode_started=profile_now () in
         let encoded=if protocol=1 then tool_value_json result_type value else tool_value_json_v2 checked result_type value in
-        encode_cpu_us:=int_of_float((Sys.time()-.encode_started)*.1e6);
+        encode_cpu_us:=profile_elapsed_us encode_started;
         encoded
     | _ -> raise (Session_error ("PEP_TOOL_SIGNATURE_UNAVAILABLE", "Active tool has no checked function signature"))
   in
   if String.length encoded_result>tool_message_max_bytes then raise(Session_error("PEP_TOOL_MESSAGE_TOO_LARGE","Tool result exceeds the response byte budget"));
-  let response_started=Sys.time() in
+  let response_started=profile_now () in
   let response=Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":%d,\"outcome\":\"ok\",\"operation\":\"tool_invoke\",\"tool\":%s,\"revision\":%s,\"result\":%s}"
     protocol (json_string entry.tool_name) (json_string entry.tool_revision) encoded_result in
-  let response_cpu_us=int_of_float((Sys.time()-.response_started)*.1e6) in
+  let response_cpu_us=profile_elapsed_us response_started in
   profile_emit entry.tool_name decode_cpu_us !execute_cpu_us !encode_cpu_us response_cpu_us grant_cpu_us
     !profile_step_count !result_value_nodes (String.length encoded_result);
   response

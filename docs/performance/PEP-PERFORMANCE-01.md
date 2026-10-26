@@ -87,6 +87,18 @@ Ranked recommendations:
 
 Safe to land as lab support: the opt-in instrumentation, external harness, generated workload variants and this report. Requiring independent review: production batch-bound changes, protocol/typed-encoding changes, persistent revision reuse, and any budget or transport-cap change.
 
+## R1 reliability hardening
+
+The harness now applies bounded deadlines to process startup, JSONL writes/flushes, response reads, input close and cleanup. Blocking pipe operations run in daemon workers; a deadline expires into SessionTimeout with a phase name, terminates the child, and joins cleanup threads for a bounded interval. Missing, malformed and non-object JSONL responses are SessionProtocolError; a Pep PEP_RUNTIME_STEP_LIMIT response is PepStepBudgetRejected, keeping expected language-level rejection separate from operating-system timeout.
+
+The generated profile executable is rebuilt when any identity changes. _build/perf/pep-profile.json records source SHA-256, generated profile-source SHA-256, opam root, opam switch and ocamlopt version. PEPIN_OPAM_ROOT and PEPIN_OPAM_SWITCH are configurable; no developer-specific root is required by the harness.
+
+Profiling clocks are now called only when PEP_PROFILE=1. A fresh executable produced one profile record for the nested count-8 invocation; the normal executable produced zero profile records. Existing step limits, typed results, protocol output and authority checks are unchanged.
+
+Windows memory calls now declare pointer-width-safe argtypes/restype values and always close successful process handles. Unavailable memory returns null/None; a genuine available zero sample remains zero. Reported values remain sampled working-set/private bytes, never allocator peaks.
+
+R1 gate evidence after the hardening: harness self-tests 8/8; full repository regression 101/101 (including A11 differential 7/7); direct A8 569 ms and PowerShell A8 596 ms in the sampled runs; width 128 A11 3,240 ms, width 256 2,860 ms, and width 512 a classified PEP_RUNTIME_STEP_LIMIT; the 256-item typed boundary remained a 1,027,410-byte setup response and 144,580-byte invocation response.
+
 ## Remaining uncertainty
 
 The memory numbers are sampled working-set/private-byte high-water values, not allocator traces. Profile phase totals use a generated executable and wall-clock timestamps. Typed construction is included in execution, not separately attributed. The current harness measures a Windows PowerShell process-creation sample but has no compiler-ready “session ready” handshake, so startup and first-response costs cannot be perfectly separated. No claim is made that a 128 or 256 batch is optimal for A12/A13; it is the measured candidate range on these A11 workloads.
