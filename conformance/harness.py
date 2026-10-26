@@ -29,6 +29,13 @@ SCHEMA = "pepin-conformance/v1"
 DEFAULT_SEEDS = [20261026, 1101, 1201]
 PROCESS_TIMEOUT = 8.0
 
+RUNTIME_EXPECTED_CODES = {
+    "division by zero": ("PEP_RUNTIME_DIVISION_BY_ZERO",),
+    "minimum integer division": ("PEP_RUNTIME_OVERFLOW",),
+    "addition overflow": ("PEP_RUNTIME_OVERFLOW",),
+    "call depth": ("PEP_RUNTIME_CALL_DEPTH",),
+}
+
 
 def revision(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
@@ -36,6 +43,15 @@ def revision(raw: bytes) -> str:
 
 def json_bytes(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def decode_output(value: Any) -> str:
+    """Return one stable text type for completed and timeout subprocess paths."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 
 def run_bounded(args: list[str], *, cwd: Path = ROOT, input_text: str | None = None,
@@ -48,18 +64,19 @@ def run_bounded(args: list[str], *, cwd: Path = ROOT, input_text: str | None = N
         )
         return {
             "status": "completed", "returncode": proc.returncode,
-            "stdout": proc.stdout, "stderr": proc.stderr,
+            "stdout": decode_output(proc.stdout), "stderr": decode_output(proc.stderr),
             "elapsedMs": round((time.perf_counter() - started) * 1000, 2),
         }
     except subprocess.TimeoutExpired as exc:
         return {
             "status": "timeout", "returncode": None,
-            "stdout": (exc.stdout or ""), "stderr": (exc.stderr or ""),
+            "stdout": decode_output(exc.stdout), "stderr": decode_output(exc.stderr),
             "elapsedMs": round((time.perf_counter() - started) * 1000, 2),
         }
 
 
-def response_from_stdout(stdout: str) -> dict[str, Any] | None:
+def response_from_stdout(stdout: str | bytes) -> dict[str, Any] | None:
+    stdout = decode_output(stdout)
     for line in reversed([line for line in stdout.splitlines() if line.strip()]):
         try:
             value = json.loads(line)
@@ -134,6 +151,74 @@ def normalized_analysis(response: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def check_result_contract(result: dict[str, Any], *, expected_status: str | None = None) -> tuple[bool, str]:
+    """Validate the check command transport before interpreting its semantics."""
+    if result.get("status") != "completed":
+        return False, f"check process did not complete: {result.get('status')}"
+    response = result.get("response")
+    if not isinstance(response, dict):
+        return False, "check completed without a JSON object response"
+    status = response.get("status")
+    if status not in {"valid", "invalid", "incomplete"}:
+        return False, f"check returned unexpected status {status!r}"
+    expected_returncode = 0 if status == "valid" else 1
+    if result.get("returncode") != expected_returncode:
+        return False, f"check status {status!r} had returncode {result.get('returncode')!r}"
+    if expected_status is not None and status != expected_status:
+        return False, f"expected check status {expected_status!r}, got {status!r}"
+    return True, "check response and exit contract are valid"
+
+
+def check_failure_signature(result: dict[str, Any]) -> dict[str, Any]:
+    response = result.get("response")
+    if result.get("status") != "completed":
+        return {"kind": "process", "status": result.get("status")}
+    if not isinstance(response, dict):
+        return {"kind": "no-response", "returncode": result.get("returncode")}
+    return {"kind": "rejected", "status": response.get("status"), "returncode": result.get("returncode")}
+
+
+def diagnostic_codes(response: dict[str, Any] | None) -> list[str]:
+    if not isinstance(response, dict):
+        return []
+    return [item.get("code") for item in response.get("diagnostics", [])
+            if isinstance(item, dict) and isinstance(item.get("code"), str)]
+
+
+def classify_runtime_result(result: dict[str, Any], expected_codes: Iterable[str]) -> dict[str, Any]:
+    """Apply the exact runtime-error oracle, including process/launcher failures."""
+    expected = list(expected_codes)
+    evidence = {
+        "status": result.get("status"),
+        "returncode": result.get("returncode"),
+        "response": result.get("response"),
+        "stdout": decode_output(result.get("stdout")),
+        "stderr": decode_output(result.get("stderr")),
+    }
+    if result.get("status") == "timeout":
+        return {"classification": "confirmed-bug", "outcome": "timeout", "detail": "runtime process exceeded bounded timeout", "evidence": evidence}
+    if result.get("status") != "completed":
+        return {"classification": "confirmed-bug", "outcome": "process-failure", "detail": "runtime process did not complete", "evidence": evidence}
+    response = result.get("response")
+    actual_codes = diagnostic_codes(response)
+    if result.get("returncode") == 1 and isinstance(response, dict) and response.get("status") == "runtime_error" and actual_codes == expected:
+        return {"classification": "expected-rejection", "outcome": "controlled-runtime-failure", "codes": actual_codes, "evidence": evidence}
+    if result.get("returncode") == 0:
+        detail = "runtime failure case exited successfully"
+        outcome = "unexpected-success"
+    elif not isinstance(response, dict):
+        detail = "runtime process failed without a Pep JSON diagnostic"
+        outcome = "launcher-or-malformed-output"
+    elif response.get("status") != "runtime_error":
+        detail = f"runtime process returned unexpected status {response.get('status')!r}"
+        outcome = "wrong-response-status"
+    else:
+        detail = f"runtime diagnostic codes {actual_codes!r} did not match expected {expected!r}"
+        outcome = "wrong-diagnostic"
+    return {"classification": "confirmed-bug", "outcome": outcome, "detail": detail,
+            "expectedCodes": expected, "actualCodes": actual_codes, "evidence": evidence}
+
+
 def analysis_pair(case_id: str, raw: bytes) -> dict[str, Any]:
     cli = cli_case(case_id, raw, "check")
     try:
@@ -142,7 +227,15 @@ def analysis_pair(case_id: str, raw: bytes) -> dict[str, Any]:
         return {"caseId": case_id, "kind": "cli-session", "classification": "unsupported-feature",
                 "detail": "The text CLI cannot carry malformed UTF-8; open_bytes is tested separately."}
     opened = session_case([{"schemaVersion": 3, "op": "open", "source": source}])
-    session_response = opened["responses"][0] if opened["responses"] else None
+    if not check_result_contract(cli)[0]:
+        return {"caseId": case_id, "kind": "cli-session", "classification": "confirmed-bug",
+                "detail": check_result_contract(cli)[1], "cliEvidence": cli}
+    if (opened.get("status") != "completed" or opened.get("returncode") != 0 or
+            len(opened.get("responses", [])) != 1 or not isinstance(opened["responses"][0], dict)):
+        return {"caseId": case_id, "kind": "cli-session", "classification": "confirmed-bug",
+                "detail": "session open did not produce one completed JSON object response",
+                "sessionEvidence": opened}
+    session_response = opened["responses"][0]
     left = normalized_analysis(cli.get("response"))
     right = normalized_analysis(session_response)
     if left == right:
@@ -260,56 +353,97 @@ def runtime_sources(seed: int, count: int) -> Iterable[tuple[str, bytes, str]]:
         yield f"runtime-{seed}-{index:04d}", source.encode("utf-8"), reason
 
 
-def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: dict[str, int]) -> None:
+def note_classification(stats: dict[str, Any], classification: str) -> None:
+    counts = stats.setdefault("classificationCounts", {})
+    counts[classification] = counts.get(classification, 0) + 1
+
+
+def append_finding(findings: list[dict[str, Any]], stats: dict[str, Any], finding: dict[str, Any]) -> None:
+    note_classification(stats, str(finding.get("classification", "unknown")))
+    case_id = finding.get("caseId")
+    if case_id:
+        finding.setdefault("reproducer", {
+            "caseFile": f"_build/conformance/corpus/{case_id}.pep",
+            "checkCommand": f"pwsh -NoProfile -File pep.ps1 check _build/conformance/corpus/{case_id}.pep --json",
+            "runCommand": f"pwsh -NoProfile -File pep.ps1 run _build/conformance/corpus/{case_id}.pep --json",
+        })
+    findings.append(finding)
+
+
+def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     for case_id, raw, expected in valid_sources(seed, count):
         stats["validGenerated"] += 1
         check = cli_case(case_id, raw, "check")
         response = check.get("response") or {}
-        if response.get("status") != "valid":
-            findings.append({"caseId": case_id, "kind": "valid-generator", "classification": "confirmed-bug",
-                             "detail": "Generated valid program was not accepted", "response": response})
+        valid_check, check_detail = check_result_contract(check, expected_status="valid")
+        if not valid_check:
+            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-generator", "classification": "confirmed-bug",
+                             "detail": "Generated valid program was not accepted or check transport failed",
+                             "contract": check_detail, "response": response, "evidence": check,
+                             "oracle": {"kind": "check-failure", "signature": check_failure_signature(check)}})
             continue
         run = cli_case(case_id, raw, "run")
         if run["status"] == "timeout":
-            findings.append({"caseId": case_id, "kind": "valid-runtime", "classification": "confirmed-bug",
-                             "detail": "Generated valid program exceeded bounded runtime", "timeoutSeconds": 8})
+            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-runtime", "classification": "confirmed-bug",
+                             "detail": "Generated valid program exceeded bounded runtime", "timeoutSeconds": PROCESS_TIMEOUT,
+                             "oracle": {"kind": "valid-output", "mode": "timeout", "expected": expected}})
         elif run["returncode"] != 0 or run["stdout"] != expected:
-            findings.append({"caseId": case_id, "kind": "valid-runtime", "classification": "confirmed-bug",
+            append_finding(findings, stats, {"caseId": case_id, "kind": "valid-runtime", "classification": "confirmed-bug",
                              "detail": "Generated valid program did not produce its independent expected output",
-                             "expected": expected, "actual": run["stdout"], "stderr": run["stderr"]})
-        findings.append(analysis_pair(case_id, raw))
+                             "expected": expected, "actual": run["stdout"], "stderr": run["stderr"],
+                             "oracle": {"kind": "valid-output", "mode": "output-mismatch", "expected": expected}})
+        pair = analysis_pair(case_id, raw)
+        if pair["classification"] != "missing-test":
+            append_finding(findings, stats, pair)
+        else:
+            note_classification(stats, "missing-test")
     for case_id, raw, reason in invalid_sources(seed, count):
         stats["invalidGenerated"] += 1
         check = cli_case(case_id, raw, "check")
         response = check.get("response") or {}
-        if response.get("status") in ("valid", "incomplete"):
-            findings.append({"caseId": case_id, "kind": "invalid-generator", "classification": "confirmed-bug",
+        if response.get("status") in ("valid", "incomplete") and check.get("status") == "completed":
+            append_finding(findings, stats, {"caseId": case_id, "kind": "invalid-generator", "classification": "confirmed-bug",
                              "detail": "Intentionally malformed or ill-typed program was accepted",
                              "reason": reason, "response": response})
+        elif not check_result_contract(check):
+            append_finding(findings, stats, {"caseId": case_id, "kind": "invalid-generator", "classification": "confirmed-bug",
+                             "detail": "Invalid-program check transport failed",
+                             "reason": reason, "contract": check_result_contract(check)[1], "evidence": check})
         else:
             stats["expectedRejection"] += 1
-        findings.append(analysis_pair(case_id, raw))
+            note_classification(stats, "expected-rejection")
+        pair = analysis_pair(case_id, raw)
+        if pair["classification"] != "missing-test":
+            append_finding(findings, stats, pair)
+        else:
+            note_classification(stats, "missing-test")
     for case_id, raw, reason in runtime_sources(seed, count):
         stats["runtimeGenerated"] += 1
         check = cli_case(case_id, raw, "check")
         run = cli_case(case_id, raw, "run")
         response = check.get("response") or {}
-        if response.get("status") != "valid":
-            findings.append({"caseId": case_id, "kind": "runtime-generator", "classification": "missing-test",
+        check_ok, check_detail = check_result_contract(check, expected_status="valid")
+        if not check_ok and check.get("status") == "completed" and isinstance(response, dict) and response.get("status") in {"invalid", "incomplete"}:
+            append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "missing-test",
                              "detail": "Runtime stress source was rejected before execution", "reason": reason,
                              "response": response})
-        elif run["status"] == "timeout":
-            findings.append({"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
-                             "detail": "Runtime stress source exceeded bounded process timeout", "reason": reason})
-        elif run["returncode"] == 0:
-            findings.append({"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
-                             "detail": "Runtime failure case exited successfully", "reason": reason,
-                             "stdout": run["stdout"]})
         else:
-            stats["controlledRuntimeFailures"] += 1
+            if not check_ok:
+                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
+                                 "detail": "Runtime check transport failed", "reason": reason,
+                                 "contract": check_detail, "evidence": check})
+                continue
+            oracle = classify_runtime_result(run, RUNTIME_EXPECTED_CODES[reason])
+            if oracle["classification"] == "expected-rejection":
+                stats["controlledRuntimeFailures"] += 1
+                note_classification(stats, "expected-rejection")
+            else:
+                append_finding(findings, stats, {"caseId": case_id, "kind": "runtime-generator", "classification": "confirmed-bug",
+                                 "detail": oracle["detail"], "reason": reason, "oracle": oracle,
+                                 "expectedCodes": list(RUNTIME_EXPECTED_CODES[reason])})
 
 
-def session_invariants(findings: list[dict[str, Any]], stats: dict[str, int]) -> None:
+def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     source = "fn double(n: Int) -> Int { return ?calculation }\n"
     rev = revision(source.encode())
     filled = source.replace("?calculation", "n * 2")
@@ -331,22 +465,23 @@ def session_invariants(findings: list[dict[str, Any]], stats: dict[str, int]) ->
     result = session_case(requests)
     stats["sessionRequests"] += len(requests)
     responses = result["responses"]
-    if result["status"] != "completed" or len(responses) != len(requests):
-        findings.append({"caseId": "session-invariants", "kind": "session", "classification": "confirmed-bug",
+    if (result["status"] != "completed" or result.get("returncode") != 0 or
+            len(responses) != len(requests) or any(not isinstance(item, dict) for item in responses)):
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "session", "classification": "confirmed-bug",
                          "detail": "JSONL session did not return one bounded response per request",
                          "returncode": result["returncode"], "responseCount": len(responses)})
         return
     if normalized_analysis(responses[1]) != normalized_analysis(responses[2]):
-        findings.append({"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
                          "detail": "Repeated same-revision analysis changed its semantic result"})
     if responses[3].get("metrics", {}).get("cache_hits", 0) < 2:
-        findings.append({"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "cache", "classification": "confirmed-bug",
                          "detail": "Repeated same-revision queries did not report cache hits", "response": responses[3]})
     if responses[5].get("error", {}).get("code") != "PEP_STALE_REVISION":
-        findings.append({"caseId": "session-invariants", "kind": "revision", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "revision", "classification": "confirmed-bug",
                          "detail": "Stale edit was not rejected", "response": responses[5]})
     if responses[7].get("error", {}).get("code") != "PEP_SESSION_MALFORMED_JSON" or responses[8].get("status") != "valid":
-        findings.append({"caseId": "session-invariants", "kind": "recovery", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-invariants", "kind": "recovery", "classification": "confirmed-bug",
                          "detail": "Malformed JSON did not preserve session recovery", "responses": responses[7:9]})
 
     invalid = session_case([
@@ -360,26 +495,34 @@ def session_invariants(findings: list[dict[str, Any]], stats: dict[str, int]) ->
                          "detail": "open_bytes adversarial inputs did not receive bounded responses"})
     else:
         stats["malformedInputs"] += 3
-        if invalid["responses"][0].get("status") != "invalid":
-            findings.append({"caseId": "session-open-bytes", "kind": "utf8", "classification": "confirmed-bug",
-                             "detail": "Malformed UTF-8 was not reported as invalid", "response": invalid["responses"][0]})
+        expected_codes = ["PEP_INVALID_UTF8", "PEP_SOURCE_BYTE_VALUE", "PEP_SOURCE_BYTE_LIMIT"]
+        for index, expected_code in enumerate(expected_codes):
+            response = invalid["responses"][index]
+            actual_code = response.get("diagnostics", [{}])[0].get("code") if response.get("status") == "invalid" else response.get("error", {}).get("code")
+            if actual_code != expected_code:
+                append_finding(findings, stats, {"caseId": "session-open-bytes", "kind": "utf8" if index == 0 else "source-boundary",
+                                 "classification": "confirmed-bug",
+                                 "detail": f"open_bytes case {index} returned the wrong error contract",
+                                 "expectedCode": expected_code, "actualCode": actual_code, "response": response})
 
     # A large but structurally ordinary source probes the JSONL response cap
     # without depending on A12 code. It must either return the documented
     # bounded-message rejection or complete within the cap; a hung/crashed
     # session is a real harness finding.
     large_source = ('say("x")\n' * 6000)
+    write_case("session-large-response", large_source.encode("utf-8"))
     large = session_case([{"schemaVersion": 3, "op": "open", "source": large_source}], timeout=20.0)
     stats["largeResponseProbes"] += 1
     large_response = large["responses"][0] if large["responses"] else {}
     if large["status"] != "completed" or len(large["responses"]) != 1:
-        findings.append({"caseId": "session-large-response", "kind": "transport", "classification": "confirmed-bug",
+        append_finding(findings, stats, {"caseId": "session-large-response", "kind": "transport", "classification": "confirmed-bug",
                          "detail": "Large valid source did not receive one bounded session response",
                          "returncode": large["returncode"], "status": large["status"]})
     elif large_response.get("error", {}).get("code") == "PEP_TOOL_MESSAGE_TOO_LARGE":
         stats["largeResponseLimitRejections"] += 1
+        note_classification(stats, "expected-rejection")
     else:
-        findings.append({"caseId": "session-large-response", "kind": "transport", "classification": "missing-test",
+        append_finding(findings, stats, {"caseId": "session-large-response", "kind": "transport", "classification": "missing-test",
                          "detail": "Large valid source completed without the response-limit rejection",
                          "responseBytes": len(large["stdout"].encode("utf-8"))})
 
@@ -402,7 +545,7 @@ def inherited_a11_evidence(timeout: float) -> dict[str, Any]:
     }
 
 
-def reduce_bytes(raw: bytes, still_fails: Callable[[bytes], bool], budget: int = 80) -> bytes:
+def reduce_bytes(raw: bytes, still_fails: Callable[[bytes], bool], budget: int = 80) -> tuple[bytes, int]:
     """Deterministic ddmin over bytes; every predicate call is externally bounded."""
     current = raw
     granularity = 2
@@ -424,7 +567,53 @@ def reduce_bytes(raw: bytes, still_fails: Callable[[bytes], bool], budget: int =
             if granularity >= len(current):
                 break
             granularity = min(len(current), granularity * 2)
-    return current
+    return current, attempts
+
+
+def replay_finding(finding: dict[str, Any], raw: bytes, case_id: str) -> bool | None:
+    """Replay one finding's own failure oracle; None means unsupported reduction."""
+    kind = finding.get("kind")
+    if kind == "invalid-generator":
+        result = cli_case(case_id + "-reduce", raw, "check")
+        response = result.get("response") or {}
+        return result.get("status") == "completed" and response.get("status") in {"valid", "incomplete"}
+    if kind == "valid-generator":
+        result = cli_case(case_id + "-reduce", raw, "check")
+        oracle = finding.get("oracle", {})
+        if oracle.get("kind") != "check-failure":
+            return None
+        return check_failure_signature(result) == oracle.get("signature")
+    if kind == "valid-runtime":
+        check = cli_case(case_id + "-reduce", raw, "check")
+        if not check_result_contract(check, expected_status="valid")[0]:
+            return False
+        run = cli_case(case_id + "-reduce", raw, "run")
+        oracle = finding.get("oracle", {})
+        if oracle.get("kind") != "valid-output":
+            return None
+        if oracle.get("expected") is None:
+            return None
+        if oracle.get("mode") == "timeout":
+            return run.get("status") == "timeout"
+        return run.get("status") == "completed" and (run.get("returncode") != 0 or run.get("stdout") != oracle["expected"])
+    if kind == "runtime-generator":
+        check = cli_case(case_id + "-reduce", raw, "check")
+        if not check_result_contract(check, expected_status="valid")[0]:
+            return False
+        reason = finding.get("reason")
+        expected = RUNTIME_EXPECTED_CODES.get(reason)
+        oracle = finding.get("oracle")
+        if not expected or not isinstance(oracle, dict):
+            return None
+        replay = classify_runtime_result(cli_case(case_id + "-reduce", raw, "run"), expected)
+        if replay.get("classification") != "confirmed-bug" or replay.get("outcome") != oracle.get("outcome"):
+            return False
+        if oracle.get("outcome") == "wrong-diagnostic":
+            return replay.get("actualCodes") == oracle.get("actualCodes")
+        return True
+    if kind == "cli-session":
+        return analysis_pair(case_id + "-reduce", raw).get("classification") == "confirmed-bug"
+    return None
 
 
 def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
@@ -437,13 +626,22 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
             continue
         path = OUT / "corpus" / f"{case_id}.pep"
         if not path.exists():
+            finding["reduction"] = {"status": "unsupported", "reason": "original corpus input is unavailable"}
             continue
         original = path.read_bytes()
-        def fails(candidate: bytes) -> bool:
-            result = cli_case(case_id + "-reduce", candidate, "check")
-            response = result.get("response") or {}
-            return response.get("status") == "valid" if finding.get("kind") == "invalid-generator" else result["status"] == "timeout"
-        minimized = reduce_bytes(original, fails)
+        original_reproduces = replay_finding(finding, original, case_id)
+        if original_reproduces is not True:
+            finding["reduction"] = {"status": "unsupported", "reason": "original failure oracle did not reproduce"}
+            continue
+        supported = replay_finding(finding, original, case_id)
+        if supported is None:
+            finding["reduction"] = {"status": "unsupported", "reason": f"finding kind {finding.get('kind')!r} has no reliable oracle"}
+            continue
+        minimized, attempts = reduce_bytes(original, lambda candidate: replay_finding(finding, candidate, case_id) is True)
+        if replay_finding(finding, minimized, case_id) is not True:
+            finding["reduction"] = {"status": "unsupported", "reason": "minimized bytes failed the original failure oracle",
+                                     "attempts": attempts}
+            continue
         reduced_path = OUT / "counterexamples" / f"{case_id}.pep"
         reduced_path.parent.mkdir(parents=True, exist_ok=True)
         reduced_path.write_bytes(minimized)
@@ -451,6 +649,8 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
         finding["originalBytes"] = len(original)
         finding["reducedBytes"] = len(minimized)
         finding["reducedHex"] = minimized.hex()
+        finding["reduction"] = {"status": "reduced", "attempts": attempts,
+                                 "budget": 80, "oracle": finding.get("kind")}
         reduced += 1
 
 
@@ -486,8 +686,16 @@ def report_text(result: dict[str, Any]) -> str:
     else:
         for finding in findings:
             lines.append(f"- **{finding.get('classification', 'unknown')}** `{finding.get('caseId', 'unknown')}` — {finding.get('detail', '')}")
+            if finding.get("reproducer"):
+                lines.append(f"  - source: `{finding['reproducer']['caseFile']}`")
+                lines.append(f"  - check: `{finding['reproducer']['checkCommand']}`")
             if finding.get("reducedPath"):
                 lines.append(f"  - reduced counterexample: `{finding['reducedPath']}` ({finding['reducedBytes']} bytes; hex `{finding['reducedHex']}`)")
+            elif finding.get("reduction", {}).get("status") == "unsupported":
+                lines.append(f"  - reduction unsupported: {finding['reduction'].get('reason', 'unspecified')}")
+    lines += ["", "## Classification counts", "", "| Classification | Count |", "|---|---:|"]
+    for classification, count in sorted(stats.get("classificationCounts", {}).items()):
+        lines.append(f"| {classification} | {count} |")
     lines += [
         "", "## Independent checks", "",
         "- CLI `check` and JSONL `open` are compared after removing transport-only fields.",
@@ -495,6 +703,8 @@ def report_text(result: dict[str, Any]) -> str:
         "- A stale edit must be rejected while malformed JSON must not terminate the session.",
         "- Generated valid programs are checked and run against independently computed expected output.",
         "- Generated invalid programs must not be accepted as valid or incomplete.",
+        "- Runtime stress cases require return code 1, status `runtime_error`, and the exact expected diagnostic code; launcher errors, malformed output and timeouts are findings.",
+        "- Reduction reruns the finding-specific oracle and retains the original input when the oracle is unsupported or does not survive.",
         "- Existing A11 OCaml-vs-Pep lexer tests are separate evidence and are not counted as fresh lab cases.",
         f"- Inherited A11 differential evidence: `{result['inheritedA11']['status'] if result.get('inheritedA11') else 'not requested'}`"
         + (f" ({result['inheritedA11'].get('tests')} tests)" if result.get('inheritedA11') and result['inheritedA11'].get('tests') else ""),
@@ -513,7 +723,7 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         "repositoryExamples": 0, "validGenerated": 0, "invalidGenerated": 0,
         "runtimeGenerated": 0, "expectedRejection": 0, "controlledRuntimeFailures": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
-        "largeResponseLimitRejections": 0,
+        "largeResponseLimitRejections": 0, "classificationCounts": {},
     }
     findings: list[dict[str, Any]] = []
     example_paths = sorted((ROOT / "examples").glob("*.pep"))
@@ -521,7 +731,11 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         raw = path.read_bytes()
         case_id = "example-" + path.stem
         stats["repositoryExamples"] += 1
-        findings.append(analysis_pair(case_id, raw))
+        finding = analysis_pair(case_id, raw)
+        if finding["classification"] != "missing-test":
+            append_finding(findings, stats, finding)
+        else:
+            note_classification(stats, "missing-test")
     for seed in args.seeds:
         run_generated(seed, args.count, findings, stats)
     session_invariants(findings, stats)
@@ -529,10 +743,15 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         reduce_findings(findings, args.reduce)
     git_revision = run_bounded(["git", "rev-parse", "HEAD"], timeout=3)
     git_branch = run_bounded(["git", "branch", "--show-current"], timeout=3)
+    lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
+                   "--count", str(args.count), "--timeout", str(args.timeout), "--reduce", str(args.reduce)]
+    if args.a11:
+        lab_command.append("--a11")
     result = {
         "schema": SCHEMA, "revision": git_revision["stdout"].strip(),
         "branch": git_branch["stdout"].strip(), "seeds": args.seeds,
         "countPerSeed": args.count, "timeoutSeconds": args.timeout,
+        "command": lab_command,
         "stats": stats, "findings": findings,
         "inheritedA11": inherited_a11_evidence(args.a11_timeout) if args.a11 else None,
     }
