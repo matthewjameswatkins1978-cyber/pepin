@@ -21,6 +21,11 @@ import tempfile
 import time
 from typing import Any, Callable, Iterable
 
+try:
+    from .generator import boundary_vectors, generate_cases
+except ImportError:  # Running this file directly from the repository root.
+    from generator import boundary_vectors, generate_cases
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
@@ -542,6 +547,71 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
                              "expectedCodes": list(RUNTIME_EXPECTED_CODES[reason])})
 
 
+def run_grammar_generated(seed: int, count: int, depth: int,
+                          findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Run the independent grammar-aware corpus with strict case oracles."""
+    cases = generate_cases(seed, count, depth)
+    for case in cases:
+        stats["grammarGenerated"] += 1
+        stats["grammarValid" if case.validity == "valid" else "grammarInvalid"] += 1
+        check = cli_case(case.case_id, case.source, "check")
+        response = check.get("response") if isinstance(check.get("response"), dict) else {}
+        status = response.get("status")
+        expected_returncode = 1 if case.validity == "invalid" else 0
+        contract_ok = (check.get("status") == "completed" and
+                       check.get("returncode") == expected_returncode)
+        shape_ok = isinstance(response, dict) and response_shape_error(response) is None
+        expected_status = status in case.expected_statuses
+        if case.validity == "invalid":
+            expected = contract_ok and shape_ok and expected_status
+        else:
+            expected = contract_ok and shape_ok and status == "valid"
+        if not expected:
+            completed_semantic_rejection = (
+                check.get("status") == "completed"
+                and status in {"invalid", "incomplete"}
+                and shape_ok
+            )
+            classification = "confirmed-bug" if case.validity == "valid" and completed_semantic_rejection else transport_failure_classification(check)
+            append_finding(findings, stats, {
+                "caseId": case.case_id,
+                "kind": "grammar-generator",
+                "classification": classification,
+                "detail": "Generated case did not satisfy its grammar/check oracle",
+                "case": case.as_record(),
+                "contract": {"expectedStatuses": list(case.expected_statuses),
+                             "actualStatus": status, "returncode": check.get("returncode")},
+                "response": response,
+                "evidence": check,
+            })
+            continue
+        if case.validity == "invalid":
+            stats["grammarExpectedRejection"] += 1
+            note_classification(stats, "expected-rejection")
+            continue
+        stats["grammarExpectedOutput"] += 1
+        run = cli_case(case.case_id, case.source, "run")
+        if run.get("status") == "launch-error":
+            classification = "infrastructure-failure"
+        elif run.get("status") == "timeout":
+            classification = "confirmed-bug"
+        elif run.get("status") != "completed" or run.get("returncode") != 0 or run.get("stdout") != case.expected_output:
+            classification = "confirmed-bug"
+        else:
+            note_classification(stats, "missing-test")
+            continue
+        append_finding(findings, stats, {
+            "caseId": case.case_id,
+            "kind": "grammar-runtime",
+            "classification": classification,
+            "detail": "Generated valid program did not produce its independent expected output",
+            "case": case.as_record(),
+            "expected": case.expected_output,
+            "actual": run.get("stdout"),
+            "evidence": run,
+        })
+
+
 def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     source = "fn double(n: Int) -> Int { return ?calculation }\n"
     rev = revision(source.encode())
@@ -780,6 +850,10 @@ def report_text(result: dict[str, Any]) -> str:
     for key, label in [
         ("repositoryExamples", "repository examples"), ("validGenerated", "generated valid programs"),
         ("invalidGenerated", "generated invalid programs"), ("runtimeGenerated", "runtime stress programs"),
+        ("grammarGenerated", "grammar-aware generated cases"), ("grammarValid", "grammar-aware valid cases"),
+        ("grammarInvalid", "grammar-aware invalid cases"), ("grammarExpectedOutput", "grammar output checks"),
+        ("grammarExpectedRejection", "grammar expected rejections"),
+        ("grammarBoundaryVectors", "independent integer boundary vectors"),
         ("expectedRejection", "expected rejections"), ("controlledRuntimeFailures", "controlled runtime failures"),
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
@@ -810,6 +884,9 @@ def report_text(result: dict[str, Any]) -> str:
         "- A stale edit must be rejected while malformed JSON must not terminate the session.",
         "- Generated valid programs are checked and run against independently computed expected output.",
         "- Generated invalid programs must not be accepted as valid or incomplete.",
+        "- Grammar-aware cases are generated from bounded constructors; valid cases require both check acceptance and exact independent output.",
+        "- Grammar invalid cases accept only the documented invalid/incomplete check statuses with a valid diagnostic contract.",
+        "- Integer boundary vectors use an independent signed-64-bit model; they are evidence about the model and do not replace compiler execution.",
         "- Runtime stress cases require return code 1, status `runtime_error`, and the exact expected diagnostic code; launcher errors, malformed output and timeouts are findings.",
         "- Launch failures and missing/malformed process output are classified as `infrastructure-failure` and fail the run without being misreported as Pep compiler defects.",
         "- Reduction reruns the finding-specific oracle and retains the original input when the oracle is unsupported or does not survive.",
@@ -830,6 +907,9 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
     stats = {
         "repositoryExamples": 0, "validGenerated": 0, "invalidGenerated": 0,
         "runtimeGenerated": 0, "expectedRejection": 0, "controlledRuntimeFailures": 0,
+        "grammarGenerated": 0, "grammarValid": 0, "grammarInvalid": 0,
+        "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
+        "grammarBoundaryVectors": len(boundary_vectors()),
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
         "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
         "classificationCounts": {},
@@ -847,13 +927,17 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
             note_classification(stats, "missing-test")
     for seed in args.seeds:
         run_generated(seed, args.count, findings, stats)
+        if args.grammar_count:
+            run_grammar_generated(seed, args.grammar_count, args.grammar_depth, findings, stats)
     session_invariants(findings, stats)
     if args.reduce:
         reduce_findings(findings, args.reduce)
     git_revision = run_bounded(["git", "rev-parse", "HEAD"], timeout=3)
     git_branch = run_bounded(["git", "branch", "--show-current"], timeout=3)
     lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
-                   "--count", str(args.count), "--timeout", str(args.timeout), "--reduce", str(args.reduce)]
+                   "--count", str(args.count), "--grammar-count", str(args.grammar_count),
+                   "--grammar-depth", str(args.grammar_depth), "--timeout", str(args.timeout),
+                   "--reduce", str(args.reduce)]
     if args.a11:
         lab_command.append("--a11")
     result = {
@@ -874,13 +958,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
     parser.add_argument("--count", type=int, default=4, help="cases per generated family and seed")
+    parser.add_argument("--grammar-count", type=int, default=0,
+                        help="bounded grammar-aware valid/invalid pairs per seed (0 disables)")
+    parser.add_argument("--grammar-depth", type=int, default=2,
+                        help="maximum recursive expression depth for grammar cases")
     parser.add_argument("--timeout", type=float, default=8.0, help="documented process timeout")
     parser.add_argument("--reduce", type=int, default=2, help="confirmed findings to reduce")
     parser.add_argument("--a11", action="store_true", help="run the existing bounded A11 lexer differential suite")
     parser.add_argument("--a11-timeout", type=float, default=180.0, help="timeout for inherited A11 evidence")
     args = parser.parse_args()
-    if args.count < 1 or args.count > 100 or args.reduce < 0:
-        parser.error("count must be 1..100 and reduce must be nonnegative")
+    if args.count < 1 or args.count > 100 or args.grammar_count < 0 or args.grammar_count > 100 or args.reduce < 0:
+        parser.error("count must be 1..100, grammar-count must be 0..100 and reduce must be nonnegative")
+    if args.grammar_depth < 0 or args.grammar_depth > 5:
+        parser.error("grammar-depth must be 0..5")
     if args.timeout <= 0 or args.a11_timeout <= 0:
         parser.error("timeouts must be positive")
     PROCESS_TIMEOUT = args.timeout

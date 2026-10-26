@@ -4,6 +4,37 @@ This directory owns an independent, reusable black-box laboratory for the
 OCaml seed compiler at the reviewed A11 base. It does not edit the Pep parser,
 checker, interpreter, or established semantics.
 
+## Grammar-aware corpus (Conformance 02)
+
+`conformance/generator.py` owns a small deterministic constructor library for
+the implemented seed grammar. It emits paired valid and intentionally invalid
+cases for arithmetic, Boolean control flow, records, recursive union matching,
+lists/`for-in`, and lexical shadowing. Cases carry their seed, family, depth,
+node count, exact source bytes, expected check status and (for valid programs)
+independently computed output. No Pep parser or AST is reused to generate the
+source.
+
+The optional grammar tier is bounded separately from the inherited generator:
+
+```powershell
+python conformance/harness.py --seeds 20261026 1101 --count 2 `
+  --grammar-count 3 --grammar-depth 2 --timeout 8 --reduce 0
+```
+
+`--grammar-count N` creates `2*N` grammar cases per seed (`N` valid and `N`
+invalid); `--grammar-depth` is constrained to 0..5. Valid cases must pass the
+normal check contract and then produce the exact independent output. Invalid
+cases must return a completed, well-shaped diagnostic with status `invalid` or
+`incomplete` and exit code 1. A valid case rejected by check is a
+`confirmed-bug`; a launch/transport failure is an `infrastructure-failure`.
+
+The same module contains a signed-64-bit reference model (`INT_MIN` and
+`INT_MAX`) covering checked add/subtract/multiply/negate, truncation-toward-zero
+division, divide-by-zero and the minimum-integer divide/negate overflow cases.
+These vectors are recorded as model evidence; they do not silently stand in
+for compiler execution. A12 parser topology remains gated and is not imported
+by this tier.
+
 ## Run
 
 From the repository root:

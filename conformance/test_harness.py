@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from . import harness
+from .generator import INT_MAX, INT_MIN, ArithmeticFault, boundary_vectors, checked_neg, generate_cases
 
 
 class HarnessContractTests(unittest.TestCase):
@@ -230,6 +231,69 @@ class HarnessContractTests(unittest.TestCase):
             result = harness.session_case([{"op": "open", "source": "say(\"x\")\n"}])
         self.assertEqual(result["responses"][0]["_malformedResponse"], "not-json")
         self.assertEqual(result["responses"][1]["status"], "valid")
+
+    def test_grammar_corpus_is_deterministic_and_pairs_valid_invalid_cases(self) -> None:
+        first = generate_cases(42, 6, 2)
+        second = generate_cases(42, 6, 2)
+        self.assertEqual(first, second)
+        self.assertEqual([case.validity for case in first], ["valid", "invalid"] * 6)
+        self.assertEqual(len({case.case_id for case in first}), len(first))
+        self.assertTrue({case.family for case in first} >= {"records", "recursive-union-match", "lists-for-in"})
+
+    def test_integer_reference_model_covers_signed_64_bit_boundaries(self) -> None:
+        vectors = {vector.name: vector for vector in boundary_vectors()}
+        self.assertEqual(vectors["add-max"].value, INT_MAX)
+        self.assertEqual(vectors["sub-min"].value, INT_MIN)
+        self.assertEqual(vectors["div-min"].value, INT_MIN)
+        self.assertEqual(vectors["add-overflow"].error_code, "PEP_RUNTIME_OVERFLOW")
+        self.assertEqual(vectors["div-overflow"].error_code, "PEP_RUNTIME_OVERFLOW")
+        self.assertEqual(vectors["div-zero"].error_code, "PEP_RUNTIME_DIVISION_BY_ZERO")
+        with self.assertRaises(ArithmeticFault):
+            checked_neg(INT_MIN)
+
+    @staticmethod
+    def _grammar_stats() -> dict[str, object]:
+        return {"grammarGenerated": 0, "grammarValid": 0, "grammarInvalid": 0,
+                "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
+                "grammarBoundaryVectors": 10, "classificationCounts": {}}
+
+    def test_grammar_runner_rejected_valid_case_is_fatal(self) -> None:
+        case = generate_cases(7, 1, 1)[0]
+        check = {"status": "completed", "returncode": 1,
+                 "response": {"status": "invalid", "diagnostics": [{"code": "PEP_PARSE"}]}}
+        findings: list[dict[str, object]] = []
+        stats = self._grammar_stats()
+        with patch.object(harness, "generate_cases", return_value=(case,)), \
+             patch.object(harness, "cli_case", return_value=check):
+            harness.run_grammar_generated(7, 1, 1, findings, stats)
+        self.assertEqual(findings[0]["classification"], "confirmed-bug")
+        self.assertEqual(harness.failed_finding_count(findings), 1)
+
+    def test_grammar_runner_accepts_only_exact_invalid_contract(self) -> None:
+        case = generate_cases(7, 1, 1)[1]
+        malformed = {"status": "completed", "returncode": 1,
+                     "response": {"status": "invalid", "diagnostics": []}}
+        findings: list[dict[str, object]] = []
+        stats = self._grammar_stats()
+        with patch.object(harness, "generate_cases", return_value=(case,)), \
+             patch.object(harness, "cli_case", return_value=malformed):
+            harness.run_grammar_generated(7, 1, 1, findings, stats)
+        self.assertEqual(findings[0]["classification"], "infrastructure-failure")
+        self.assertEqual(harness.failed_finding_count(findings), 1)
+
+    def test_grammar_runner_requires_independent_runtime_output(self) -> None:
+        case = generate_cases(7, 1, 1)[0]
+        check = {"status": "completed", "returncode": 0,
+                 "response": {"status": "valid"}, "stdout": "", "stderr": ""}
+        run = {"status": "completed", "returncode": 0, "stdout": "wrong\n", "stderr": "",
+               "response": {"status": "valid"}}
+        findings: list[dict[str, object]] = []
+        stats = self._grammar_stats()
+        with patch.object(harness, "generate_cases", return_value=(case,)), \
+             patch.object(harness, "cli_case", side_effect=[check, run]):
+            harness.run_grammar_generated(7, 1, 1, findings, stats)
+        self.assertEqual(findings[0]["classification"], "confirmed-bug")
+        self.assertEqual(findings[0]["expected"], case.expected_output)
 
 
 if __name__ == "__main__":
