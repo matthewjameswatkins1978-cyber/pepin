@@ -5,7 +5,7 @@ This is the canonical packet index. For any implementation handoff, **start at [
 |---|---|---|---|
 | A6 | [A6](A6-COLLECTIONS-AND-CONTROL-FLOW.md) | completed | A5 |
 | A7 | [A7](A7-TYPED-SEMANTIC-API.md) | completed | A6 |
-| A8 | [A8](A8-PEP-WRITTEN-ANALYSER.md) | ready | A7 |
+| A8 | [A8](A8-PEP-WRITTEN-ANALYSER.md) | completed | A7 |
 | A9 | [A9](A9-DEVELOPMENT-TOOLS.md) | provisional | A8 |
 | A10 | [A10](A10-COMPILER-FOUNDATION-LIBRARY.md) | provisional | A8 |
 | A11 | [A11](A11-PEP-WRITTEN-LEXER.md) | provisional | A10 |
@@ -14,7 +14,7 @@ This is the canonical packet index. For any implementation handoff, **start at [
 | A14 | [A14](A14-PEP-WRITTEN-C23-EMITTER.md) | provisional | A13 |
 | A15 | [A15](A15-STAGED-SELF-HOSTING.md) | provisional | A14 |
 
-**Status contract:** ready = currently authorised; queued = within the already scoped A6–A8 campaign, runnable only when the preceding acceptance gate passes; provisional = future design draft, not implementation authorisation; completed = implementation and evidence published. A3–A5 are accepted historical milestones, with the A5 record in [archive](archive/A5-ACCEPTANCE-RECORD.md).
+**Status contract:** ready = currently authorised; queued = within the already scoped A6–A8 campaign, runnable only when the preceding acceptance gate passes; provisional = future design draft, not implementation authorisation; completed = implementation and evidence published. After A8, manifest `current: null` records the design and priority review pause; no implementation phase is authorised. A3–A5 are accepted historical milestones, with the A5 record in [archive](archive/A5-ACCEPTANCE-RECORD.md).
 
 ## Working procedure
 1. Open [CURRENT.md](CURRENT.md), inspect repository HEAD/status, read linked packet, AGENTS.md, [status](../DESIGN.md), [protocol](../SESSION_PROTOCOL.md), [founding design](../FOUNDING_DESIGN_v0.3.md), [TR001](../TECHNICAL_RESOLUTION_001.md) and [TR002](../TECHNICAL_RESOLUTION_002.md).

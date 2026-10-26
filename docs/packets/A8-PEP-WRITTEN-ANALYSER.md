@@ -1,5 +1,5 @@
 # A8: First compiler-aware development tool written in Pep
-**Status: READY.** Final already scoped phase of the A6–A8 campaign, after accepted and published A7.
+**Status: COMPLETED.** Published in [da24441](https://github.com/matthewjameswatkins1978-cyber/pepin/commit/da244417c45a961728181a17ad31581e4d5a21de). A8 closes the already scoped A6–A8 campaign; the repository now pauses for design and priority review.
 
 ## Objective
 Implement **unused-function reachability analysis in ordinary Pep source** and run it through the existing versioned tool registry. The host supplies immutable checked facts, but **does not compute the answer**.
@@ -30,5 +30,12 @@ One compiler-owned syntax/type/scope authority. Preserve bidirectional typing, v
 
 Use focused checks while coding; at phase gate run clean OCaml build and full Windows CLI suite, with OCaml/MoonBit counts separate, plus real JSONL tests, negative/adversarial cases, git diff --check, secret/local-path review. Publish one coherent verified phase to public master without force-pushing or disturbing unrelated work; record public SHA, evidence, limitations and decisions. Only advance CURRENT after verified acceptance. Escalate semantic conflict, destructive work, material new dependencies or security/acceptance blockers, not routine reversible details.
 
-## Receipt and pause
-Published SHA, real analyser source path and independent fixtures, checked session transcript, test counts and specific limitations. **After A8 stop for a design and priority review. A9–A15 are provisional and not authorised merely by their existence.**
+## Acceptance receipt and pause
+
+- Published implementation: [da244417c45a961728181a17ad31581e4d5a21de](https://github.com/matthewjameswatkins1978-cyber/pepin/commit/da244417c45a961728181a17ad31581e4d5a21de). Pep analyzer source: [`examples/unused_functions.pep`](../../examples/unused_functions.pep); end-to-end tests: [`tests/test_a8.py`](../../tests/test_a8.py).
+- In one JSONL session, the suite checked and registered the analyzer, validated independently specified vectors, activated/listed/invoked it over protocol v2, exercised retained target revisions and stable tool revision, and hot-replaced the analyzer with an independently revised implementation.
+- The matrix covered all-reachable and no-root cases, disconnected functions/chains/cycles, reachable and unrooted recursion, direct and explicit roots, constructor-versus-function edges, call-like text, UTF-8/CRLF byte spans, invalid/incomplete targets, unknown and duplicate roots, unauthorised documents, direct/transitive `say`, invalid/incomplete/incompatible/failing-vector replacements, rollback, and bounded exhaustion. Session output was parsed as JSON.
+- Verification: clean OCaml 5.5.2 build and hello check/run smoke passed; **55/55 primary OCaml/A7/A8 tests** passed; **11/11 historical MoonBit tests** passed; `git diff --check` passed; reviewed changed files for credentials and local machine paths.
+- Limits: findings mean unreachable under `top_level_calls_plus_host_entry_functions`, not universal dead code. Invalid/incomplete targets return non-authoritative results. Large reports can return a structured runtime budget error rather than partial findings. The analyzer is an ordinary Pep example invoked through the trusted-local tool host; it is not a built-in CLI command, sandbox, general project analyzer, or self-hosted compiler.
+
+**After A8, stop for design and priority review. A9–A15 remain provisional and are not authorised by their presence.**

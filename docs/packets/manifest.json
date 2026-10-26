@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "current": "A8",
-  "lastAccepted": "A7",
-  "lastAcceptedCommit": "e97382a92bb27b4724099425c5bfaf126a983cb8",
+  "current": null,
+  "lastAccepted": "A8",
+  "lastAcceptedCommit": "da244417c45a961728181a17ad31581e4d5a21de",
   "policy": {
-    "ready": "current implementation",
+    "ready": "currently authorised implementation phase; current is null during a review pause",
     "queued": "existing A6-A8 campaign after previous acceptance",
     "provisional": "design draft, requires separate approval",
     "completed": "accepted public evidence"
@@ -29,7 +29,7 @@
     {
       "id": "A8",
       "path": "docs/packets/A8-PEP-WRITTEN-ANALYSER.md",
-      "status": "ready",
+      "status": "completed",
       "dependsOn": [
         "A7"
       ]
