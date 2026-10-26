@@ -16,6 +16,7 @@ from unittest.mock import patch
 from . import harness
 from .generator import INT_MAX, INT_MIN, ArithmeticFault, boundary_vectors, checked_neg, generate_cases
 from .metamorphic import MetamorphicPair, compare_pair, pairs_for_case, semantic_signature
+from .session_history import generate_histories, reduce_history, validate_history
 
 
 class HarnessContractTests(unittest.TestCase):
@@ -334,6 +335,48 @@ class HarnessContractTests(unittest.TestCase):
             harness.run_metamorphic(7, 1, 1, findings, stats)
         self.assertEqual(stats["metamorphicPairs"], 1)
         self.assertEqual(findings[0]["classification"], "confirmed-bug")
+
+    def test_session_histories_and_reducer_are_deterministic_and_bounded(self) -> None:
+        first = generate_histories(9, 2)
+        second = generate_histories(9, 2)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first[0].requests), 9)
+        self.assertEqual(first[0].expected_codes, ((5, "PEP_STALE_REVISION"),
+                                                   (7, "PEP_SESSION_MALFORMED_JSON")))
+        predicate = lambda items: "KEEP" in items
+        original = ("noise-a", "KEEP", "noise-b", "noise-c")
+        reduced, attempts = reduce_history(original, predicate, budget=20)
+        reduced_again, attempts_again = reduce_history(original, predicate, budget=20)
+        self.assertEqual(reduced, reduced_again)
+        self.assertEqual(attempts, attempts_again)
+        self.assertTrue(predicate(reduced))
+        self.assertLessEqual(attempts, 20)
+        self.assertEqual(reduced, ("KEEP",))
+
+    def test_session_history_validator_rejects_wrong_error_without_crashing(self) -> None:
+        history = generate_histories(9, 1)[0]
+        responses = [{"status": "incomplete"}, {"status": "incomplete"},
+                     {"status": "incomplete"}, {"metrics": {"cache_hits": 2}},
+                     {"status": "valid"}, {"error": {"code": "PEP_WRONG"}},
+                     {"status": "valid"}, {"error": {"code": "PEP_SESSION_MALFORMED_JSON"}},
+                     {"status": "valid"}]
+        result = {"status": "completed", "returncode": 0, "responses": responses}
+        finding = validate_history(result, history, lambda response: response.get("status"))
+        self.assertEqual(finding["classification"], "confirmed-bug")
+        self.assertEqual(finding["actualCode"], "PEP_WRONG")
+
+    def test_session_history_runner_propagates_finding_classification(self) -> None:
+        history = generate_histories(9, 1)[0]
+        findings: list[dict[str, object]] = []
+        stats = {"sessionHistories": 0, "sessionHistoryRequests": 0, "classificationCounts": {}}
+        with patch.object(harness, "generate_histories", return_value=(history,)), \
+             patch.object(harness, "session_case", return_value={"status": "completed", "returncode": 0, "responses": []}), \
+             patch.object(harness, "validate_history", return_value={"classification": "confirmed-bug", "detail": "synthetic history mismatch"}):
+            harness.run_session_histories(9, 1, findings, stats)
+        self.assertEqual(stats["sessionHistories"], 1)
+        self.assertEqual(stats["sessionHistoryRequests"], 9)
+        self.assertEqual(findings[0]["classification"], "confirmed-bug")
+        self.assertEqual(harness.failed_finding_count(findings), 1)
 
 
 if __name__ == "__main__":

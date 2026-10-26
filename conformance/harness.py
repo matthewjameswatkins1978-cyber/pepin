@@ -24,9 +24,11 @@ from typing import Any, Callable, Iterable
 try:
     from .generator import boundary_vectors, generate_cases
     from .metamorphic import compare_pair, pairs_for_case
+    from .session_history import generate_histories, validate_history
 except ImportError:  # Running this file directly from the repository root.
     from generator import boundary_vectors, generate_cases
     from metamorphic import compare_pair, pairs_for_case
+    from session_history import generate_histories, validate_history
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -669,6 +671,28 @@ def run_metamorphic(seed: int, count: int, depth: int,
                 })
 
 
+def run_session_histories(seed: int, count: int,
+                          findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Exercise bounded stateful histories without importing session internals."""
+    for history in generate_histories(seed, count):
+        write_case(history.history_id, history.source.encode("utf-8"))
+        result = session_case(list(history.requests))
+        stats["sessionHistories"] += 1
+        stats["sessionHistoryRequests"] += len(history.requests)
+        oracle = validate_history(result, history, normalized_analysis)
+        if oracle["classification"] == "missing-test":
+            note_classification(stats, "missing-test")
+        else:
+            append_finding(findings, stats, {
+                "caseId": history.history_id, "kind": "session-history",
+                "classification": oracle["classification"], "detail": oracle["detail"],
+                "history": {"seed": history.seed, "index": history.index,
+                            "requestCount": len(history.requests),
+                            "expectedCodes": [list(item) for item in history.expected_codes]},
+                "oracle": oracle, "responses": result.get("responses"),
+            })
+
+
 def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     source = "fn double(n: Int) -> Int { return ?calculation }\n"
     rev = revision(source.encode())
@@ -913,6 +937,8 @@ def report_text(result: dict[str, Any]) -> str:
         ("grammarBoundaryVectors", "independent integer boundary vectors"),
         ("metamorphicPairs", "metamorphic source pairs"),
         ("metamorphicPreserved", "metamorphic relations preserved"),
+        ("sessionHistories", "generated session histories"),
+        ("sessionHistoryRequests", "generated session-history requests"),
         ("expectedRejection", "expected rejections"), ("controlledRuntimeFailures", "controlled runtime failures"),
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
@@ -970,6 +996,7 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
         "grammarBoundaryVectors": len(boundary_vectors()),
         "metamorphicPairs": 0, "metamorphicPreserved": 0,
+        "sessionHistories": 0, "sessionHistoryRequests": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
         "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
         "classificationCounts": {},
@@ -991,6 +1018,8 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
             run_grammar_generated(seed, args.grammar_count, args.grammar_depth, findings, stats)
         if args.metamorphic_count:
             run_metamorphic(seed, args.metamorphic_count, args.grammar_depth, findings, stats)
+        if args.history_count:
+            run_session_histories(seed, args.history_count, findings, stats)
     session_invariants(findings, stats)
     if args.reduce:
         reduce_findings(findings, args.reduce)
@@ -999,6 +1028,7 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
     lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
                    "--count", str(args.count), "--grammar-count", str(args.grammar_count),
                    "--grammar-depth", str(args.grammar_depth), "--metamorphic-count", str(args.metamorphic_count),
+                   "--history-count", str(args.history_count),
                    "--timeout", str(args.timeout),
                    "--reduce", str(args.reduce)]
     if args.a11:
@@ -1027,14 +1057,17 @@ def main() -> int:
                         help="maximum recursive expression depth for grammar cases")
     parser.add_argument("--metamorphic-count", type=int, default=0,
                         help="valid grammar cases per seed to replay under source transformations (0 disables)")
+    parser.add_argument("--history-count", type=int, default=0,
+                        help="bounded JSONL session histories per seed (0 disables)")
     parser.add_argument("--timeout", type=float, default=8.0, help="documented process timeout")
     parser.add_argument("--reduce", type=int, default=2, help="confirmed findings to reduce")
     parser.add_argument("--a11", action="store_true", help="run the existing bounded A11 lexer differential suite")
     parser.add_argument("--a11-timeout", type=float, default=180.0, help="timeout for inherited A11 evidence")
     args = parser.parse_args()
     if (args.count < 1 or args.count > 100 or args.grammar_count < 0 or args.grammar_count > 100 or
-            args.metamorphic_count < 0 or args.metamorphic_count > 100 or args.reduce < 0):
-        parser.error("count must be 1..100, grammar-count/metamorphic-count must be 0..100 and reduce must be nonnegative")
+            args.metamorphic_count < 0 or args.metamorphic_count > 100 or args.history_count < 0 or
+            args.history_count > 100 or args.reduce < 0):
+        parser.error("count must be 1..100, grammar/metamorphic/history counts must be 0..100 and reduce must be nonnegative")
     if args.grammar_depth < 0 or args.grammar_depth > 5:
         parser.error("grammar-depth must be 0..5")
     if args.timeout <= 0 or args.a11_timeout <= 0:

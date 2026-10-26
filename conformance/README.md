@@ -47,6 +47,17 @@ therefore not a false finding, while a synthetic mismatch is a fatal harness
 test. The relation itself is pure and deterministic, making it suitable for
 future source-aware reduction without importing a Pep parser.
 
+## Stateful session tier
+
+`conformance/session_history.py` generates bounded schema-v3 histories covering
+open, repeated same-revision query, metrics/cache reuse, a successful edit, a
+stale edit, current-revision query, malformed JSON, and post-error recovery.
+Enable it with `--history-count N`. Each history records its seed, exact source,
+request count and expected error codes. The history reducer is deterministic
+sequence ddmin with a fixed attempt budget; it is independently testable and
+does not assume that a shortened history remains meaningful unless the supplied
+failure predicate says so.
+
 ## Run
 
 From the repository root:
