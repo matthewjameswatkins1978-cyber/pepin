@@ -508,7 +508,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
         oracle_run = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
              "check", str(LEXER), "--json"],
-            cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\\opam-roots\\pepin")},
+            cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
             capture_output=True, text=True, encoding="utf-8", check=False,
         )
         self.assertEqual(oracle_run.returncode, 0, oracle_run.stderr)
@@ -519,6 +519,34 @@ class A12ParserDifferentialTests(unittest.TestCase):
         self.assertLess(self.last_parser_steps, len(raw))
         self.assertEqual(scalar(result_fields["document"]), target["document"])
         self.assertEqual(scalar(result_fields["revision"]), target["revision"])
+
+    def test_repository_examples_match_ocaml_parser_ast(self):
+        matched = 0
+        skipped_oversize = []
+        for source_path in sorted((ROOT / "examples").glob("*.pep")):
+            raw = source_path.read_bytes()
+            if len(raw) > 65536:
+                skipped_oversize.append(source_path.name)
+                continue
+            target, result = self.parse(raw, metadata_only=True)
+            oracle_run = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
+                 "check", str(source_path), "--json"],
+                cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
+                capture_output=True, text=True, encoding="utf-8", check=False,
+            )
+            oracle = json.loads(oracle_run.stdout)
+            oracle_ast = oracle.get("ast")
+            parser_fields = fields(result)
+            if isinstance(oracle_ast, list):
+                self.assertEqual(scalar(parser_fields["status"]), "complete", source_path.name)
+                self.assertEqual(pep_flat_nodes(result), ocaml_flat_nodes(oracle_ast), source_path.name)
+                matched += 1
+            else:
+                self.assertNotEqual(scalar(parser_fields["status"]), "complete", source_path.name)
+                self.assertEqual(scalar(parser_fields["errorCode"]), oracle.get("errorCode"), source_path.name)
+        self.assertGreaterEqual(matched, 8)
+        self.assertIn("pep_parser.pep", skipped_oversize)
 
     def test_incremental_parser_transport_scaling(self):
         measurements = []
