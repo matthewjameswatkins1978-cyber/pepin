@@ -181,10 +181,10 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(responses[8]["result"], {"type":"Str","value":"Pep"})
         self.assertEqual(responses[12]["result"], {"type":"Unit","value":None})
 
-    def test_tool_protocol_requires_version_one(self):
+    def test_tool_protocol_rejects_unknown_versions(self):
         missing_version = {"schemaVersion":3,"op":"tool_list"}
         unsupported_version = self.tool_request("tool_list")
-        unsupported_version["toolProtocolVersion"] = 2
+        unsupported_version["toolProtocolVersion"] = 99
         responses = [json.loads(line) for line in invoke_session([missing_version,unsupported_version]).stdout.splitlines()]
         self.assertEqual(responses[0]["error"]["code"], "PEP_SESSION_FIELD_REQUIRED")
         self.assertEqual(responses[1]["error"]["code"], "PEP_TOOL_PROTOCOL_VERSION")
