@@ -1,8 +1,8 @@
 # Pep C23 runtime ABI hardening and benchmark report
 
-Mission: `PEP-C23-ABI-03`  
-Accepted research base: `6a41f0e8d62e8fb3d82bb5d6bc13a338bc4762ec`  
-Branch: `exp/c23-feasibility`  
+Mission: `PEP-C23-ABI-03`
+Accepted research base: `6a41f0e8d62e8fb3d82bb5d6bc13a338bc4762ec`
+Branch: `exp/c23-feasibility`
 Benchmark/comparison slice: `3d027ed4f7174ca898b4c46f1b7109a7eae81022`
 
 ## Result
