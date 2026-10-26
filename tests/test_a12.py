@@ -465,7 +465,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
 
     def setUp(self):
         env = os.environ.copy()
-        env.setdefault("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")
+        env.setdefault("PEPIN_OPAM_ROOT", os.environ.get("OPAMROOT", ""))
         self.session = JsonLineClient(
             ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "session", "--jsonl"], ROOT, env,
         )
@@ -846,7 +846,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
         oracle_run = subprocess.run(
             ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
              "check", str(LEXER), "--json"],
-            cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
+            cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", os.environ.get("OPAMROOT", ""))},
             capture_output=True, text=True, encoding="utf-8", check=False,
         )
         self.assertEqual(oracle_run.returncode, 0, oracle_run.stderr)
@@ -876,7 +876,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
                 oracle_run = subprocess.run(
                     ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
                      "check", str(probe), "--json"],
-                    cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
+                    cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", os.environ.get("OPAMROOT", ""))},
                     capture_output=True, text=True, encoding="utf-8", check=False,
                 )
                 oracle = json.loads(oracle_run.stdout)
@@ -902,7 +902,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
             oracle_run = subprocess.run(
                 ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
                  "check", str(source_path), "--json"],
-                cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\opam-roots\pepin")},
+                cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", os.environ.get("OPAMROOT", ""))},
                 capture_output=True, text=True, encoding="utf-8", check=False,
             )
             oracle = json.loads(oracle_run.stdout)
