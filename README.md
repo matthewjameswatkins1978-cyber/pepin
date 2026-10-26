@@ -4,6 +4,10 @@ Pep is a small, statically typed, AI-first programming language intended to beco
 
 The primary compiler seed is OCaml 5.5.2. Pep follows a **modern-by-default, evidence-driven upgrade policy**; its planned native backend is a **Pep-written C23 generator** (ISO/IEC 9899:2024), using **Clang as the primary native compiler and GCC for independent checks**, not yet implemented. Pep source is ordinary plaintext `.pep` files. The current interpreter supports built-in types `Int`, `Bool`, `Str`, and `Unit`; immutable nominal records; recursive tagged unions; constructor pattern matching; functions, lexical scopes, integer operations, conditionals, built-in calls, and typed or unconstrained holes. Examples cover [records](examples/point_sum.pep), [recursive unions](examples/recursive_expr.pep), and [typed match holes](examples/match_holes.pep). Exact limits are in [the seed-language note](docs/SEED_LANGUAGE.md) and [implementation-status index](docs/DESIGN.md).
 
+## For implementation agents
+
+**[Read the current Pepin implementation packet](docs/packets/CURRENT.md)**. This stable GitHub link points to the next authorised milestone. The [complete packet roadmap](docs/packets/README.md) includes individually prepared A6–A15 contracts; later self-hosting packets are **provisional plans, not shipped features or permission to implement them automatically**. The [A5 acceptance record](docs/packets/archive/A5-ACCEPTANCE-RECORD.md) is preserved.
+
 ## Build, inspect, check, and run
 Requirements: PowerShell 7, opam, and the Pepin-specific OCaml 5.5.2 switch. By default the CLI uses the standard opam root; set `PEPIN_OPAM_ROOT` if the switch is installed in another root.
 
@@ -30,7 +34,8 @@ The in-process semantic session reads and writes JSON Lines over standard input/
 - [Implementation status](docs/DESIGN.md): what is implemented versus planned.
 - [Session protocol v3](docs/SESSION_PROTOCOL.md): ephemeral revision-aware JSONL interface and its limits.
 - [Seed-language decision](docs/SEED_LANGUAGE.md): OCaml seed choice and current limits.
-- [A5 implementation packet](docs/NEXT_PACKET.md): acceptance scope and implementation status for the first local Pep tool extension.
+- [Current implementation packet](docs/packets/CURRENT.md): stable agent entry; [all packets](docs/packets/README.md): A6–A15 roadmap.
+- [Historical A5 acceptance](docs/packets/archive/A5-ACCEPTANCE-RECORD.md): verified first local Pep tool extension.
 - [Historical A0 MoonBit design](docs/HISTORICAL_DESIGN_A0.md): retained prototype record; not the primary compiler feature list.
 
 The original MoonBit compiler remains available as `pep-moonbit.ps1` with its separate tests for historical/reference use. The current bootstrap instructions are in [BOOTSTRAP.md](docs/BOOTSTRAP.md).

@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "current": "A6",
+  "lastAccepted": "A5",
+  "lastAcceptedCommit": "e8a82e22dc4e63d66705369725556bb3e086f10a",
+  "policy": {
+    "ready": "current implementation",
+    "queued": "existing A6-A8 campaign after previous acceptance",
+    "provisional": "design draft, requires separate approval",
+    "completed": "accepted public evidence"
+  },
+  "packets": [
+    {
+      "id": "A6",
+      "path": "docs/packets/A6-COLLECTIONS-AND-CONTROL-FLOW.md",
+      "status": "ready",
+      "dependsOn": [
+        "A5"
+      ]
+    },
+    {
+      "id": "A7",
+      "path": "docs/packets/A7-TYPED-SEMANTIC-API.md",
+      "status": "queued",
+      "dependsOn": [
+        "A6"
+      ]
+    },
+    {
+      "id": "A8",
+      "path": "docs/packets/A8-PEP-WRITTEN-ANALYSER.md",
+      "status": "queued",
+      "dependsOn": [
+        "A7"
+      ]
+    },
+    {
+      "id": "A9",
+      "path": "docs/packets/A9-DEVELOPMENT-TOOLS.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A8"
+      ]
+    },
+    {
+      "id": "A10",
+      "path": "docs/packets/A10-COMPILER-FOUNDATION-LIBRARY.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A8"
+      ]
+    },
+    {
+      "id": "A11",
+      "path": "docs/packets/A11-PEP-WRITTEN-LEXER.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A10"
+      ]
+    },
+    {
+      "id": "A12",
+      "path": "docs/packets/A12-PEP-WRITTEN-PARSER.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A11"
+      ]
+    },
+    {
+      "id": "A13",
+      "path": "docs/packets/A13-PEP-WRITTEN-CHECKER.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A12"
+      ]
+    },
+    {
+      "id": "A14",
+      "path": "docs/packets/A14-PEP-WRITTEN-C23-EMITTER.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A13"
+      ]
+    },
+    {
+      "id": "A15",
+      "path": "docs/packets/A15-STAGED-SELF-HOSTING.md",
+      "status": "provisional",
+      "dependsOn": [
+        "A14"
+      ]
+    }
+  ]
+}
