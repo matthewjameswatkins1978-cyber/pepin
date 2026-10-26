@@ -1,4 +1,4 @@
-type ty = Int | Bool | Str | Unit | Named of string | List of ty
+type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int }
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
 type token = { kind:token_kind; at:span }
@@ -18,7 +18,7 @@ type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan lo hi line column = {lo;hi;line;column}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -155,7 +155,7 @@ let accept_sym p s = if symbol p s then (ignore(take p);true) else false
 let expect_sym p s = if not(accept_sym p s) then fail "PEP_PARSE_EXPECTED" ("Expected '"^s^"'") (at p) ()
 let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "Expected a name" t.at ()
 let rec parse_type p = match take p with
-  |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "Unit";_}->Unit
+  |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
   |{kind=Id name;_}->Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
@@ -393,16 +393,16 @@ let check tops =
   List.iter (fun info -> Hashtbl.add type_table info.record_name (`Record info)) semantic_record_infos;
   List.iter(function
     |TopType (RecordDecl(name,fields,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ids=Hashtbl.create 8 in
         let resolved=List.map(fun(field,ty,fsp)->if Hashtbl.mem ids field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add ids field ();fresh_field(),field,ty,fsp) fields in
         let info={record_id=fresh_type();record_name=name;record_fields=resolved;record_span=sp} in
         Hashtbl.add type_table name (`Record info); records:=info::!records
     |TopType (UnionDecl(name,variants,sp))->
-        if List.mem name ["Int";"Bool";"Str";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
+        if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ctor_ids=Hashtbl.create 8 in
         let resolved=List.map(fun(ctor,args,csp)->
-          if List.mem ctor ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"semantic_snapshot";"source_bytes"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
+          if List.mem ctor ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
           if Hashtbl.mem ctor_ids ctor || Hashtbl.mem constructor_table ctor then fail "PEP_DUPLICATE_CONSTRUCTOR" ("Duplicate constructor '"^ctor^"'") csp ();
           Hashtbl.add ctor_ids ctor ();
           let item=(fresh_ctor(),ctor,args,csp) in Hashtbl.add constructor_table ctor (name,item); item) variants in
@@ -420,7 +420,7 @@ let check tops =
     |TopStmt _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
-  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
+  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
@@ -560,16 +560,22 @@ let check tops =
          {node=XCall(None,name,[collection]);ety=Some(List element);espan=s}
        ) else if name="byte_length" then (
          check_arity 1;
-         let source=check_expr env scope (Some Str) (List.hd args) in
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
          {node=XCall(None,name,[source]);ety=Some Int;espan=s}
        ) else if name="byte_at" then (
          check_arity 2;
-         let source=check_expr env scope (Some Str) (List.hd args) in
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
          let offset=check_expr env scope (Some Int) (List.nth args 1) in
          {node=XCall(None,name,[source;offset]);ety=Some Int;espan=s}
        ) else if name="byte_slice" then (
          check_arity 3;
-         let source=check_expr env scope (Some Str) (List.hd args) in
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
+         let start=check_expr env scope (Some Int) (List.nth args 1) in
+         let finish=check_expr env scope (Some Int) (List.nth args 2) in
+         {node=XCall(None,name,[source;start;finish]);ety=Some SourceBytes;espan=s}
+       ) else if name="utf8_slice" then (
+         check_arity 3;
+         let source=check_expr env scope (Some SourceBytes) (List.hd args) in
          let start=check_expr env scope (Some Int) (List.nth args 1) in
          let finish=check_expr env scope (Some Int) (List.nth args 2) in
          {node=XCall(None,name,[source;start;finish]);ety=Some Str;espan=s}
@@ -585,7 +591,7 @@ let check tops =
          let value=check_expr env scope (Some element) (List.nth args 1) in
          {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
        ) else (
-         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],Str,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
            match Hashtbl.find_opt signatures name with None->
              let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
              let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
@@ -744,7 +750,7 @@ let diag_json d = "{\"schemaVersion\":2,\"status\":\"invalid\",\"diagnostics\":[
 let program_status c = if c.holes=[] then "valid" else "incomplete"
 let check_json tops c = "{\"schemaVersion\":2,\"status\":"^json_string(program_status c)^",\"ast\":"^ast_json tops^",\"typedTree\":"^typed_json c^",\"holes\":["^String.concat ","(List.map hole_json c.holes)^"],\"diagnostics\":[]}"
 
-type value = VInt of int64|VBool of bool|VStr of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
+type value = VInt of int64|VBool of bool|VStr of string|VSourceBytes of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
 exception Runtime of string*string*span
 let runtime code message sp=raise(Runtime(code,message,sp))
 let int_value = function VInt n->n|_->assert false
@@ -808,24 +814,33 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
         let rec copy result=function []->VList result|head::rest->tick e.espan;copy (head::result) rest in copy [] items
       |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked reverse received invalid arguments" e.espan)
     else if name="byte_length" then (match values with
-      |[VStr source]->VInt(Int64.of_int(String.length source))
+      |[VSourceBytes source]->VInt(Int64.of_int(String.length source))
       |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_length received invalid arguments" e.espan)
     else if name="byte_at" then (match values with
-      |[VStr source;VInt offset] when offset>=0L && offset<Int64.of_int(String.length source)->VInt(Int64.of_int(Char.code source.[Int64.to_int offset]))
-      |[VStr _;VInt _]->runtime "PEP_RUNTIME_BYTE_RANGE" "Byte offset is outside the source" e.espan
+      |[VSourceBytes source;VInt offset] when offset>=0L && offset<Int64.of_int(String.length source)->VInt(Int64.of_int(Char.code source.[Int64.to_int offset]))
+      |[VSourceBytes _;VInt _]->runtime "PEP_RUNTIME_BYTE_RANGE" "Byte offset is outside the source" e.espan
       |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_at received invalid arguments" e.espan)
     else if name="byte_slice" then (match values with
-      |[VStr source;VInt start;VInt finish]->
+      |[VSourceBytes source;VInt start;VInt finish]->
         let length=Int64.of_int(String.length source) in
         if start<0L || finish<start || finish>length then runtime "PEP_RUNTIME_BYTE_RANGE" "Byte slice must be a valid half-open source range" e.espan;
-        let boundary offset=offset=0L || offset=length || Char.code source.[Int64.to_int offset] land 0xc0 <> 0x80 in
-        if not(boundary start && boundary finish) then runtime "PEP_RUNTIME_BYTE_BOUNDARY" "Byte slice boundary splits a UTF-8 sequence" e.espan;
         let first=Int64.to_int start and count=Int64.to_int(Int64.sub finish start) in
         for _=1 to count do tick e.espan done;
-        VStr(String.sub source first count)
+        VSourceBytes(String.sub source first count)
       |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked byte_slice received invalid arguments" e.espan)
+    else if name="utf8_slice" then (match values with
+      |[VSourceBytes source;VInt start;VInt finish]->
+        let length=Int64.of_int(String.length source) in
+        if start<0L || finish<start || finish>length then runtime "PEP_RUNTIME_BYTE_RANGE" "UTF-8 slice must be a valid half-open source range" e.espan;
+        let boundary offset=offset=0L || offset=length || Char.code source.[Int64.to_int offset] land 0xc0 <> 0x80 in
+        if not(boundary start && boundary finish) then runtime "PEP_RUNTIME_BYTE_BOUNDARY" "UTF-8 slice boundary splits a UTF-8 sequence" e.espan;
+        let first=Int64.to_int start and count=Int64.to_int(Int64.sub finish start) in
+        for _=1 to count do tick e.espan done;
+        let text=String.sub source first count in
+        (match invalid_utf8_offset text with Some offset->runtime "PEP_RUNTIME_INVALID_UTF8" (Printf.sprintf "UTF-8 slice contains invalid encoding at byte %d" offset) e.espan |None->VStr text)
+      |_ ->runtime "PEP_RUNTIME_BUILTIN" "Checked utf8_slice received invalid arguments" e.espan)
     else if name="source_bytes" then (match source_bytes_value with
-      |Some source->source
+      |Some source->VSourceBytes source
       |None->runtime "PEP_RUNTIME_SOURCE_CONTEXT" "source_bytes is available only for a host-authorised v2 semanticTarget" e.espan)
     else if name="append" then (match values with
       |[VList items;value]->
@@ -1298,7 +1313,7 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | List _ | Named _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
@@ -1344,6 +1359,7 @@ let session_record_by_name checked name =
 let session_tool_transport_supported checked ty =
   let rec supports seen = function
     |Int|Bool|Str|Unit->true
+    |SourceBytes->false
     |List element->supports seen element
     |Named name->
         (match session_record_by_name checked name with
@@ -1406,6 +1422,7 @@ let session_tool_value_v2 checked expected payload =
        let actual=session_required_string fields "type" in
        if actual<>type_name ty then raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
        (match ty with
+        |SourceBytes -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "SourceBytes cannot cross the v2 tool boundary"))
         |Int|Bool|Str|Unit ->
            session_exact_fields fields ["type";"value"] "PEP_TOOL_VALUE_FIELDS";
            scalar ty (Option.value (session_member fields "value") ~default:JNull)
@@ -1539,7 +1556,7 @@ let session_semantic_target tool_checked target_message =
   Some(tool_semantic_record tool_checked "ProgramInfo"
     ["document",VStr document_id;"revision",VStr revision;"status",VStr status;
      "functions",VList functions;"calls",VList calls;"roots",VList roots;"diagnostics",VList diagnostic_values]),
-  Some(VStr analysis.source)
+  Some analysis.source
 
 let tool_reaches_builtin checked function_id builtin =
   let functions=Hashtbl.create 16 in
@@ -1963,7 +1980,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"checked_byte_slices\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> Str (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"Str\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"Str\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"Str\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"Str\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in

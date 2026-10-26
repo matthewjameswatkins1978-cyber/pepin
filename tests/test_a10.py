@@ -156,52 +156,196 @@ class PepA10Tests(unittest.TestCase):
 
     def test_byte_bounds_and_utf8_slice_boundaries_are_explicit(self):
         source = (
-            "fn probe(source: Str) -> Int { return byte_at(source, byte_length(source) - 1) }\n"
-            "fn slice_probe(source: Str) -> Str { return byte_slice(source, 0, 1) }\n"
+            "fn probe() -> Int { return byte_at(source_bytes(), byte_length(source_bytes()) - 1) }\n"
+            "fn slice_probe() -> Str { return utf8_slice(source_bytes(), 0, 1) }\n"
         )
-        target = "x"
+        ordinary = "x"
+        empty = ""
+        accented = "é"
         requests = [
-            request("open", source=source), request("open", source=target),
+            request("open", source=source), request("open", source=ordinary),
+            request("open", source=empty), request("open", source=accented),
             request("tool_register", tool="probe", document="doc-1", revision=revision(source), function="probe"),
-            request("tool_validate", tool="probe", document="doc-1", revision=revision(source), testVectors=[{"arguments": [scalar("Str", "x")], "expect": scalar("Int", "120")}]),
+            request("tool_validate", tool="probe", document="doc-1", revision=revision(source), testVectors=[{
+                "arguments": [], "expect": scalar("Int", "120"),
+                "semanticTarget": {"document": "doc-2", "revision": revision(ordinary), "entryFunctions": []},
+            }]),
             request("tool_activate", tool="probe", document="doc-1", revision=revision(source)),
-            request("tool_invoke", tool="probe", arguments=[scalar("Str", "")]),
+            request("tool_invoke", tool="probe", arguments=[]),
+            request("tool_invoke", tool="probe", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(empty), "entryFunctions": [],
+            }),
             request("tool_register", tool="slice", document="doc-1", revision=revision(source), function="slice_probe"),
-            request("tool_validate", tool="slice", document="doc-1", revision=revision(source), testVectors=[{"arguments": [scalar("Str", "x")], "expect": scalar("Str", "x")}]),
+            request("tool_validate", tool="slice", document="doc-1", revision=revision(source), testVectors=[{
+                "arguments": [], "expect": scalar("Str", "x"),
+                "semanticTarget": {"document": "doc-2", "revision": revision(ordinary), "entryFunctions": []},
+            }]),
             request("tool_activate", tool="slice", document="doc-1", revision=revision(source)),
-            request("tool_invoke", tool="slice", arguments=[scalar("Str", "é")]),
+            request("tool_invoke", tool="slice", arguments=[], semanticTarget={
+                "document": "doc-4", "revision": revision(accented), "entryFunctions": [],
+            }),
         ]
         result = invoke_session(requests)
         self.assertEqual(result.returncode, 0, result.stderr)
         responses = [json.loads(line) for line in result.stdout.splitlines()]
-        self.assertEqual(responses[5]["error"]["code"], "PEP_RUNTIME_BYTE_RANGE")
-        self.assertEqual(responses[9]["error"]["code"], "PEP_RUNTIME_BYTE_BOUNDARY")
+        self.assertEqual(responses[5]["status"], "Validated", responses[5])
+        self.assertEqual(responses[7]["error"]["code"], "PEP_RUNTIME_SOURCE_CONTEXT")
+        self.assertEqual(responses[8]["error"]["code"], "PEP_RUNTIME_BYTE_RANGE")
+        self.assertEqual(responses[10]["status"], "Validated", responses[10])
+        self.assertEqual(responses[12]["error"]["code"], "PEP_RUNTIME_BYTE_BOUNDARY")
 
-
-    def test_source_bytes_requires_host_grant_and_invalid_str_never_escapes_json(self):
-        source = "fn raw() -> Str { return source_bytes() }\n"
-        empty = ""
-        raw = bytes([255])
+    def test_raw_byte_slice_may_split_utf8_for_bytewise_scanning(self):
+        source = "fn first() -> Int { return byte_at(byte_slice(source_bytes(), 0, 1), 0) }\n"
+        target = "é"
         requests = [
-            request("open", source=source), request("open", source=empty),
-            request("tool_register", tool="raw", document="doc-1", revision=revision(source), function="raw"),
-            request("tool_validate", tool="raw", document="doc-1", revision=revision(source), testVectors=[{
-                "arguments": [], "expect": scalar("Str", ""),
-                "semanticTarget": {"document": "doc-2", "revision": revision(empty), "entryFunctions": []},
+            request("open", source=source), request("open", source=target),
+            request("tool_register", tool="first", document="doc-1", revision=revision(source), function="first"),
+            request("tool_validate", tool="first", document="doc-1", revision=revision(source), testVectors=[{
+                "arguments": [], "expect": scalar("Int", "195"),
+                "semanticTarget": {"document": "doc-2", "revision": revision(target), "entryFunctions": []},
             }]),
-            request("tool_activate", tool="raw", document="doc-1", revision=revision(source)),
-            {"schemaVersion": 3, "op": "open_bytes", "bytes": list(raw)},
-            request("tool_invoke", tool="raw", arguments=[]),
-            request("tool_invoke", tool="raw", arguments=[], semanticTarget={
-                "document": "doc-3", "revision": "sha256:" + hashlib.sha256(raw).hexdigest(), "entryFunctions": [],
+            request("tool_activate", tool="first", document="doc-1", revision=revision(source)),
+            request("tool_invoke", tool="first", arguments=[], semanticTarget={
+                "document": "doc-2", "revision": revision(target), "entryFunctions": [],
             }),
         ]
         result = invoke_session(requests)
         self.assertEqual(result.returncode, 0, result.stderr)
         responses = [json.loads(line) for line in result.stdout.splitlines()]
         self.assertEqual(responses[3]["status"], "Validated", responses[3])
-        self.assertEqual(responses[6]["error"]["code"], "PEP_RUNTIME_SOURCE_CONTEXT")
-        self.assertEqual(responses[7]["error"]["code"], "PEP_TOOL_RESULT_ENCODING")
+        self.assertEqual(responses[5]["result"]["value"], "195")
+        self.assertEqual(responses[5]["revision"], revision(source))
+
+    def test_source_bytes_is_opaque_and_utf8_conversion_is_explicit(self):
+        invalid_text = "fn bad_text() -> Str { return source_bytes() }\n"
+        source = (
+            "type RawBox { raw: SourceBytes }\n"
+            "fn raw_result() -> SourceBytes { return source_bytes() }\n"
+            "fn nested_result() -> List[RawBox] { return [RawBox { raw: source_bytes() }] }\n"
+            "fn raw_length() -> Int { return byte_length(source_bytes()) }\n"
+            "fn as_text() -> Str { return utf8_slice(source_bytes(), 0, byte_length(source_bytes())) }\n"
+        )
+        raw = bytes([255])
+        ordinary = "x"
+        requests = [
+            request("open", source=invalid_text),
+            request("open", source=source),
+            {"schemaVersion": 3, "op": "open_bytes", "bytes": list(raw)},
+            request("open", source=ordinary),
+            request("tool_register", tool="length", document="doc-2", revision=revision(source), function="raw_length"),
+            request("tool_validate", tool="length", document="doc-2", revision=revision(source), testVectors=[{
+                "arguments": [], "expect": scalar("Int", "1"),
+                "semanticTarget": {"document": "doc-3", "revision": "sha256:" + hashlib.sha256(raw).hexdigest(), "entryFunctions": []},
+            }]),
+            request("tool_activate", tool="length", document="doc-2", revision=revision(source)),
+            request("tool_invoke", tool="length", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": "sha256:" + hashlib.sha256(raw).hexdigest(), "entryFunctions": [],
+            }),
+            request("tool_register", tool="raw", document="doc-2", revision=revision(source), function="raw_result"),
+            request("tool_validate", tool="raw", document="doc-2", revision=revision(source), testVectors=[]),
+            request("tool_register", tool="nested", document="doc-2", revision=revision(source), function="nested_result"),
+            request("tool_validate", tool="nested", document="doc-2", revision=revision(source), testVectors=[]),
+            request("tool_register", tool="text", document="doc-2", revision=revision(source), function="as_text"),
+            request("tool_validate", tool="text", document="doc-2", revision=revision(source), testVectors=[{
+                "arguments": [], "expect": scalar("Str", ordinary),
+                "semanticTarget": {"document": "doc-4", "revision": revision(ordinary), "entryFunctions": []},
+            }]),
+            request("tool_activate", tool="text", document="doc-2", revision=revision(source)),
+            request("tool_invoke", tool="text", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": "sha256:" + hashlib.sha256(raw).hexdigest(), "entryFunctions": [],
+            }),
+        ]
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(responses[0]["status"], "invalid", responses[0])
+        self.assertEqual(responses[5]["status"], "Validated", responses[5])
+        self.assertEqual(responses[7]["result"]["value"], "1")
+        self.assertEqual(responses[9]["status"], "Rejected", responses[9])
+        self.assertIn("Version 2 supports only", responses[9]["error"])
+        self.assertEqual(responses[11]["status"], "Rejected", responses[11])
+        self.assertIn("Version 2 supports only", responses[11]["error"])
+        self.assertEqual(responses[13]["status"], "Validated", responses[13])
+        self.assertEqual(responses[15]["error"]["code"], "PEP_RUNTIME_INVALID_UTF8")
+
+    def test_retained_source_bytes_are_revision_bound_and_errors_do_not_mutate(self):
+        original = "# 😀\r\nlet x = 42 <= 43\n"
+        edited = original.replace("42", "105")
+        _, requests = lexer_requests(original)
+        lexer_source = requests[0]["source"] + "\nfn source_echo() -> Str { return utf8_slice(source_bytes(), 0, byte_length(source_bytes())) }\n"
+        requests[0]["source"] = lexer_source
+        for index in (2, 3, 4):
+            requests[index]["revision"] = revision(lexer_source)
+        requests.extend([
+            request("tool_register", tool="echo", document="doc-1", revision=revision(lexer_source), function="source_echo"),
+            request("tool_validate", tool="echo", document="doc-1", revision=revision(lexer_source), testVectors=[{
+                "arguments": [], "expect": scalar("Str", ""),
+                "semanticTarget": {"document": "doc-2", "revision": revision(""), "entryFunctions": []},
+            }]),
+            request("tool_activate", tool="echo", document="doc-1", revision=revision(lexer_source)),
+        ])
+        start = original.encode("utf-8").index(b"42")
+        requests.extend([
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-3",
+             "expected_revision": revision(original), "start_byte": start, "end_byte": start + 2,
+             "replacement": "105"},
+            request("tool_invoke", tool="lexer", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(original), "entryFunctions": [],
+            }),
+            request("tool_invoke", tool="lexer", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(edited), "entryFunctions": [],
+            }),
+            request("tool_invoke", tool="echo", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(original), "entryFunctions": [],
+            }),
+            request("tool_invoke", tool="echo", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(edited), "entryFunctions": [],
+            }),
+            {"schemaVersion": 3, "op": "apply_edit", "document": "doc-3",
+             "expected_revision": revision(original), "start_byte": start, "end_byte": start + 2,
+             "replacement": "999"},
+            request("tool_invoke", tool="lexer", arguments=[], semanticTarget={
+                "document": "doc-404", "revision": revision(original), "entryFunctions": [],
+            }),
+            request("tool_invoke", tool="lexer", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": "sha256:" + "0" * 64, "entryFunctions": [],
+            }),
+            request("tool_invoke", tool="lexer", arguments=[]),
+            request("tool_invoke", tool="lexer", arguments=[], semanticTarget={
+                "document": "doc-3", "revision": revision(original), "entryFunctions": [],
+            }),
+        ])
+        result = invoke_session(requests)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        responses = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(len(responses), len(requests))
+        initial, edit_result, old_again, new_report = responses[6], responses[10], responses[11], responses[12]
+        stale, unknown_document, unknown_revision, unauthorized, after_errors = responses[15:20]
+        self.assertEqual(initial["revision"], revision(lexer_source))
+        self.assertEqual(fields(initial["result"])["revision"]["value"], revision(original))
+        self.assertEqual(fields(old_again["result"])["revision"]["value"], revision(original))
+        old_tokens = fields(old_again["result"])["tokens"]["value"]
+        old_numbers = [(fields(token)["startByte"]["value"], fields(token)["endByte"]["value"],
+                        fields(token)["lexeme"]["value"]) for token in old_tokens if fields(token)["kind"]["value"] == "number"]
+        self.assertEqual(old_numbers, [("16", "18", "42"), ("22", "24", "43")])
+        self.assertEqual(new_report["revision"], revision(lexer_source))
+        self.assertEqual(fields(new_report["result"])["revision"]["value"], revision(edited))
+        new_tokens = fields(new_report["result"])["tokens"]["value"]
+        new_numbers = [(fields(token)["startByte"]["value"], fields(token)["endByte"]["value"],
+                        fields(token)["lexeme"]["value"]) for token in new_tokens if fields(token)["kind"]["value"] == "number"]
+        self.assertEqual(new_numbers, [("16", "19", "105"), ("23", "25", "43")])
+        self.assertEqual(stale["error"]["code"], "PEP_STALE_REVISION")
+        self.assertEqual(unknown_document["error"]["code"], "PEP_DOCUMENT_NOT_FOUND")
+        self.assertEqual(unknown_revision["error"]["code"], "PEP_REVISION_NOT_FOUND")
+        self.assertEqual(unauthorized["error"]["code"], "PEP_RUNTIME_SEMANTIC_CONTEXT")
+        self.assertEqual(fields(after_errors["result"])["revision"]["value"], revision(original))
+        self.assertEqual(responses[13]["result"], scalar("Str", original))
+        self.assertEqual(responses[14]["result"], scalar("Str", edited))
+        self.assertEqual(responses[13]["revision"], revision(lexer_source))
+        self.assertEqual(responses[14]["revision"], revision(lexer_source))
+        self.assertEqual(edit_result["revision"], revision(edited))
+        self.assertEqual(old_again["revision"], revision(lexer_source))
+        self.assertEqual(new_report["revision"], revision(lexer_source))
 
     def test_step_limit_failure_leaves_the_session_usable(self):
         source = "# scan target\n"
