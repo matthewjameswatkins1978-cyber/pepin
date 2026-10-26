@@ -17,7 +17,7 @@ The primary compiler is `pep_ocaml.ml`, invoked by the PowerShell 7 CLI `pep.ps1
 
 Hole filling requires a unique scope-qualified target at the current revision, parses one expression, checks the entire candidate, preserves unrelated bytes, and retains historical revisions. Invalid candidates and stale or ambiguous targets do not advance the document. The local tool host is trusted and is not a sandbox.
 
-Edited revisions are fully parsed and checked; this is not cross-revision incremental compilation. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the exact interface, [SEED_LANGUAGE.md](SEED_LANGUAGE.md) for the seed limits, and [packets/CURRENT.md](packets/CURRENT.md) for the current implementation task, and [packets/archive/A5-ACCEPTANCE-RECORD.md](packets/archive/A5-ACCEPTANCE-RECORD.md) for the A5 acceptance record. The historical MoonBit A0 design remains in [HISTORICAL_DESIGN_A0.md](HISTORICAL_DESIGN_A0.md).
+Edited revisions are fully parsed and checked; this is not cross-revision incremental compilation. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the exact interface, [SEED_LANGUAGE.md](SEED_LANGUAGE.md) for the seed limits, and [packets/CURRENT.md](packets/CURRENT.md) for the current implementation task. The [A5](packets/archive/A5-ACCEPTANCE-RECORD.md) and [A6](packets/archive/A6-ACCEPTANCE-RECORD.md) acceptance records preserve their published evidence. The historical MoonBit A0 design remains in [HISTORICAL_DESIGN_A0.md](HISTORICAL_DESIGN_A0.md).
 ## Designed or planned, not implemented in this seed
 The following v0.3 commitments are not current compiler capabilities:
 

@@ -6,7 +6,7 @@ The primary compiler seed is OCaml 5.5.2. Pep follows a **modern-by-default, evi
 
 ## For implementation agents
 
-**[Read the current Pepin implementation packet](docs/packets/CURRENT.md)**. This stable GitHub link points to the next authorised milestone. The [complete packet roadmap](docs/packets/README.md) includes individually prepared A6–A15 contracts; later self-hosting packets are **provisional plans, not shipped features or permission to implement them automatically**. The [A5 acceptance record](docs/packets/archive/A5-ACCEPTANCE-RECORD.md) is preserved.
+**[Read the current Pepin implementation packet](docs/packets/CURRENT.md)**. This stable GitHub link points to the next authorised milestone. The [complete packet roadmap](docs/packets/README.md) includes individually prepared A6–A15 contracts; later self-hosting packets are **provisional plans, not shipped features or permission to implement them automatically**. The [A5 acceptance record](docs/packets/archive/A5-ACCEPTANCE-RECORD.md) and [A6 acceptance record](docs/packets/archive/A6-ACCEPTANCE-RECORD.md) are preserved.
 
 ## Build, inspect, check, and run
 Requirements: PowerShell 7, opam, and the Pepin-specific OCaml 5.5.2 switch. By default the CLI uses the standard opam root; set `PEPIN_OPAM_ROOT` if the switch is installed in another root.

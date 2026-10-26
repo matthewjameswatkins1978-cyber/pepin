@@ -1,5 +1,5 @@
 # A6: Typed collections and practical control flow
-**Status: READY.** First authorised phase in the A6–A8 campaign. Depends on A5.
+**Status: COMPLETED.** Accepted and published as `4d3bceff7be0f013d08310cf8e75eb5a1f365556`; see the [A6 acceptance record](archive/A6-ACCEPTANCE-RECORD.md).
 
 ## Objective
 Make ordinary Pep able to traverse and construct typed sequences and implement graph algorithms. Preserve small, explicit semantics; add no user-defined generics or mutable container aliases.

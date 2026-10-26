@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "current": "A6",
-  "lastAccepted": "A5",
-  "lastAcceptedCommit": "e8a82e22dc4e63d66705369725556bb3e086f10a",
+  "current": "A7",
+  "lastAccepted": "A6",
+  "lastAcceptedCommit": "4d3bceff7be0f013d08310cf8e75eb5a1f365556",
   "policy": {
     "ready": "current implementation",
     "queued": "existing A6-A8 campaign after previous acceptance",
@@ -13,7 +13,7 @@
     {
       "id": "A6",
       "path": "docs/packets/A6-COLLECTIONS-AND-CONTROL-FLOW.md",
-      "status": "ready",
+      "status": "completed",
       "dependsOn": [
         "A5"
       ]
@@ -21,7 +21,7 @@
     {
       "id": "A7",
       "path": "docs/packets/A7-TYPED-SEMANTIC-API.md",
-      "status": "queued",
+      "status": "ready",
       "dependsOn": [
         "A6"
       ]

@@ -1,5 +1,5 @@
 # A7: Typed compiler semantics exposed to Pep
-**Status: QUEUED until A6 accepted.** Then executable as the next phase of the previously scoped A6–A8 campaign.
+**Status: READY.** Next authorised phase in the already-scoped A6–A8 campaign, following accepted and published A6.
 
 ## Objective
 Enable an authorised Pep function to inspect a target program's **compiler-resolved function declarations and call graph** without scanning source text or receiving a mutable AST.
