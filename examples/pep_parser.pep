@@ -28,6 +28,34 @@ type ParserStream {
   lexErrorLine: Int,
   lexErrorColumn: Int
 }
+type ParserCursor {
+  document: Str,
+  revision: Str,
+  stream: ParserStream,
+  nextNodeId: Int,
+  done: Bool,
+  functionActive: Bool,
+  functionName: Str,
+  functionStartByte: Int,
+  functionLine: Int,
+  functionColumn: Int,
+  functionRootId: Int,
+  functionChildIndex: Int,
+  frames: List[ParserFrame]
+}
+type ParserFrame {
+  kind: Str,
+  nodeId: Int,
+  parentId: Int,
+  rootChildIndex: Int,
+  rootRole: Str,
+  startByte: Int,
+  line: Int,
+  column: Int,
+  text: Str,
+  bodyChildIndex: Int
+}
+type ParserContext { parentId: Int, childIndex: Int, role: Str }
 type TokenRead { token: LexToken, stream: ParserStream, ok: Bool }
 type AstParse {
   value: AstValue,
@@ -46,6 +74,20 @@ type ParserProgress {
   revision: Str,
   status: Str,
   nodes: List[FlatAstNode],
+  done: Bool,
+  errorCode: Str,
+  message: Str,
+  errorStart: Int,
+  errorEnd: Int,
+  errorLine: Int,
+  errorColumn: Int
+}
+type ParserChunk {
+  document: Str,
+  revision: Str,
+  status: Str,
+  nodes: List[FlatAstNode],
+  cursor: ParserCursor,
   done: Bool,
   errorCode: Str,
   message: Str,
@@ -894,7 +936,7 @@ fn parse_statement(stream: ParserStream, depth: Int) -> AstParse {
   if !semicolon.ok { return parse_lex_error(semicolon.stream) } else { }
   return parse_ok(AstExpressionStatement(expression.value, expressionSpan), semicolon.stream)
 }
-fn parse_function_after(first: LexToken, stream: ParserStream, depth: Int) -> AstParse {
+fn parse_function_header_after(first: LexToken, stream: ParserStream, depth: Int) -> AstParse {
   let name = stream_take(stream)
   if !name.ok { return parse_lex_error(name.stream) } else { }
   if name.token.kind != "identifier" { return parse_error("PEP_PARSE_NAME", "Expected a name", name.token, name.stream) } else { }
@@ -941,16 +983,32 @@ fn parse_function_after(first: LexToken, stream: ParserStream, depth: Int) -> As
   } else { }
   let result = parse_type_syntax(arrow.stream, depth + 1)
   if !result.ok { return result } else { }
-  let body = parse_block_after(result.stream, depth + 1)
+  let functionSpan = AstSpan { startByte: first.startByte,
+    endByte: ast_value_span(result.value).endByte, line: first.line, column: first.column }
+  return parse_ok(AstFunction(name.token.text, reverse(parameters), result.value, [], functionSpan), result.stream)
+}
+
+fn parse_function_after(first: LexToken, stream: ParserStream, depth: Int) -> AstParse {
+  let header = parse_function_header_after(first, stream, depth)
+  if !header.ok { return header } else { }
+  let body = parse_block_after(header.stream, depth + 1)
   if !body.ok {
     return AstParse { value: AstAbsent(), stream: body.stream, ok: false,
       errorCode: body.errorCode, message: body.message, errorStart: body.errorStart,
       errorEnd: body.errorEnd, errorLine: body.errorLine, errorColumn: body.errorColumn }
   } else { }
-  let functionSpan = AstSpan { startByte: first.startByte, endByte: body.closing.endByte,
-    line: first.line, column: first.column }
-  return parse_ok(AstFunction(name.token.text, reverse(parameters), result.value,
-    body.statements, functionSpan), body.stream)
+  return match header.value {
+    AstFunction(name, parameters, resultType, bodyItems, span) => parse_complete_function(
+      name, parameters, resultType, span, body)
+    _ => parse_error("PEP_PARSER_INTERNAL", "Function header did not produce a function", body.opening, body.stream)
+  }
+}
+
+fn parse_complete_function(name: Str, parameters: List[AstValue], resultType: AstValue,
+  span: AstSpan, body: BlockParse) -> AstParse {
+  let functionSpan = AstSpan { startByte: span.startByte, endByte: body.closing.endByte,
+    line: span.line, column: span.column }
+  return parse_ok(AstFunction(name, parameters, resultType, body.statements, functionSpan), body.stream)
 }
 fn parse_expression(stream: ParserStream, minimumPrecedence: Int, recordAllowed: Bool, depth: Int) -> AstParse {
   if depth <= 64 { } else {
@@ -1028,18 +1086,18 @@ fn parse_expression(stream: ParserStream, minimumPrecedence: Int, recordAllowed:
     current = expected.stream
     left = AstList(reverse(items), ast_combine(ast_span(first), ast_span(close.token)))
   } else { if first.kind == "symbol" && first.text == "!" {
-    let operand = parse_expression(current, 30, true, depth + 1)
+    let operand = parse_expression(current, 30, recordAllowed, depth + 1)
     if !operand.ok { return operand } else { }
     current = operand.stream
     left = AstUnary("!", operand.value, ast_combine(ast_span(first), ast_value_span(operand.value)))
   } else { if first.kind == "symbol" && first.text == "-" {
-    let operand = parse_expression(current, 30, true, depth + 1)
+    let operand = parse_expression(current, 30, recordAllowed, depth + 1)
     if !operand.ok { return operand } else { }
     current = operand.stream
     let zero = AstInteger(0, ast_span(first))
     left = AstBinary("neg", zero, operand.value, ast_combine(ast_span(first), ast_value_span(operand.value)))
   } else { if first.kind == "symbol" && first.text == "(" {
-    let inside = parse_expression(current, 0, true, depth + 1)
+    let inside = parse_expression(current, 0, recordAllowed, depth + 1)
     if !inside.ok { return inside } else { }
     current = inside.stream
     let close = stream_peek(current, 0)
@@ -1204,7 +1262,7 @@ fn parse_expression(stream: ParserStream, minimumPrecedence: Int, recordAllowed:
       let precedence = if op == "||" { 1 } else { if op == "&&" { 2 } else { if op == "==" || op == "!=" { 3 } else { if op == "<=" { 5 } else { if op == "+" || op == "-" { 10 } else { if op == "*" || op == "/" { 20 } else { -1 } } } } } }
       if next.token.kind == "symbol" && minimumPrecedence <= precedence {
         let operatorToken = stream_take(current)
-        let right = parse_expression(operatorToken.stream, precedence + 1, true, depth + 1)
+        let right = parse_expression(operatorToken.stream, precedence + 1, recordAllowed, depth + 1)
         if !right.ok { return right } else { }
         left = AstBinary(op, left, right.value, ast_combine(ast_value_span(left), ast_value_span(right.value)))
         current = right.stream
@@ -1277,6 +1335,21 @@ fn flatten_ast(value: AstValue) -> List[FlatAstNode] {
   return reverse(state.nodesReversed)
 }
 
+fn flat_rebase_ids(nodes: List[FlatAstNode], offset: Int) -> List[FlatAstNode] {
+  var reversed: List[FlatAstNode] = []
+  for node in nodes {
+    let parent = if node.parentId <= -1 { -1 } else { node.parentId + offset }
+    reversed = prepend(reversed, FlatAstNode {
+      id: node.id + offset, parentId: parent, childIndex: node.childIndex,
+      role: node.role, kind: node.kind, text: node.text,
+      integerValue: node.integerValue, booleanValue: node.booleanValue,
+      stringParts: node.stringParts, startByte: node.startByte,
+      endByte: node.endByte, line: node.line, column: node.column
+    })
+  }
+  return reverse(reversed)
+}
+
 fn parser_progress(status: Str, nodes: List[FlatAstNode], done: Bool,
   code: Str, message: Str, start: Int, ending: Int, line: Int, column: Int
 ) -> ParserProgress {
@@ -1286,6 +1359,424 @@ fn parser_progress(status: Str, nodes: List[FlatAstNode], done: Bool,
     nodes: nodes, done: done, errorCode: code, message: message,
     errorStart: start, errorEnd: ending, errorLine: line, errorColumn: column
   }
+}
+
+fn parser_chunk(cursor: ParserCursor, status: Str, nodes: List[FlatAstNode], done: Bool,
+  code: Str, message: Str, start: Int, ending: Int, line: Int, column: Int
+) -> ParserChunk {
+  let info = semantic_snapshot()
+  return ParserChunk {
+    document: info.document, revision: info.revision, status: status,
+    nodes: nodes, cursor: cursor, done: done, errorCode: code, message: message,
+    errorStart: start, errorEnd: ending, errorLine: line, errorColumn: column
+  }
+}
+
+fn parse_top_level_item(stream: ParserStream, depth: Int) -> AstParse {
+  let next = stream_peek(stream, 0)
+  if !next.ok { return parse_lex_error(next.stream) } else { }
+  if next.token.kind == "eof" { return parse_ok(AstAbsent(), next.stream) } else { }
+  let beforeOffset = next.stream.lexCursor.offset
+  let beforeCount = length(next.stream.bufferedTokens)
+  var item: AstParse = parse_ok(AstAbsent(), next.stream)
+  if next.token.kind == "identifier" && next.token.text == "fn" {
+    let keyword = stream_take(next.stream)
+    item = parse_function_after(keyword.token, keyword.stream, depth + 1)
+  } else { if next.token.kind == "identifier" && next.token.text == "type" {
+    let keyword = stream_take(next.stream)
+    item = parse_type_declaration_after(keyword.token, keyword.stream, depth + 1)
+  } else { item = parse_statement(next.stream, depth + 1) } }
+  if !item.ok { return item } else { }
+  if item.stream.lexCursor.offset == beforeOffset && length(item.stream.bufferedTokens) == beforeCount {
+    let stuck = stream_peek(item.stream, 0)
+    return parse_error("PEP_PARSE_NO_PROGRESS", "Parser made no progress", stuck.token, stuck.stream)
+  } else { }
+  return item
+}
+
+fn parser_start() -> ParserCursor {
+  let info = semantic_snapshot()
+  return ParserCursor {
+    document: info.document, revision: info.revision,
+    stream: parser_stream(lexer_start()), nextNodeId: 0, done: false,
+    functionActive: false, functionName: "", functionStartByte: 0,
+    functionLine: 1, functionColumn: 1,
+    functionRootId: 0, functionChildIndex: 0, frames: []
+  }
+}
+
+fn parser_emit_item(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
+  let nodes = flat_rebase_ids(flatten_ast(parsed.value), cursor.nextNodeId)
+  let next = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: parsed.stream,
+    nextNodeId: cursor.nextNodeId + length(nodes), done: false,
+    functionActive: false, functionName: "", functionStartByte: 0,
+    functionLine: 1, functionColumn: 1,
+    functionRootId: 0, functionChildIndex: 0, frames: []
+  }
+  return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
+}
+
+fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
+  if !parsed.ok {
+    let failed = ParserCursor {
+      document: cursor.document, revision: cursor.revision, stream: parsed.stream,
+      nextNodeId: cursor.nextNodeId, done: true,
+      functionActive: cursor.functionActive, functionName: cursor.functionName,
+      functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+      functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+      functionChildIndex: cursor.functionChildIndex, frames: cursor.frames
+    }
+    return parser_chunk(failed, parser_error_status(parsed), [], true,
+      parsed.errorCode, parsed.message, parsed.errorStart, parsed.errorEnd,
+      parsed.errorLine, parsed.errorColumn)
+  } else { }
+  return match parsed.value {
+    AstAbsent() => parser_chunk(ParserCursor {
+      document: cursor.document, revision: cursor.revision, stream: parsed.stream,
+      nextNodeId: cursor.nextNodeId, done: true,
+      functionActive: false, functionName: "", functionStartByte: 0,
+      functionLine: 1, functionColumn: 1,
+      functionRootId: 0, functionChildIndex: 0, frames: []
+    }, "complete", [], true, "", "", 0, 0, 0, 0)
+    _ => parser_emit_item(cursor, parsed)
+  }
+}
+
+fn parser_validation_chunk(cursor: ParserCursor) -> ParserChunk {
+  var stream = cursor.stream
+  var count = 0
+  while count <= 7 && stream.lexCursor.stage == "validate" && stream.lexErrorCode == "" {
+    let progress = lexer_step(stream.lexCursor)
+    var errorCode = stream.lexErrorCode
+    var errorStart = stream.lexErrorStart
+    var errorEnd = stream.lexErrorEnd
+    var errorLine = stream.lexErrorLine
+    var errorColumn = stream.lexErrorColumn
+    if progress.errorCode != "" {
+      errorCode = progress.errorCode
+      errorStart = progress.errorStart
+      errorEnd = progress.errorEnd
+      errorLine = progress.errorLine
+      errorColumn = progress.errorColumn
+    } else { }
+    stream = ParserStream {
+      lexCursor: progress.cursor, bufferedTokens: stream.bufferedTokens,
+      lexDone: progress.done, lexErrorCode: errorCode,
+      lexErrorStart: errorStart, lexErrorEnd: errorEnd,
+      lexErrorLine: errorLine, lexErrorColumn: errorColumn
+    }
+    count = count + 1
+  }
+  let failed = stream.lexErrorCode != ""
+  let next = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: stream,
+    nextNodeId: cursor.nextNodeId, done: failed,
+    functionActive: cursor.functionActive, functionName: cursor.functionName,
+    functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+    functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+    functionChildIndex: cursor.functionChildIndex, frames: cursor.frames
+  }
+  if failed {
+    return parser_chunk(next, "invalid", [], true, stream.lexErrorCode,
+      "Invalid source encoding", stream.lexErrorStart, stream.lexErrorEnd,
+      stream.lexErrorLine, stream.lexErrorColumn)
+  } else {
+    return parser_chunk(next, "continuing", [], false, "", "", 0, 0, 0, 0)
+  }
+}
+
+fn parser_step(cursor: ParserCursor) -> ParserChunk {
+  let info = semantic_snapshot()
+  if cursor.document != info.document || cursor.revision != info.revision {
+    return parser_chunk(cursor, "invalid", [], true, "PEP_PARSER_CURSOR_REVISION",
+      "Parser cursor belongs to a different document revision", 0, 0, 0, 0)
+  } else { }
+  if cursor.done { return parser_chunk(cursor, "complete", [], true, "", "", 0, 0, 0, 0) } else { }
+  if cursor.stream.lexCursor.stage == "validate" {
+    return parser_validation_chunk(cursor)
+  } else { }
+  if cursor.functionActive { return parser_step_function(cursor) } else { }
+  let next = stream_peek(cursor.stream, 0)
+  if !next.ok { return parser_finish_step(cursor, parse_lex_error(next.stream)) } else { }
+  if next.token.kind == "eof" { return parser_finish_step(cursor, parse_ok(AstAbsent(), next.stream)) } else { }
+  if next.token.kind == "identifier" && next.token.text == "fn" {
+    let keyword = stream_take(next.stream)
+    let header = parse_function_header_after(keyword.token, keyword.stream, 1)
+    if !header.ok { return parser_finish_step(cursor, header) } else { }
+    return parser_begin_function(cursor, header)
+  } else { }
+  let parsed = parse_top_level_item(cursor.stream, 0)
+  return parser_finish_step(cursor, parsed)
+}
+
+fn parser_begin_function(cursor: ParserCursor, header: AstParse) -> ParserChunk {
+  let opening = expect_symbol(header.stream, "{")
+  if !opening.ok {
+    if opening.stream.lexErrorCode != "" { return parser_finish_step(cursor, parse_lex_error(opening.stream)) } else { }
+    return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '{'", opening.token, opening.stream))
+  } else { }
+  return match header.value {
+    AstFunction(name, parameters, resultType, body, span) => parser_function_header_chunk(
+      cursor, opening.stream, name, parameters, resultType, span)
+    _ => parser_finish_step(cursor, parse_error("PEP_PARSER_INTERNAL", "Function header did not produce a function",
+      opening.token, opening.stream))
+  }
+}
+
+fn parser_function_header_chunk(cursor: ParserCursor, stream: ParserStream, name: Str,
+  parameters: List[AstValue], resultType: AstValue, span: AstSpan) -> ParserChunk {
+  let rootId = cursor.nextNodeId
+  let start = FlatState { nextId: rootId + 1, nodesReversed: [] }
+  let withParameters = flat_children(parameters, rootId, "parameter", start)
+  let withResult = flat_node(resultType, rootId, 0, "return_type", withParameters)
+  let nodes = reverse(withResult.nodesReversed)
+  let next = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: stream,
+    nextNodeId: withResult.nextId, done: false, functionActive: true,
+    functionName: name, functionStartByte: span.startByte,
+    functionLine: span.line, functionColumn: span.column,
+    functionRootId: rootId, functionChildIndex: 0, frames: cursor.frames
+  }
+  return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
+}
+
+fn parser_empty_frame() -> ParserFrame {
+  return ParserFrame { kind: "", nodeId: 0, parentId: -1, rootChildIndex: 0,
+    rootRole: "", startByte: 0, line: 1, column: 1, text: "", bodyChildIndex: 0 }
+}
+
+fn parser_frame_top(frames: List[ParserFrame]) -> ParserFrame {
+  var selected = parser_empty_frame()
+  var found = false
+  for frame in frames {
+    if !found { selected = frame; found = true } else { }
+  }
+  return selected
+}
+
+fn parser_frame_pop(frames: List[ParserFrame]) -> List[ParserFrame] {
+  var reversed: List[ParserFrame] = []
+  var skipped = false
+  for frame in frames {
+    if !skipped { skipped = true } else { reversed = prepend(reversed, frame) }
+  }
+  return reverse(reversed)
+}
+
+fn parser_frame_replace_top(frames: List[ParserFrame], frame: ParserFrame) -> List[ParserFrame] {
+  return prepend(parser_frame_pop(frames), frame)
+}
+
+fn parser_current_context(cursor: ParserCursor) -> ParserContext {
+  if length(cursor.frames) == 0 {
+    return ParserContext { parentId: cursor.functionRootId,
+      childIndex: cursor.functionChildIndex, role: "statement" }
+  } else { }
+  let frame = parser_frame_top(cursor.frames)
+  let role = if frame.kind == "if_then" { "then" } else {
+    if frame.kind == "if_else" { "else" } else {
+      if frame.kind == "block" { "statement" } else { "body" }
+    }
+  }
+  return ParserContext { parentId: frame.nodeId, childIndex: frame.bodyChildIndex, role: role }
+}
+
+fn parser_consume_parent_slot(cursor: ParserCursor) -> ParserCursor {
+  if length(cursor.frames) == 0 {
+    return ParserCursor { document: cursor.document, revision: cursor.revision,
+      stream: cursor.stream, nextNodeId: cursor.nextNodeId, done: cursor.done,
+      functionActive: cursor.functionActive, functionName: cursor.functionName,
+      functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+      functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+      functionChildIndex: cursor.functionChildIndex + 1, frames: cursor.frames }
+  } else { }
+  let top = parser_frame_top(cursor.frames)
+  let updated = ParserFrame { kind: top.kind, nodeId: top.nodeId, parentId: top.parentId,
+    rootChildIndex: top.rootChildIndex, rootRole: top.rootRole, startByte: top.startByte,
+    line: top.line, column: top.column, text: top.text, bodyChildIndex: top.bodyChildIndex + 1 }
+  return ParserCursor { document: cursor.document, revision: cursor.revision,
+    stream: cursor.stream, nextNodeId: cursor.nextNodeId, done: cursor.done,
+    functionActive: cursor.functionActive, functionName: cursor.functionName,
+    functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+    functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+    functionChildIndex: cursor.functionChildIndex,
+    frames: parser_frame_replace_top(cursor.frames, updated) }
+}
+
+fn parser_begin_frame(cursor: ParserCursor, stream: ParserStream, frame: ParserFrame,
+  state: FlatState) -> ParserChunk {
+  let parent = parser_consume_parent_slot(cursor)
+  let next = ParserCursor { document: parent.document, revision: parent.revision,
+    stream: stream, nextNodeId: state.nextId, done: false,
+    functionActive: parent.functionActive, functionName: parent.functionName,
+    functionStartByte: parent.functionStartByte, functionLine: parent.functionLine,
+    functionColumn: parent.functionColumn, functionRootId: parent.functionRootId,
+    functionChildIndex: parent.functionChildIndex, frames: prepend(parent.frames, frame) }
+  return parser_chunk(next, "continuing", reverse(state.nodesReversed), false, "", "", 0, 0, 0, 0)
+}
+
+fn parser_emit_frame(cursor: ParserCursor, frame: ParserFrame, stream: ParserStream,
+  endByte: Int) -> ParserChunk {
+  let kind = if frame.kind == "while" { "while" } else {
+    if frame.kind == "for_in" { "for_in" } else {
+      if frame.kind == "block" { "block" } else { "if_statement" }
+    }
+  }
+  let root = FlatAstNode { id: frame.nodeId, parentId: frame.parentId,
+    childIndex: frame.rootChildIndex, role: frame.rootRole, kind: kind, text: frame.text,
+    integerValue: 0, booleanValue: false, stringParts: [], startByte: frame.startByte,
+    endByte: endByte, line: frame.line, column: frame.column }
+  let next = ParserCursor { document: cursor.document, revision: cursor.revision,
+    stream: stream, nextNodeId: cursor.nextNodeId, done: false,
+    functionActive: cursor.functionActive, functionName: cursor.functionName,
+    functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+    functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+    functionChildIndex: cursor.functionChildIndex, frames: parser_frame_pop(cursor.frames) }
+  return parser_chunk(next, "continuing", [root], false, "", "", 0, 0, 0, 0)
+}
+
+fn parser_close_frame(cursor: ParserCursor, frame: ParserFrame, close: TokenRead) -> ParserChunk {
+  if frame.kind == "if_then" {
+    let after = stream_peek(close.stream, 0)
+    if !after.ok { return parser_finish_step(cursor, parse_lex_error(after.stream)) } else { }
+    if after.token.kind == "identifier" && after.token.text == "else" {
+      let opening = expect_symbol(stream_take(after.stream).stream, "{")
+      if !opening.ok {
+        if opening.stream.lexErrorCode != "" { return parser_finish_step(cursor, parse_lex_error(opening.stream)) } else { }
+        return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '{'", opening.token, opening.stream))
+      } else { }
+      let updated = ParserFrame { kind: "if_else", nodeId: frame.nodeId,
+        parentId: frame.parentId, rootChildIndex: frame.rootChildIndex,
+        rootRole: frame.rootRole, startByte: frame.startByte, line: frame.line,
+        column: frame.column, text: frame.text, bodyChildIndex: 0 }
+      let next = ParserCursor { document: cursor.document, revision: cursor.revision,
+        stream: opening.stream, nextNodeId: cursor.nextNodeId, done: false,
+        functionActive: cursor.functionActive, functionName: cursor.functionName,
+        functionStartByte: cursor.functionStartByte, functionLine: cursor.functionLine,
+        functionColumn: cursor.functionColumn, functionRootId: cursor.functionRootId,
+        functionChildIndex: cursor.functionChildIndex,
+        frames: parser_frame_replace_top(cursor.frames, updated) }
+      return parser_chunk(next, "continuing", [], false, "", "", 0, 0, 0, 0)
+    } else {
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_ELSE", "Expected else after if block", after.token, after.stream))
+    }
+  } else { }
+  return parser_emit_frame(cursor, frame, close.stream, close.token.endByte)
+}
+
+fn parser_start_control(cursor: ParserCursor, keyword: LexToken) -> ParserChunk {
+  let context = parser_current_context(cursor)
+  let rootId = cursor.nextNodeId
+  if keyword.text == "{" {
+    let opened = stream_take(cursor.stream)
+    let frame = ParserFrame { kind: "block", nodeId: rootId, parentId: context.parentId,
+      rootChildIndex: context.childIndex, rootRole: context.role, startByte: keyword.startByte,
+      line: keyword.line, column: keyword.column, text: "", bodyChildIndex: 0 }
+    return parser_begin_frame(cursor, opened.stream, frame,
+      FlatState { nextId: rootId + 1, nodesReversed: [] })
+  } else { }
+  let consumed = stream_take(cursor.stream)
+  if keyword.text == "if" || keyword.text == "while" {
+    let condition = parse_expression(consumed.stream, 0, false, 1)
+    if !condition.ok { return parser_finish_step(cursor, condition) } else { }
+    let opening = expect_symbol(condition.stream, "{")
+    if !opening.ok {
+      if opening.stream.lexErrorCode != "" { return parser_finish_step(cursor, parse_lex_error(opening.stream)) } else { }
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '{'", opening.token, opening.stream))
+    } else { }
+    let kind = if keyword.text == "if" { "if_then" } else { "while" }
+    let frame = ParserFrame { kind: kind, nodeId: rootId, parentId: context.parentId,
+      rootChildIndex: context.childIndex, rootRole: context.role, startByte: keyword.startByte,
+      line: keyword.line, column: keyword.column, text: "", bodyChildIndex: 0 }
+    let state = flat_node(condition.value, rootId, 0, "condition",
+      FlatState { nextId: rootId + 1, nodesReversed: [] })
+    return parser_begin_frame(cursor, opening.stream, frame, state)
+  } else { }
+  if keyword.text == "for" {
+    let name = stream_take(consumed.stream)
+    if !name.ok { return parser_finish_step(cursor, parse_lex_error(name.stream)) } else { }
+    if name.token.kind != "identifier" {
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_NAME", "Expected a loop variable", name.token, name.stream))
+    } else { }
+    let inToken = stream_peek(name.stream, 0)
+    if !inToken.ok { return parser_finish_step(cursor, parse_lex_error(inToken.stream)) } else { }
+    if inToken.token.kind != "identifier" || inToken.token.text != "in" {
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_FOR_IN", "Expected 'in' after the loop variable", inToken.token, inToken.stream))
+    } else { }
+    let iterable = parse_expression(stream_take(inToken.stream).stream, 0, false, 1)
+    if !iterable.ok { return parser_finish_step(cursor, iterable) } else { }
+    let opening = expect_symbol(iterable.stream, "{")
+    if !opening.ok {
+      if opening.stream.lexErrorCode != "" { return parser_finish_step(cursor, parse_lex_error(opening.stream)) } else { }
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '{'", opening.token, opening.stream))
+    } else { }
+    let frame = ParserFrame { kind: "for_in", nodeId: rootId, parentId: context.parentId,
+      rootChildIndex: context.childIndex, rootRole: context.role, startByte: keyword.startByte,
+      line: keyword.line, column: keyword.column, text: name.token.text, bodyChildIndex: 0 }
+    let state = flat_node(iterable.value, rootId, 0, "iterable",
+      FlatState { nextId: rootId + 1, nodesReversed: [] })
+    return parser_begin_frame(cursor, opening.stream, frame, state)
+  } else { }
+  return parser_finish_step(cursor, parse_error("PEP_PARSER_INTERNAL", "Unknown control statement", keyword, consumed.stream))
+}
+
+fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
+  let next = stream_peek(cursor.stream, 0)
+  if !next.ok { return parser_finish_step(cursor, parse_lex_error(next.stream)) } else { }
+  if !(length(cursor.frames) <= 0) {
+    let frame = parser_frame_top(cursor.frames)
+    if next.token.kind == "symbol" && next.token.text == "}" {
+      return parser_close_frame(cursor, frame, stream_take(next.stream))
+    } else { }
+  } else { }
+  if length(cursor.frames) == 0 && next.token.kind == "symbol" && next.token.text == "}" {
+    let close = stream_take(next.stream)
+    let root = FlatAstNode {
+      id: cursor.functionRootId, parentId: -1, childIndex: 0, role: "top_level",
+      kind: "function", text: cursor.functionName, integerValue: 0,
+      booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
+      endByte: close.token.endByte, line: cursor.functionLine, column: cursor.functionColumn
+    }
+    let doneCursor = ParserCursor {
+      document: cursor.document, revision: cursor.revision, stream: close.stream,
+      nextNodeId: cursor.nextNodeId, done: false, functionActive: false,
+      functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
+      functionRootId: 0, functionChildIndex: 0, frames: []
+    }
+    return parser_chunk(doneCursor, "continuing", [root], false, "", "", 0, 0, 0, 0)
+  } else { }
+  if next.token.kind == "eof" {
+    return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '}'", next.token, next.stream))
+  } else { }
+  if next.token.kind == "identifier" &&
+     (next.token.text == "if" || next.token.text == "while" || next.token.text == "for") {
+    return parser_start_control(cursor, next.token)
+  } else { }
+  if next.token.kind == "symbol" && next.token.text == "{" {
+    return parser_start_control(cursor, next.token)
+  } else { }
+  let parsed = parse_statement(next.stream, 1)
+  if !parsed.ok { return parser_finish_step(cursor, parsed) } else { }
+  if parsed.stream.lexCursor.offset == cursor.stream.lexCursor.offset &&
+     length(parsed.stream.bufferedTokens) == length(cursor.stream.bufferedTokens) {
+    let stuck = stream_peek(parsed.stream, 0)
+    return parser_finish_step(cursor, parse_error("PEP_PARSE_NO_PROGRESS", "Parser made no progress", stuck.token, stuck.stream))
+  } else { }
+  let context = parser_current_context(cursor)
+  let state = flat_node(parsed.value, context.parentId, context.childIndex,
+    context.role, FlatState { nextId: cursor.nextNodeId, nodesReversed: [] })
+  let nodes = reverse(state.nodesReversed)
+  let consumed = parser_consume_parent_slot(cursor)
+  let nextCursor = ParserCursor {
+    document: consumed.document, revision: consumed.revision, stream: parsed.stream,
+    nextNodeId: state.nextId, done: false, functionActive: consumed.functionActive,
+    functionName: consumed.functionName, functionStartByte: consumed.functionStartByte,
+    functionLine: consumed.functionLine, functionColumn: consumed.functionColumn,
+    functionRootId: consumed.functionRootId, functionChildIndex: consumed.functionChildIndex,
+    frames: consumed.frames
+  }
+  return parser_chunk(nextCursor, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
 
 fn parse_program(stream: ParserStream, depth: Int) -> AstParse {

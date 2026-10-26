@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import subprocess
+import time
 import unittest
 
 from tests.test_a11 import JsonLineClient, typed, typed_record, typed_list
@@ -29,6 +30,46 @@ def scalar(value):
 def span(value):
     return (value["start"]["offset"], value["endOffset"],
             value["start"]["line"], value["start"]["column"])
+
+
+def parser_cursor_value(document, revision, done=False, next_node_id=0, lex_done=False, lex_stage="validate"):
+    lex_cursor = typed_record("LexCursor", [
+        ("document", typed("Str", document)), ("revision", typed("Str", revision)),
+        ("status", typed("Str", "valid")), ("stage", typed("Str", lex_stage)),
+        ("offset", typed("Int", "0")), ("line", typed("Int", "1")),
+        ("column", typed("Int", "1")), ("mode", typed("Str", "")),
+        ("tokenStart", typed("Int", "0")), ("tokenLine", typed("Int", "1")),
+        ("tokenColumn", typed("Int", "1")), ("integerValue", typed("Int", "0")),
+        ("integerOverflow", typed("Bool", False)), ("escapePending", typed("Bool", False)),
+        ("stringPartStart", typed("Int", "0")), ("stringPartsReversed", typed_list("Str", [])),
+    ])
+    stream = typed_record("ParserStream", [
+        ("lexCursor", lex_cursor), ("bufferedTokens", typed_list("LexToken", [])),
+        ("lexDone", typed("Bool", lex_done)), ("lexErrorCode", typed("Str", "")),
+        ("lexErrorStart", typed("Int", "0")), ("lexErrorEnd", typed("Int", "0")),
+        ("lexErrorLine", typed("Int", "0")), ("lexErrorColumn", typed("Int", "0")),
+    ])
+    return typed_record("ParserCursor", [
+        ("document", typed("Str", document)), ("revision", typed("Str", revision)),
+        ("stream", stream), ("nextNodeId", typed("Int", str(next_node_id))),
+        ("done", typed("Bool", done)),
+        ("functionActive", typed("Bool", False)), ("functionName", typed("Str", "")),
+        ("functionStartByte", typed("Int", "0")), ("functionLine", typed("Int", "1")),
+        ("functionColumn", typed("Int", "1")), ("functionRootId", typed("Int", "0")),
+        ("functionChildIndex", typed("Int", "0")), ("frames", typed_list("ParserFrame", [])),
+    ])
+
+
+def parser_chunk_value(document, revision, cursor, status="complete", nodes=None, done=True,
+                       error_code="", message="", start=0, ending=0, line=0, column=0):
+    return typed_record("ParserChunk", [
+        ("document", typed("Str", document)), ("revision", typed("Str", revision)),
+        ("status", typed("Str", status)), ("nodes", typed_list("FlatAstNode", nodes or [])),
+        ("cursor", cursor), ("done", typed("Bool", done)),
+        ("errorCode", typed("Str", error_code)), ("message", typed("Str", message)),
+        ("errorStart", typed("Int", str(start))), ("errorEnd", typed("Int", str(ending))),
+        ("errorLine", typed("Int", str(line))), ("errorColumn", typed("Int", str(column))),
+    ])
 
 
 def pep_flat_nodes(result):
@@ -232,37 +273,30 @@ class A12ParserDifferentialTests(unittest.TestCase):
         self.assertEqual(empty.get("outcome"), "ok", empty)
         self.target_document = empty["document"]
         self.target_revision = empty["revision"]
-        expected = typed_record("ParserProgress", [
-            ("document", typed("Str", self.target_document)),
-            ("revision", typed("Str", self.target_revision)),
-            ("status", typed("Str", "complete")),
-            ("nodes", typed_list("FlatAstNode", [])),
-            ("done", typed("Bool", True)),
-            ("errorCode", typed("Str", "")),
-            ("message", typed("Str", "")),
-            ("errorStart", typed("Int", "0")),
-            ("errorEnd", typed("Int", "0")),
-            ("errorLine", typed("Int", "0")),
-            ("errorColumn", typed("Int", "0")),
-        ])
+        self.initial_cursor = parser_cursor_value(self.target_document, self.target_revision)
+        self.register_tool("pep-parser-start", "parser_start", [], self.initial_cursor)
+        finished_cursor = parser_cursor_value(self.target_document, self.target_revision, done=True, lex_done=True, lex_stage="done")
+        expected_chunk = parser_chunk_value(self.target_document, self.target_revision, finished_cursor)
+        self.register_tool("pep-parser-step", "parser_step", [finished_cursor], expected_chunk)
+
+    def register_tool(self, tool, function, arguments, expected):
         registered = self.session.send({
             "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
-            "tool": "pep-parser", "document": self.tool_document,
-            "revision": self.tool_revision, "function": "parser_parse_program",
+            "tool": tool, "document": self.tool_document,
+            "revision": self.tool_revision, "function": function,
         })
         self.assertEqual(registered.get("status"), "Registered", registered)
         validated = self.session.send({
             "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
-            "tool": "pep-parser", "document": self.tool_document,
-            "revision": self.tool_revision,
-            "testVectors": [{"arguments": [], "expect": expected, "semanticTarget": {
+            "tool": tool, "document": self.tool_document, "revision": self.tool_revision,
+            "testVectors": [{"arguments": arguments, "expect": expected, "semanticTarget": {
                 "document": self.target_document, "revision": self.target_revision, "entryFunctions": [],
             }}],
         })
         self.assertEqual(validated.get("status"), "Validated", validated)
         activated = self.session.send({
             "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
-            "tool": "pep-parser", "document": self.tool_document, "revision": self.tool_revision,
+            "tool": tool, "document": self.tool_document, "revision": self.tool_revision,
         })
         self.assertEqual(activated.get("status"), "Active", activated)
 
@@ -300,25 +334,80 @@ class A12ParserDifferentialTests(unittest.TestCase):
         })
         self.assertEqual(after_rejection.get("document"), "doc-5", after_rejection)
 
-    def parse(self, source):
+    def parse(self, source, metadata_only=False):
+        parse_started = time.perf_counter()
         raw = source if isinstance(source, bytes) else source.encode("utf-8")
         target = self.session.send({
             "schemaVersion": 3, "op": "open_bytes", "name": "parser-target",
-            "bytes": list(raw),
+            "bytes": list(raw), "metadataOnly": metadata_only,
         })
         self.assertEqual(target.get("outcome"), "ok", target)
-        invoked = self.session.send({
+        request_bytes = self.session.last_request_bytes
+        response_bytes = self.session.last_response_bytes
+        max_request_bytes = request_bytes
+        max_response_bytes = response_bytes
+        semantic_target = {
+            "document": target["document"], "revision": target["revision"], "entryFunctions": [],
+        }
+        started = self.session.send({
             "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-            "tool": "pep-parser", "arguments": [], "semanticTarget": {
-                "document": target["document"], "revision": target["revision"], "entryFunctions": [],
-            },
+            "tool": "pep-parser-start", "arguments": [], "semanticTarget": semantic_target,
         })
-        self.assertEqual(invoked.get("outcome"), "ok", invoked)
-        self.assertEqual(invoked["revision"], self.tool_revision)
-        result = invoked["result"]
-        result_fields = fields(result)
-        self.assertEqual(scalar(result_fields["document"]), target["document"])
-        self.assertEqual(scalar(result_fields["revision"]), target["revision"])
+        self.assertEqual(started.get("outcome"), "ok", started)
+        self.assertEqual(started["revision"], self.tool_revision)
+        request_bytes += self.session.last_request_bytes
+        response_bytes += self.session.last_response_bytes
+        cursor = started["result"]
+        nodes = []
+        final_fields = None
+        step_count = 0
+        while step_count <= len(raw) + 1:
+            invoked = self.session.send({
+                "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                "tool": "pep-parser-step", "arguments": [cursor], "semanticTarget": semantic_target,
+            })
+            source_offset = scalar(fields(fields(fields(cursor)["stream"])["lexCursor"])["offset"])
+            self.assertEqual(invoked.get("outcome"), "ok", {"offset": source_offset, "response": invoked})
+            self.assertEqual(invoked["revision"], self.tool_revision)
+            request_bytes += self.session.last_request_bytes
+            response_bytes += self.session.last_response_bytes
+            max_request_bytes = max(max_request_bytes, self.session.last_request_bytes)
+            max_response_bytes = max(max_response_bytes, self.session.last_response_bytes)
+            result_fields = fields(invoked["result"])
+            self.assertEqual(scalar(result_fields["document"]), target["document"])
+            self.assertEqual(scalar(result_fields["revision"]), target["revision"])
+            chunk_nodes = result_fields["nodes"]["value"]
+            if not scalar(result_fields["done"]):
+                self.assertNotEqual(result_fields["cursor"], cursor,
+                                    "nonterminal parser continuation must advance its cursor")
+            nodes.extend(chunk_nodes)
+            cursor = result_fields["cursor"]
+            final_fields = result_fields
+            step_count += 1
+            if scalar(result_fields["done"]):
+                break
+        nodes.sort(key=lambda node: int(scalar(fields(node)["id"])))
+        self.assertIsNotNone(final_fields)
+        self.assertTrue(scalar(final_fields["done"]), "parser continuation failed to complete")
+        result = typed_record("ParserProgress", [
+            ("document", typed("Str", target["document"])),
+            ("revision", typed("Str", target["revision"])),
+            ("status", final_fields["status"]),
+            ("nodes", typed_list("FlatAstNode", nodes)),
+            ("done", final_fields["done"]),
+            ("errorCode", final_fields["errorCode"]),
+            ("message", final_fields["message"]),
+            ("errorStart", final_fields["errorStart"]),
+            ("errorEnd", final_fields["errorEnd"]),
+            ("errorLine", final_fields["errorLine"]),
+            ("errorColumn", final_fields["errorColumn"]),
+        ])
+        self.last_parser_steps = step_count
+        self.last_parser_request_bytes = request_bytes
+        self.last_parser_response_bytes = response_bytes
+        self.last_parser_max_request_bytes = max_request_bytes
+        self.last_parser_max_response_bytes = max_response_bytes
+        self.last_parser_elapsed_ms = (time.perf_counter() - parse_started) * 1000
         return target, result
 
     def assert_differential(self, source):
@@ -386,6 +475,74 @@ class A12ParserDifferentialTests(unittest.TestCase):
             "fn total(tree: Tree) -> Int { return match tree { "
             "Leaf(number) => number Node(Leaf(_), right) => total(right) _ => 0 } }"
         )
+
+    def test_if_statement_parenthesized_condition_and_unary_context(self):
+        self.assert_differential(
+            "fn f(limit: Int) -> Int { if !(limit <= 0) { return 1 } else { return limit } }"
+        )
+
+    def test_cursor_revision_mismatch_is_rejected_without_session_corruption(self):
+        stale = parser_cursor_value("doc-stale", "sha256:stale")
+        semantic_target = {
+            "document": self.target_document, "revision": self.target_revision, "entryFunctions": [],
+        }
+        rejected = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser-step", "arguments": [stale], "semanticTarget": semantic_target,
+        })
+        self.assertEqual(rejected.get("outcome"), "ok", rejected)
+        result = fields(rejected["result"])
+        self.assertEqual(scalar(result["status"]), "invalid")
+        self.assertEqual(scalar(result["errorCode"]), "PEP_PARSER_CURSOR_REVISION")
+        valid = self.session.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-parser-start", "arguments": [], "semanticTarget": semantic_target,
+        })
+        self.assertEqual(valid.get("outcome"), "ok", valid)
+
+    def test_incremental_parser_processes_actual_lexer_source(self):
+        raw = LEXER.read_bytes()
+        target, result = self.parse(raw, metadata_only=True)
+        result_fields = fields(result)
+        self.assertEqual(scalar(result_fields["status"]), "complete")
+        oracle_run = subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
+             "check", str(LEXER), "--json"],
+            cwd=ROOT, env={**os.environ, "PEPIN_OPAM_ROOT": os.environ.get("PEPIN_OPAM_ROOT", r"D:\\opam-roots\\pepin")},
+            capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        self.assertEqual(oracle_run.returncode, 0, oracle_run.stderr)
+        oracle = json.loads(oracle_run.stdout)
+        self.assertEqual(pep_flat_nodes(result), ocaml_flat_nodes(oracle["ast"]))
+        self.assertGreater(len(result_fields["nodes"]["value"]), 100)
+        self.assertGreater(self.last_parser_steps, 1)
+        self.assertLess(self.last_parser_steps, len(raw))
+        self.assertEqual(scalar(result_fields["document"]), target["document"])
+        self.assertEqual(scalar(result_fields["revision"]), target["revision"])
+
+    def test_incremental_parser_transport_scaling(self):
+        measurements = []
+        for count in (8, 16, 32):
+            statements = "".join(
+                f"let item{index}: Int = {index}; " for index in range(count)
+            )
+            source = f"fn generated() -> Int {{ {statements} return item{count - 1} }}"
+            target, result = self.parse(source)
+            self.assertEqual(scalar(fields(result)["status"]), "complete")
+            self.assertEqual(pep_flat_nodes(result), ocaml_flat_nodes(target["ast"]))
+            self.assertLess(self.last_parser_max_request_bytes, 1_048_576)
+            self.assertLess(self.last_parser_max_response_bytes, 1_048_576)
+            measurements.append((
+                len(source.encode("utf-8")), self.last_parser_steps,
+                self.last_parser_request_bytes, self.last_parser_response_bytes,
+                self.last_parser_max_request_bytes, self.last_parser_max_response_bytes,
+            ))
+        for before, after in zip(measurements, measurements[1:]):
+            self.assertGreater(after[0], before[0])
+            self.assertLessEqual(after[1], before[1] * 2 + 8)
+            self.assertLessEqual(after[2], before[2] * 3)
+            self.assertLessEqual(after[3], before[3] * 3)
+        self.incremental_scaling_measurements = measurements
 
     def test_unicode_crlf_byte_positions(self):
         self.assert_differential(b'fn text() -> Str {\r\n  return "caf\xc3\xa9"\r\n}')
