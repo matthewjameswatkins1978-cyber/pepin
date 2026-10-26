@@ -9,7 +9,7 @@ Begin every implementation/handoff at [CURRENT.md](CURRENT.md). GitHub code/test
 | A8 | [Pep-written analyser](A8-PEP-WRITTEN-ANALYSER.md) | Completed | A7 |
 | A9 | [More Pep tools](A9-DEVELOPMENT-TOOLS.md) | Provisional | **Deferred**; return only for specific demonstrated utility |
 | A10 | [Lexer-driven compiler foundations](A10-COMPILER-FOUNDATION-LIBRARY.md) | Provisional | **Next recommended design gate**; follows accepted A8 |
-| A11 | [Pep-written lexer](A11-PEP-WRITTEN-LEXER.md) | Provisional | First compiler-written-in-Pep target; depends on measured A10 proof |
+| A11 | [Pep-written lexer](A11-PEP-WRITTEN-LEXER.md) | Provisional | First compiler-written-in-Pep target; depends on measured A10 proof; [development receipt](A11-IMPLEMENTATION-RECEIPT.md) |
 | A12 | [Pep-written parser](A12-PEP-WRITTEN-PARSER.md) | Provisional | Depends on A11 |
 | A13 | [Pep-written checker](A13-PEP-WRITTEN-CHECKER.md) | Provisional | Depends on A12; may split resolution/checking |
 | A14 | [Pep-written C23 emitter](A14-PEP-WRITTEN-C23-EMITTER.md) | Provisional | Depends on sufficient checked Pep implementation |
