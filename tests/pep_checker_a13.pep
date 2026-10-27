@@ -4,10 +4,11 @@ type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, e
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, startByte: Int, endByte: Int }
+type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic] }
-type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic] }
+type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type FunctionLookup { found: Bool, function: CheckedFunction }
 type BindingLookup { found: Bool, binding: BindingFact }
@@ -318,6 +319,62 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
 fn supported_primitive_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes"
 }
+fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+  let parent = lookup_node(nodes, hole.parentId)
+  if !parent.found { return "" } else {}
+  if parent.node.kind == "return" && hole.role == "value" {
+    let owner = owner_function(nodes, hole, functions)
+    if owner.found { return owner.function.returnType } else { return "" }
+  } else {}
+  if parent.node.kind == "call" && hole.role == "argument" {
+    let target = find_function(functions, parent.node.text)
+    if target.found { return function_parameter_type(nodes, target.function.syntaxId, hole.childIndex) } else { return "" }
+  } else {}
+  if (parent.node.kind == "let" || parent.node.kind == "var") && hole.role == "value" {
+    let annotation = child_at(nodes, parent.node.id, "annotation", 0)
+    if annotation.found { return type_name_at(nodes, annotation.node.id) } else { return "" }
+  } else {}
+  if parent.node.kind == "binary" {
+    if parent.node.text == "&&" || parent.node.text == "||" { return "Bool" } else {}
+    if parent.node.text == "+" || parent.node.text == "-" || parent.node.text == "*" || parent.node.text == "/" || parent.node.text == "%" || parent.node.text == "<" || parent.node.text == "<=" || parent.node.text == ">" || parent.node.text == ">=" { return "Int" } else {}
+    let siblingRole = if hole.role == "left" { "right" } else { "left" }
+    let siblingIndex = if hole.role == "left" { 1 } else { 0 }
+    let sibling = child_at(nodes, parent.node.id, siblingRole, siblingIndex)
+    if sibling.found { return infer_expression_type(nodes, sibling.node.id, functions, bindings, references) } else { return "" }
+  } else {}
+  if parent.node.kind == "unary" && hole.role == "operand" {
+    if parent.node.text == "!" { return "Bool" } else { return "Int" }
+  } else {}
+  if parent.node.kind == "if_expression" && hole.role == "condition" { return "Bool" } else {}
+  return ""
+}
+fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[HoleFact] {
+  var facts: List[HoleFact] = []
+  var ordinal = 0
+  for node in nodes {
+    if node.kind == "hole" {
+      let owner = owner_function(nodes, node, functions)
+      let scopes = if owner.found { scope_chain(nodes, node, owner.function.syntaxId, owner.function.semanticId) } else { [] }
+      let scope = first_scope(scopes, 0)
+      let expected = expected_hole_type(nodes, node, functions, bindings, references)
+      var visible: List[Int] = []
+      var candidates: List[Int] = []
+      var visibleNames: List[Str] = []
+      for scopeId in scopes {
+        for binding in bindings {
+          if owner.found && binding.ownerFunctionId == owner.function.semanticId && binding.scopeId == scopeId && binding.visibleFrom <= node.startByte && !contains(visibleNames, binding.name) {
+            visibleNames = append(visibleNames, binding.name)
+            visible = append(visible, binding.semanticId)
+            if expected != "" && binding.typeName == expected { candidates = append(candidates, binding.semanticId) } else {}
+          } else {}
+        }
+      }
+      facts = append(facts, HoleFact { semanticId: 3000000 + ordinal, syntaxId: node.id, name: node.text, expectedType: expected, scopeId: scope, visibleBindingIds: visible, candidateBindingIds: candidates, startByte: node.startByte, endByte: node.endByte })
+      ordinal = ordinal + 1
+    } else {}
+  }
+  return facts
+}
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -341,10 +398,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     if is_expression_kind(node.kind) {
       let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
       if actual == "" {
+        if node.kind == "hole" { } else {
         if node.kind == "call" {
           if known_builtin(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
         } else {
           if node.kind != "name" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
+        }
         }
       } else {
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, startByte: node.startByte, endByte: node.endByte })
@@ -361,7 +420,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if node.kind == "unary" {
         let operand = child_at(nodes, node.id, "operand", 0)
         let expected = if node.text == "!" { "Bool" } else { "Int" }
-        if operand.found && infer_expression_type(nodes, operand.node.id, functions, bindings, references) != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Unary operator operand has an incompatible type", operand.node)) } else {}
+        if operand.found && operand.node.kind != "hole" && infer_expression_type(nodes, operand.node.id, functions, bindings, references) != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Unary operator operand has an incompatible type", operand.node)) } else {}
       } else {}
       if node.kind == "call" {
         let target = find_function(functions, node.text)
@@ -383,7 +442,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let condition = child_at(nodes, node.id, "condition", 0)
         let thenValue = child_at(nodes, node.id, "then", 1)
         let elseValue = child_at(nodes, node.id, "else", 2)
-        if condition.found && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
+        if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If condition must have type Bool", condition.node))
         } else {}
         if thenValue.found && elseValue.found {
@@ -423,7 +482,7 @@ fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
 }
 fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: FlatAstNode) -> CheckerReport {
-  return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], diagnostics: [diagnostic(code, message, node)] }
+  return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [diagnostic(code, message, node)] }
 }
 fn analyze() -> CheckerReport {
   let authority = semantic_snapshot()
@@ -462,6 +521,7 @@ fn analyze() -> CheckerReport {
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
   let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
+  let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
@@ -490,5 +550,6 @@ fn analyze() -> CheckerReport {
   }
   let calls = reverse(reversedCalls)
   let diagnostics = reverse(reversedDiagnostics)
-  return CheckerReport { document: authority.document, revision: authority.revision, status: if length(diagnostics) == 0 { "valid" } else { "invalid" }, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, diagnostics: diagnostics }
+  let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
+  return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
 }

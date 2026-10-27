@@ -45,6 +45,7 @@ def checker_report(document, source, *, status="valid", nodes=0, functions=(), c
         ("bindings", typed_list("BindingFact", [])), ("references", typed_list("ResolvedName", [])),
         ("calls", typed_list("ResolvedCall", edges)),
         ("expressionTypes", typed_list("ExpressionTypeFact", [])),
+        ("holes", typed_list("HoleFact", [])),
         ("diagnostics", typed_list("CheckDiagnostic", errors)),
     ])
 
@@ -215,6 +216,74 @@ class A13FunctionResolutionTests(unittest.TestCase):
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertEqual(scalar(report["status"]), "invalid", report)
         self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
+
+    def test_typed_holes_keep_context_scope_candidates_and_original_spans(self):
+        source = ("fn id(value: Int) -> Int { return value }" + NL +
+                  "fn main(outer: Int) -> Int { let local: Int = ?init; return id(?argument) }")
+        opened, report = self._analyze(source)
+        self.assertEqual(opened["status"], "incomplete")
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        self.assertEqual(report["diagnostics"]["value"], [])
+        holes = [fields(item) for item in report["holes"]["value"]]
+        self.assertEqual([scalar(item["name"]) for item in holes], ["init", "argument"])
+        self.assertEqual([scalar(item["expectedType"]) for item in holes], ["Int", "Int"])
+        self.assertEqual([scalar(item["semanticId"]) for item in holes], [3000000, 3000001])
+        starts = [len(source[:source.index("?init")].encode()), len(source[:source.index("?argument")].encode())]
+        for hole, start in zip(holes, starts):
+            self.assertEqual((scalar(hole["startByte"]), scalar(hole["endByte"])), (start, start + len(("?" + scalar(hole["name"])).encode())))
+        self.assertEqual(len(holes[0]["visibleBindingIds"]["value"]), 1)
+        bindings = [fields(item) for item in report["bindings"]["value"]]
+        local_id = next(scalar(item["semanticId"]) for item in bindings if scalar(item["name"]) == "local")
+        binding_names = {scalar(item["semanticId"]): scalar(item["name"]) for item in bindings}
+        reference_holes = {item["name"]: item for item in opened["holes"]}
+        for hole in holes:
+            name = scalar(hole["name"])
+            reference = reference_holes[name]
+            self.assertEqual(scalar(hole["expectedType"]), reference["expectedType"])
+            self.assertEqual(scalar(hole["startByte"]), reference["span"]["start"]["offset"])
+            self.assertEqual(scalar(hole["endByte"]), reference["span"]["endOffset"])
+            visible_names = {binding_names[scalar(item)] for item in hole["visibleBindingIds"]["value"]}
+            self.assertEqual(visible_names, {item["name"] for item in reference["bindings"]})
+            candidate_names = {binding_names[scalar(item)] for item in hole["candidateBindingIds"]["value"]}
+            self.assertEqual(candidate_names, {item["name"] for item in reference["actions"][0]["candidates"]})
+        self.assertNotIn(local_id, [scalar(item) for item in holes[0]["visibleBindingIds"]["value"]])
+        self.assertIn(local_id, [scalar(item) for item in holes[1]["visibleBindingIds"]["value"]])
+        self.assertIn(local_id, [scalar(item) for item in holes[1]["candidateBindingIds"]["value"]])
+        self.assertGreater(len(report["expressionTypes"]["value"]), 0)
+
+    def test_nested_hole_candidates_follow_shadowing_and_match_ocaml(self):
+        source = "fn main(outer: Int) -> Int { let value: Int = 1; { let value: Int = 2; return ?nested } }"
+        opened, report = self._analyze(source)
+        self.assertEqual(opened["status"], "incomplete")
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        bindings = [fields(item) for item in report["bindings"]["value"]]
+        binding_names = {scalar(item["semanticId"]): scalar(item["name"]) for item in bindings}
+        visible_names = {binding_names[scalar(item)] for item in hole["visibleBindingIds"]["value"]}
+        candidate_names = {binding_names[scalar(item)] for item in hole["candidateBindingIds"]["value"]}
+        reference = opened["holes"][0]
+        self.assertEqual(visible_names, {item["name"] for item in reference["bindings"]})
+        self.assertEqual(candidate_names, {item["name"] for item in reference["actions"][0]["candidates"]})
+        self.assertEqual(visible_names, {"outer", "value"})
+        same_name = [item for item in bindings if scalar(item["name"]) == "value"]
+        self.assertEqual(len(same_name), 2)
+        self.assertEqual(scalar(hole["scopeId"]), scalar(same_name[-1]["scopeId"]))
+        self.assertEqual(scalar(hole["startByte"]), reference["span"]["start"]["offset"])
+        self.assertEqual(scalar(hole["endByte"]), reference["span"]["endOffset"])
+
+    def test_unconstrained_holes_stay_incomplete_and_semantic_errors_stay_invalid(self):
+        source = "fn main() -> Int { let value = ?free; return 0 }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(hole["name"]), "free")
+        self.assertEqual(scalar(hole["expectedType"]), "")
+        self.assertNotEqual(scalar(hole["scopeId"]), 0)
+        source = "fn main(x: Bool) -> Int { let value: Int = ?waiting; return x }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertTrue(report["holes"]["value"], report)
+        self.assertIn("PEP_RETURN_TYPE", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
     def test_utf8_and_crlf_keep_original_function_byte_spans(self):
         prefix = '"λ🙂"' + CRLF
