@@ -24,7 +24,8 @@ fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
-  if node.kind == "integer" || node.kind == "call" { return false } else {}
+  if node.kind == "integer" { return false } else {}
+  if node.kind == "call" { return true } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
     let right = pep_c23_child(nodes, node.id, "right", 1)
@@ -38,6 +39,21 @@ fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> B
     return true
   } else {}
   return true
+}
+fn pep_c23_call_free_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
+  if node.kind == "integer" { return true } else {}
+  if node.kind == "binary" {
+    let left = pep_c23_child(nodes, node.id, "left", 0)
+    let right = pep_c23_child(nodes, node.id, "right", 1)
+    return left.found && right.found &&
+      pep_c23_call_free_expression(nodes, left.node) &&
+      pep_c23_call_free_expression(nodes, right.node)
+  } else {}
+  if node.kind == "unary" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    return operand.found && pep_c23_call_free_expression(nodes, operand.node)
+  } else {}
+  return false
 }
 fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "integer" {
@@ -70,8 +86,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let targetValue = if targetStatement.found {
       pep_c23_child(nodes, targetStatement.node.id, "value", 0)
     } else { PepC23NodeLookup { found: false, node: empty_node() } }
-    if !targetStatement.found || !targetValue.found || targetValue.node.kind != "integer" {
-      return pep_c23_unsupported("Pep C23 calls currently require a literal-returning target; recursive calls are unsupported")
+    if !targetStatement.found || targetStatement.node.kind != "return" || !targetValue.found ||
+       !pep_c23_call_free_expression(nodes, targetValue.node) {
+      return pep_c23_unsupported("Pep C23 calls require a zero-argument Int target with a call-free integer expression; recursive calls are unsupported")
     } else {}
     return PepC23Emission { status: "emitted", sourceParts: ["pep_fn_", int_text(target.node.id), "()"], diagnostic: "" }
   } else {}
