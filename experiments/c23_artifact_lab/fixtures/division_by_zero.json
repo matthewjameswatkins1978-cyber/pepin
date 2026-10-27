@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "a05.failure.division",
+  "entry_function": "fn.main",
+  "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 5}},
+  "pep_source": "8 / 0\n",
+  "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Int", "statements": [], "result": {"node_id": "node.division", "kind": "binary", "op": "/", "type": "Int", "span": {"start": 0, "end": 5}, "left": {"node_id": "node.eight", "kind": "int", "value": 8, "type": "Int", "span": {"start": 0, "end": 1}}, "right": {"node_id": "node.zero", "kind": "int", "value": 0, "type": "Int", "span": {"start": 4, "end": 5}}}}],
+  "types": [],
+  "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": []},
+  "potential_failures": ["division_by_zero", "overflow"],
+  "supported_features": ["checked_arithmetic", "int_literals"],
+  "expected": {"status": "runtime_error", "value": null, "error": "division_by_zero", "interpreter_comparable": true}
+}

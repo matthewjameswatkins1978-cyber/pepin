@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "a05.failure.overflow",
+  "entry_function": "fn.main",
+  "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 32}},
+  "pep_source": "9223372036854775807 + 1\n",
+  "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Int", "statements": [], "result": {"node_id": "node.overflow", "kind": "binary", "op": "+", "type": "Int", "span": {"start": 0, "end": 25}, "left": {"node_id": "node.max", "kind": "int", "value": 9223372036854775807, "type": "Int", "span": {"start": 0, "end": 19}}, "right": {"node_id": "node.one", "kind": "int", "value": 1, "type": "Int", "span": {"start": 22, "end": 23}}}}],
+  "types": [],
+  "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": []},
+  "potential_failures": ["overflow"],
+  "supported_features": ["checked_arithmetic", "int_literals"],
+  "expected": {"status": "runtime_error", "value": null, "error": "overflow", "interpreter_comparable": true}
+}
