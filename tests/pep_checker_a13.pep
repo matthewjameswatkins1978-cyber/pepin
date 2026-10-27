@@ -71,6 +71,21 @@ fn is_constructor(nodes: List[FlatAstNode], name: Str) -> Bool {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return true } else {} }
   return false
 }
+fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+  for node in nodes { if node.parentId == -1 && node.kind == "record_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
+  return NodeLookup { found: false, node: empty_node() }
+}
+fn record_field_type(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) -> Str {
+  let record = record_declaration(nodes, recordName)
+  if !record.found { return "" } else {}
+  for field in nodes {
+    if field.parentId == record.node.id && field.kind == "field_declaration" && field.text == fieldName {
+      let fieldType = child_at(nodes, field.id, "type", 0)
+      if fieldType.found { return type_name_at(nodes, fieldType.node.id) } else { return "" }
+    } else {}
+  }
+  return ""
+}
 fn find_function(functions: List[CheckedFunction], name: Str) -> FunctionLookup {
   var answer = FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", startByte: 0, endByte: 0 } }
   for function in functions { if function.name == name { answer = FunctionLookup { found: true, function: function } } else {} }
@@ -311,7 +326,11 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     let thenValue = child_at(nodes, node.id, "then", 1)
     if thenValue.found { return infer_expression_type(nodes, thenValue.node.id, functions, bindings, references) } else { return "" }
   } else {}
-  if node.kind == "record" { return "" } else {}
+  if node.kind == "record" { if record_declaration(nodes, node.text).found { return node.text } else { return "" } } else {}
+  if node.kind == "field_access" {
+    let value = child_at(nodes, node.id, "value", 0)
+    if value.found { return record_field_type(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references), node.text) } else { return "" }
+  } else {}
   return ""
 }
 fn list_type_name(elementType: Str) -> Str {
@@ -383,6 +402,9 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
 fn supported_primitive_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" || list_element_type(typeName) != ""
 }
+fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
+  return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found
+}
 fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
   if !parent.found { return "" } else {}
@@ -419,6 +441,10 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   } else {}
   if parent.node.kind == "list" && hole.role == "element" {
     return list_element_type(contextual_expected_type(nodes, parent.node, functions, bindings, references))
+  } else {}
+  if parent.node.kind == "record_field" && hole.role == "value" {
+    let record = lookup_node(nodes, parent.node.parentId)
+    if record.found { return record_field_type(nodes, record.node.text, parent.node.text) } else { return "" }
   } else {}
   if (parent.node.kind == "if_expression" || parent.node.kind == "if_statement" || parent.node.kind == "while") && hole.role == "condition" { return "Bool" } else {}
   return ""
@@ -489,11 +515,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for node in nodes {
     if node.kind == "function" {
-      if !supported_primitive_type(declared_return_type(nodes, node.id)) {
+      if !supported_type(nodes, declared_return_type(nodes, node.id)) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Function result type is outside the implemented primitive checker subset", node))
       } else {}
       for parameter in nodes {
-        if parameter.parentId == node.id && parameter.kind == "parameter" && !supported_primitive_type(declared_binding_type(nodes, parameter)) {
+        if parameter.parentId == node.id && parameter.kind == "parameter" && !supported_type(nodes, declared_binding_type(nodes, parameter)) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Parameter type is outside the implemented primitive checker subset", parameter))
         } else {}
       }
@@ -509,12 +535,22 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
     if (node.kind == "let" || node.kind == "var") {
       let annotation = child_at(nodes, node.id, "annotation", 0)
-      if annotation.found && !supported_primitive_type(type_name_at(nodes, annotation.node.id)) {
+      if annotation.found && !supported_type(nodes, type_name_at(nodes, annotation.node.id)) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Binding annotation is outside the implemented primitive checker subset", node))
       } else {}
     } else {}
-    if node.kind == "record_declaration" || node.kind == "union_declaration" {
-      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Nominal declarations are outside the implemented checker subset", node))
+    if node.kind == "record_declaration" {
+      for field in nodes {
+        if field.parentId == node.id && field.kind == "field_declaration" {
+          let fieldType = child_at(nodes, field.id, "type", 0)
+          if fieldType.found && !supported_primitive_type(type_name_at(nodes, fieldType.node.id)) {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Record field type is outside the implemented scalar record subset", field))
+          } else {}
+        } else {}
+      }
+    } else {}
+    if node.kind == "union_declaration" {
+      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Tagged unions and exhaustive matching are outside the implemented checker subset", node))
     } else {}
     if node.kind == "assignment" || node.kind == "for_in" {
       reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Assignment and for-in semantics are outside the implemented checker subset", node))
@@ -533,6 +569,30 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, startByte: node.startByte, endByte: node.endByte })
       }
+      if node.kind == "record" {
+        let declaration = record_declaration(nodes, node.text)
+        if declaration.found {
+          for field in nodes {
+            if field.parentId == node.id && field.kind == "record_field" {
+              let expected = record_field_type(nodes, node.text, field.text)
+              let value = child_at(nodes, field.id, "value", 0)
+              let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+              if expected == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Record literal names a field absent from its declaration", field)) } else {}
+              if expected != "" && actual != "" && actual != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", value.node)) } else {}
+              var repeated = false
+              for prior in nodes { if prior.parentId == node.id && prior.kind == "record_field" && prior.text == field.text && prior.id != field.id { repeated = true } else {} }
+              if repeated { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record literal supplies a field more than once", field)) } else {}
+            } else {}
+          }
+          for declared in nodes {
+            if declared.parentId == declaration.node.id && declared.kind == "field_declaration" {
+              var supplied = false
+              for field in nodes { if field.parentId == node.id && field.kind == "record_field" && field.text == declared.text { supplied = true } else {} }
+              if !supplied { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_FIELD", "Record literal omits a declared field", node)) } else {}
+            } else {}
+          }
+        } else {}
+      } else {}
       if node.kind == "list" {
         let expectedElement = list_element_type(infer_expression_type(nodes, node.id, functions, bindings, references))
         for element in nodes {
@@ -543,6 +603,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           } else {}
         }
+      } else {}
+      if node.kind == "field_access" {
+        let value = child_at(nodes, node.id, "value", 0)
+        if value.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
+        } else {}
       } else {}
       if node.kind == "binary" {
         let left = child_at(nodes, node.id, "left", 0)

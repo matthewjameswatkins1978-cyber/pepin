@@ -342,7 +342,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
     def test_unimplemented_semantics_fail_closed_against_ocaml(self):
         cases = [
-            ("record-field", "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: true }; return 0 }", "PEP_TYPE_MISMATCH", "PEP_A13_TYPE_UNSUPPORTED"),
+            ("record-field", "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: true }; return 0 }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("constructor-payload", "type Maybe = Some(Int) | None()" + NL + "fn main() -> Int { let value = Some(true); return 0 }", "PEP_TYPE_MISMATCH", "PEP_A13_TYPE_UNSUPPORTED"),
             ("if-condition", "fn main() -> Int { if 1 { return 1 } else { return 2 } }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("while-condition", "fn main() -> Unit { while 1 {} }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
@@ -365,9 +365,45 @@ class A13FunctionResolutionTests(unittest.TestCase):
         reference = self._reference_check("record-hole", source)
         _, report = self._analyze(source)
         self.assertEqual(reference["status"], "incomplete", reference)
-        self.assertEqual(scalar(report["status"]), "invalid", report)
-        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
-        self.assertEqual([scalar(fields(item)["name"]) for item in report["holes"]["value"]], ["field"])
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(hole["name"]), "field")
+        self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+    def test_named_record_construction_fields_and_holes_are_checked(self):
+        source = "type Point { x: Int, label: Str }" + NL + "fn main() -> Int { let point = Point { x: 3, label: \"home\" }; return point.x }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        facts = [fields(item) for item in report["expressionTypes"]["value"]]
+        field_fact = next(item for item in facts if scalar(item["startByte"]) == source.index("point.x"))
+        self.assertEqual(scalar(field_fact["typeName"]), "Int")
+        binding_types = [scalar(fields(item)["typeName"]) for item in report["bindings"]["value"]]
+        self.assertIn("Point", binding_types)
+
+        source = "type Point { x: Int }" + NL + "fn read(point: Point) -> Int { return point.x }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        field = next(fields(item) for item in report["expressionTypes"]["value"] if scalar(fields(item)["typeName"]) == "Int" and scalar(fields(item)["startByte"]) == source.index("point.x"))
+        self.assertEqual(scalar(field["typeName"]), "Int")
+
+        source = "type Point { x: Int }" + NL + "fn main() -> Int { let point = Point { x: ?coordinate }; return 0 }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+        invalid_cases = [
+            ("fn main() -> Int { let point = Point { x: true }; return 0 }", "PEP_TYPE_MISMATCH"),
+            ("fn main() -> Int { let point = Point { }; return 0 }", "PEP_MISSING_FIELD"),
+            ("fn main() -> Int { let point = Point { x: 1, other: 2 }; return 0 }", "PEP_UNKNOWN_FIELD"),
+            ("fn main() -> Int { let point = Point { x: 1, x: 2 }; return 0 }", "PEP_DUPLICATE_FIELD"),
+            ("fn main(point: Point) -> Int { return point.missing }", "PEP_UNKNOWN_FIELD"),
+        ]
+        for body, expected_code in invalid_cases:
+            _, report = self._analyze("type Point { x: Int }" + NL + body)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            self.assertIn(expected_code, codes)
 
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
