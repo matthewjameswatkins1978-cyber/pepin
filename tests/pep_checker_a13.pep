@@ -742,7 +742,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if arm.parentId == node.id && arm.kind == "match_arm" {
             let pattern = child_at(nodes, arm.id, "pattern", 0)
             let result = child_at(nodes, arm.id, "result", 1)
-            if pattern.found {
+            let unreachable = catchAll
+            if unreachable {
+              invalidPattern = true
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNREACHABLE_MATCH_ARM", "Match arm follows an irrefutable pattern", arm))
+            } else {}
+            if pattern.found && !unreachable {
               if pattern.node.kind == "wildcard_pattern" || pattern.node.kind == "binding_pattern" { catchAll = true } else {}
               if pattern.node.kind == "constructor_pattern" {
                 let patternUnion = constructor_union_type(nodes, pattern.node.text)
@@ -771,7 +776,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Pattern form is outside the implemented checker subset", pattern.node))
               } else {}
             } else {}
-            if result.found {
+            if result.found && !unreachable {
               let actualResult = infer_expression_type(nodes, result.node.id, functions, bindings, references)
               if resultType == "" && actualResult != "" { resultType = actualResult } else {}
               if resultType != "" && actualResult != "" && resultType != actualResult {

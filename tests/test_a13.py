@@ -545,6 +545,34 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertIn(expected_code, [item["code"] for item in reference["diagnostics"]])
                 self.assertIn(expected_code, [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
+    def test_match_wildcard_catchall_rejects_later_constructor_pattern(self):
+        source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { _ => 0 A(v) => v } }"
+        reference = self._reference_check("match-unreachable-wildcard", source)
+        _, report = self._analyze(source)
+        reference_diagnostic = next(item for item in reference["diagnostics"] if item["code"] == "PEP_UNREACHABLE_MATCH_ARM")
+        report_diagnostic = next(
+            fields(item) for item in report["diagnostics"]["value"]
+            if scalar(fields(item)["code"]) == "PEP_UNREACHABLE_MATCH_ARM"
+        )
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertEqual(scalar(report_diagnostic["startByte"]), reference_diagnostic["span"]["start"]["offset"])
+        self.assertEqual(scalar(report_diagnostic["endByte"]), reference_diagnostic["span"]["endOffset"])
+
+    def test_match_binding_catchall_rejects_later_wildcard(self):
+        source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { rest => 0 _ => 1 } }"
+        reference = self._reference_check("match-unreachable-binding", source)
+        _, report = self._analyze(source)
+        reference_diagnostic = next(item for item in reference["diagnostics"] if item["code"] == "PEP_UNREACHABLE_MATCH_ARM")
+        report_diagnostic = next(
+            fields(item) for item in report["diagnostics"]["value"]
+            if scalar(fields(item)["code"]) == "PEP_UNREACHABLE_MATCH_ARM"
+        )
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertEqual(scalar(report_diagnostic["startByte"]), reference_diagnostic["span"]["start"]["offset"])
+        self.assertEqual(scalar(report_diagnostic["endByte"]), reference_diagnostic["span"]["endOffset"])
+
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
         _, report = self._analyze(source)
