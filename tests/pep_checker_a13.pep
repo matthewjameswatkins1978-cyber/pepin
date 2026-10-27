@@ -42,7 +42,10 @@ fn type_name_at(nodes: List[FlatAstNode], id: Int) -> Str {
   if found.node.kind == "type_scalar" || found.node.kind == "type_named" { return found.node.text } else {}
   if found.node.kind == "type_list" {
     let element = child_at(nodes, id, "element_type", 0)
-    if element.found { return "" } else { return "" }
+    if element.found {
+      let elementType = type_name_at(nodes, element.node.id)
+      return list_type_name(elementType)
+    } else { return "" }
   } else {}
   return ""
 }
@@ -279,6 +282,10 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if node.text == "length" || node.text == "byte_length" || node.text == "byte_at" { return "Int" } else {}
     if node.text == "byte_slice" { return "SourceBytes" } else {}
     if node.text == "contains" { return "Bool" } else {}
+    if node.text == "append" || node.text == "prepend" || node.text == "reverse" {
+      let collection = child_at(nodes, node.id, "argument", 0)
+      if collection.found { return infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { return "" }
+    } else {}
     if is_constructor(nodes, node.text) {
       for variant in nodes {
         if variant.kind == "variant_declaration" && variant.text == node.text {
@@ -294,12 +301,75 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     return "Int"
   } else {}
   if node.kind == "unary" { if node.text == "!" { return "Bool" } else { return "Int" } } else {}
-  if node.kind == "list" { return "" } else {}
+  if node.kind == "list" {
+    var elementType = ""
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
+        let actual = infer_expression_type(nodes, element.id, functions, bindings, references)
+        if elementType == "" && actual != "" { elementType = actual } else {}
+      } else {}
+    }
+    if elementType != "" { return list_type_name(elementType) } else {
+      let expected = contextual_expected_type(nodes, node, functions, bindings, references)
+      if expected != "" { return expected } else { return "" }
+    }
+  } else {}
   if node.kind == "if_expression" {
     let thenValue = child_at(nodes, node.id, "then", 1)
     if thenValue.found { return infer_expression_type(nodes, thenValue.node.id, functions, bindings, references) } else { return "" }
   } else {}
   if node.kind == "record" { return node.text } else {}
+  return ""
+}
+fn list_type_name(elementType: Str) -> Str {
+  if elementType == "Int" { return "List[Int]" } else {}
+  if elementType == "Bool" { return "List[Bool]" } else {}
+  if elementType == "Str" { return "List[Str]" } else {}
+  if elementType == "Unit" { return "List[Unit]" } else {}
+  if elementType == "SourceBytes" { return "List[SourceBytes]" } else {}
+  return ""
+}
+fn list_element_type(typeName: Str) -> Str {
+  if typeName == "List[Int]" { return "Int" } else {}
+  if typeName == "List[Bool]" { return "Bool" } else {}
+  if typeName == "List[Str]" { return "Str" } else {}
+  if typeName == "List[Unit]" { return "Unit" } else {}
+  if typeName == "List[SourceBytes]" { return "SourceBytes" } else {}
+  return ""
+}
+fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+  let parent = lookup_node(nodes, node.parentId)
+  if !parent.found { return "" } else {}
+  if (parent.node.kind == "let" || parent.node.kind == "var") && node.role == "value" {
+    let annotation = child_at(nodes, parent.node.id, "annotation", 0)
+    if annotation.found { return type_name_at(nodes, annotation.node.id) } else { return "" }
+  } else {}
+  if parent.node.kind == "return" && node.role == "value" {
+    let owner = owner_function(nodes, node, functions)
+    if owner.found { return owner.function.returnType } else { return "" }
+  } else {}
+  if parent.node.kind == "call" && node.role == "argument" {
+    let target = find_function(functions, parent.node.text)
+    if target.found { return function_parameter_type(nodes, target.function.syntaxId, node.childIndex) } else {}
+    if (parent.node.text == "append" || parent.node.text == "prepend") && node.childIndex == 0 {
+      let value = child_at(nodes, parent.node.id, "argument", 1)
+      if value.found {
+        let elementType = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+        return list_type_name(elementType)
+      } else { return "" }
+    } else {}
+    return ""
+  } else {}
+  if parent.node.kind == "if_expression" && (node.role == "then" || node.role == "else") {
+    let siblingRole = if node.role == "then" { "else" } else { "then" }
+    let siblingIndex = if node.role == "then" { 2 } else { 1 }
+    let sibling = child_at(nodes, parent.node.id, siblingRole, siblingIndex)
+    if sibling.found { return infer_expression_type(nodes, sibling.node.id, functions, bindings, references) } else { return "" }
+  } else {}
+  if parent.node.kind == "list" && node.role == "element" {
+    let expectedList = contextual_expected_type(nodes, parent.node, functions, bindings, references)
+    return list_element_type(expectedList)
+  } else {}
   return ""
 }
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
@@ -318,7 +388,7 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
   return typed
 }
 fn supported_primitive_type(typeName: Str) -> Bool {
-  return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes"
+  return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" || list_element_type(typeName) != ""
 }
 fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
@@ -329,7 +399,15 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   } else {}
   if parent.node.kind == "call" && hole.role == "argument" {
     let target = find_function(functions, parent.node.text)
-    if target.found { return function_parameter_type(nodes, target.function.syntaxId, hole.childIndex) } else { return "" }
+    if target.found { return function_parameter_type(nodes, target.function.syntaxId, hole.childIndex) } else {}
+    if (parent.node.text == "append" || parent.node.text == "prepend" || parent.node.text == "contains") && hole.childIndex == 1 {
+      let collection = child_at(nodes, parent.node.id, "argument", 0)
+      if collection.found { return list_element_type(infer_expression_type(nodes, collection.node.id, functions, bindings, references)) } else { return "" }
+    } else {}
+    if (parent.node.text == "append" || parent.node.text == "prepend") && hole.childIndex == 0 {
+      return contextual_expected_type(nodes, parent.node, functions, bindings, references)
+    } else {}
+    return ""
   } else {}
   if (parent.node.kind == "let" || parent.node.kind == "var") && hole.role == "value" {
     let annotation = child_at(nodes, parent.node.id, "annotation", 0)
@@ -345,6 +423,9 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   } else {}
   if parent.node.kind == "unary" && hole.role == "operand" {
     if parent.node.text == "!" { return "Bool" } else { return "Int" }
+  } else {}
+  if parent.node.kind == "list" && hole.role == "element" {
+    return list_element_type(contextual_expected_type(nodes, parent.node, functions, bindings, references))
   } else {}
   if (parent.node.kind == "if_expression" || parent.node.kind == "if_statement" || parent.node.kind == "while") && hole.role == "condition" { return "Bool" } else {}
   return ""
@@ -377,7 +458,8 @@ fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindin
   return facts
 }
 fn fixed_builtin_arity(name: Str) -> Int {
-  if name == "say" || name == "int_text" || name == "byte_length" { return 1 } else {}
+  if name == "say" || name == "int_text" || name == "byte_length" || name == "length" || name == "reverse" { return 1 } else {}
+  if name == "append" || name == "prepend" || name == "contains" { return 2 } else {}
   if name == "byte_at" { return 2 } else {}
   if name == "byte_slice" || name == "utf8_slice" { return 3 } else {}
   if name == "source_bytes" { return 0 } else {}
@@ -426,6 +508,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, startByte: node.startByte, endByte: node.endByte })
       }
+      if node.kind == "list" {
+        let expectedElement = list_element_type(infer_expression_type(nodes, node.id, functions, bindings, references))
+        for element in nodes {
+          if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
+            let actualElement = infer_expression_type(nodes, element.id, functions, bindings, references)
+            if expectedElement != "" && actualElement != "" && expectedElement != actualElement {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "List element type does not match the inferred element type", element))
+            } else {}
+          } else {}
+        }
+      } else {}
       if node.kind == "binary" {
         let left = child_at(nodes, node.id, "left", 0)
         let right = child_at(nodes, node.id, "right", 1)
@@ -471,6 +564,28 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 index = index + 1
               } else {}
             }
+            if node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains" {
+              let collection = child_at(nodes, node.id, "argument", 0)
+              let collectionType = if collection.found { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
+              let elementType = list_element_type(collectionType)
+              if elementType == "" {
+                let code = if collectionType == "" { "PEP_LIST_UNTYPED" } else { "PEP_LIST_EXPECTED" }
+                let atNode = if collection.found { collection.node } else { node }
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Built-in operation requires a list with a supported element type", atNode))
+              } else {}
+              if node.text == "append" || node.text == "prepend" || node.text == "contains" {
+                let value = child_at(nodes, node.id, "argument", 1)
+                if value.found && value.node.kind != "hole" {
+                  let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+                  if actualValue != "" && actualValue != elementType {
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "List built-in value type does not match the collection element type", value.node))
+                  } else {}
+                } else {}
+                if node.text == "contains" && (elementType == "SourceBytes" || elementType == "Unit") {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MEMBERSHIP_UNSUPPORTED", "Membership is not defined for this list element type", node))
+                } else {}
+              } else {}
+            } else {}
           } else {}
         }
       } else {}

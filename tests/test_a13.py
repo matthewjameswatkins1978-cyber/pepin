@@ -240,6 +240,67 @@ class A13FunctionResolutionTests(unittest.TestCase):
             holes = [fields(item) for item in report["holes"]["value"]]
             self.assertEqual([scalar(item["expectedType"]) for item in holes], ["Bool"])
 
+    def test_list_literals_and_contextual_empty_list_typecheck(self):
+        cases = [
+            ("fn values() -> List[Int] { return [1, 2] }", "List[Int]"),
+            ("fn empty() -> List[Int] { return [] }", "List[Int]"),
+            ("fn main() -> Int { let values: List[Int] = []; return length(values) }", "Int"),
+        ]
+        for source, result_type in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            functions = [fields(item) for item in report["functions"]["value"]]
+            self.assertEqual(scalar(functions[-1]["returnType"]), result_type)
+            if "let values" in source:
+                binding = fields(report["bindings"]["value"][0])
+                self.assertEqual(scalar(binding["typeName"]), "List[Int]")
+                self.assertGreater(len(report["expressionTypes"]["value"]), 0)
+
+        cases = [
+            ("fn bad() -> List[Int] { return [1, true] }", "PEP_TYPE_MISMATCH"),
+            ("fn bad() -> List[Int] { return [\"text\"] }", "PEP_RETURN_TYPE"),
+        ]
+        for source, expected_code in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn(expected_code, codes)
+
+    def test_list_builtin_signatures_and_element_holes(self):
+        cases = [
+            ("fn size(values: List[Int]) -> Int { return length(values) }", "Int"),
+            ("fn rev(values: List[Str]) -> List[Str] { return reverse(values) }", "List[Str]"),
+            ("fn add(values: List[Int]) -> List[Int] { return append(values, 1) }", "List[Int]"),
+            ("fn add(values: List[Int]) -> List[Int] { return prepend(values, 1) }", "List[Int]"),
+            ("fn has(values: List[Bool]) -> Bool { return contains(values, true) }", "Bool"),
+        ]
+        for source, result_type in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            function = fields(report["functions"]["value"][0])
+            self.assertEqual(scalar(function["returnType"]), result_type)
+
+        cases = [
+            ("fn bad() -> List[Int] { return append([1], \"text\") }", "PEP_ARGUMENT_TYPE"),
+            ("fn bad() -> Int { return length(1) }", "PEP_LIST_EXPECTED"),
+            ("fn bad() -> Int { return length([]) }", "PEP_LIST_UNTYPED"),
+            ("fn bad() -> List[Int] { return reverse() }", "PEP_ARGUMENT_COUNT"),
+            ("fn bad() -> Bool { return contains([source_bytes()], source_bytes()) }", "PEP_MEMBERSHIP_UNSUPPORTED"),
+        ]
+        for source, expected_code in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn(expected_code, codes)
+
+
+    def test_list_holes_inherit_element_type_and_empty_context(self):
+        source = "fn main(items: List[Int]) -> List[Int] { return append(items, ?item) }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(hole["expectedType"]), "Int")
+
     def test_source_byte_builtin_signatures_are_checked(self):
         valid_cases = [
             ("fn main() -> SourceBytes { return source_bytes() }", "source_bytes()", "SourceBytes"),
@@ -267,14 +328,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
-    def test_unimplemented_nominal_and_list_types_fail_closed(self):
+    def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
-        _, report = self._analyze(source)
-        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-        self.assertEqual(scalar(report["status"]), "invalid", report)
-        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
-
-        source = "fn empty() -> List[Int] { return [] }"
         _, report = self._analyze(source)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertEqual(scalar(report["status"]), "invalid", report)
