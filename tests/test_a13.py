@@ -582,6 +582,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("all-arms-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => false } }"),
             ("first-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => 0 } }"),
             ("later-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => 0 B() => true } }"),
+            ("annotated-binding", "type M = A() | B()" + NL + "fn f(x: M) -> Int { let n: Int = match x { A() => true B() => false }; return n }"),
+            ("conditional-branch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return if true { match x { A() => true B() => false } } else { 0 } }"),
+            ("list-element", "type M = A() | B()" + NL + "fn f(x: M) -> List[Int] { return [match x { A() => true B() => false }] }"),
         ]
         for name, source in cases:
             with self.subTest(name=name):
