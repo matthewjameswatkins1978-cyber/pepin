@@ -4,6 +4,60 @@ This directory owns an independent, reusable black-box laboratory for the
 OCaml seed compiler at the reviewed A11 base. It does not edit the Pep parser,
 checker, interpreter, or established semantics.
 
+## Grammar-aware corpus (Conformance 02)
+
+`conformance/generator.py` owns a small deterministic constructor library for
+the implemented seed grammar. It emits paired valid and intentionally invalid
+cases for arithmetic, Boolean control flow, records, recursive union matching,
+lists/`for-in`, and lexical shadowing. Cases carry their seed, family, depth,
+node count, exact source bytes, expected check status and (for valid programs)
+independently computed output. No Pep parser or AST is reused to generate the
+source.
+
+The optional grammar tier is bounded separately from the inherited generator:
+
+```powershell
+python conformance/harness.py --seeds 20261026 1101 --count 2 `
+  --grammar-count 3 --grammar-depth 2 --timeout 8 --reduce 0
+```
+
+`--grammar-count N` creates `2*N` grammar cases per seed (`N` valid and `N`
+invalid); `--grammar-depth` is constrained to 0..5. Valid cases must pass the
+normal check contract and then produce the exact independent output. Invalid
+cases must return a completed, well-shaped diagnostic with status `invalid` or
+`incomplete` and exit code 1. A valid case rejected by check is a
+`confirmed-bug`; a launch/transport failure is an `infrastructure-failure`.
+
+The same module contains a signed-64-bit reference model (`INT_MIN` and
+`INT_MAX`) covering checked add/subtract/multiply/negate, truncation-toward-zero
+division, divide-by-zero and the minimum-integer divide/negate overflow cases.
+These vectors are recorded as model evidence; they do not silently stand in
+for compiler execution. A12 parser topology remains gated and is not imported
+by this tier.
+
+## Metamorphic tier
+
+`conformance/metamorphic.py` provides two reviewed relations for valid generated
+cases: switching LF/CRLF line endings and adding lexer comments at line ends.
+The runner is enabled with `--metamorphic-count N`; each selected valid case
+normally yields two bounded pairs. Both checks must remain valid, both runs must
+match the independent expected output, and a span/revision-insensitive semantic
+signature must agree. A transformed case that differs only in source offsets is
+therefore not a false finding, while a synthetic mismatch is a fatal harness
+test. The relation itself is pure and deterministic, making it suitable for
+future source-aware reduction without importing a Pep parser.
+
+## Stateful session tier
+
+`conformance/session_history.py` generates bounded schema-v3 histories covering
+open, repeated same-revision query, metrics/cache reuse, a successful edit, a
+stale edit, current-revision query, malformed JSON, and post-error recovery.
+Enable it with `--history-count N`. Each history records its seed, exact source,
+request count and expected error codes. The history reducer is deterministic
+sequence ddmin with a fixed attempt budget; it is independently testable and
+does not assume that a shortened history remains meaningful unless the supplied
+failure predicate says so.
+
 ## Run
 
 From the repository root:
@@ -99,3 +153,15 @@ boundary probe.
 The harness intentionally does not call agreement between two compiler paths
 proof of language correctness. The OCaml parser/checker and JSONL session can
 share assumptions, so the report records that limitation explicitly.
+
+## A12 handoff for the next campaign
+
+The accepted A12 parser candidate is pinned at `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`
+on its separate branch. This R1 laboratory does not import or execute that
+implementation. A later SHA-pinned adapter may target the parser's
+`parser_start` → exact returned `parser_step` cursor chain, host-selected
+document/revision, chunk status and flattened-node topology: unique IDs,
+parent IDs, roles, child indices, root order, typed scalar payloads and
+original-byte spans. That campaign must also retain forged-cursor rejection,
+malformed/invalid-UTF8 recovery, source/revision boundaries and mutation
+counterexamples. A13 checker facts remain gated and are not assumed here.

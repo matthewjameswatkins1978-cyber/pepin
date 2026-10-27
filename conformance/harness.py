@@ -21,6 +21,17 @@ import tempfile
 import time
 from typing import Any, Callable, Iterable
 
+try:
+    from .generator import boundary_vectors, generate_cases
+    from .metamorphic import compare_pair, pairs_for_case
+    from .session_history import (generate_histories, history_from_record, history_record,
+                                  reduce_history, validate_history)
+except ImportError:  # Running this file directly from the repository root.
+    from generator import boundary_vectors, generate_cases
+    from metamorphic import compare_pair, pairs_for_case
+    from session_history import (generate_histories, history_from_record, history_record,
+                                 reduce_history, validate_history)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
@@ -99,6 +110,23 @@ def write_case(case_id: str, raw: bytes) -> Path:
     path = OUT / "corpus" / f"{case_id}.pep"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
+    return path
+
+
+def write_session_transcript(history: Any, requests: Iterable[Any], responses: Iterable[Any],
+                             suffix: str = "original") -> Path:
+    """Persist the exact request/response pairs used by a history replay."""
+    path = OUT / "histories" / f"{history.history_id}-{suffix}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    request_list = list(requests)
+    response_list = list(responses)
+    if len(request_list) != len(response_list):
+        raise ValueError("session transcript requires one response per request")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for index, (request, response) in enumerate(zip(request_list, response_list)):
+            handle.write(json.dumps({"historyId": history.history_id, "index": index,
+                                     "request": request, "response": response},
+                                    ensure_ascii=False, separators=(",", ":")) + "\n")
     return path
 
 
@@ -542,6 +570,173 @@ def run_generated(seed: int, count: int, findings: list[dict[str, Any]], stats: 
                              "expectedCodes": list(RUNTIME_EXPECTED_CODES[reason])})
 
 
+def run_grammar_generated(seed: int, count: int, depth: int,
+                          findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Run the independent grammar-aware corpus with strict case oracles."""
+    cases = generate_cases(seed, count, depth)
+    for case in cases:
+        stats["grammarGenerated"] += 1
+        stats["grammarValid" if case.validity == "valid" else "grammarInvalid"] += 1
+        check = cli_case(case.case_id, case.source, "check")
+        response = check.get("response") if isinstance(check.get("response"), dict) else {}
+        status = response.get("status")
+        expected_returncode = 1 if case.validity == "invalid" else 0
+        contract_ok = (check.get("status") == "completed" and
+                       check.get("returncode") == expected_returncode)
+        shape_ok = isinstance(response, dict) and response_shape_error(response) is None
+        expected_status = status in case.expected_statuses
+        if case.validity == "invalid":
+            expected = contract_ok and shape_ok and expected_status
+        else:
+            expected = contract_ok and shape_ok and status == "valid"
+        if not expected:
+            completed_semantic_rejection = (
+                check.get("status") == "completed"
+                and status in {"invalid", "incomplete"}
+                and shape_ok
+            )
+            classification = "confirmed-bug" if case.validity == "valid" and completed_semantic_rejection else transport_failure_classification(check)
+            append_finding(findings, stats, {
+                "caseId": case.case_id,
+                "kind": "grammar-generator",
+                "classification": classification,
+                "detail": "Generated case did not satisfy its grammar/check oracle",
+                "case": case.as_record(),
+                "contract": {"expectedStatuses": list(case.expected_statuses),
+                             "actualStatus": status, "returncode": check.get("returncode")},
+                "response": response,
+                "evidence": check,
+            })
+            continue
+        if case.validity == "invalid":
+            stats["grammarExpectedRejection"] += 1
+            note_classification(stats, "expected-rejection")
+            continue
+        stats["grammarExpectedOutput"] += 1
+        run = cli_case(case.case_id, case.source, "run")
+        if run.get("status") == "launch-error":
+            classification = "infrastructure-failure"
+        elif run.get("status") == "timeout":
+            classification = "confirmed-bug"
+        elif run.get("status") != "completed" or run.get("returncode") != 0 or run.get("stdout") != case.expected_output:
+            classification = "confirmed-bug"
+        else:
+            note_classification(stats, "missing-test")
+            continue
+        append_finding(findings, stats, {
+            "caseId": case.case_id,
+            "kind": "grammar-runtime",
+            "classification": classification,
+            "detail": "Generated valid program did not produce its independent expected output",
+            "case": case.as_record(),
+            "expected": case.expected_output,
+            "actual": run.get("stdout"),
+            "evidence": run,
+        })
+
+
+def run_metamorphic(seed: int, count: int, depth: int,
+                    findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Replay bounded source transformations against strict semantic oracles."""
+    for case in generate_cases(seed, count, depth):
+        for pair in pairs_for_case(case):
+            stats["metamorphicPairs"] += 1
+            original_check = cli_case(pair.origin_case_id + "-meta-original", pair.original, "check")
+            transformed_check = cli_case(pair.pair_id, pair.transformed, "check")
+            original_contract, original_detail = check_result_contract(original_check, expected_status="valid")
+            transformed_contract, transformed_detail = check_result_contract(transformed_check, expected_status="valid")
+            if not original_contract or not transformed_contract:
+                classification = ("infrastructure-failure" if
+                                  (original_check.get("status") != "completed" or
+                                   transformed_check.get("status") != "completed" or
+                                   not isinstance(original_check.get("response"), dict) or
+                                   not isinstance(transformed_check.get("response"), dict))
+                                  else "confirmed-bug")
+                append_finding(findings, stats, {
+                    "caseId": pair.pair_id, "kind": "metamorphic",
+                    "classification": classification,
+                    "detail": "Metamorphic check contract was not preserved",
+                    "relation": pair.relation,
+                    "contract": {"original": original_detail, "transformed": transformed_detail},
+                    "evidence": {"original": original_check, "transformed": transformed_check},
+                })
+                continue
+            original_run = cli_case(pair.origin_case_id + "-meta-original", pair.original, "run")
+            transformed_run = cli_case(pair.pair_id, pair.transformed, "run")
+            oracle = compare_pair(original_check, transformed_check,
+                                  original_run.get("stdout"), transformed_run.get("stdout"),
+                                  expected_output=pair.expected_output)
+            if (original_run.get("status") != "completed" or
+                    transformed_run.get("status") != "completed" or
+                    original_run.get("returncode") is None or transformed_run.get("returncode") is None):
+                oracle = {"classification": "infrastructure-failure",
+                          "detail": "Metamorphic runtime process did not complete with an exit code",
+                          "original": original_run, "transformed": transformed_run}
+            elif (original_run.get("returncode") != 0 or transformed_run.get("returncode") != 0):
+                oracle = {"classification": "confirmed-bug",
+                          "detail": "Metamorphic runtime completed with an unexpected nonzero exit",
+                          "original": original_run, "transformed": transformed_run}
+            elif (original_run.get("stdout") != pair.expected_output or
+                  transformed_run.get("stdout") != pair.expected_output):
+                oracle = {"classification": "confirmed-bug",
+                          "detail": "Metamorphic runtime output disagrees with the independent expected output",
+                          "expected": pair.expected_output,
+                          "original": original_run, "transformed": transformed_run,
+                          "originalOutput": original_run.get("stdout"),
+                          "transformedOutput": transformed_run.get("stdout")}
+            if oracle["classification"] == "missing-test":
+                stats["metamorphicPreserved"] += 1
+                note_classification(stats, "missing-test")
+            else:
+                append_finding(findings, stats, {
+                    "caseId": pair.pair_id, "kind": "metamorphic",
+                    "classification": oracle["classification"],
+                    "detail": oracle["detail"], "relation": pair.relation,
+                    "originCaseId": pair.origin_case_id, "oracle": oracle,
+                })
+
+
+def run_session_histories(seed: int, count: int,
+                          findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
+    """Exercise bounded stateful histories without importing session internals."""
+    for key in ("sessionHistoriesGenerated", "sessionHistoriesExecuted", "sessionHistoryResponses",
+                "sessionHistoryPassed", "sessionHistoryInfrastructure", "sessionHistoryFailures"):
+        stats.setdefault(key, 0)
+    for history in generate_histories(seed, count):
+        write_case(history.history_id, history.source.encode("utf-8"))
+        stats["sessionHistoriesGenerated"] += 1
+        result = session_case(list(history.requests))
+        stats["sessionHistories"] += 1
+        stats["sessionHistoriesExecuted"] += 1
+        stats["sessionHistoryRequests"] += len(history.requests)
+        responses = result.get("responses", [])
+        stats["sessionHistoryResponses"] += len(responses)
+        transcript = None
+        if len(responses) == len(history.requests):
+            transcript = write_session_transcript(history, history.requests, responses)
+        oracle = validate_history(result, history, normalized_analysis)
+        if oracle["classification"] == "missing-test":
+            stats["sessionHistoryPassed"] += 1
+            note_classification(stats, "missing-test")
+        else:
+            if oracle["classification"] == "infrastructure-failure":
+                stats["sessionHistoryInfrastructure"] += 1
+            else:
+                stats["sessionHistoryFailures"] += 1
+            append_finding(findings, stats, {
+                "caseId": history.history_id, "kind": "session-history",
+                "classification": oracle["classification"], "detail": oracle["detail"],
+                "failureSignature": oracle.get("failureSignature"),
+                "history": {"seed": history.seed, "index": history.index,
+                            "requestCount": len(history.requests),
+                            "expectedCodes": [list(item) for item in history.expected_codes]},
+                "historyRecord": history_record(history),
+                "originalTranscript": (str(transcript.relative_to(ROOT)) if transcript and transcript.is_relative_to(ROOT)
+                                       else str(transcript) if transcript else None),
+                "oracle": oracle, "responses": responses, "evidence": result,
+            })
+
+
 def session_invariants(findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     source = "fn double(n: Int) -> Int { return ?calculation }\n"
     rev = revision(source.encode())
@@ -723,10 +918,89 @@ def replay_finding(finding: dict[str, Any], raw: bytes, case_id: str) -> bool | 
     return None
 
 
-def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
+def replay_session_finding(finding: dict[str, Any], requests: Iterable[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Replay a session finding in a fresh process and return its exact oracle."""
+    record = finding.get("historyRecord")
+    if not isinstance(record, dict):
+        return ({"classification": "infrastructure-failure", "failureSignature": "reduction-unsupported",
+                 "detail": "session finding has no durable history record"},
+                {"status": "not-run", "responses": []})
+    history = history_from_record(record)
+    request_tuple = tuple(requests)
+    result = session_case(list(request_tuple))
+    oracle = validate_history(result, history, normalized_analysis,
+                              requests=request_tuple,
+                              focus_signature=finding.get("failureSignature"))
+    return oracle, result
+
+
+def reduce_session_finding(finding: dict[str, Any], budget: int = 80,
+                           stats: dict[str, Any] | None = None) -> None:
+    """Minimise a session request sequence while preserving its exact signature."""
+    record = finding.get("historyRecord")
+    signature = finding.get("failureSignature")
+    if not isinstance(record, dict) or not isinstance(signature, str):
+        finding["reduction"] = {"status": "unsupported", "reason": "missing session failure signature or history record"}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    original = tuple(record.get("requests", ()))
+    if finding.get("classification") != "confirmed-bug":
+        finding["reduction"] = {"status": "unsupported", "reason": "only confirmed session findings are reducible"}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+
+    def preserves(candidate: tuple[Any, ...]) -> bool:
+        oracle, _ = replay_session_finding(finding, candidate)
+        return (oracle.get("classification") == "confirmed-bug" and
+                oracle.get("failureSignature") == signature)
+
+    minimized, attempts = reduce_history(original, preserves, budget=budget)
+    if stats is not None:
+        stats["sessionReductionAttempts"] += attempts
+    if minimized == original:
+        finding["reduction"] = {"status": "unsupported", "reason": "no smaller request sequence preserved the failure",
+                                 "attempts": attempts, "budget": budget, "failureSignature": signature}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    oracle, result = replay_session_finding(finding, minimized)
+    if oracle.get("classification") != "confirmed-bug" or oracle.get("failureSignature") != signature:
+        finding["reduction"] = {"status": "unsupported", "reason": "minimized request sequence failed the original oracle",
+                                 "attempts": attempts, "budget": budget, "failureSignature": signature}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    responses = result.get("responses", [])
+    history = history_from_record(record)
+    reduced_transcript = write_session_transcript(history, minimized, responses, "reduced")
+    finding["reducedTranscript"] = (str(reduced_transcript.relative_to(ROOT))
+                                    if reduced_transcript.is_relative_to(ROOT)
+                                    else str(reduced_transcript))
+    finding["originalRequestCount"] = len(original)
+    finding["reducedRequestCount"] = len(minimized)
+    finding["reducedResponses"] = responses
+    finding["reduction"] = {"status": "reduced", "attempts": attempts, "budget": budget,
+                             "failureSignature": signature}
+    if stats is not None:
+        stats["sessionReductionSuccess"] += 1
+
+
+def reduce_findings(findings: list[dict[str, Any]], max_cases: int,
+                    stats: dict[str, Any] | None = None) -> None:
     reduced = 0
+    if stats is not None:
+        for key in ("reductionAttempts", "reductionSuccess", "reductionUnsupported",
+                    "sessionReductionAttempts", "sessionReductionSuccess", "sessionReductionUnsupported"):
+            stats.setdefault(key, 0)
     for finding in findings:
         if reduced >= max_cases or finding.get("classification") != "confirmed-bug":
+            continue
+        if finding.get("kind") == "session-history":
+            reduce_session_finding(finding, budget=80, stats=stats)
+            if finding.get("reduction", {}).get("status") == "reduced":
+                reduced += 1
             continue
         case_id = finding.get("caseId")
         if not case_id:
@@ -744,9 +1018,13 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
             finding["reduction"] = {"status": "unsupported", "reason": "original failure oracle did not reproduce"}
             continue
         minimized, attempts = reduce_bytes(original, lambda candidate: replay_finding(finding, candidate, case_id) is True)
+        if stats is not None:
+            stats["reductionAttempts"] += attempts
         if replay_finding(finding, minimized, case_id) is not True:
             finding["reduction"] = {"status": "unsupported", "reason": "minimized bytes failed the original failure oracle",
                                      "attempts": attempts}
+            if stats is not None:
+                stats["reductionUnsupported"] += 1
             continue
         reduced_path = OUT / "counterexamples" / f"{case_id}.pep"
         reduced_path.parent.mkdir(parents=True, exist_ok=True)
@@ -757,6 +1035,8 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
         finding["reducedHex"] = minimized.hex()
         finding["reduction"] = {"status": "reduced", "attempts": attempts,
                                  "budget": 80, "oracle": finding.get("kind")}
+        if stats is not None:
+            stats["reductionSuccess"] += 1
         reduced += 1
 
 
@@ -780,6 +1060,25 @@ def report_text(result: dict[str, Any]) -> str:
     for key, label in [
         ("repositoryExamples", "repository examples"), ("validGenerated", "generated valid programs"),
         ("invalidGenerated", "generated invalid programs"), ("runtimeGenerated", "runtime stress programs"),
+        ("grammarGenerated", "grammar-aware generated cases"), ("grammarValid", "grammar-aware valid cases"),
+        ("grammarInvalid", "grammar-aware invalid cases"), ("grammarExpectedOutput", "grammar output checks"),
+        ("grammarExpectedRejection", "grammar expected rejections"),
+        ("grammarBoundaryVectors", "independent integer boundary vectors"),
+        ("metamorphicPairs", "metamorphic source pairs"),
+        ("metamorphicPreserved", "metamorphic relations preserved"),
+        ("sessionHistoriesGenerated", "generated session histories"),
+        ("sessionHistoriesExecuted", "executed session histories"),
+        ("sessionHistoryRequests", "session-history requests"),
+        ("sessionHistoryResponses", "session-history responses"),
+        ("sessionHistoryPassed", "session histories satisfying the oracle"),
+        ("sessionHistoryFailures", "session-history confirmed findings"),
+        ("sessionHistoryInfrastructure", "session-history infrastructure findings"),
+        ("sessionReductionAttempts", "session-history reduction attempts"),
+        ("sessionReductionSuccess", "session-history reductions preserved"),
+        ("sessionReductionUnsupported", "session-history reductions unsupported"),
+        ("reductionAttempts", "byte reduction attempts"),
+        ("reductionSuccess", "byte reductions preserved"),
+        ("reductionUnsupported", "byte reductions unsupported"),
         ("expectedRejection", "expected rejections"), ("controlledRuntimeFailures", "controlled runtime failures"),
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
@@ -798,6 +1097,8 @@ def report_text(result: dict[str, Any]) -> str:
                 lines.append(f"  - check: `{finding['reproducer']['checkCommand']}`")
             if finding.get("reducedPath"):
                 lines.append(f"  - reduced counterexample: `{finding['reducedPath']}` ({finding['reducedBytes']} bytes; hex `{finding['reducedHex']}`)")
+            if finding.get("reducedTranscript"):
+                lines.append(f"  - reduced session transcript: `{finding['reducedTranscript']}` ({finding['reducedRequestCount']} requests; signature `{finding.get('failureSignature')}`)")
             elif finding.get("reduction", {}).get("status") == "unsupported":
                 lines.append(f"  - reduction unsupported: {finding['reduction'].get('reason', 'unspecified')}")
     lines += ["", "## Classification counts", "", "| Classification | Count |", "|---|---:|"]
@@ -810,6 +1111,9 @@ def report_text(result: dict[str, Any]) -> str:
         "- A stale edit must be rejected while malformed JSON must not terminate the session.",
         "- Generated valid programs are checked and run against independently computed expected output.",
         "- Generated invalid programs must not be accepted as valid or incomplete.",
+        "- Grammar-aware cases are generated from bounded constructors; valid cases require both check acceptance and exact independent output.",
+        "- Grammar invalid cases accept only the documented invalid/incomplete check statuses with a valid diagnostic contract.",
+        "- Integer boundary vectors use an independent signed-64-bit model; they are evidence about the model and do not replace compiler execution.",
         "- Runtime stress cases require return code 1, status `runtime_error`, and the exact expected diagnostic code; launcher errors, malformed output and timeouts are findings.",
         "- Launch failures and missing/malformed process output are classified as `infrastructure-failure` and fail the run without being misreported as Pep compiler defects.",
         "- Reduction reruns the finding-specific oracle and retains the original input when the oracle is unsupported or does not survive.",
@@ -830,8 +1134,17 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
     stats = {
         "repositoryExamples": 0, "validGenerated": 0, "invalidGenerated": 0,
         "runtimeGenerated": 0, "expectedRejection": 0, "controlledRuntimeFailures": 0,
+        "grammarGenerated": 0, "grammarValid": 0, "grammarInvalid": 0,
+        "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
+        "grammarBoundaryVectors": len(boundary_vectors()),
+        "metamorphicPairs": 0, "metamorphicPreserved": 0,
+        "sessionHistories": 0, "sessionHistoriesGenerated": 0, "sessionHistoriesExecuted": 0,
+        "sessionHistoryRequests": 0, "sessionHistoryResponses": 0, "sessionHistoryPassed": 0,
+        "sessionHistoryFailures": 0, "sessionHistoryInfrastructure": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
         "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
+        "reductionAttempts": 0, "reductionSuccess": 0, "reductionUnsupported": 0,
+        "sessionReductionAttempts": 0, "sessionReductionSuccess": 0, "sessionReductionUnsupported": 0,
         "classificationCounts": {},
     }
     findings: list[dict[str, Any]] = []
@@ -847,13 +1160,23 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
             note_classification(stats, "missing-test")
     for seed in args.seeds:
         run_generated(seed, args.count, findings, stats)
+        if args.grammar_count:
+            run_grammar_generated(seed, args.grammar_count, args.grammar_depth, findings, stats)
+        if args.metamorphic_count:
+            run_metamorphic(seed, args.metamorphic_count, args.grammar_depth, findings, stats)
+        if args.history_count:
+            run_session_histories(seed, args.history_count, findings, stats)
     session_invariants(findings, stats)
     if args.reduce:
-        reduce_findings(findings, args.reduce)
+        reduce_findings(findings, args.reduce, stats)
     git_revision = run_bounded(["git", "rev-parse", "HEAD"], timeout=3)
     git_branch = run_bounded(["git", "branch", "--show-current"], timeout=3)
     lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
-                   "--count", str(args.count), "--timeout", str(args.timeout), "--reduce", str(args.reduce)]
+                   "--count", str(args.count), "--grammar-count", str(args.grammar_count),
+                   "--grammar-depth", str(args.grammar_depth), "--metamorphic-count", str(args.metamorphic_count),
+                   "--history-count", str(args.history_count),
+                   "--timeout", str(args.timeout),
+                   "--reduce", str(args.reduce)]
     if args.a11:
         lab_command.append("--a11")
     result = {
@@ -874,13 +1197,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
     parser.add_argument("--count", type=int, default=4, help="cases per generated family and seed")
+    parser.add_argument("--grammar-count", type=int, default=0,
+                        help="bounded grammar-aware valid/invalid pairs per seed (0 disables)")
+    parser.add_argument("--grammar-depth", type=int, default=2,
+                        help="maximum recursive expression depth for grammar cases")
+    parser.add_argument("--metamorphic-count", type=int, default=0,
+                        help="valid grammar cases per seed to replay under source transformations (0 disables)")
+    parser.add_argument("--history-count", type=int, default=0,
+                        help="bounded JSONL session histories per seed (0 disables)")
     parser.add_argument("--timeout", type=float, default=8.0, help="documented process timeout")
     parser.add_argument("--reduce", type=int, default=2, help="confirmed findings to reduce")
     parser.add_argument("--a11", action="store_true", help="run the existing bounded A11 lexer differential suite")
     parser.add_argument("--a11-timeout", type=float, default=180.0, help="timeout for inherited A11 evidence")
     args = parser.parse_args()
-    if args.count < 1 or args.count > 100 or args.reduce < 0:
-        parser.error("count must be 1..100 and reduce must be nonnegative")
+    if (args.count < 1 or args.count > 100 or args.grammar_count < 0 or args.grammar_count > 100 or
+            args.metamorphic_count < 0 or args.metamorphic_count > 100 or args.history_count < 0 or
+            args.history_count > 100 or args.reduce < 0):
+        parser.error("count must be 1..100, grammar/metamorphic/history counts must be 0..100 and reduce must be nonnegative")
+    if args.grammar_depth < 0 or args.grammar_depth > 5:
+        parser.error("grammar-depth must be 0..5")
     if args.timeout <= 0 or args.a11_timeout <= 0:
         parser.error("timeouts must be positive")
     PROCESS_TIMEOUT = args.timeout
