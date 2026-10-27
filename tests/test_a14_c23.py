@@ -58,18 +58,14 @@ class A14C23EmissionTests(unittest.TestCase):
                                        "tool": "pep-c23-emitter", "document": self.tool_document,
                                        "revision": self.tool_revision, "function": "emit_c23"})
         self.assertEqual(registered.get("status"), "Registered", registered)
-        sample = "fn main() -> Int { return 17 }"
+        sample = "fn main() -> Int { return true }"
         target = self._open(sample)
-        parts = [
-            "#include <stdio.h>\n", "int main(void) {\n",
-            "  (void)printf(\"%lld\\n\", (long long)(", "17", "));\n",
-            "  return 0;\n", "}\n",
-        ]
+        expected = emission("unsupported", (), "Pep C23 emission requires a valid Pep checker report")
         validated = self.client.send({
             "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
             "tool": "pep-c23-emitter", "document": self.tool_document, "revision": self.tool_revision,
             "testVectors": [{
-                "arguments": [], "expect": emission("emitted", parts),
+                "arguments": [], "expect": expected,
                 "semanticTarget": {"document": target["document"], "revision": target["revision"],
                                    "entryFunctions": []},
             }],
@@ -121,15 +117,27 @@ class A14C23EmissionTests(unittest.TestCase):
     def test_generated_c23_executes_source_backed_programs_under_clang_and_gcc(self):
         self.assertEqual(subprocess.run([str(CLANG), "--version"], text=True, capture_output=True).returncode, 0)
         self.assertEqual(subprocess.run([str(GCC), "--version"], text=True, capture_output=True).returncode, 0)
-        for value in (0, 17, 2147483647):
+        for value in (0, 17, 2147483647, 9223372036854775807):
             with self.subTest(value=value):
                 self._compile_and_run(f"fn main() -> Int {{ return {value} }}", value)
+        self._compile_and_run(
+            "fn main() -> Int { return answer() } fn answer() -> Int { return 29 }",
+            29,
+        )
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
         emitted = self._emit("fn main() -> Int { return 1 + 2 }")
         self.assertEqual(scalar(emitted["status"]), "unsupported")
         self.assertEqual(emitted["sourceParts"]["value"], [])
         self.assertNotEqual(scalar(emitted["diagnostic"]), "")
+
+    def test_recursive_call_is_rejected_before_native_lowering(self):
+        emitted = self._emit(
+            "fn main() -> Int { return loop() } fn loop() -> Int { return loop() }"
+        )
+        self.assertEqual(scalar(emitted["status"]), "unsupported")
+        self.assertEqual(emitted["sourceParts"]["value"], [])
+        self.assertIn("recursive calls are unsupported", scalar(emitted["diagnostic"]))
 
     def test_checker_invalid_program_is_not_emitted(self):
         emitted = self._emit("fn main() -> Int { return true }")
