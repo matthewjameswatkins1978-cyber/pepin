@@ -10,13 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import pathlib
+import queue
 import statistics
 import subprocess
 import argparse
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 
@@ -30,6 +33,18 @@ MAX_TRACE_CALLS = 4_096
 
 class PipelineError(AssertionError):
     """The real pipeline or its independent evidence checks failed."""
+
+
+class SessionInfrastructureError(PipelineError):
+    """The JSONL child failed independently of Pep semantic results."""
+
+    def __init__(self, message: str, details: dict[str, Any]):
+        super().__init__(message)
+        self.details = details
+
+
+class SessionResponseTimeout(SessionInfrastructureError):
+    """The JSONL child did not produce a response before the finite deadline."""
 
 
 def revision(raw: bytes) -> str:
@@ -102,51 +117,154 @@ def chunk_value(document: str, rev: str, cursor: dict[str, Any], *, done: bool =
 
 
 class JsonlSession:
-    def __init__(self, root: pathlib.Path):
+    DEFAULT_RESPONSE_TIMEOUT_S = 30.0
+
+    def __init__(self, root: pathlib.Path, *, response_timeout_s: float | None = None,
+                 command: list[str] | None = None):
+        configured_timeout = (self.DEFAULT_RESPONSE_TIMEOUT_S if response_timeout_s is None
+                              else response_timeout_s)
+        if not isinstance(configured_timeout, (int, float)) or not math.isfinite(configured_timeout) or configured_timeout <= 0:
+            raise ValueError("response_timeout_s must be a finite positive number")
         env = os.environ.copy()
         env.setdefault("PEPIN_OPAM_ROOT", os.environ.get("OPAMROOT", r"D:\opam-roots\pepin"))
         started = time.perf_counter_ns()
         self.process = subprocess.Popen(
-            ["pwsh", "-NoProfile", "-File", str(root / "pep.ps1"), "session", "--jsonl"],
+            command or ["pwsh", "-NoProfile", "-File", str(root / "pep.ps1"), "session", "--jsonl"],
             cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1,
         )
         self.spawn_ms = (time.perf_counter_ns() - started) / 1_000_000
+        self.response_timeout_s = float(configured_timeout)
+        self._stdout_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._stderr_chunks: list[str] = []
+        self._reader_failed: BaseException | None = None
+        self._terminated_for_failure = False
+        self._closed = False
+        self._stdout_thread = threading.Thread(target=self._read_stdout, name="pepin-jsonl-stdout", daemon=True)
+        self._stderr_thread = threading.Thread(target=self._read_stderr, name="pepin-jsonl-stderr", daemon=True)
+        self._stdout_thread.start()
+        self._stderr_thread.start()
+
+    def _read_stdout(self) -> None:
+        try:
+            if self.process.stdout is None:
+                self._stdout_queue.put(("reader_error", RuntimeError("stdout pipe is unavailable")))
+                return
+            while True:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                self._stdout_queue.put(("line", line))
+        except BaseException as exc:
+            self._reader_failed = exc
+            self._stdout_queue.put(("reader_error", exc))
+        finally:
+            self._stdout_queue.put(("eof", None))
+
+    def _read_stderr(self) -> None:
+        try:
+            if self.process.stderr is not None:
+                self._stderr_chunks.append(self.process.stderr.read())
+        except BaseException as exc:
+            self._stderr_chunks.append(f"<stderr reader failed: {exc!r}>")
+
+    def _stderr_text(self) -> str:
+        return "".join(self._stderr_chunks)
+
+    def _terminate_child(self, reason: str) -> dict[str, Any]:
+        self._terminated_for_failure = True
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5.0)
+        self._stdout_thread.join(timeout=2.0)
+        self._stderr_thread.join(timeout=2.0)
+        partial: list[str] = []
+        while True:
+            try:
+                kind, value = self._stdout_queue.get_nowait()
+            except queue.Empty:
+                break
+            if kind == "line" and value:
+                partial.append(value)
+        return {"kind": reason, "returncode": self.process.returncode,
+                "partialStdout": "".join(partial), "stderr": self._stderr_text(),
+                "timeoutSeconds": self.response_timeout_s}
 
     def send(self, request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        if self._closed or self._terminated_for_failure:
+            raise SessionInfrastructureError("session is closed after an infrastructure failure",
+                                              {"kind": "session-unusable"})
         if self.process.stdin is None or self.process.stdout is None:
-            raise PipelineError("session pipes are unavailable")
+            details = self._terminate_child("launcher-failure")
+            raise SessionInfrastructureError("session pipes are unavailable", details)
         encoded = (json.dumps(request, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         started = time.perf_counter_ns()
-        self.process.stdin.write(encoded.decode("utf-8"))
-        self.process.stdin.flush()
-        line = self.process.stdout.readline()
+        try:
+            self.process.stdin.write(encoded.decode("utf-8"))
+            self.process.stdin.flush()
+        except (BrokenPipeError, OSError) as exc:
+            details = self._terminate_child("launcher-failure")
+            details["writeError"] = repr(exc)
+            raise SessionInfrastructureError("JSONL child rejected the request pipe", details) from exc
+        try:
+            kind, value = self._stdout_queue.get(timeout=self.response_timeout_s)
+        except queue.Empty as exc:
+            details = self._terminate_child("response-timeout")
+            raise SessionResponseTimeout(
+                f"JSONL response exceeded {self.response_timeout_s:g}s deadline", details
+            ) from exc
+        if kind == "eof":
+            details = self._terminate_child("process-closed-before-response")
+            raise SessionInfrastructureError("JSONL child closed output before responding", details)
+        if kind == "reader_error":
+            details = self._terminate_child("launcher-failure")
+            details["readerError"] = repr(value)
+            raise SessionInfrastructureError("JSONL stdout reader failed", details)
+        line = value
         elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
         if not line:
-            stderr = self.process.stderr.read() if self.process.stderr else ""
-            raise PipelineError(f"session ended without response: {stderr}")
+            details = self._terminate_child("process-closed-before-response")
+            raise SessionInfrastructureError("session ended without response", details)
         response_bytes = len(line.encode("utf-8"))
         try:
             response = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise PipelineError(f"invalid JSONL response: {line!r}") from exc
+            details = {"kind": "malformed-json", "rawResponse": line,
+                       "stderr": self._stderr_text(), "returncode": self.process.poll()}
+            raise SessionInfrastructureError("invalid JSONL response", details) from exc
         return response, {
             "requestBytes": len(encoded), "responseBytes": response_bytes,
             "elapsedMs": elapsed_ms,
         }
 
     def close(self) -> None:
-        if self.process.poll() is None:
-            if self.process.stdin:
+        if self._closed:
+            return
+        if self.process.stdin:
+            try:
                 self.process.stdin.close()
+            except OSError:
+                pass
+        if self.process.poll() is None:
             self.process.wait(timeout=30)
-        stderr = self.process.stderr.read() if self.process.stderr else ""
-        if self.process.returncode != 0:
-            raise PipelineError(f"session exited {self.process.returncode}: {stderr}")
+        self._stdout_thread.join(timeout=2.0)
+        self._stderr_thread.join(timeout=2.0)
+        stderr = self._stderr_text()
+        if self.process.returncode != 0 and not self._terminated_for_failure:
+            self._closed = True
+            raise SessionInfrastructureError(
+                f"session exited {self.process.returncode}",
+                {"kind": "launcher-failure", "returncode": self.process.returncode, "stderr": stderr},
+            )
         if self.process.stdout:
             self.process.stdout.close()
         if self.process.stderr:
             self.process.stderr.close()
+        self._closed = True
 
 
 def normalize_nodes(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -340,6 +458,14 @@ class ParserMeasurement:
     elapsed_ms: float
     call_rows: list[dict[str, Any]]
     nodes: list[dict[str, Any]]
+    target_status: str = ""
+    target_ast: list[dict[str, Any]] = field(default_factory=list)
+    target_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    parser_error_code: str = ""
+    parser_error_start: int = 0
+    parser_error_end: int = 0
+    parser_error_line: int = 0
+    parser_error_column: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -353,6 +479,10 @@ class ParserMeasurement:
             "responseBytes": self.response_bytes, "maxRequestBytes": self.max_request_bytes,
             "maxResponseBytes": self.max_response_bytes, "elapsedMs": self.elapsed_ms,
             "callRows": self.call_rows, "nodes": self.nodes,
+            "targetStatus": self.target_status, "targetDiagnostics": self.target_diagnostics,
+            "parserError": {"code": self.parser_error_code, "start": self.parser_error_start,
+                             "end": self.parser_error_end, "line": self.parser_error_line,
+                             "column": self.parser_error_column},
             "coalescingModels": [simulated_coalescing(self.call_rows, width) for width in (2, 4, 8, 16, 32)],
         }
 
@@ -478,6 +608,14 @@ def parse_source(source: str | bytes, *, a12_root: pathlib.Path = A12_ROOT) -> P
             max_request_bytes=max_request, max_response_bytes=max_response,
             elapsed_ms=(time.perf_counter_ns() - loop_started) / 1_000_000,
             call_rows=rows, nodes=nodes,
+            target_status=target_response.get("status", ""),
+            target_ast=ast,
+            target_diagnostics=target_response.get("diagnostics") or [],
+            parser_error_code=scalar(result_fields["errorCode"]),
+            parser_error_start=int(scalar(result_fields["errorStart"])),
+            parser_error_end=int(scalar(result_fields["errorEnd"])),
+            parser_error_line=int(scalar(result_fields["errorLine"])),
+            parser_error_column=int(scalar(result_fields["errorColumn"])),
         )
     finally:
         session.close()
