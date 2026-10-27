@@ -193,18 +193,8 @@ fn find_reference(references: List[ResolvedName], syntaxId: Int) -> ReferenceLoo
   for reference in references { if reference.syntaxId == syntaxId { return ReferenceLookup { found: true, reference: reference } } else {} }
   return ReferenceLookup { found: false, reference: ResolvedName { syntaxId: -1, bindingId: -1, name: "", startByte: 0, endByte: 0 } }
 }
-fn inside_function(nodes: List[FlatAstNode], node: FlatAstNode, functionId: Int) -> Bool {
-  var parentId = node.parentId
-  var steps = 0
-  var found = false
-  while parentId != -1 && !found && steps <= length(nodes) {
-    if parentId == functionId { found = true } else {
-      let parent = lookup_node(nodes, parentId)
-      if parent.found { parentId = parent.node.parentId } else { parentId = -1 }
-    }
-    steps = steps + 1
-  }
-  return found
+fn inside_function(node: FlatAstNode, function: CheckedFunction) -> Bool {
+  return node.id != function.syntaxId && function.startByte <= node.startByte && node.endByte <= function.endByte
 }
 fn fixed_child_index(parentKind: Str, role: Str) -> Int {
   if parentKind == "binary" { if role == "left" { return 0 } else { if role == "right" { return 1 } else { return -1 } } } else {}
@@ -337,7 +327,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
   for function in functions {
     for node in nodes {
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
-      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(nodes, node, function.syntaxId)
+      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(node, function)
       if parameter || local {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         let scope = if parameter { function.semanticId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, function.semanticId) } }
@@ -358,7 +348,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for function in functions {
     for node in nodes {
-      if node.kind == "name" && inside_function(nodes, node, function.syntaxId) {
+      if node.kind == "name" && inside_function(node, function) {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         var found = false
         var resolved = 0
@@ -380,7 +370,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
 }
 fn owner_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> FunctionLookup {
   var answer = FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
-  for function in functions { if inside_function(nodes, node, function.syntaxId) { answer = FunctionLookup { found: true, function: function } } else {} }
+  for function in functions { if inside_function(node, function) { answer = FunctionLookup { found: true, function: function } } else {} }
   return answer
 }
 fn inside_any_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> Bool {
@@ -1352,7 +1342,7 @@ fn analyze() -> CheckerReport {
   for item in typeResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
   for function in functions {
     for node in nodes {
-      if node.kind == "call" && inside_function(nodes, node, function.syntaxId) {
+      if node.kind == "call" && inside_function(node, function) {
         let target = find_function(functions, node.text)
         if target.found {
           if count_children(nodes, node.id, "argument") == target.function.arity {
