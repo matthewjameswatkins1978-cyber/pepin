@@ -224,6 +224,22 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
+    def test_statement_conditions_are_typed_and_holes_keep_boolean_expectations(self):
+        _, report = self._analyze("fn main() -> Unit { if true {} else {} while false {} }")
+        self.assertEqual(scalar(report["status"]), "valid", report)
+
+        for source in ["fn main() -> Unit { if 1 {} else {} }", "fn main() -> Unit { while \"no\" {} }"]:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn("PEP_TYPE_MISMATCH", codes)
+
+        for source in ["fn main() -> Unit { if ?condition {} else {} }", "fn main() -> Unit { while ?condition {} }"]:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "incomplete", report)
+            holes = [fields(item) for item in report["holes"]["value"]]
+            self.assertEqual([scalar(item["expectedType"]) for item in holes], ["Bool"])
+
     def test_source_byte_builtin_signatures_are_checked(self):
         valid_cases = [
             ("fn main() -> SourceBytes { return source_bytes() }", "source_bytes()", "SourceBytes"),

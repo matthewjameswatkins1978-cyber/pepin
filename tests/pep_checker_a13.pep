@@ -346,7 +346,7 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if parent.node.kind == "unary" && hole.role == "operand" {
     if parent.node.text == "!" { return "Bool" } else { return "Int" }
   } else {}
-  if parent.node.kind == "if_expression" && hole.role == "condition" { return "Bool" } else {}
+  if (parent.node.kind == "if_expression" || parent.node.kind == "if_statement" || parent.node.kind == "while") && hole.role == "condition" { return "Bool" } else {}
   return ""
 }
 fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[HoleFact] {
@@ -488,6 +488,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branches must have the same type", node))
           } else {}
         } else {}
+      } else {}
+    } else {}
+    if node.kind == "if_statement" || node.kind == "while" {
+      let condition = child_at(nodes, node.id, "condition", 0)
+      if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Control-flow condition must have type Bool", condition.node))
       } else {}
     } else {}
     if node.kind == "return" && inside_any_function(nodes, node, functions) {
