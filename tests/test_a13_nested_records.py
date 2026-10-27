@@ -77,6 +77,18 @@ class A13NestedRecordTests(unittest.TestCase):
         expression_shapes = [fields(item)["typeShape"] for item in report["expressionTypes"]["value"] if scalar(fields(item)["typeShape"]["fields"][0]["value"]) == "nominal"]
         self.assertTrue(any(scalar(fields(item)["name"]) == "Point" and scalar(fields(item)["listDepth"]) == 1 for item in expression_shapes))
 
+    def test_match_binding_preserves_nominal_list_type_shape(self):
+        source = (
+            "type Point { x: Int }\n"
+            "type Data = Wrap(List[Point]) | Empty()\n"
+            "fn size(data: Data) -> Int { return match data { Wrap(points) => 0 Empty => 0 } }"
+        )
+        report = self._assert_matches_reference("match-nominal-list-binding", source)
+        self.assertEqual(scalar(report["status"]), "valid")
+        points = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == "points")
+        shape = fields(points["typeShape"])
+        self.assertEqual((scalar(shape["kind"]), scalar(shape["name"]), scalar(shape["listDepth"])), ("nominal", "Point", 1))
+
     def test_if_expression_preserves_nominal_list_shapes_and_rejects_mismatch(self):
         valid = (
             "type Point { x: Int }\n"

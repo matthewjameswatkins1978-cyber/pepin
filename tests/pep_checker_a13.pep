@@ -692,25 +692,22 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
   for binding in bindings {
     var typeName = binding.typeName
     let declaration = lookup_node(nodes, binding.syntaxId)
-    if typeName == "" {
-      if declaration.found {
-        let value = child_at(nodes, declaration.node.id, "value", 0)
-        if declaration.found && declaration.node.kind == "binding_pattern" { typeName = pattern_binding_type(nodes, declaration.node, functions, typed, references) } else {
-          if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
-        }
-      } else {}
-    } else {}
     var typeShape = binding.typeShape
-    if typeShape.kind == "" && typeName != "" { typeShape = legacy_type_shape(nodes, typeName) } else {}
-    if typeShape.kind == "" {
-      if typeShape.kind == "" && typeName == "" && declaration.found {
-        if declaration.node.kind == "binding_pattern" {
-          typeShape = pattern_binding_shape(nodes, declaration.node, functions, typed, references)
-        } else {
-          let value = child_at(nodes, declaration.node.id, "value", 0)
-          if value.found { typeShape = expression_type_shape(nodes, value.node.id, functions, typed, references) } else {}
+    if typeName == "" && declaration.found {
+      if declaration.node.kind == "binding_pattern" {
+        if typeShape.kind == "" { typeShape = pattern_binding_shape(nodes, declaration.node, functions, typed, references) } else {}
+        if typeShape.kind != "" { typeName = legacy_type_name(typeShape) } else {
+          typeName = pattern_binding_type(nodes, declaration.node, functions, typed, references)
         }
-      } else {}
+      } else {
+        let value = child_at(nodes, declaration.node.id, "value", 0)
+        if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+      }
+    } else {}
+    if typeShape.kind == "" && typeName != "" { typeShape = legacy_type_shape(nodes, typeName) } else {}
+    if typeShape.kind == "" && typeName == "" && declaration.found && declaration.node.kind != "binding_pattern" {
+      let value = child_at(nodes, declaration.node.id, "value", 0)
+      if value.found { typeShape = expression_type_shape(nodes, value.node.id, functions, typed, references) } else {}
     } else {}
     typed = prepend(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape })
   }
@@ -1167,18 +1164,25 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             for argument in nodes {
               if argument.parentId == node.id && argument.role == "argument" {
                 let expected = fixed_builtin_parameter_type(node.text, index)
-                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
-                if expected != "" && actualArgument != "" && expected != actualArgument {
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
+                if expected != "" {
+                  let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                  if actualArgument != "" && expected != actualArgument {
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
+                  } else {}
                 } else {}
                 index = index + 1
               } else {}
             }
           if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && count_children(nodes, node.id, "argument") == requiredArity {
               let collection = child_at(nodes, node.id, "argument", 0)
-              let collectionType = if collection.found { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
-              let elementType = list_element_type(collectionType)
               let collectionShape = if collection.found { expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { empty_type_shape() }
+              var collectionType = ""
+              if collection.found {
+                if collectionShape.listDepth != 0 { collectionType = legacy_type_name(collectionShape) } else {
+                  collectionType = infer_expression_type(nodes, collection.node.id, functions, bindings, references)
+                }
+              } else {}
+              let elementType = list_element_type(collectionType)
               if elementType == "" && collectionShape.listDepth == 0 {
                 let emptyCollection = collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0
                 if !emptyCollection {
