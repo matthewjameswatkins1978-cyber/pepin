@@ -11,8 +11,10 @@ The laboratory establishes deterministic C23 source generation and strict
 native execution for a small explicit subset. Eight fixtures generate source
 that compiles and executes under both selected Windows toolchains. Native
 successes and controlled overflow/division failures match the independently
-declared outcomes, and all comparable Pep interpreter runs match. The accepted
-ABI-04 runtime and separate-TU fixture remain the runtime authority.
+declared outcomes, and all comparable Pep interpreter runs match. Fresh R1
+evidence is in `_build/c23-artifact-05/native-r1.json` and
+`_build/c23-artifact-05/performance-r1.json` (ignored build outputs). The
+accepted ABI-04 runtime and separate-TU fixture remain the runtime authority.
 
 ## Schema and trust boundary
 
@@ -21,9 +23,18 @@ provenance, function/binding identities, types, ownership/lifetime facts,
 potential failures, supported features, and an expected outcome. Expressions
 carry stable node IDs, explicit types, and byte spans. The validator rejects
 missing facts, unknown bindings/functions/constructors/fields, invalid UTF-8,
-bad nominal types, wrong field/constructor arity, duplicate node IDs, missing
-ownership facts, incomplete match facts, revision conflicts, and unsupported
-schema versions before writing C.
+bad nominal types, wrong field/constructor arity, duplicate node IDs, incomplete
+ownership coverage or values, incomplete match facts, digest mismatches,
+out-of-bounds spans, revision conflicts, and unsupported schema versions before
+writing C.
+
+Validation and emission capability are separate gates. Constructor and match
+facts remain validator-recognised but fail with a structured
+`unsupported_emission_feature`; parameterised entry points fail with
+`entry_parameters_unsupported`; union/unsupported nominal outputs fail with
+`unsupported_entry_output` or `unsupported_emission_type`; and borrowed
+`List[Int]` parameters fail with `borrowed_list_unsupported`. No raw assertion
+or downstream C compiler error is the feature diagnostic.
 
 A13 owns binding/type/constructor/call resolution, source validity,
 exhaustiveness, holes, and semantic validity. The generator owns only schema
@@ -55,13 +66,15 @@ Every build uses:
 
 The native runner discovers explicit `PEP_C23_CLANG`/`PEP_C23_GCC` overrides,
 PATH, then known installation locations. Unavailable compilers, compilation
-failure, executable failure, malformed receipts, and timeouts are separate
-non-success classifications. It never turns a missing compiler into a pass.
+ failure, executable failure, malformed receipts, unrelated stdout, and
+ timeouts are separate non-success classifications. Compiler identity is
+ checked before compilation, and timeout stdout/stderr may be bytes or text
+ without causing a secondary decoding failure. It never turns a missing
+ compiler into a pass.
 
-The 16 native receipts comprise six successful scalar/structured values,
-eight successful values including record/list/string fixtures, and four
-controlled runtime errors across the full corpus. The current receipt is
-written under ignored `_build/c23-artifact-05/native3`.
+The fresh R1 native receipt contains 16 passed rows (eight fixtures per
+compiler), including four controlled runtime errors. The receipt records the
+actual compiler identity and command for every build and execution.
 
 ## Generated semantics
 
@@ -85,28 +98,37 @@ C string termination.
 
 List generation zero-initialises the output owner, checks constructor status,
 sums with checked arithmetic, disposes before returning, and propagates the
-status. An independent generated-source invariant rejects a mutation that
-removes `pep_list_dispose`. The ABI-04 separate-TU fixture was rerun with the
-new execution/revision deadlines: Clang and GCC semantic/error receipts remain
-equal, including owner mismatch `range` and owner recovery `ok`.
+status. Ownership maps now require exact parameter-binding and function-result
+coverage, recognised borrowed/owned values, and unique lifetime facts. An
+independent generated-source invariant matches every allocated list symbol to
+a disposal and rejects a mismatched cleanup mutation. A borrowed `List[Int]`
+parameter is deliberately rejected because the current list_sum emitter would
+otherwise dispose borrowed storage. The ABI-04 separate-TU fixture was rerun
+with the new execution/revision deadlines: Clang and GCC semantic/error
+receipts remain equal, including owner mismatch `range` and owner recovery
+`ok`.
 
-Clang AddressSanitizer passes on generated list, record, and string artifacts
-when the LLVM 23 Windows runtime directory is explicitly present on PATH.
-GCC ASan remains unavailable in the installed MinGW distribution because its
-linker lacks `-lasan`; this is reported as unavailable, not passed coverage.
+Fresh Clang AddressSanitizer builds and executions pass on generated list,
+record, and string artifacts when the LLVM 23 Windows runtime directory is
+explicitly present on PATH. GCC ASan remains unavailable in the installed
+MinGW distribution because its linker lacks `-lasan`; the attempted strict
+link failed with that exact diagnostic, so this is reported as unavailable,
+not passed coverage.
 
 ## Artifacts and performance
 
-The bounded performance receipt uses two warmups and five trials per fixture
-and compiler, with separate artifact/runtime object compilation and linking.
-It records source/object/executable sizes, hashes, exact commands, compiler
-versions, exit status, and startup samples. Eight rows per compiler passed.
+The fresh R1 performance receipt uses one warmup and three measured trials per
+fixture and compiler, with separate artifact/runtime object compilation and
+linking. It records source/object/executable sizes, hashes, exact commands,
+compiler versions, exit status, stdout/stderr, and every per-run receipt.
+Every warmup and measured trial was checked against the expected oracle;
+unrelated stdout is rejected and stderr is retained. Sixteen rows passed.
 On this Windows host, generated source sizes were 793--1,448 bytes, Clang
 object sizes 2,134--2,716 bytes, GCC object sizes 1,222--1,672 bytes, Clang
-executables 153,088 bytes, and GCC executables 61,336--61,876 bytes. Mean
-process samples were approximately 9.22--15.82 ms for Clang and 9.68--12.76
-ms for GCC. These are artifact startup measurements, not claims about a future
-native compiler or interpreter speedup.
+executables 153,088 bytes, and GCC executables 61,336--61,876 bytes. Fresh
+three-trial mean process samples were approximately 17.33--18.90 ms for
+Clang and 9.14--11.36 ms for GCC. These are artifact startup measurements,
+not claims about a future native compiler or interpreter speedup.
 
 ## Union boundary and A13 matrix
 
