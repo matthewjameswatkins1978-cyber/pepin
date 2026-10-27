@@ -237,6 +237,44 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   } else {}
   return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
+fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
+  if count_children(nodes, function.id, "statement") != 1 {
+    return pep_c23_unsupported("Pep C23 conditional-return lowering requires one top-level if statement")
+  } else {}
+  let statement = pep_c23_child(nodes, function.id, "statement", 0)
+  if !statement.found || statement.node.kind != "if_statement" {
+    return pep_c23_unsupported("Pep C23 conditional-return lowering requires a top-level if statement")
+  } else {}
+  let condition = pep_c23_child(nodes, statement.node.id, "condition", 0)
+  if !condition.found || count_children(nodes, statement.node.id, "then") != 1 || count_children(nodes, statement.node.id, "else") != 1 {
+    return pep_c23_unsupported("Pep C23 conditional return requires one condition and one statement in each branch")
+  } else {}
+  let thenReturn = pep_c23_child(nodes, statement.node.id, "then", 0)
+  let elseReturn = pep_c23_child(nodes, statement.node.id, "else", 0)
+  if !thenReturn.found || !elseReturn.found || thenReturn.node.kind != "return" || elseReturn.node.kind != "return" {
+    return pep_c23_unsupported("Pep C23 conditional branches must each contain one direct return")
+  } else {}
+  let thenValue = pep_c23_child(nodes, thenReturn.node.id, "value", 0)
+  let elseValue = pep_c23_child(nodes, elseReturn.node.id, "value", 0)
+  if !thenValue.found || !elseValue.found {
+    return pep_c23_unsupported("Pep C23 conditional return is missing a result expression")
+  } else {}
+  let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+  let loweredThen = pep_c23_expression(nodes, function, thenValue.node)
+  let loweredElse = pep_c23_expression(nodes, function, elseValue.node)
+  if loweredCondition.status != "emitted" { return loweredCondition } else {}
+  if loweredThen.status != "emitted" { return loweredThen } else {}
+  if loweredElse.status != "emitted" { return loweredElse } else {}
+  var parts: List[Str] = ["if ("]
+  for part in loweredCondition.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ") {\n  return ")
+  for part in loweredThen.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ";\n} else {\n  return ")
+  for part in loweredElse.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ";\n}\n")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+
 fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
@@ -321,7 +359,9 @@ fn emit_c23() -> PepC23Emission {
   }
   for node in parsed.nodes {
     if node.parentId == -1 && node.kind == "function" {
-      let lowered = pep_c23_function_expression(parsed.nodes, node)
+      let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
+      let hasConditionalBody = conditionalBody.status == "emitted"
+      let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node) }
       if lowered.status != "emitted" { return lowered } else {}
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
@@ -346,9 +386,13 @@ fn emit_c23() -> PepC23Emission {
           bodyParts = append(bodyParts, ";\n")
         } else {}
       }
-      bodyParts = append(bodyParts, "  return ")
-      for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
-      bodyParts = append(bodyParts, ";\n")
+      if hasConditionalBody {
+        for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
+      } else {
+        bodyParts = append(bodyParts, "  return ")
+        for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
+        bodyParts = append(bodyParts, ";\n")
+      }
       reversed = prepend(reversed, "int64_t pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       if parameter.found {

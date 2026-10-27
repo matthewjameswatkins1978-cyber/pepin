@@ -38,13 +38,12 @@ class PepC23CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             folder = pathlib.Path(temp)
             source = folder / "answer.pep"
-            source.write_text("fn main() -> Int { return combine(19, 23) }\n"
-                              "fn combine(a: Int, b: Int) -> Int { return b }\n",
+            source.write_text("fn main() -> Int { if 19 <= 23 { return 23 } else { return 0 } }\n",
                               encoding="utf-8", newline="\n")
             result = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "23\n")
-            source.write_text("fn main() -> Int { if true { return 1 } else { return 2 } }\n",
+            source.write_text("fn main() -> Int { return length([1, 2]) }\n",
                               encoding="utf-8", newline="\n")
             rejected = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)
