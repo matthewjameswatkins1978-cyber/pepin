@@ -369,9 +369,8 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   return NameResolution { references: reverse(reversedReferences), diagnostics: reverse(reversedDiagnostics) }
 }
 fn owner_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> FunctionLookup {
-  var answer = FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
-  for function in functions { if inside_function(node, function) { answer = FunctionLookup { found: true, function: function } } else {} }
-  return answer
+  for function in functions { if inside_function(node, function) { return FunctionLookup { found: true, function: function } } else {} }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
 }
 fn inside_any_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> Bool {
   return owner_function(nodes, node, functions).found
