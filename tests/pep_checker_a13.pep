@@ -392,6 +392,11 @@ fn list_type_name(elementType: Str) -> Str {
   if elementType == "Str" { return "List[Str]" } else {}
   if elementType == "Unit" { return "List[Unit]" } else {}
   if elementType == "SourceBytes" { return "List[SourceBytes]" } else {}
+  if elementType == "List[Int]" { return "List[List[Int]]" } else {}
+  if elementType == "List[Bool]" { return "List[List[Bool]]" } else {}
+  if elementType == "List[Str]" { return "List[List[Str]]" } else {}
+  if elementType == "List[Unit]" { return "List[List[Unit]]" } else {}
+  if elementType == "List[SourceBytes]" { return "List[List[SourceBytes]]" } else {}
   return ""
 }
 fn list_element_type(typeName: Str) -> Str {
@@ -400,6 +405,11 @@ fn list_element_type(typeName: Str) -> Str {
   if typeName == "List[Str]" { return "Str" } else {}
   if typeName == "List[Unit]" { return "Unit" } else {}
   if typeName == "List[SourceBytes]" { return "SourceBytes" } else {}
+  if typeName == "List[List[Int]]" { return "List[Int]" } else {}
+  if typeName == "List[List[Bool]]" { return "List[Bool]" } else {}
+  if typeName == "List[List[Str]]" { return "List[Str]" } else {}
+  if typeName == "List[List[Unit]]" { return "List[Unit]" } else {}
+  if typeName == "List[List[SourceBytes]]" { return "List[SourceBytes]" } else {}
   return ""
 }
 fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
@@ -730,7 +740,16 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
             let actualElement = infer_expression_type(nodes, element.id, functions, bindings, references)
             if expectedElement != "" && actualElement != "" && expectedElement != actualElement {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "List element type does not match the inferred element type", element))
+              var mismatchNode = element
+              let nestedExpectedElement = list_element_type(expectedElement)
+              if element.kind == "list" && nestedExpectedElement != "" {
+                for nested in nodes {
+                  if nested.parentId == element.id && nested.role == "element" && nested.kind != "hole" && infer_expression_type(nodes, nested.id, functions, bindings, references) != nestedExpectedElement {
+                    mismatchNode = nested
+                  } else {}
+                }
+              } else {}
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "List element type does not match the inferred element type", mismatchNode))
             } else {}
           } else {}
         }
@@ -885,8 +904,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
                   } else {}
                 } else {}
-                if node.text == "contains" && (elementType == "SourceBytes" || elementType == "Unit") {
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MEMBERSHIP_UNSUPPORTED", "Membership is not defined for this list element type", node))
+                if node.text == "contains" && elementType != "" && !equality_supported_type(elementType) {
+                  let atNode = if collection.found { collection.node } else { node }
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MEMBERSHIP_UNSUPPORTED", "Membership is not defined for this list element type", atNode))
                 } else {}
               } else {}
             } else {}

@@ -33,6 +33,23 @@ class A13NestedRecordTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         return report
 
+    def test_nested_primitive_lists_match_ocaml(self):
+        valid = "fn values() -> List[List[Int]] { return [[1, 2], [3]] }"
+        report = self._assert_matches_reference("nested-list", valid)
+        self.assertEqual(scalar(report["status"]), "valid")
+        types = [scalar(fields(item)["typeName"]) for item in report["expressionTypes"]["value"]]
+        self.assertIn("List[Int]", types)
+        self.assertIn("List[List[Int]]", types)
+
+        invalid = "fn values() -> List[List[Int]] { return [[1], [true]] }"
+        report = self._assert_matches_reference("nested-list-mismatch", invalid)
+        self.assertEqual(scalar(report["status"]), "invalid")
+        self.assertIn("PEP_TYPE_MISMATCH", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
+
+        unsupported_contains = "fn has() -> Bool { return contains([[1]], [1]) }"
+        report = self._assert_matches_reference("nested-list-contains", unsupported_contains)
+        self.assertEqual(scalar(report["status"]), "invalid")
+
     def test_union_payload_can_hold_a_named_record(self):
         source = (
             "type Inner { value: Int }\n"
