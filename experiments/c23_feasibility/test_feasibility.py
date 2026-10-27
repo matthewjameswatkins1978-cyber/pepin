@@ -340,6 +340,12 @@ class NativeProofTests(unittest.TestCase):
             self.assertEqual(result.returncode, 7)
 
     def test_machine_readable_interpreter_comparison(self):
+        unavailable = [name for name in ("clang", "gcc") if resolve_compiler(name) is None]
+        if unavailable:
+            self.skipTest("strict C23 compilers are unavailable: " + ", ".join(unavailable))
+        for name in ("clang", "gcc"):
+            result = build_with(name)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         result = run(["python", str(ROOT / "compare_semantics.py")])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         report = json.loads(result.stdout)
