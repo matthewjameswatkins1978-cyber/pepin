@@ -1,7 +1,6 @@
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
-type PepTypeShape { kind: Str, name: Str, listDepth: Int }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, startByte: Int, endByte: Int }
@@ -29,13 +28,12 @@ fn count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
   return count
 }
 fn child_at(nodes: List[FlatAstNode], parent: Int, role: Str, index: Int) -> NodeLookup {
-  var answer = NodeLookup { found: false, node: empty_node() }
   for node in nodes {
     if node.parentId == parent && node.role == role && node.childIndex == index {
-      answer = NodeLookup { found: true, node: node }
+      return NodeLookup { found: true, node: node }
     } else {}
   }
-  return answer
+  return NodeLookup { found: false, node: empty_node() }
 }
 fn type_name_at(nodes: List[FlatAstNode], id: Int) -> Str {
   let found = lookup_node(nodes, id)
@@ -529,6 +527,14 @@ fn supported_primitive_type(typeName: Str) -> Bool {
 fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
   return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found
 }
+fn supported_type_at(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Bool {
+  if supported_type(nodes, knownName) { return true } else {}
+  let found = lookup_node(nodes, id)
+  if !found.found || found.node.kind != "type_list" { return false } else {}
+  let element = child_at(nodes, id, "element_type", 0)
+  if !element.found { return false } else {}
+  return supported_type_at(nodes, element.node.id, type_name_at(nodes, element.node.id))
+}
 fn equality_supported_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit"
 }
@@ -667,15 +673,19 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for node in nodes {
     if node.kind == "function" {
-      if !supported_type(nodes, declared_return_type(nodes, node.id)) {
+      let returnType = child_at(nodes, node.id, "return_type", 0)
+      if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Function result type is outside the implemented primitive checker subset", node))
       } else {}
       if known_builtin(node.text) || is_constructor(nodes, node.text) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_RESERVED_FUNCTION", "Function name is reserved for a builtin or constructor", node))
       } else {}
       for parameter in nodes {
-        if parameter.parentId == node.id && parameter.kind == "parameter" && !supported_type(nodes, declared_binding_type(nodes, parameter)) {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Parameter type is outside the implemented primitive checker subset", parameter))
+        if parameter.parentId == node.id && parameter.kind == "parameter" {
+          let parameterType = child_at(nodes, parameter.id, "type", 0)
+          if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)) {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Parameter type is outside the implemented primitive checker subset", parameter))
+          } else {}
         } else {}
       }
       if declared_return_type(nodes, node.id) != "Unit" {
@@ -690,7 +700,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
     if (node.kind == "let" || node.kind == "var") {
       let annotation = child_at(nodes, node.id, "annotation", 0)
-      if annotation.found && !supported_type(nodes, type_name_at(nodes, annotation.node.id)) {
+      if annotation.found && !supported_type_at(nodes, annotation.node.id, type_name_at(nodes, annotation.node.id)) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Binding annotation is outside the implemented primitive checker subset", node))
       } else {}
     } else {}
@@ -701,7 +711,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if field.parentId == node.id && field.kind == "field_declaration" {
           if record_field_declaration_count(nodes, node.id, field.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
           let fieldType = child_at(nodes, field.id, "type", 0)
-          if fieldType.found && !supported_type(nodes, type_name_at(nodes, fieldType.node.id)) {
+          if fieldType.found && !supported_type_at(nodes, fieldType.node.id, type_name_at(nodes, fieldType.node.id)) {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Record field type is outside the implemented checker subset", field))
           } else {}
         } else {}
@@ -714,7 +724,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if variant.parentId == node.id && variant.kind == "variant_declaration" {
           if constructor_declaration_count(nodes, variant.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
           for payload in nodes {
-            if payload.parentId == variant.id && payload.role == "field_type" && !supported_type(nodes, type_name_at(nodes, payload.id)) {
+            if payload.parentId == variant.id && payload.role == "field_type" && !supported_type_at(nodes, payload.id, type_name_at(nodes, payload.id)) {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Union constructor payload type is outside the implemented checker subset", payload))
             } else {}
           }

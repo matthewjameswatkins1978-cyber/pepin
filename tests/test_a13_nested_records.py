@@ -60,6 +60,15 @@ class A13NestedRecordTests(unittest.TestCase):
         report = self._assert_matches_reference("nested-list-contains", unsupported_contains)
         self.assertEqual(scalar(report["status"]), "invalid")
 
+    def test_structural_type_shapes_accept_nested_nominal_declarations(self):
+        source = (
+            "type Point { x: Int }\n"
+            "type Box { points: List[Point] }\n"
+            "fn consume(points: List[Point]) -> Unit {}"
+        )
+        report = self._assert_matches_reference("structural-nominal-list-shapes", source)
+        self.assertEqual(scalar(report["status"]), "valid")
+
     def test_union_payload_can_hold_a_named_record(self):
         source = (
             "type Inner { value: Int }\n"
