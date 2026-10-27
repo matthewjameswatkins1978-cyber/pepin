@@ -75,6 +75,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   if node.kind == "integer" {
     return PepC23Emission { status: "emitted", sourceParts: [int_text(node.integerValue)], diagnostic: "" }
   } else {}
+  if node.kind == "boolean" {
+    let value = if node.booleanValue { "1" } else { "0" }
+    return PepC23Emission { status: "emitted", sourceParts: [value], diagnostic: "" }
+  } else {}
   if node.kind == "name" {
     var localFound = false
     var localId = -1
@@ -152,6 +156,28 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       return PepC23Emission { status: "emitted", sourceParts: ["pep_fn_", int_text(target.node.id), "()"], diagnostic: "" }
     }
+  } else {}
+  if node.kind == "if_expression" {
+    let condition = pep_c23_child(nodes, node.id, "condition", 0)
+    let thenValue = pep_c23_child(nodes, node.id, "then", 1)
+    let elseValue = pep_c23_child(nodes, node.id, "else", 2)
+    if !condition.found || !thenValue.found || !elseValue.found {
+      return pep_c23_unsupported("Pep C23 conditional expression requires a condition and both branches")
+    } else {}
+    let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+    let loweredThen = pep_c23_expression(nodes, function, thenValue.node)
+    let loweredElse = pep_c23_expression(nodes, function, elseValue.node)
+    if loweredCondition.status != "emitted" { return loweredCondition } else {}
+    if loweredThen.status != "emitted" { return loweredThen } else {}
+    if loweredElse.status != "emitted" { return loweredElse } else {}
+    var parts: List[Str] = ["("]
+    for part in loweredCondition.sourceParts { parts = append(parts, part) }
+    parts = append(parts, " ? ")
+    for part in loweredThen.sourceParts { parts = append(parts, part) }
+    parts = append(parts, " : ")
+    for part in loweredElse.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
   } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)

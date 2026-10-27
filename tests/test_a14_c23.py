@@ -168,6 +168,22 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn first(value: Int, unused: Int) -> Int { return value }",
             41,
         )
+        self._compile_and_run(
+            "fn main() -> Int { return if true { 17 } else { 29 } }",
+            17,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { return if false { 17 } else { 29 } }",
+            29,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { return if 1 <= 2 { 17 } else { 29 } }",
+            17,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { return if false { 1 / 0 } else { 42 } }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
@@ -223,7 +239,7 @@ class A14C23EmissionTests(unittest.TestCase):
                 self._compile_and_expect_runtime_error(source, expected_code)
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
-        emitted = self._emit("fn main() -> Int { return if true { 1 } else { 2 } }")
+        emitted = self._emit("fn main() -> Int { if true { return 1 } else { return 2 } }")
         self.assertEqual(scalar(emitted["status"]), "unsupported")
         self.assertEqual(emitted["sourceParts"]["value"], [])
         self.assertNotEqual(scalar(emitted["diagnostic"]), "")
