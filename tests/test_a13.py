@@ -657,10 +657,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
+        reference = self._reference_check("unknown-nominal", source)
         _, report = self._analyze(source)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertEqual(reference["status"], "invalid", reference)
         self.assertEqual(scalar(report["status"]), "invalid", report)
-        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
+        self.assertIn("PEP_UNKNOWN_TYPE", [item["code"] for item in reference["diagnostics"]])
+        self.assertIn("PEP_UNKNOWN_TYPE", codes)
 
     def test_non_unit_return_completeness_follows_nested_blocks_and_if_branches(self):
         valid_sources = [
