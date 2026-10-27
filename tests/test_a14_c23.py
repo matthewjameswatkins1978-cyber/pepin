@@ -194,6 +194,10 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { if false { return 1 / 0 } else { return 42 } }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int {\n  let base = 41\n  if base <= 42 { return base + 1 } else { return 0 }\n}",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (

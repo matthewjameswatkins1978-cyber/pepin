@@ -238,13 +238,23 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
 fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
-  if count_children(nodes, function.id, "statement") != 1 {
-    return pep_c23_unsupported("Pep C23 conditional-return lowering requires one top-level if statement")
+  var statementCount = 0
+  var conditionalCount = 0
+  var prefixValid = true
+  var lastStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.parentId == function.id && candidate.role == "statement" {
+      statementCount = statementCount + 1
+      lastStatement = PepC23NodeLookup { found: true, node: candidate }
+      if candidate.kind == "if_statement" { conditionalCount = conditionalCount + 1 } else {
+        if candidate.kind != "let" { prefixValid = false } else {}
+      }
+    } else {}
+  }
+  if statementCount == 0 || conditionalCount != 1 || !lastStatement.found || lastStatement.node.kind != "if_statement" || !prefixValid {
+    return pep_c23_unsupported("Pep C23 conditional-return lowering requires direct immutable lets followed by one final if statement")
   } else {}
-  let statement = pep_c23_child(nodes, function.id, "statement", 0)
-  if !statement.found || statement.node.kind != "if_statement" {
-    return pep_c23_unsupported("Pep C23 conditional-return lowering requires a top-level if statement")
-  } else {}
+  let statement = lastStatement
   let condition = pep_c23_child(nodes, statement.node.id, "condition", 0)
   if !condition.found || count_children(nodes, statement.node.id, "then") != 1 || count_children(nodes, statement.node.id, "else") != 1 {
     return pep_c23_unsupported("Pep C23 conditional return requires one condition and one statement in each branch")
