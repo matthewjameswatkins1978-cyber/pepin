@@ -148,6 +148,16 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { return answer() }\nfn answer() -> Int { return 20 + 22 }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { return increment(41) }\n"
+            "fn increment(value: Int) -> Int { return value + 1 }",
+            42,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { return constant(41) }\n"
+            "fn constant(unused: Int) -> Int { return 42 }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
@@ -220,6 +230,10 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(call_order_failure["status"]), "unsupported")
         self.assertEqual(call_order_failure["sourceParts"]["value"], [])
         self.assertIn("evaluation order is unspecified", scalar(call_order_failure["diagnostic"]))
+        parameterized_main = self._emit("fn main(value: Int) -> Int { return value }")
+        self.assertEqual(scalar(parameterized_main["status"]), "unsupported")
+        self.assertEqual(parameterized_main["sourceParts"]["value"], [])
+        self.assertIn("functions require zero or one Int parameter", scalar(parameterized_main["diagnostic"]))
         local_return_call = self._emit(
             "fn main() -> Int { return maybe() }\n"
             "fn maybe() -> Int {\n  let seed = 0\n  return 1 / seed\n}"
@@ -234,6 +248,12 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(emitted["status"]), "unsupported")
         self.assertEqual(emitted["sourceParts"]["value"], [])
         self.assertIn("recursive calls are unsupported", scalar(emitted["diagnostic"]))
+        parameter_recursive = self._emit(
+            "fn main() -> Int { return loop(2) }\n"
+            "fn loop(value: Int) -> Int { return loop(value) }"
+        )
+        self.assertEqual(scalar(parameter_recursive["status"]), "unsupported")
+        self.assertEqual(parameter_recursive["sourceParts"]["value"], [])
 
     def test_checker_invalid_program_is_not_emitted(self):
         emitted = self._emit("fn main() -> Int { return true }")
