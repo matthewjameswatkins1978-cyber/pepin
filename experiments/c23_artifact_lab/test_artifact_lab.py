@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from artifact_lab import FixtureError, canonical_manifest_bytes, load_manifest, render_c, validate_generated_source, validate_manifest
+from artifact_lab import FixtureError, canonical_manifest_bytes, load_manifest, render_c, validate_emission_capability, validate_generated_source, validate_manifest
 
 
 ROOT = Path(__file__).parent
@@ -128,6 +128,75 @@ class ArtifactLabTests(unittest.TestCase):
         with self.assertRaises(FixtureError) as raised:
             validate_generated_source(source.replace("pep_list_dispose", "pep_omitted"), manifest)
         self.assertEqual(raised.exception.code, "missing_cleanup")
+
+    def test_emission_gate_rejects_checked_but_unimplemented_features(self):
+        original = json.loads((ROOT / "fixtures" / "primitive_add.json").read_text())
+        constructor = copy.deepcopy(original)
+        constructor["types"] = [{"id": "type.expr", "kind": "union", "constructors": [{"id": "ctor.number", "name": "Number", "fields": []}]}]
+        constructor["functions"][0]["return_type"] = "type.expr"
+        constructor["functions"][0]["result"] = {"node_id": "node.constructor", "kind": "constructor", "constructor_id": "ctor.number", "type": "type.expr", "span": {"start": 0, "end": 1}, "fields": {}}
+        constructor["supported_features"] = ["constructors"]
+        validate_manifest(constructor)
+        with self.assertRaises(FixtureError) as raised:
+            render_c(constructor)
+        self.assertEqual(raised.exception.code, "unsupported_emission_feature")
+
+        match = copy.deepcopy(original)
+        match["functions"][0]["result"] = {"node_id": "node.match", "kind": "match", "type": "Int", "span": {"start": 0, "end": 1}, "arms": [{}]}
+        match["supported_features"] = ["pattern_matching"]
+        validate_manifest(match)
+        with self.assertRaises(FixtureError) as raised:
+            render_c(match)
+        self.assertEqual(raised.exception.code, "unsupported_emission_feature")
+
+    def test_emission_gate_rejects_entry_shape_and_runtime_list_initializers(self):
+        original = json.loads((ROOT / "fixtures" / "primitive_add.json").read_text())
+        parameterized = copy.deepcopy(original)
+        parameterized["functions"][0]["parameters"] = [{"binding_id": "binding.x", "name": "x", "type": "Int"}]
+        parameterized["functions"][0]["result"] = {"node_id": "node.x", "kind": "param_ref", "binding_id": "binding.x", "type": "Int", "span": {"start": 0, "end": 1}}
+        parameterized["supported_features"] = ["parameters"]
+        validate_manifest(parameterized)
+        with self.assertRaises(FixtureError) as raised:
+            render_c(parameterized)
+        self.assertEqual(raised.exception.code, "entry_parameters_unsupported")
+
+        list_manifest = json.loads((ROOT / "fixtures" / "list_sum.json").read_text())
+        list_manifest["functions"][0]["result"]["target"]["items"][0] = {
+            "node_id": "node.runtime.item", "kind": "binary", "op": "+", "type": "Int", "span": {"start": 0, "end": 1},
+            "left": {"node_id": "node.runtime.left", "kind": "int", "value": 1, "type": "Int", "span": {"start": 0, "end": 1}},
+            "right": {"node_id": "node.runtime.right", "kind": "int", "value": 2, "type": "Int", "span": {"start": 0, "end": 1}},
+        }
+        list_manifest["supported_features"] = ["checked_arithmetic", "int_literals", "list_literals", "list_sum"]
+        validate_manifest(list_manifest)
+        with self.assertRaises(FixtureError) as raised:
+            render_c(list_manifest)
+        self.assertEqual(raised.exception.code, "unsupported_list_initializer")
+
+    def test_provenance_requires_digest_and_bounded_spans(self):
+        manifest = json.loads((ROOT / "fixtures" / "primitive_add.json").read_text())
+        bad_digest = copy.deepcopy(manifest)
+        bad_digest["source"]["revision"] = "sha256:" + "0" * 64
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(bad_digest)
+        self.assertEqual(raised.exception.code, "source_revision_mismatch")
+
+        bad_revision = copy.deepcopy(manifest)
+        bad_revision["source"]["revision"] = "sha256:not-a-digest"
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(bad_revision)
+        self.assertEqual(raised.exception.code, "source_provenance")
+
+        bad_span = copy.deepcopy(manifest)
+        bad_span["source"]["span"]["end"] = len(bad_span["pep_source"].encode()) + 1
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(bad_span)
+        self.assertEqual(raised.exception.code, "source_span_out_of_bounds")
+
+        bad_node_span = copy.deepcopy(manifest)
+        bad_node_span["functions"][0]["result"]["span"]["end"] = len(bad_node_span["pep_source"].encode()) + 1
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(bad_node_span)
+        self.assertEqual(raised.exception.code, "source_span_out_of_bounds")
 
 
 if __name__ == "__main__":

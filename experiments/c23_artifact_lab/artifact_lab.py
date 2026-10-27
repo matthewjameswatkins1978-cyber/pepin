@@ -15,6 +15,8 @@ FEATURES = {"bool_literals", "checked_arithmetic", "comparisons", "constructors"
 FAILURES = {"overflow", "division_by_zero", "allocation", "invalid_variant", "depth"}
 PRIMITIVES = {"Int", "Bool", "Str", "Unit"}
 ID_RE = re.compile(r"^[a-z0-9_.-]+$")
+EMIT_KINDS = {"int", "bool", "unit", "str", "binary", "call", "param_ref", "record", "field_access", "list", "list_sum"}
+SOURCE_MODES = {"comparison_source", "synthetic"}
 
 
 class FixtureError(Exception):
@@ -42,6 +44,20 @@ def checked_span(value: Any, where: str) -> None:
             or not isinstance(value["start"], int) or not isinstance(value["end"], int)
             or value["start"] < 0 or value["end"] < value["start"]):
         fail("invalid_span", f"{where} has an invalid source span", where=where)
+
+
+def validate_expr_spans(value: Any, source_length: int, where: str) -> None:
+    """Check every checked expression span against the committed source bytes."""
+    if isinstance(value, dict):
+        if "node_id" in value and "span" in value:
+            checked_span(value["span"], f"{where}.span")
+            if value["span"]["end"] > source_length:
+                fail("source_span_out_of_bounds", f"{where}.span exceeds the Pep source", where=where, end=value["span"]["end"], source_length=source_length)
+        for key, child in value.items():
+            validate_expr_spans(child, source_length, f"{where}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            validate_expr_spans(child, source_length, f"{where}[{index}]")
 
 
 def checked_type(value: Any, known: set[str], where: str) -> str:
@@ -174,16 +190,29 @@ def validate_manifest(manifest: Any, expected_revision: str | None = None) -> di
         fail("unsupported_fixture_schema", "unsupported artifact schema", schema_version=manifest["schema_version"])
     checked_id(manifest["fixture_id"], "fixture_id")
     source = manifest["source"]
-    if not isinstance(source, dict) or set(source) != {"document_id", "revision", "span"}:
+    if not isinstance(source, dict) or set(source) != {"mode", "document_id", "revision", "span"}:
         fail("source_provenance", "source provenance is incomplete")
+    if source["mode"] not in SOURCE_MODES:
+        fail("source_provenance", "source provenance mode is unsupported", mode=source["mode"])
     checked_id(source["document_id"], "source.document_id")
-    if not isinstance(source["revision"], str) or not source["revision"].startswith("sha256:"):
-        fail("source_provenance", "source revision must be a sha256 commitment")
+    if not isinstance(source["revision"], str):
+        fail("source_provenance", "source revision must be text")
+    if source["mode"] == "comparison_source" and not re.fullmatch(r"sha256:[0-9a-f]{64}", source["revision"]):
+        fail("source_provenance", "comparison source revision must contain a lowercase SHA-256 digest")
+    if source["mode"] == "synthetic" and not re.fullmatch(r"synthetic:[a-z0-9_.-]+", source["revision"]):
+        fail("source_provenance", "synthetic source revision must identify its synthetic mode")
     checked_span(source["span"], "source.span")
     if expected_revision is not None and source["revision"] != expected_revision:
         fail("source_revision_conflict", "source revision does not match requested revision", expected=expected_revision, actual=source["revision"])
     if not isinstance(manifest["pep_source"], str):
         fail("pep_source_shape", "pep_source must be text")
+    source_length = len(manifest["pep_source"].encode("utf-8"))
+    if source["span"]["end"] > source_length:
+        fail("source_span_out_of_bounds", "source.span exceeds the Pep source", end=source["span"]["end"], source_length=source_length)
+    if source["mode"] == "comparison_source":
+        actual_revision = "sha256:" + hashlib.sha256(manifest["pep_source"].encode("utf-8")).hexdigest()
+        if source["revision"] != actual_revision:
+            fail("source_revision_mismatch", "source revision does not match pep_source bytes", expected=actual_revision, actual=source["revision"])
     known: set[str] = set()
     declarations = manifest["types"]
     for declaration in declarations:
@@ -269,6 +298,7 @@ def validate_manifest(manifest: Any, expected_revision: str | None = None) -> di
     for function_id, function in functions.items():
         bindings = {parameter["binding_id"]: parameter["type"] for parameter in function["parameters"]}
         actual = validate_expr(function["result"], known, bindings, functions, seen, features, f"functions[{function_id}].result", manifest["types"])
+        validate_expr_spans(function["result"], source_length, f"functions[{function_id}].result")
         if actual != function["return_type"]:
             fail("function_result_type_mismatch", "function result does not match declared return type", function_id=function_id)
     declared = manifest["supported_features"]
@@ -294,6 +324,53 @@ def load_manifest(path: Path, expected_revision: str | None = None) -> dict[str,
     except (OSError, json.JSONDecodeError) as exc:
         fail("manifest_read", f"cannot read manifest: {exc}", path=str(path))
     return validate_manifest(raw, expected_revision)
+
+
+def validate_emission_capability(manifest: dict[str, Any]) -> None:
+    """Reject checked AST facts outside the deliberately small Artifact-05 emitter."""
+    functions = {function["id"]: function for function in manifest["functions"]}
+    declarations = {declaration["id"]: declaration for declaration in manifest["types"]}
+    record_types = {type_id for type_id, declaration in declarations.items() if declaration["kind"] == "record"}
+    union_types = {type_id for type_id, declaration in declarations.items() if declaration["kind"] == "union"}
+
+    def check_type(type_name: str, where: str, *, entry_output: bool = False) -> None:
+        if entry_output and type_name not in PRIMITIVES:
+            fail("unsupported_entry_output", f"{where} cannot be printed by the Artifact-05 executable", type=type_name)
+        if type_name in PRIMITIVES or type_name == "List[Int]" or type_name in record_types:
+            return
+        if type_name in union_types:
+            fail("unsupported_emission_type", f"{where} uses an unsupported recursive/union C representation", type=type_name)
+        fail("unsupported_emission_type", f"{where} has no checked C representation", type=type_name)
+
+    def walk(expr: Any, where: str) -> None:
+        if not isinstance(expr, dict):
+            return
+        if "kind" in expr:
+            kind = expr["kind"]
+            if kind not in EMIT_KINDS:
+                fail("unsupported_emission_feature", f"{where} is not supported by the Artifact-05 emitter", feature=kind, where=where)
+            check_type(expr["type"], f"{where}.type")
+            if kind == "list":
+                for index, item in enumerate(expr["items"]):
+                    if not isinstance(item, dict) or item.get("kind") != "int":
+                        fail("unsupported_list_initializer", f"{where} requires compile-time Int literal items", where=where, index=index)
+            if kind == "list_sum" and isinstance(expr.get("target"), dict) and expr["target"].get("kind") == "param_ref":
+                fail("borrowed_list_unsupported", f"{where} would dispose a borrowed List[Int] parameter", where=where)
+        for key, child in expr.items():
+            walk(child, f"{where}.{key}")
+
+    for function_id, function in functions.items():
+        walk(function["result"], f"functions[{function_id}].result")
+        for index, parameter in enumerate(function["parameters"]):
+            check_type(parameter["type"], f"functions[{function_id}].parameters[{index}].type")
+            if parameter["type"] == "List[Int]":
+                fail("borrowed_list_unsupported", f"functions[{function_id}] has a borrowed List[Int] parameter", function_id=function_id)
+        check_type(function["return_type"], f"functions[{function_id}].return_type")
+
+    entry = functions[manifest["entry_function"]]
+    if entry["parameters"]:
+        fail("entry_parameters_unsupported", "Artifact-05 executables require a parameterless entry function", entry_function=manifest["entry_function"])
+    check_type(entry["return_type"], f"entry_function {manifest['entry_function']}.return_type", entry_output=True)
 
 
 def c_type(type_name: str, nominal_types: set[str] | None = None) -> str:
@@ -378,6 +455,7 @@ def emit_expr(expr: dict[str, Any], names: dict[str, str], symbols: dict[str, st
 
 def render_c(manifest: dict[str, Any]) -> str:
     validate_manifest(manifest)
+    validate_emission_capability(manifest)
     functions = {function["id"]: function for function in manifest["functions"]}
     type_declarations = [declaration for declaration in manifest["types"] if declaration["kind"] == "record"]
     nominal_types = {declaration["id"] for declaration in type_declarations}

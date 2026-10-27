@@ -2,7 +2,7 @@
   "schema_version": 1,
   "fixture_id": "a05.string.bytes",
   "entry_function": "fn.main",
-  "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 18}},
+  "source": {"mode": "comparison_source", "document_id": "doc.artifact05", "revision": "sha256:8e5cb72522a1cd7b057bc1262e2c4c875484d544cc4b0b802daf6fdde22ee9fc", "span": {"start": 0, "end": 13}},
   "pep_source": "say(\"A\\0é\")\n",
   "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Str", "statements": [], "result": {"node_id": "node.string", "kind": "str", "bytes": [65, 0, 195, 169], "type": "Str", "span": {"start": 0, "end": 10}}}],
   "types": [],
