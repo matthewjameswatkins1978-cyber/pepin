@@ -207,6 +207,19 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(dual_failure["status"]), "unsupported")
         self.assertEqual(dual_failure["sourceParts"]["value"], [])
         self.assertIn("evaluation order is unspecified", scalar(dual_failure["diagnostic"]))
+        call_order_failure = self._emit(
+            "fn main() -> Int { return maybe() + (9223372036854775807 + 1) }\n"
+            "fn maybe() -> Int { return 1 / 0 }"
+        )
+        self.assertEqual(scalar(call_order_failure["status"]), "unsupported")
+        self.assertEqual(call_order_failure["sourceParts"]["value"], [])
+        self.assertIn("evaluation order is unspecified", scalar(call_order_failure["diagnostic"]))
+        local_return_call = self._emit(
+            "fn main() -> Int { return maybe() }\n"
+            "fn maybe() -> Int {\n  let seed = 0\n  return 1 / seed\n}"
+        )
+        self.assertEqual(scalar(local_return_call["status"]), "unsupported")
+        self.assertEqual(local_return_call["sourceParts"]["value"], [])
 
     def test_recursive_call_is_rejected_before_native_lowering(self):
         emitted = self._emit(
