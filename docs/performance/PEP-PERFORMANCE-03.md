@@ -59,8 +59,8 @@ about 69 KB, so the existing 1 MiB message boundary is not the limiting factor
 for this workload. The small-workload rows show that registration and cursor
 framing dominate fixed cost, while declaration scaling makes response traffic
 and call count grow with emitted AST nodes. The first cold session's setup is
-separate from the parser-loop timing; the current Slice 1 adapter does not yet
-claim a warm-session result because each workload starts a fresh process.
+separate from the parser-loop timing; Slice 2 separately measures retained
+session reuse.
 
 The evidence supports measuring a larger safe stage batch and retained-session
 reuse next. It does not yet justify a production protocol change, cursor
@@ -108,6 +108,46 @@ would need an independently reviewed bounded envelope, ordering/error model
 and A13 consumer. The safe near-term improvement is retained session/tool
 state where document/revision ownership remains explicit.
 
+## A13 readiness and composition boundary
+
+Read-only GitHub inspection found no `a13`, checker or accepted A13 branch/ref
+on `origin` at this slice. The repository contains only the provisional
+`docs/packets/A13-PEP-WRITTEN-CHECKER.md` and the accepted A12 consumer
+contract. C23's current work is an isolated synthetic checked-fixture/native
+artifact lab and is not an A13 implementation. Therefore this report makes no
+claim that A11, A12 and A13 have executed as one compiler pipeline.
+
+The accepted A12 contract is sufficient to define a guarded future bridge:
+the checker must retain the exact document/revision, consume the exact
+`parser_start`/`parser_step` cursor chain, collect chunks by node ID, and keep
+syntax IDs separate from checker-owned semantic identities. The performance
+measurements do not authorise semantic IDs, ownership facts, type resolution,
+or an A13 wire schema.
+
+## Engineering decision
+
+| candidate | measured gain | complexity/risk | A12/A13 impact | decision |
+| --- | --- | --- | --- | --- |
+| separate host lexer and parser token streams | easy to debug; existing components remain isolated | duplicates token/cursor transport and adds host round trips; no real composition evidence | requires a new token bridge and semantic ownership rules | retain only as a diagnostic baseline |
+| parser-internal lexer/parser stage composition | removes per-token host transfer; A12 already demonstrates this shape | needs independent checker contract, error propagation and bounded result envelopes | compatible with A12's internal stream; A13 must consume verified chunks, not syntax IDs as semantics | preferred architecture direction, pending A13 review |
+| retained session/tool registration | measured setup amortisation across repeated targets | session lifecycle, document/revision isolation and failure recovery must remain explicit | compatible if every target receives a fresh authorised revision and exact cursor chain | safe improvement to pursue now |
+| host-side response coalescing | modelled 568 to 10 calls at width 64 while staying below 1 MiB on this workload | not implemented; changes framing, ordering, diagnostics and failure semantics; width 128 is unsafe | requires A12/A13 consumer agreement and a separate protocol review | test-only planning evidence; no landing now |
+
+Recommendation: keep one long-lived local session for a compiler pipeline,
+retain explicit document/revision authority, and let lexer/parser/checker
+stages cooperate inside bounded interpreter invocations rather than returning
+one host message per token or AST node. Preserve ordinary chunked typed results
+and fail-closed continuation validation. A future stage-batching change should
+be selected from measured envelopes per workload and independently reviewed;
+the current evidence supports a 64-step coalescing candidate only as a
+workload-specific experiment, not as a default.
+
+This is the simplest architecture that addresses the measured fixed setup and
+transport costs without weakening source access, hiding work in host builtins,
+raising budgets, or claiming an unimplemented A13. It keeps A12 compatible and
+gives A13 a clear boundary: syntax chunks in, checker-owned revision-scoped
+facts out.
+
 ## Reproduction
 
 From the repository root, with the disposable `_build/perf03-a12` checkout at
@@ -121,6 +161,12 @@ python -m unittest tests.test_performance03_lab tests.test_performance02_lab -v
 The generated JSON is ignored build evidence. It includes per-call rows and
 cursor fingerprints for later continuation and batching analysis.
 
+The retained-session experiment can be reproduced with the module helper:
+
+```text
+python -c "from tests import performance03_lab as l; import json; print(json.dumps(l.warm_session_measurement(), indent=2))"
+```
+
 ## Boundaries
 
 This slice does not claim that A11 and A12 are one production compiler
@@ -130,3 +176,10 @@ independent structural/count oracle, but a complete semantic field-by-field
 AST differential remains a later slice. PowerShell invocation and OCaml
 compilation are intentionally outside the parser-loop total and need separate
 warm-session experiments.
+
+The remaining high-value uncertainty is internal attribution: the current
+adapter cannot separate Pep interpreter CPU, typed-value construction, JSON
+encoding and allocator behaviour without production profiling hooks. P02's
+direct A11 profile supplies those categories for the lexer route, but not for
+the pinned A12 parser route. Any production batching or compact representation
+should wait for that independent review and a real A13 workload.
