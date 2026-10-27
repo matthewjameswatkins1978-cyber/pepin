@@ -13,8 +13,8 @@ fn pep_c23_unsupported(message: Str) -> PepC23Emission {
   return PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: message }
 }
 
-// Accept checked zero-argument Int functions with one returned non-negative integer or a call to a literal-returning function.
-// Unsupported syntax and recursive calls are rejected before C is emitted.
+// Accept checked zero-argument Int functions with pure integer literals, checked arithmetic and bounded calls.
+// Checked C23 helpers preserve Pep overflow and division-by-zero errors; unsupported syntax fails closed.
 fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   for node in nodes {
     if node.parentId == -1 && node.kind == "function" && node.text == name {
@@ -22,6 +22,22 @@ fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
     } else {}
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
+}
+fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
+  if node.kind == "integer" || node.kind == "call" { return false } else {}
+  if node.kind == "binary" {
+    let left = pep_c23_child(nodes, node.id, "left", 0)
+    let right = pep_c23_child(nodes, node.id, "right", 1)
+    if !left.found || !right.found { return true } else {}
+    if node.text == "neg" {
+      if right.node.kind == "integer" { return false } else { return true }
+    } else {}
+    if node.text == "<=" {
+      return pep_c23_expression_may_fail(nodes, left.node) || pep_c23_expression_may_fail(nodes, right.node)
+    } else {}
+    return true
+  } else {}
+  return true
 }
 fn pep_c23_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emission {
   if node.kind == "integer" {
@@ -46,6 +62,62 @@ fn pep_c23_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emis
       return pep_c23_unsupported("Pep C23 calls currently require a literal-returning target; recursive calls are unsupported")
     } else {}
     return PepC23Emission { status: "emitted", sourceParts: ["pep_fn_", int_text(target.node.id), "()"], diagnostic: "" }
+  } else {}
+  if node.kind == "binary" {
+    let left = pep_c23_child(nodes, node.id, "left", 0)
+    let right = pep_c23_child(nodes, node.id, "right", 1)
+    if !left.found || !right.found {
+      return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
+    } else {}
+    if pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
+      return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
+    } else {}
+    if node.text == "neg" {
+      let lowered = pep_c23_expression(nodes, right.node)
+      if lowered.status != "emitted" { return lowered } else {}
+      var parts: List[Str] = ["pep_neg("]
+      for part in lowered.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
+    let loweredLeft = pep_c23_expression(nodes, left.node)
+    let loweredRight = pep_c23_expression(nodes, right.node)
+    if loweredLeft.status != "emitted" { return loweredLeft } else {}
+    if loweredRight.status != "emitted" { return loweredRight } else {}
+    let helper = if node.text == "+" { "pep_add" } else {
+      if node.text == "-" { "pep_sub" } else {
+        if node.text == "*" { "pep_mul" } else {
+          if node.text == "/" { "pep_div" } else { "" }
+        }
+      }
+    }
+    if helper != "" {
+      var parts: List[Str] = [helper, "("]
+      for part in loweredLeft.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in loweredRight.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
+    if node.text == "<=" {
+      var parts: List[Str] = ["("]
+      for part in loweredLeft.sourceParts { parts = append(parts, part) }
+      parts = append(parts, " <= ")
+      for part in loweredRight.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
+    return pep_c23_unsupported("Pep C23 binary operator is unsupported")
+  } else {}
+  if node.kind == "unary" && node.text == "-" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    if !operand.found { return pep_c23_unsupported("Pep C23 unary expression has no operand") } else {}
+    let lowered = pep_c23_expression(nodes, operand.node)
+    if lowered.status != "emitted" { return lowered } else {}
+    var parts: List[Str] = ["pep_neg("]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
   } else {}
   return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
@@ -89,6 +161,8 @@ fn emit_c23() -> PepC23Emission {
   var reversed: List[Str] = []
   reversed = prepend(reversed, "#include <stdio.h>\n")
   reversed = prepend(reversed, "#include <stdint.h>\n")
+  reversed = prepend(reversed, "#include <stdlib.h>\n")
+  reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n")
   for node in parsed.nodes {
     if node.parentId == -1 && node.kind == "function" {
       let lowered = pep_c23_function_expression(parsed.nodes, node)

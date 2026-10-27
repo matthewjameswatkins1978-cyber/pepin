@@ -95,7 +95,17 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(result.get("revision"), self.tool_revision)
         return fields(result["result"])
 
+    def _run_reference(self, source):
+        pep_path = BUILD / "reference.pep"
+        pep_path.write_text(source + "\nsay(int_text(main()))\n", encoding="utf-8", newline="\n")
+        return subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(pep_path)],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+
     def _compile_and_run(self, source, expected):
+        reference = self._run_reference(source)
+        self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
         emitted = self._emit(source)
         self.assertEqual(scalar(emitted["status"]), "emitted", emitted)
         c_source = "".join(scalar(part) for part in emitted["sourceParts"]["value"])
@@ -112,7 +122,9 @@ class A14C23EmissionTests(unittest.TestCase):
                 self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
                 ran = subprocess.run([str(exe)], text=True, capture_output=True, check=False)
                 self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(ran.returncode, reference.returncode)
                 self.assertEqual(ran.stdout, f"{expected}\n")
+                self.assertEqual(ran.stdout, reference.stdout)
 
     def test_generated_c23_executes_source_backed_programs_under_clang_and_gcc(self):
         self.assertEqual(subprocess.run([str(CLANG), "--version"], text=True, capture_output=True).returncode, 0)
@@ -125,11 +137,67 @@ class A14C23EmissionTests(unittest.TestCase):
             29,
         )
 
+    def test_generated_c23_executes_checked_arithmetic(self):
+        cases = (
+            ("fn main() -> Int { return 1 + 2 * 3 }", 7),
+            ("fn main() -> Int { return 5 - 8 }", -3),
+            ("fn main() -> Int { return -7 / 3 }", -2),
+            ("fn main() -> Int { return 24 / 6 + 2 }", 6),
+            ("fn main() -> Int { return 0 - 9223372036854775807 - 1 }", -9223372036854775808),
+            ("fn main() -> Int { return (0 - 9223372036854775807) * -1 }", 9223372036854775807),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self._compile_and_run(source, expected)
+
+    def _compile_and_expect_runtime_error(self, source, expected_code):
+        reference = self._run_reference(source)
+        self.assertNotEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+        self.assertIn(expected_code, reference.stdout + reference.stderr)
+        emitted = self._emit(source)
+        self.assertEqual(scalar(emitted["status"]), "emitted", emitted)
+        c_source = "".join(scalar(part) for part in emitted["sourceParts"]["value"])
+        c_path = BUILD / "generated-error.c"
+        c_path.write_text(c_source, encoding="utf-8", newline="\n")
+        for compiler in (CLANG, GCC):
+            with self.subTest(compiler=compiler.name, source=source):
+                exe = BUILD / (compiler.stem + "-error.exe")
+                built = subprocess.run(
+                    [str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                     "-O2", str(c_path), "-o", str(exe)],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                ran = subprocess.run([str(exe)], text=True, capture_output=True, check=False)
+                self.assertNotEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(ran.returncode, reference.returncode)
+                self.assertEqual(ran.stderr.strip(), expected_code)
+
+    def test_arithmetic_errors_match_pep_runtime_codes(self):
+        cases = (
+            ("fn main() -> Int { return 9223372036854775807 + 1 }", "PEP_RUNTIME_OVERFLOW"),
+            ("fn main() -> Int { return 0 - 9223372036854775807 - 2 }", "PEP_RUNTIME_OVERFLOW"),
+            ("fn main() -> Int { return 9223372036854775807 * 2 }", "PEP_RUNTIME_OVERFLOW"),
+            ("fn main() -> Int { return (0 - 9223372036854775807 - 1) * -1 }", "PEP_RUNTIME_OVERFLOW"),
+            ("fn main() -> Int { return 1 / 0 }", "PEP_RUNTIME_DIVISION_BY_ZERO"),
+            ("fn main() -> Int { return (0 - 9223372036854775807 - 1) / -1 }", "PEP_RUNTIME_OVERFLOW"),
+            ("fn main() -> Int { return -(0 - 9223372036854775807 - 1) }", "PEP_RUNTIME_OVERFLOW"),
+        )
+        for source, expected_code in cases:
+            with self.subTest(source=source):
+                self._compile_and_expect_runtime_error(source, expected_code)
+
     def test_unsupported_valid_program_is_reported_without_c_output(self):
-        emitted = self._emit("fn main() -> Int { return 1 + 2 }")
+        emitted = self._emit("fn main() -> Int { return if true { 1 } else { 2 } }")
         self.assertEqual(scalar(emitted["status"]), "unsupported")
         self.assertEqual(emitted["sourceParts"]["value"], [])
         self.assertNotEqual(scalar(emitted["diagnostic"]), "")
+        dual_failure = self._emit(
+            "fn main() -> Int { return (9223372036854775807 + 1) + (1 / 0) }"
+        )
+        self.assertEqual(scalar(dual_failure["status"]), "unsupported")
+        self.assertEqual(dual_failure["sourceParts"]["value"], [])
+        self.assertIn("evaluation order is unspecified", scalar(dual_failure["diagnostic"]))
 
     def test_recursive_call_is_rejected_before_native_lowering(self):
         emitted = self._emit(
