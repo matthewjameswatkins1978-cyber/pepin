@@ -1,0 +1,20 @@
+{
+  "mission": "PEP-INTEGRATION-01-READINESS",
+  "oracleRule": "The expected outcome is checked independently; subprocess exit alone is never success",
+  "cases": [
+    {"id": "valid-minimal", "stage": "A12", "source": "1 + 2 * 3 - 4", "expected": "complete", "verification": "real boundary smoke"},
+    {"id": "valid-record", "stage": "A12", "source": "record/function", "expected": "complete", "verification": "real nontrivial boundary smoke"},
+    {"id": "invalid-syntax", "stage": "A12", "source": "unexpected character", "expected": "invalid with diagnostic", "verification": "real parser status and diagnostic"},
+    {"id": "incomplete-source", "stage": "A12", "source": "unclosed expression", "expected": "incomplete with PEP_PARSE diagnostic", "verification": "real parser status"},
+    {"id": "wrong-source-revision", "stage": "A12", "source": "cursor semantic target mismatch", "expected": "rejected or invalid without authority escape", "verification": "accepted A12 revision/cursor tests"},
+    {"id": "forged-continuation", "stage": "A12", "source": "caller-made cursor", "expected": "not completion proof", "verification": "P03 continuation negative control"},
+    {"id": "missing-chunk", "stage": "integration", "source": "dropped parser chunk", "expected": "fail closed", "verification": "integration oracle design; implementation pending"},
+    {"id": "wrong-parent-role", "stage": "A12", "source": "mutated FlatAstNode", "expected": "topology rejection", "verification": "P03 topology negative control"},
+    {"id": "unresolved-binding", "stage": "A13", "source": "name without resolved identity", "expected": "blocked until accepted checker", "verification": "contract-only; no inferred semantic fact"},
+    {"id": "unsupported-native-feature", "stage": "C23", "source": "union/borrowed-list path", "expected": "controlled unsupported diagnostic", "verification": "Artifact-05 R1 capability gate"},
+    {"id": "runtime-overflow", "stage": "runtime", "source": "checked arithmetic overflow", "expected": "explicit checked failure", "verification": "C23 fixture contract; A13 input required"},
+    {"id": "resource-exhaustion", "stage": "A12", "source": "65537 bytes", "expected": "PEP_SOURCE_BYTE_LIMIT", "verification": "real resource-boundary probe"},
+    {"id": "utf8-crlf", "stage": "A12", "source": "caf\u00e9 with CRLF", "expected": "complete with original-byte spans", "verification": "real boundary smoke"},
+    {"id": "failure-recovery", "stage": "session", "source": "failed parse then valid source", "expected": "session remains usable", "verification": "accepted A12/session contract; integration follow-up"}
+  ]
+}

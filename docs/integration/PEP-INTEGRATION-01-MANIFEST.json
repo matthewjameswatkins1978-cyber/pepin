@@ -1,0 +1,89 @@
+{
+  "mission": "PEP-INTEGRATION-01-READINESS",
+  "branch": "exp/pep-performance-03",
+  "baseline": "4e497bf192b33e76cb0fdf59bfc30e9b3ef3127f",
+  "experimentalHead": "fb9cbef4dfcf0e32c6f886cf7a3371cfae3b717a",
+  "authority": "GitHub SHAs and SHA-bound tests; this manifest does not replace CURRENT.md or manifest.json",
+  "inputs": [
+    {
+      "name": "A11 lexer",
+      "stage": "lexer",
+      "status": "accepted-evidence",
+      "sha": "3fb83b7fb9eeb82674f12b021b1f21f2d677c795",
+      "branch": "a11/complete-pep-lexer",
+      "pr": 3,
+      "contract": "Pep-written resumable lexer with retained source revisions and typed token results",
+      "verification": ["A11 differential 7/7", "full accepted implementation evidence"]
+    },
+    {
+      "name": "A12 parser",
+      "stage": "parser",
+      "status": "accepted-evidence",
+      "sha": "69a47fe77187666bdd045b8dc8a9f633a7dd49d7",
+      "branch": "a12/pep-written-parser",
+      "pr": 6,
+      "checkout": "read-only disposable checkout",
+      "contract": "parser_start followed only by exact returned parser_step cursors; FlatAstNode chunks carry syntax, topology, spans and source revision",
+      "verification": ["A12 focused 22/22", "Windows full suite 115/115", "A11 differential 7/7"]
+    },
+    {
+      "name": "Conformance R1",
+      "stage": "independent conformance",
+      "status": "experimental-awaiting-review",
+      "sha": "731157bb4aff24002b693c78951a2e207b37d392",
+      "branch": "exp/pep-conformance-02",
+      "pr": 8,
+      "contract": "independent positive, negative, revision, metamorphic and bounded session oracles",
+      "verification": ["harness 31/31", "A11 differential 7/7", "full repository 93/93"]
+    },
+    {
+      "name": "Performance 03 adapter",
+      "stage": "integration measurement",
+      "status": "experimental-awaiting-review",
+      "sha": "fb9cbef4dfcf0e32c6f886cf7a3371cfae3b717a",
+      "branch": "exp/pep-performance-03",
+      "pr": 11,
+      "contract": "test-only A12 adapter, workload measurements, independent topology/count checks and bounded architecture models",
+      "verification": ["focused P02/P03 29/29", "full repository 134/134"]
+    },
+    {
+      "name": "C23 Artifact-05",
+      "stage": "native artifact experiment",
+      "status": "experimental-awaiting-review",
+      "sha": "ff0ad3fe513419a2317cc0e9616e1c5ce13f3701",
+      "branch": "exp/c23-artifact-05",
+      "pr": 10,
+      "contract": "checked-fixture-shaped manifest to deterministic C23 for an explicitly restricted subset; not A14",
+      "verification": ["focused 19/19", "native receipts 16/16", "interpreter matches 16/16", "unsupported ownership and language paths remain diagnostics"]
+    },
+    {
+      "name": "A13 checker",
+      "stage": "semantic checker",
+      "status": "missing-accepted-input",
+      "sha": null,
+      "branch": null,
+      "pr": null,
+      "contract": "provisional packet only; semantic IDs, checked types, resolved calls, holes, exhaustiveness and ownership are not yet accepted",
+      "verification": []
+    }
+  ],
+  "limits": {
+    "sourceBytes": 65536,
+    "toolStepBudget": 100000,
+    "messageBytes": 1048576,
+    "policy": "preserve existing limits; no integration harness may raise or bypass them"
+  },
+  "integrationStages": {
+    "lexer": "A11 accepted evidence; A12 performs lexical work internally",
+    "parser": "A12 accepted evidence; verified syntax boundary only",
+    "checker": "not executable in this mission; await accepted A13 contract",
+    "emitter": "C23 Artifact-05 is experimental and must not be represented as A14",
+    "native": "not an end-to-end compiler result"
+  },
+  "firstVerticalSlice": {
+    "status": "planned-not-implemented",
+    "subset": ["single function", "Int/Bool/Unit", "resolved direct call", "checked arithmetic failure"],
+    "requiredA13Facts": ["stable semantic IDs", "source revision and bounded spans", "resolved call target", "checked expression types", "explicit ownership/lifetime facts"],
+    "requiredA14Checks": ["deterministic C23", "strict Clang and GCC", "native/interpreter result equality", "controlled unsupported diagnostics"]
+  }
+}
