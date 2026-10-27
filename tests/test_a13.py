@@ -224,6 +224,33 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
+    def test_source_byte_builtin_signatures_are_checked(self):
+        valid_cases = [
+            ("fn main() -> SourceBytes { return source_bytes() }", "source_bytes()", "SourceBytes"),
+            ("fn main() -> Int { return byte_length(source_bytes()) }", "byte_length(source_bytes())", "Int"),
+            ("fn main() -> Int { return byte_at(source_bytes(), 0) }", "byte_at(source_bytes(), 0)", "Int"),
+            ("fn main() -> SourceBytes { return byte_slice(source_bytes(), 0, 0) }", "byte_slice(source_bytes(), 0, 0)", "SourceBytes"),
+            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, 0) }", "utf8_slice(source_bytes(), 0, 0)", "Str"),
+        ]
+        for source, call, expected_type in valid_cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            types_by_start = {scalar(fields(item)["startByte"]): scalar(fields(item)["typeName"]) for item in report["expressionTypes"]["value"]}
+            self.assertEqual(types_by_start[source.index(call)], expected_type)
+
+        cases = [
+            ("fn main() -> SourceBytes { return source_bytes(1) }", "PEP_ARGUMENT_COUNT"),
+            ("fn main() -> Int { return byte_length(1) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Int { return byte_at(source_bytes()) }", "PEP_ARGUMENT_COUNT"),
+            ("fn main() -> SourceBytes { return byte_slice(source_bytes(), 0) }", "PEP_ARGUMENT_COUNT"),
+            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_ARGUMENT_TYPE"),
+        ]
+        for source, expected_code in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn(expected_code, codes)
+
     def test_unimplemented_nominal_and_list_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
         _, report = self._analyze(source)

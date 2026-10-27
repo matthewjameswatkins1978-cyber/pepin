@@ -273,6 +273,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   if node.kind == "call" {
     let target = find_function(functions, node.text)
     if target.found { return target.function.returnType } else {}
+    if node.text == "source_bytes" { return "SourceBytes" } else {}
     if node.text == "int_text" || node.text == "utf8_slice" { return "Str" } else {}
     if node.text == "say" { return "Unit" } else {}
     if node.text == "length" || node.text == "byte_length" || node.text == "byte_at" { return "Int" } else {}
@@ -375,13 +376,21 @@ fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindin
   }
   return facts
 }
-fn primitive_builtin_arity(name: Str) -> Int {
-  if name == "say" || name == "int_text" { return 1 } else {}
+fn fixed_builtin_arity(name: Str) -> Int {
+  if name == "say" || name == "int_text" || name == "byte_length" { return 1 } else {}
+  if name == "byte_at" { return 2 } else {}
+  if name == "byte_slice" || name == "utf8_slice" { return 3 } else {}
+  if name == "source_bytes" { return 0 } else {}
   return -1
 }
-fn primitive_builtin_parameter_type(name: Str, index: Int) -> Str {
+fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if name == "say" && index == 0 { return "Str" } else {}
   if name == "int_text" && index == 0 { return "Int" } else {}
+  if name == "byte_length" && index == 0 { return "SourceBytes" } else {}
+  if name == "byte_at" && index == 0 { return "SourceBytes" } else {}
+  if (name == "byte_slice" || name == "utf8_slice") && index == 0 { return "SourceBytes" } else {}
+  if name == "byte_at" && index == 1 { return "Int" } else {}
+  if (name == "byte_slice" || name == "utf8_slice") && (index == 1 || index == 2) { return "Int" } else {}
   return ""
 }
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
@@ -446,7 +455,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           }
         } else {
-          let requiredArity = primitive_builtin_arity(node.text)
+          let requiredArity = fixed_builtin_arity(node.text)
           if requiredArity != -1 {
             if count_children(nodes, node.id, "argument") != requiredArity {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Built-in call argument count does not match its signature", node))
@@ -454,7 +463,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             var index = 0
             for argument in nodes {
               if argument.parentId == node.id && argument.role == "argument" {
-                let expected = primitive_builtin_parameter_type(node.text, index)
+                let expected = fixed_builtin_parameter_type(node.text, index)
                 let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
                 if expected != "" && actualArgument != "" && expected != actualArgument {
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
