@@ -586,6 +586,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("annotated-binding", "type M = A() | B()" + NL + "fn f(x: M) -> Int { let n: Int = match x { A() => true B() => false }; return n }"),
             ("conditional-branch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return if true { match x { A() => true B() => false } } else { 0 } }"),
             ("list-element", "type M = A() | B()" + NL + "fn f(x: M) -> List[Int] { return [match x { A() => true B() => false }] }"),
+            ("record-field", "type M = A() | B()" + NL + "type R { x: Int }" + NL + "fn f(m: M) -> R { return R { x: match m { A() => true B() => false } } }"),
         ]
         for name, source in cases:
             with self.subTest(name=name):

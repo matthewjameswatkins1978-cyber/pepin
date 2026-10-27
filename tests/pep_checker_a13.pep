@@ -405,6 +405,10 @@ fn list_element_type(typeName: Str) -> Str {
 fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, node.parentId)
   if !parent.found { return "" } else {}
+  if parent.node.kind == "record_field" && node.role == "value" {
+    let record = lookup_node(nodes, parent.node.parentId)
+    if record.found && record.node.kind == "record" { return record_field_type(nodes, record.node.text, parent.node.text) } else { return "" }
+  } else {}
   if (parent.node.kind == "let" || parent.node.kind == "var") && node.role == "value" {
     let annotation = child_at(nodes, parent.node.id, "annotation", 0)
     if annotation.found { return type_name_at(nodes, annotation.node.id) } else { return "" }
