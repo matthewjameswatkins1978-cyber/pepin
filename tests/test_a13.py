@@ -242,6 +242,36 @@ class A13FunctionResolutionTests(unittest.TestCase):
             holes = [fields(item) for item in report["holes"]["value"]]
             self.assertEqual([scalar(item["expectedType"]) for item in holes], ["Bool"])
 
+    def test_unconstrained_empty_lists_match_reference_diagnostic(self):
+        cases = [
+            ("return-nonlist", "fn bad() -> Int { return [] }"),
+            ("binding-no-context", "fn main() -> Int { let xs = []; return 0 }"),
+            ("binding-nonlist-context", "fn main() -> Int { let xs: Int = []; return 0 }"),
+            ("length-argument", "fn bad() -> Int { return length([]) }"),
+            ("contains-argument", "fn bad() -> Bool { return contains([], true) }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check(name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                diagnostics = [fields(item) for item in report["diagnostics"]["value"]]
+                self.assertEqual(
+                    [scalar(item["code"]) for item in diagnostics],
+                    ["PEP_EMPTY_LIST_NEEDS_TYPE"],
+                    report,
+                )
+                self.assertEqual(len(reference["diagnostics"]), 1, reference)
+                reference_diagnostic = reference["diagnostics"][0]
+                start = source.index("[]")
+                end = start + 2
+                self.assertEqual(reference_diagnostic["code"], "PEP_EMPTY_LIST_NEEDS_TYPE")
+                self.assertEqual(reference_diagnostic["span"]["start"]["offset"], start)
+                self.assertEqual(reference_diagnostic["span"]["endOffset"], end)
+                self.assertEqual(scalar(diagnostics[0]["startByte"]), start)
+                self.assertEqual(scalar(diagnostics[0]["endByte"]), end)
+
     def test_list_literals_and_contextual_empty_list_typecheck(self):
         cases = [
             ("fn values() -> List[Int] { return [1, 2] }", "List[Int]"),
@@ -285,7 +315,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         cases = [
             ("fn bad() -> List[Int] { return append([1], \"text\") }", "PEP_TYPE_MISMATCH"),
             ("fn bad() -> Int { return length(1) }", "PEP_LIST_EXPECTED"),
-            ("fn bad() -> Int { return length([]) }", "PEP_LIST_UNTYPED"),
+            ("fn bad() -> Int { return length([]) }", "PEP_EMPTY_LIST_NEEDS_TYPE"),
             ("fn bad() -> List[Int] { return reverse() }", "PEP_ARGUMENT_COUNT"),
             ("fn bad() -> Bool { return contains([source_bytes()], source_bytes()) }", "PEP_MEMBERSHIP_UNSUPPORTED"),
         ]

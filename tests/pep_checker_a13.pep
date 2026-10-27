@@ -357,7 +357,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     }
     if elementType != "" { return list_type_name(elementType) } else {
       let expected = contextual_expected_type(nodes, node, functions, bindings, references)
-      if expected != "" { return expected } else { return "" }
+      if list_element_type(expected) != "" { return expected } else { return "" }
     }
   } else {}
   if node.kind == "if_expression" {
@@ -679,7 +679,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if known_builtin(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
           if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
-          if node.kind != "name" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
+          if node.kind == "list" && count_children(nodes, node.id, "element") == 0 {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node))
+          } else {
+            if node.kind != "name" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
+          }
         }
         }
       } else {
@@ -846,15 +850,18 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               let collectionType = if collection.found { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
               let elementType = list_element_type(collectionType)
               if elementType == "" {
-                let code = if collectionType == "" { "PEP_LIST_UNTYPED" } else { "PEP_LIST_EXPECTED" }
-                let atNode = if collection.found { collection.node } else { node }
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Built-in operation requires a list with a supported element type", atNode))
+                let emptyCollection = collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0
+                if !emptyCollection {
+                  let code = if collectionType == "" { "PEP_LIST_UNTYPED" } else { "PEP_LIST_EXPECTED" }
+                  let atNode = if collection.found { collection.node } else { node }
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Built-in operation requires a list with a supported element type", atNode))
+                } else {}
               } else {}
               if node.text == "append" || node.text == "prepend" || node.text == "contains" {
                 let value = child_at(nodes, node.id, "argument", 1)
                 if value.found && value.node.kind != "hole" {
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
-                  if actualValue != "" && actualValue != elementType {
+                  if elementType != "" && actualValue != "" && actualValue != elementType {
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
                   } else {}
                 } else {}
