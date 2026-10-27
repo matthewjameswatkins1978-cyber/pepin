@@ -7,10 +7,10 @@ from tests import performance02_lab as lab
 class Performance02LabTests(unittest.TestCase):
     def test_profile_totals_keep_internal_wall_clock_ledger(self):
         totals = lab.profile_totals([
-            {"decodeCpuUs": 100, "grantCpuUs": 200, "executeCpuUs": 300,
+            {"tool": "lexer-step", "decodeCpuUs": 100, "grantCpuUs": 200, "executeCpuUs": 300,
              "encodeCpuUs": 400, "responseCpuUs": 500, "steps": 9,
              "resultValueNodes": 4, "encodedResultBytes": 12},
-            {"decodeCpuUs": 300, "grantCpuUs": 0, "executeCpuUs": 100,
+            {"tool": "lexer-step", "decodeCpuUs": 300, "grantCpuUs": 0, "executeCpuUs": 100,
              "encodeCpuUs": 0, "responseCpuUs": 100, "steps": 3,
              "resultValueNodes": 2, "encodedResultBytes": 8},
         ])
@@ -20,6 +20,46 @@ class Performance02LabTests(unittest.TestCase):
         self.assertEqual(totals.encoded_result_bytes, 20)
         self.assertEqual(totals.internal_ms, 2.0)
 
+    def test_profile_integrity_distinguishes_verified_and_host_only(self):
+        row = {"tool": "lexer-step", "decodeCpuUs": 1, "grantCpuUs": 2,
+               "executeCpuUs": 3, "encodeCpuUs": 4, "responseCpuUs": 5,
+               "steps": 6, "resultValueNodes": 7, "encodedResultBytes": 8}
+        self.assertEqual(lab.validate_profile_records([row], requested=True)["status"], "verified")
+        self.assertEqual(lab.validate_profile_records([], requested=False)["status"], "unavailable-host-only")
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_records([], requested=True)
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_records([row], requested=False)
+
+    def test_profile_negative_controls_fail_closed(self):
+        valid = {"tool": "lexer-step", "decodeCpuUs": 1, "grantCpuUs": 2,
+                 "executeCpuUs": 3, "encodeCpuUs": 4, "responseCpuUs": 5,
+                 "steps": 6, "resultValueNodes": 7, "encodedResultBytes": 8}
+        mutations = [
+            {"decodeCpuUs": None},
+            {"decodeCpuUs": -1},
+            {"executeCpuUs": "slow"},
+            {"steps": 0},
+            {"steps": float("inf")},
+        ]
+        for mutation in mutations:
+            candidate = valid.copy()
+            candidate.update(mutation)
+            with self.assertRaises(lab.ProfileIntegrityError):
+                lab.validate_profile_records([candidate], requested=True)
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_records([valid], requested=True, expected_records=2)
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.parse_profile_text("PEP_PROFILE {\"tool\":\"lexer-step\"", requested=True)
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_identity(
+                {"path": "stale.exe", "sha256": "x", "sourceSha256": "old"},
+                expected_source_sha256="new",
+            )
+        incompatible = {**valid, "sourceBytes": 10}
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_records([incompatible], requested=True, workload={"sourceBytes": 11})
+
     def test_stage_accounting_labels_overlap_and_typed_construction(self):
         row = lab.stage_accounting(
             source={"bytes": 1, "revision": "sha256:x"},
@@ -27,7 +67,7 @@ class Performance02LabTests(unittest.TestCase):
             metrics={"requests": {"count": 1, "requestBytes": 2, "responseBytes": 3,
                                   "requestEncodeMs": 1.0, "writeMs": 2.0, "readMs": 3.0,
                                   "parseMs": 4.0, "totalMs": 10.0}},
-            profiles=[{"decodeCpuUs": 1, "grantCpuUs": 2, "executeCpuUs": 3,
+            profiles=[{"tool": "lexer-step", "decodeCpuUs": 1, "grantCpuUs": 2, "executeCpuUs": 3,
                        "encodeCpuUs": 4, "responseCpuUs": 5, "steps": 6,
                        "resultValueNodes": 7, "encodedResultBytes": 8}],
             process={"spawnMs": 9.0, "readyMs": 10.0, "peakMemory": None},
@@ -36,6 +76,34 @@ class Performance02LabTests(unittest.TestCase):
         self.assertTrue(row["attribution"]["internalAndHostLedgersOverlap"])
         self.assertTrue(row["attribution"]["typedConstructionIsNotSeparatelyIsolated"])
         self.assertEqual(row["internalProfile"]["interpreterAndTypedConstructionMs"], 0.003)
+
+    def test_stage_accounting_does_not_fabricate_unavailable_internal_timing(self):
+        row = lab.stage_accounting(
+            source={"bytes": 1, "revision": "sha256:x"}, result={"tokens": [], "error": None},
+            metrics={"requests": {"count": 1, "requestBytes": 2, "responseBytes": 3,
+                                  "requestEncodeMs": 1, "writeMs": 2, "readMs": 3,
+                                  "parseMs": 4, "totalMs": 10}}, profiles=[],
+            process={"spawnMs": 1, "readyMs": 2, "peakMemory": None}, trial=1,
+        )
+        self.assertEqual(row["profileStatus"]["status"], "unavailable-host-only")
+        self.assertIsNone(row["internalProfile"])
+
+    def test_a11_output_oracle_rejects_token_and_diagnostic_mutations(self):
+        expected = {"tokens": [{"kind": "integer", "value": 7, "startByte": 0,
+                                 "endByte": 1, "line": 1, "column": 1}], "error": None}
+        for mutation in ("value", "offset", "missing", "diagnostic"):
+            actual = json.loads(json.dumps(expected))
+            if mutation == "value":
+                actual["tokens"][0]["value"] = 8
+            elif mutation == "offset":
+                actual["tokens"][0]["startByte"] = 1
+            elif mutation == "missing":
+                actual["tokens"].pop()
+            else:
+                actual["error"] = {"code": "PEP_WRONG", "startByte": 0, "endByte": 1, "line": 1, "column": 1}
+            with self.assertRaises(lab.OutputCorrectnessError):
+                lab.validate_lexer_output(actual, expected)
+        self.assertEqual(lab.validate_lexer_output(expected, expected)["status"], "verified")
 
     def test_representation_variants_round_trip_exactly(self):
         fixture = lab.synthetic_checked_ast_fixture(12)

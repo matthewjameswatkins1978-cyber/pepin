@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import pathlib
 import statistics
 import sys
@@ -49,6 +50,20 @@ class LifecycleInvariantError(ValueError):
     """A session lifecycle response violated a fail-closed invariant."""
 
 
+class ProfileIntegrityError(ValueError):
+    """A requested profile was absent, malformed or internally inconsistent."""
+
+
+class OutputCorrectnessError(ValueError):
+    """A measured output differed from an independent expected result."""
+
+
+PROFILE_TIMING_FIELDS = (
+    "decodeCpuUs", "grantCpuUs", "executeCpuUs", "encodeCpuUs", "responseCpuUs",
+)
+PROFILE_COUNT_FIELDS = ("steps", "resultValueNodes", "encodedResultBytes")
+
+
 def elapsed_ms(start_ns: int, end_ns: int | None = None) -> float:
     return round(((time.perf_counter_ns() if end_ns is None else end_ns) - start_ns) / 1_000_000, 4)
 
@@ -83,17 +98,113 @@ class ProfileTotals:
 
 def profile_totals(rows: Iterable[dict[str, Any]]) -> ProfileTotals:
     rows = list(rows)
+    validate_profile_records(rows, requested=True)
     return ProfileTotals(
         calls=len(rows),
-        decode_ms=round(sum(int(row.get("decodeCpuUs", 0)) for row in rows) / 1000, 4),
-        grant_ms=round(sum(int(row.get("grantCpuUs", 0)) for row in rows) / 1000, 4),
-        execute_ms=round(sum(int(row.get("executeCpuUs", 0)) for row in rows) / 1000, 4),
-        encode_ms=round(sum(int(row.get("encodeCpuUs", 0)) for row in rows) / 1000, 4),
-        response_ms=round(sum(int(row.get("responseCpuUs", 0)) for row in rows) / 1000, 4),
-        steps=sum(int(row.get("steps", 0)) for row in rows),
-        value_nodes=sum(int(row.get("resultValueNodes", 0)) for row in rows),
-        encoded_result_bytes=sum(int(row.get("encodedResultBytes", 0)) for row in rows),
+        decode_ms=round(sum(int(row["decodeCpuUs"]) for row in rows) / 1000, 4),
+        grant_ms=round(sum(int(row["grantCpuUs"]) for row in rows) / 1000, 4),
+        execute_ms=round(sum(int(row["executeCpuUs"]) for row in rows) / 1000, 4),
+        encode_ms=round(sum(int(row["encodeCpuUs"]) for row in rows) / 1000, 4),
+        response_ms=round(sum(int(row["responseCpuUs"]) for row in rows) / 1000, 4),
+        steps=sum(int(row["steps"]) for row in rows),
+        value_nodes=sum(int(row["resultValueNodes"]) for row in rows),
+        encoded_result_bytes=sum(int(row["encodedResultBytes"]) for row in rows),
     )
+
+
+def _profile_bad(detail: str) -> None:
+    raise ProfileIntegrityError(f"requested-but-broken: {detail}")
+
+
+def validate_profile_records(
+    rows: Iterable[dict[str, Any]], *, requested: bool,
+    expected_records: int | None = None, workload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Fail closed on a requested profile; identify host-only runs explicitly."""
+
+    rows = list(rows)
+    if not requested:
+        if rows:
+            _profile_bad("profile records appeared in a host-only invocation")
+        return {"status": "unavailable-host-only", "records": 0, "steps": 0}
+    if not rows:
+        _profile_bad("profile-missing")
+    if expected_records is not None and len(rows) != expected_records:
+        _profile_bad(f"record-count {len(rows)} != expected {expected_records}")
+    steps = 0
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or not isinstance(row.get("tool"), str) or not row["tool"]:
+            _profile_bad(f"record {index} has no tool identity")
+        for field in PROFILE_TIMING_FIELDS + PROFILE_COUNT_FIELDS:
+            value = row.get(field)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                _profile_bad(f"record {index} field {field} is not numeric")
+            if not math.isfinite(float(value)) or value < 0:
+                _profile_bad(f"record {index} field {field} is negative or non-finite")
+            if field in PROFILE_COUNT_FIELDS and int(value) != value:
+                _profile_bad(f"record {index} field {field} is not integral")
+        if workload:
+            for key in ("sourceRevision", "sourceBytes"):
+                if key in row and row[key] != workload.get(key):
+                    _profile_bad(f"record {index} is incompatible with the requested workload")
+        steps += int(row["steps"])
+    if steps <= 0:
+        _profile_bad("profile contains zero interpreter steps")
+    return {
+        "status": "verified", "records": len(rows), "calls": len(rows), "steps": steps,
+        "nonzeroStepRecords": sum(1 for row in rows if int(row["steps"]) > 0),
+    }
+
+
+def parse_profile_text(stderr: str, *, requested: bool) -> dict[str, Any]:
+    try:
+        rows = base.parse_profile(stderr)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        _profile_bad(f"profile JSON is malformed: {exc}")
+    return validate_profile_records(rows, requested=requested)
+
+
+def profile_identity(executable: pathlib.Path) -> dict[str, Any]:
+    if not executable.exists() or not executable.is_file():
+        _profile_bad(f"profile executable unavailable: {executable}")
+    data = executable.read_bytes()
+    return {
+        "path": str(executable), "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": len(data), "sourceSha256": hashlib.sha256((ROOT / "pep_ocaml.ml").read_bytes()).hexdigest(),
+    }
+
+
+def validate_profile_identity(identity: dict[str, Any], *, expected_source_sha256: str) -> None:
+    if not isinstance(identity, dict) or not identity.get("sha256") or not identity.get("path"):
+        _profile_bad("profile identity missing")
+    if identity.get("sourceSha256") != expected_source_sha256:
+        _profile_bad("profile identity is stale for the source build")
+
+
+_A11_ORACLE_CLASS: Any = None
+
+
+def a11_reference_result(raw: bytes) -> dict[str, Any]:
+    """Use the existing test-only OCaml differential oracle, never the measured route."""
+
+    global _A11_ORACLE_CLASS
+    from tests import test_a11
+
+    cls = test_a11.A11DifferentialTests
+    if _A11_ORACLE_CLASS is None or getattr(cls, "oracle_client", None) is None or cls.oracle_client.process.poll() is not None:
+        cls.setUpClass()
+        _A11_ORACLE_CLASS = cls
+    return cls.oracle_request(raw)
+
+
+def validate_lexer_output(actual: dict[str, Any], expected: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(actual, dict) or not isinstance(expected, dict):
+        raise OutputCorrectnessError("lexer result is not an object")
+    if canonical_fixture(actual) != canonical_fixture(expected):
+        raise OutputCorrectnessError(
+            f"A11 output mismatch: expected={canonical_fixture(expected)} actual={canonical_fixture(actual)}"
+        )
+    return {"status": "verified", "tokens": len(expected.get("tokens", [])), "error": expected.get("error")}
 
 
 def source_acquisition(raw: bytes) -> dict[str, Any]:
@@ -122,6 +233,9 @@ def stage_accounting(
     profiles: list[dict[str, Any]],
     process: dict[str, Any],
     trial: int,
+    profile_status: dict[str, Any] | None = None,
+    profile_build_identity: dict[str, Any] | None = None,
+    correctness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create a non-double-counting view of one end-to-end A11 trial.
 
@@ -130,7 +244,8 @@ def stage_accounting(
     subtracts them as if they were disjoint CPU intervals.
     """
 
-    internal = profile_totals(profiles)
+    profile_status = profile_status or validate_profile_records(profiles, requested=bool(profiles))
+    internal = profile_totals(profiles) if profiles else None
     requests = metrics["requests"]
     return {
         "schemaVersion": LAB_SCHEMA_VERSION,
@@ -140,6 +255,9 @@ def stage_accounting(
         "source": source,
         "result": {"tokens": len(result.get("tokens", [])), "error": result.get("error")},
         "process": process,
+        "profileStatus": profile_status,
+        "profileIdentity": profile_build_identity,
+        "correctness": correctness or {"status": "not-checked"},
         "requests": {
             "calls": int(requests["count"]),
             "requestBytes": int(requests["requestBytes"]),
@@ -150,7 +268,7 @@ def stage_accounting(
             "hostJsonDecodeMs": float(requests["parseMs"]),
             "hostMeasuredTotalMs": float(requests["totalMs"]),
         },
-        "internalProfile": {
+        "internalProfile": None if internal is None else {
             "calls": internal.calls,
             "clockMeaning": "elapsed wall time from Unix.gettimeofday in isolated profile executable",
             "decodeMs": internal.decode_ms,
@@ -188,6 +306,14 @@ def run_a11_stage_profile(
     raw = base.LEXER.read_bytes()
     source = source_acquisition(raw)
     source_text = raw.decode("utf-8")
+    expected = a11_reference_result(raw)
+    build_identity = None
+    if mode == "direct":
+        build_identity = profile_identity(base.build_profile_exe())
+        validate_profile_identity(
+            build_identity,
+            expected_source_sha256=hashlib.sha256((ROOT / "pep_ocaml.ml").read_bytes()).hexdigest(),
+        )
     rows: list[dict[str, Any]] = []
     for trial in range(1, trials + 1):
         result, metrics, profiles, process = base.run_lexer(
@@ -199,6 +325,10 @@ def run_a11_stage_profile(
             startup_timeout_s=startup_timeout_s,
             cleanup_timeout_s=cleanup_timeout_s,
         )
+        correctness = validate_lexer_output(result, expected)
+        profile_status = validate_profile_records(
+            profiles, requested=(mode == "direct"),
+        )
         rows.append(stage_accounting(
             source=source,
             result=result,
@@ -206,6 +336,9 @@ def run_a11_stage_profile(
             profiles=profiles,
             process=process,
             trial=trial,
+            profile_status=profile_status,
+            profile_build_identity=build_identity,
+            correctness=correctness,
         ))
     return rows
 
@@ -441,6 +574,8 @@ def verify_revision_lifecycle(
         "initialRevision": initial_revision,
         "editedRevision": edited_revision,
         "recoveryRevision": recovery_revision,
+        "oldRevision": initial_revision,
+        "newRevision": edited_revision,
         "staleOutcome": stale["outcome"],
         "staleCode": stale["error"]["code"],
         "staleRejected": True,
@@ -629,7 +764,12 @@ def median_stage(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "sourceBytes": rows[0]["source"]["bytes"],
         "tokens": rows[0]["result"]["tokens"],
         "requests": {key: statistics.median(row["requests"][key] for row in rows) for key in request_keys},
-        "internalProfile": {key: statistics.median(row["internalProfile"][key] for row in rows) for key in internal_keys},
+        "profileStatus": rows[0]["profileStatus"],
+        "profileIdentity": rows[0]["profileIdentity"],
+        "correctness": rows[0]["correctness"],
+        "internalProfile": None if rows[0]["internalProfile"] is None else {
+            key: statistics.median(row["internalProfile"][key] for row in rows) for key in internal_keys
+        },
         "process": {
             "spawnMsMedian": statistics.median(row["process"]["spawnMs"] for row in rows),
             "readyMsMedian": statistics.median(

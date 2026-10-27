@@ -1,6 +1,6 @@
 # PEP-PERFORMANCE-02 compiler pipeline laboratory
 
-Status: Slice 3 final laboratory evidence on the isolated `exp/pep-performance-02`
+Status: PEP-PERFORMANCE-02-R1 evidence-integrity and reliable-measurement receipt on the isolated `exp/pep-performance-02`
 branch. This report is experimental evidence only. It does not change Pep
 semantics, the JSONL schemas, execution budgets, source cap, revision authority,
 or A12/A13/A14 implementation status.
@@ -55,12 +55,7 @@ role, type identity, original-byte spans, revision and diagnostics. It compares:
 - a flat node array;
 - a compact array with a shared string table.
 
-Each decoder is checked against a canonical logical fixture. Injected parent,
-span and revision mutations are required to remain observable. Cursor fixtures
-compare the full typed `LexCursor`, a minimal logical representation retaining all
-resume and authority fields, and an opaque-handle design-only simulator. The
-opaque form is not an authenticated certificate and does not add host-held
-production state.
+Each decoder is checked by an independent structural validator and then against a separately retained expected fixture. R1 corrupts the serialized bytes themselves: 18 mutations across all three representations (54 cases) cover parent/cycle/ID/order/child-index/role/span/revision/type/field/string-table/row-length/truncation/schema/value failures. Rejection is classified as decode error, structural invalidity, revision mismatch or reference-equivalence mismatch. A changed value is intentionally structurally valid but is rejected by the independent reference oracle. Cursor fixtures compare the full typed `LexCursor`, a minimal logical representation retaining all resume and authority fields, and an opaque-handle design-only simulator. The opaque form is not an authenticated certificate and does not add host-held production state.
 
 Synthetic checked-AST and C23-emission fixtures are labelled in JSON and are
 intended only to establish scaling and transport methodology until those stages
@@ -114,8 +109,9 @@ The local representation fixture shows the direction of transport scaling, not a
 wire-format recommendation. At eight nodes, existing typed JSON was 5,344 bytes,
 a flat array 1,468 bytes and an interned compact array 368 bytes. At 256 nodes,
 the corresponding sizes were 167,619, 45,695 and 9,868 bytes. All three round-trip
-through independent decoders and injected parent/span/revision mutations are
-rejected by the oracle. Full cursor JSON was 968 bytes; a minimal logical cursor
+through independent decoders. The earlier R2 mutation controls only showed
+that logical fixture differences were observable; the R1 serialized-corruption
+corpus and independent validator now provide the rejection evidence. Full cursor JSON was 968 bytes; a minimal logical cursor
 retaining all resume and authority fields was 318 bytes; an opaque handle was 92
 bytes but is design-only and requires trusted lifecycle state.
 
@@ -129,15 +125,9 @@ change until real Pep parser/checker workloads are measured.
 
 ## Slice 3 lifecycle and architecture evidence
 
-The real typed-result session was measured with two cold trials and one reused
-session containing four invocations. Cold setup medians were 55.871 ms and
-cold invocation medians were 6.353 ms. The reused session reported 3.818 ms
-process spawn, 56.251 ms ready, 55.596 ms open/register/validate/activate setup,
-and 6.283 ms median invocation. The four warm results matched exactly. A real
-edit produced a new SHA-256 revision and replaying the old revision was rejected
-with `PEP_STALE_REVISION`; this is lifecycle evidence, not a cache claim.
-Peak private memory for the warm session was 7,639,040 bytes. The lifecycle
-sample is small and Windows process accounting is sampled, so it is directional.
+The historical typed-result session measurement is preserved: two cold trials and one reused session containing four invocations had cold setup median 55.871 ms, cold invocation median 6.353 ms, process spawn 3.818 ms, ready 56.251 ms, setup 55.596 ms and warm invocation median 6.283 ms. Peak private memory was 7,639,040 bytes. These values remain directional because Windows process accounting is sampled.
+
+R1 now verifies the live lifecycle rather than recording only informative booleans. A genuine direct session with count 2, one warm invoke and one cold trial matched source-derived initial, edit and recovery SHA-256 revisions; the stale write returned exact `PEP_STALE_REVISION`, a recovery query proved observable state unchanged, and a current-revision recovery edit/read succeeded. The verifier fails closed on failed edits, unchanged revisions, accepted stale writes, wrong stale codes, stale state mutation and failed recovery. Campaign limits are 64 generated items, 32 warm invokes, 8 cold trials and the unchanged 65,536-byte source cap.
 
 The architecture comparison keeps evidence and design separate:
 
@@ -151,6 +141,12 @@ The composed row uses the accepted disposable A12 measurement and the measured
 A11/A12 call counts; it is not a claim that a Pep-written checker or emitter
 already exists. The hybrid row applies the local compact-fixture ratio only and
 must not be read as a production transport forecast.
+
+### R1 profile and output-integrity evidence
+
+Direct profile requests are `verified` only when records are nonempty, identify a tool, contain finite nonnegative timing and count fields, report positive steps, and carry a fresh profile executable/source identity. A direct A11 run produced 1,216 profile records and 4,172,856 steps; the isolated profile executable was identified by SHA-256 and the OCaml source SHA. PowerShell remains explicitly `unavailable-host-only` with `internalProfile: null`; it is never represented as measured zero internal timing. Missing, truncated, negative, nonnumeric, zero-step, inconsistent-count, stale-identity and incompatible-workload controls fail closed.
+
+Every A11 trial is compared to the existing test-only OCaml differential oracle for token kind/value, byte spans, line, column and diagnostics. The direct and PowerShell A11 smoke runs both returned 3,605 tokens with no error and `correctness.status: verified`. Token value, offset, missing-token and diagnostic-code mutations are rejected by the oracle.
 
 ## Bottleneck attribution and recommendations
 
@@ -187,19 +183,36 @@ Ranked decisions:
 No production batching, cursor format, protocol, revision cache, host-state
 mechanism, interpreter budget, source cap, A12 file or A13 file changed.
 
+### Architecture decision record
+
+| candidate | measured gain/evidence | complexity and risk | compatibility / decision |
+|---|---|---|---|
+| composed bounded stage invocation | removes measured continuation boundaries; A12 accepted run is 567 calls versus 1,216 A11 lexer calls | medium; must preserve revision, diagnostics and typed-value boundaries | compatible direction for A12/A13; pursue at a reviewed stage boundary |
+| conservative adaptive batches | fixed-width simulator fails dense work while estimated/feedback completes within unchanged limits | medium; estimator drift must fail before commit | compatible as test-only planning now; require real A12/A13 workload proof before landing |
+| compact immutable node/result representation | local 256-node fixture falls from 167,619 typed bytes to 9,868 compact bytes | high; schema, tooling and debugging compatibility risk | experiment only; independent review and a versioned protocol decision required |
+| opaque cursor or retained host state | 92-byte design-only cursor versus 968-byte full cursor | high trust/lifecycle/recovery complexity; no production measurement | reject for now; conflicts with transparent revision-authority boundary |
+
+The simplest integration recommendation is therefore composed, explicitly bounded
+Pep-written stages with conservative adaptive scheduling at internal boundaries,
+while retaining explicit document/revision identity and independently checkable
+results. Compact transport remains a separately reviewed future option; opaque
+host state is not recommended.
+
 ## Verification receipt
 
-The focused PEP-PERFORMANCE-02 lab suite passed 14/14 after the Slice 3
-additions. The full repository suite passed 119/119 in 108.445 s; the A11
-differential suite passed 7/7; and the accepted A12 disposable checkout passed
-22/22 at SHA `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`. The direct bounded
-smoke (`pep.ps1 describe --json`) exited 0. Width 128 and 256 matched the
-width-32 reference across all four cases. Width 512 matched the successful
-cases and classified punctuation-dense as `PEP_RUNTIME_STEP_LIMIT`, not as a
-successful result. The typed-result boundary check preserved 1,027,410 setup
-response bytes and 144,580 invocation response bytes. The separate PowerShell
-A11 path exited 0 and measured 255.313 ms spawn, 1,268.526 ms ready and
-5,592.980 ms host elapsed. `python -m py_compile` and `git diff --check` passed.
-No production compiler semantics, protocol schema, budgets, source cap, A12
-files or A13 files changed.
+R1 focused performance-lab suite: 23/23. Serialized AST self-test: 54/54
+corruptions rejected across three representations with all four oracle classes.
+Lifecycle negative controls: 7/7 rejected; a genuine direct lifecycle smoke
+verified stale rejection and recovery. Direct A11 profile smoke: verified
+profile status, 1,216 records, 4,172,856 steps and independent OCaml output
+correctness. PowerShell A11 smoke: `unavailable-host-only`, `internalProfile:
+null`, and independent output correctness verified. The current full-repository
+receipt is 128/128, including A11 differential 7/7 and the accepted A12 disposable
+checkout evidence 22/22 at SHA `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`; these are
+preserved prior evidence, not silently replaced by R1 harness tests. Width 128
+and 256 matched the width-32 reference, while width-512 punctuation remained a
+classified `PEP_RUNTIME_STEP_LIMIT`. The typed-result boundary evidence remains
+1,027,410 setup-response bytes and 144,580 invocation response bytes. `python
+-m py_compile` and `git diff --check` passed. No production compiler semantics,
+protocol schema, budgets, source cap, A12 files or A13 files changed.
 
