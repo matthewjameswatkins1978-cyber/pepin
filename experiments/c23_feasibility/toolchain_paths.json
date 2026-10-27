@@ -1,0 +1,21 @@
+{
+  "clang": [
+    "${LLVM_HOME}/bin/clang.exe",
+    "${LLVM_ROOT}/bin/clang.exe",
+    "${USERPROFILE}/scoop/apps/llvm/current/bin/clang.exe",
+    "${SCOOP}/apps/llvm/current/bin/clang.exe",
+    "${ProgramFiles}/LLVM/bin/clang.exe",
+    "${ProgramFiles(x86)}/LLVM/bin/clang.exe",
+    "${LOCALAPPDATA}/Programs/LLVM/bin/clang.exe",
+    "${MSYS2_ROOT}/clang64/bin/clang.exe"
+  ],
+  "gcc": [
+    "${MINGW_HOME}/bin/gcc.exe",
+    "${MINGW_ROOT}/bin/gcc.exe",
+    "${USERPROFILE}/scoop/apps/mingw/current/bin/gcc.exe",
+    "${SCOOP}/apps/mingw/current/bin/gcc.exe",
+    "${SCOOP}/apps/gcc/current/bin/gcc.exe",
+    "${MSYS2_ROOT}/clang64/bin/gcc.exe",
+    "${MSYS2_ROOT}/mingw64/bin/gcc.exe"
+  ]
+}
