@@ -153,3 +153,15 @@ boundary probe.
 The harness intentionally does not call agreement between two compiler paths
 proof of language correctness. The OCaml parser/checker and JSONL session can
 share assumptions, so the report records that limitation explicitly.
+
+## A12 handoff for the next campaign
+
+The accepted A12 parser candidate is pinned at `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`
+on its separate branch. This R1 laboratory does not import or execute that
+implementation. A later SHA-pinned adapter may target the parser's
+`parser_start` → exact returned `parser_step` cursor chain, host-selected
+document/revision, chunk status and flattened-node topology: unique IDs,
+parent IDs, roles, child indices, root order, typed scalar payloads and
+original-byte spans. That campaign must also retain forged-cursor rejection,
+malformed/invalid-UTF8 recovery, source/revision boundaries and mutation
+counterexamples. A13 checker facts remain gated and are not assumed here.

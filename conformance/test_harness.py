@@ -7,6 +7,7 @@ explicitly selects the harness self-tests.
 
 from __future__ import annotations
 
+import copy
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -336,6 +337,108 @@ class HarnessContractTests(unittest.TestCase):
         self.assertEqual(stats["metamorphicPairs"], 1)
         self.assertEqual(findings[0]["classification"], "confirmed-bug")
 
+    def test_metamorphic_completed_nonzero_is_compiler_finding_and_launch_is_infrastructure(self) -> None:
+        completed = {"status": "completed", "returncode": 0,
+                     "response": {"status": "valid"}, "stdout": "", "stderr": ""}
+        pair = MetamorphicPair("pair-2", "case-2", "line-ending", b"say(1)\n", b"say(1)\r\n", "1\n")
+        for transformed, expected_classification in (
+                ({"status": "completed", "returncode": 2, "stdout": "", "stderr": "",
+                  "response": {"status": "valid"}}, "confirmed-bug"),
+                ({"status": "launch-error", "returncode": None, "stdout": "", "stderr": "",
+                  "error": {"type": "FileNotFoundError"}}, "infrastructure-failure")):
+            findings: list[dict[str, object]] = []
+            stats = self._grammar_stats() | {"metamorphicPairs": 0, "metamorphicPreserved": 0}
+            with patch.object(harness, "generate_cases", return_value=(generate_cases(7, 1, 1)[0],)), \
+                 patch.object(harness, "pairs_for_case", return_value=(pair,)), \
+                 patch.object(harness, "cli_case", side_effect=[completed, completed, completed, transformed]):
+                harness.run_metamorphic(7, 1, 1, findings, stats)
+            self.assertEqual(findings[0]["classification"], expected_classification)
+            self.assertEqual(harness.failed_finding_count(findings), 1)
+
+    def test_metamorphic_same_wrong_output_is_not_preserved(self) -> None:
+        left = {"status": "completed", "returncode": 0, "response": {"status": "valid"}}
+        right = {"status": "completed", "returncode": 0, "response": {"status": "valid"}}
+        finding = compare_pair(left, right, "wrong\n", "wrong\n", expected_output="right\n")
+        self.assertEqual(finding["classification"], "confirmed-bug")
+
+    @staticmethod
+    def _complete_history_result(history):
+        hole = {"name": history.hole_name, "expectedType": "Int"}
+        initial = {"outcome": "ok", "operation": "open", "document": history.expected_document,
+                   "revision": history.original_revision, "status": "incomplete", "typedTree": {},
+                   "holes": [hole], "diagnostics": []}
+        query = {**initial, "operation": "query"}
+        metrics = {"outcome": "ok", "operation": "metrics", "metrics": {"cache_hits": 2}}
+        edit = {"outcome": "ok", "operation": "apply_edit", "document": history.expected_document,
+                "revision": history.filled_revision, "status": "valid", "typedTree": {},
+                "holes": [], "diagnostics": []}
+        stale = {"outcome": "error", "operation": "apply_edit", "document": history.expected_document,
+                 "currentRevision": history.filled_revision,
+                 "error": {"code": "PEP_STALE_REVISION"}}
+        current = {"outcome": "ok", "operation": "query", "document": history.expected_document,
+                   "revision": history.filled_revision, "status": "valid", "typedTree": {},
+                   "holes": [], "diagnostics": []}
+        malformed = {"outcome": "error", "operation": "session",
+                     "error": {"code": "PEP_SESSION_MALFORMED_JSON"}}
+        recovery = {"outcome": "ok", "operation": "open", "document": "doc-2",
+                    "revision": history.recovery_revision, "status": "valid", "typedTree": {},
+                    "holes": [], "diagnostics": []}
+        return {"status": "completed", "returncode": 0,
+                "responses": [initial, query, copy.deepcopy(query), metrics, edit, stale,
+                              current, malformed, recovery]}
+
+    def test_session_history_validator_accepts_and_checks_every_state_transition(self) -> None:
+        history = generate_histories(9, 1)[0]
+        result = self._complete_history_result(history)
+        finding = validate_history(result, history, lambda response: response.get("status"))
+        self.assertEqual(finding["classification"], "missing-test")
+        self.assertEqual(finding["failureSignature"], "history-preserved")
+
+        mutations = (
+            (0, "document", "other", "initial-open-revision"),
+            (1, "revision", "other", "original-query-shape"),
+            (4, "outcome", "error", "edit-failed"),
+            (5, "currentRevision", "other", "stale-state-mismatch"),
+            (5, "error", {"code": "PEP_WRONG"}, "stale-error-mismatch"),
+            (6, "holes", [{"name": history.hole_name}], "current-query-hole"),
+            (7, "error", {"code": "PEP_WRONG"}, "malformed-json-recovery-failed"),
+            (8, "revision", "other", "recovery-identity-mismatch"),
+        )
+        for index, key, value, signature in mutations:
+            candidate = copy.deepcopy(result)
+            candidate["responses"][index][key] = value
+            finding = validate_history(candidate, history, lambda response: response.get("status"))
+            self.assertEqual(finding["classification"], "confirmed-bug", signature)
+            self.assertEqual(finding["failureSignature"], signature, signature)
+
+    def test_session_history_reducer_replays_real_sequence_and_preserves_signature(self) -> None:
+        history = generate_histories(9, 1)[0]
+        baseline = self._complete_history_result(history)["responses"]
+        baseline[5]["error"]["code"] = "PEP_WRONG_STALE"
+
+        def fake_session(requests):
+            responses = []
+            for request in requests:
+                index = history.requests.index(request)
+                responses.append(copy.deepcopy(baseline[index]))
+            return {"status": "completed", "returncode": 0, "responses": responses}
+
+        findings: list[dict[str, object]] = []
+        stats = {"sessionHistories": 0, "sessionHistoryRequests": 0, "classificationCounts": {}}
+        with TemporaryDirectory() as directory, patch.object(harness, "OUT", Path(directory)), \
+             patch.object(harness, "generate_histories", return_value=(history,)), \
+             patch.object(harness, "session_case", side_effect=fake_session):
+            harness.run_session_histories(9, 1, findings, stats)
+            self.assertEqual(findings[0]["failureSignature"], "stale-error-mismatch")
+            harness.reduce_findings(findings, max_cases=1, stats=stats)
+            reduction = findings[0]["reduction"]
+            self.assertEqual(reduction["status"], "reduced")
+            self.assertEqual(reduction["failureSignature"], "stale-error-mismatch")
+            self.assertLess(findings[0]["reducedRequestCount"], 9)
+            self.assertLessEqual(reduction["attempts"], 80)
+            self.assertTrue((Path(directory) / findings[0]["reducedTranscript"]).exists())
+            self.assertEqual(findings[0]["reducedRequestCount"], 3)
+
     def test_session_histories_and_reducer_are_deterministic_and_bounded(self) -> None:
         first = generate_histories(9, 2)
         second = generate_histories(9, 2)
@@ -355,12 +458,8 @@ class HarnessContractTests(unittest.TestCase):
 
     def test_session_history_validator_rejects_wrong_error_without_crashing(self) -> None:
         history = generate_histories(9, 1)[0]
-        responses = [{"status": "incomplete"}, {"status": "incomplete"},
-                     {"status": "incomplete"}, {"metrics": {"cache_hits": 2}},
-                     {"status": "valid"}, {"error": {"code": "PEP_WRONG"}},
-                     {"status": "valid"}, {"error": {"code": "PEP_SESSION_MALFORMED_JSON"}},
-                     {"status": "valid"}]
-        result = {"status": "completed", "returncode": 0, "responses": responses}
+        result = self._complete_history_result(history)
+        result["responses"][5]["error"]["code"] = "PEP_WRONG"
         finding = validate_history(result, history, lambda response: response.get("status"))
         self.assertEqual(finding["classification"], "confirmed-bug")
         self.assertEqual(finding["actualCode"], "PEP_WRONG")

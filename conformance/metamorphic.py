@@ -73,12 +73,24 @@ def semantic_signature(value: Any) -> Any:
 
 def compare_pair(original: dict[str, Any], transformed: dict[str, Any],
                  original_output: str | None = None,
-                 transformed_output: str | None = None) -> dict[str, Any]:
+                 transformed_output: str | None = None,
+                 expected_output: str | None = None) -> dict[str, Any]:
     """Pure oracle used by the runner and synthetic mismatch tests."""
     if original.get("status") != "completed" or transformed.get("status") != "completed":
         return {"classification": "infrastructure-failure", "detail": "metamorphic process did not complete"}
+    if original.get("returncode") is None or transformed.get("returncode") is None:
+        return {"classification": "infrastructure-failure", "detail": "metamorphic process did not return an exit code"}
     if original.get("returncode") != transformed.get("returncode"):
         return {"classification": "confirmed-bug", "detail": "metamorphic return codes differ"}
+    if original.get("returncode") != 0:
+        return {"classification": "confirmed-bug", "detail": "completed metamorphic process returned a nonzero exit code",
+                "originalReturncode": original.get("returncode"),
+                "transformedReturncode": transformed.get("returncode")}
+    if (expected_output is not None and
+            (original_output != expected_output or transformed_output != expected_output)):
+        return {"classification": "confirmed-bug", "detail": "metamorphic runtime output disagrees with the independent expected output",
+                "expected": expected_output, "originalOutput": original_output,
+                "transformedOutput": transformed_output}
     left = semantic_signature(original.get("response"))
     right = semantic_signature(transformed.get("response"))
     if left != right:

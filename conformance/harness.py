@@ -24,11 +24,13 @@ from typing import Any, Callable, Iterable
 try:
     from .generator import boundary_vectors, generate_cases
     from .metamorphic import compare_pair, pairs_for_case
-    from .session_history import generate_histories, validate_history
+    from .session_history import (generate_histories, history_from_record, history_record,
+                                  reduce_history, validate_history)
 except ImportError:  # Running this file directly from the repository root.
     from generator import boundary_vectors, generate_cases
     from metamorphic import compare_pair, pairs_for_case
-    from session_history import generate_histories, validate_history
+    from session_history import (generate_histories, history_from_record, history_record,
+                                 reduce_history, validate_history)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +110,23 @@ def write_case(case_id: str, raw: bytes) -> Path:
     path = OUT / "corpus" / f"{case_id}.pep"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(raw)
+    return path
+
+
+def write_session_transcript(history: Any, requests: Iterable[Any], responses: Iterable[Any],
+                             suffix: str = "original") -> Path:
+    """Persist the exact request/response pairs used by a history replay."""
+    path = OUT / "histories" / f"{history.history_id}-{suffix}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    request_list = list(requests)
+    response_list = list(responses)
+    if len(request_list) != len(response_list):
+        raise ValueError("session transcript requires one response per request")
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for index, (request, response) in enumerate(zip(request_list, response_list)):
+            handle.write(json.dumps({"historyId": history.history_id, "index": index,
+                                     "request": request, "response": response},
+                                    ensure_ascii=False, separators=(",", ":")) + "\n")
     return path
 
 
@@ -645,18 +664,24 @@ def run_metamorphic(seed: int, count: int, depth: int,
             original_run = cli_case(pair.origin_case_id + "-meta-original", pair.original, "run")
             transformed_run = cli_case(pair.pair_id, pair.transformed, "run")
             oracle = compare_pair(original_check, transformed_check,
-                                  original_run.get("stdout"), transformed_run.get("stdout"))
+                                  original_run.get("stdout"), transformed_run.get("stdout"),
+                                  expected_output=pair.expected_output)
             if (original_run.get("status") != "completed" or
                     transformed_run.get("status") != "completed" or
-                    original_run.get("returncode") != 0 or transformed_run.get("returncode") != 0):
+                    original_run.get("returncode") is None or transformed_run.get("returncode") is None):
                 oracle = {"classification": "infrastructure-failure",
-                          "detail": "Metamorphic runtime process did not complete successfully",
+                          "detail": "Metamorphic runtime process did not complete with an exit code",
+                          "original": original_run, "transformed": transformed_run}
+            elif (original_run.get("returncode") != 0 or transformed_run.get("returncode") != 0):
+                oracle = {"classification": "confirmed-bug",
+                          "detail": "Metamorphic runtime completed with an unexpected nonzero exit",
                           "original": original_run, "transformed": transformed_run}
             elif (original_run.get("stdout") != pair.expected_output or
                   transformed_run.get("stdout") != pair.expected_output):
                 oracle = {"classification": "confirmed-bug",
                           "detail": "Metamorphic runtime output disagrees with the independent expected output",
                           "expected": pair.expected_output,
+                          "original": original_run, "transformed": transformed_run,
                           "originalOutput": original_run.get("stdout"),
                           "transformedOutput": transformed_run.get("stdout")}
             if oracle["classification"] == "missing-test":
@@ -674,22 +699,41 @@ def run_metamorphic(seed: int, count: int, depth: int,
 def run_session_histories(seed: int, count: int,
                           findings: list[dict[str, Any]], stats: dict[str, Any]) -> None:
     """Exercise bounded stateful histories without importing session internals."""
+    for key in ("sessionHistoriesGenerated", "sessionHistoriesExecuted", "sessionHistoryResponses",
+                "sessionHistoryPassed", "sessionHistoryInfrastructure", "sessionHistoryFailures"):
+        stats.setdefault(key, 0)
     for history in generate_histories(seed, count):
         write_case(history.history_id, history.source.encode("utf-8"))
+        stats["sessionHistoriesGenerated"] += 1
         result = session_case(list(history.requests))
         stats["sessionHistories"] += 1
+        stats["sessionHistoriesExecuted"] += 1
         stats["sessionHistoryRequests"] += len(history.requests)
+        responses = result.get("responses", [])
+        stats["sessionHistoryResponses"] += len(responses)
+        transcript = None
+        if len(responses) == len(history.requests):
+            transcript = write_session_transcript(history, history.requests, responses)
         oracle = validate_history(result, history, normalized_analysis)
         if oracle["classification"] == "missing-test":
+            stats["sessionHistoryPassed"] += 1
             note_classification(stats, "missing-test")
         else:
+            if oracle["classification"] == "infrastructure-failure":
+                stats["sessionHistoryInfrastructure"] += 1
+            else:
+                stats["sessionHistoryFailures"] += 1
             append_finding(findings, stats, {
                 "caseId": history.history_id, "kind": "session-history",
                 "classification": oracle["classification"], "detail": oracle["detail"],
+                "failureSignature": oracle.get("failureSignature"),
                 "history": {"seed": history.seed, "index": history.index,
                             "requestCount": len(history.requests),
                             "expectedCodes": [list(item) for item in history.expected_codes]},
-                "oracle": oracle, "responses": result.get("responses"),
+                "historyRecord": history_record(history),
+                "originalTranscript": (str(transcript.relative_to(ROOT)) if transcript and transcript.is_relative_to(ROOT)
+                                       else str(transcript) if transcript else None),
+                "oracle": oracle, "responses": responses, "evidence": result,
             })
 
 
@@ -874,10 +918,89 @@ def replay_finding(finding: dict[str, Any], raw: bytes, case_id: str) -> bool | 
     return None
 
 
-def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
+def replay_session_finding(finding: dict[str, Any], requests: Iterable[Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Replay a session finding in a fresh process and return its exact oracle."""
+    record = finding.get("historyRecord")
+    if not isinstance(record, dict):
+        return ({"classification": "infrastructure-failure", "failureSignature": "reduction-unsupported",
+                 "detail": "session finding has no durable history record"},
+                {"status": "not-run", "responses": []})
+    history = history_from_record(record)
+    request_tuple = tuple(requests)
+    result = session_case(list(request_tuple))
+    oracle = validate_history(result, history, normalized_analysis,
+                              requests=request_tuple,
+                              focus_signature=finding.get("failureSignature"))
+    return oracle, result
+
+
+def reduce_session_finding(finding: dict[str, Any], budget: int = 80,
+                           stats: dict[str, Any] | None = None) -> None:
+    """Minimise a session request sequence while preserving its exact signature."""
+    record = finding.get("historyRecord")
+    signature = finding.get("failureSignature")
+    if not isinstance(record, dict) or not isinstance(signature, str):
+        finding["reduction"] = {"status": "unsupported", "reason": "missing session failure signature or history record"}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    original = tuple(record.get("requests", ()))
+    if finding.get("classification") != "confirmed-bug":
+        finding["reduction"] = {"status": "unsupported", "reason": "only confirmed session findings are reducible"}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+
+    def preserves(candidate: tuple[Any, ...]) -> bool:
+        oracle, _ = replay_session_finding(finding, candidate)
+        return (oracle.get("classification") == "confirmed-bug" and
+                oracle.get("failureSignature") == signature)
+
+    minimized, attempts = reduce_history(original, preserves, budget=budget)
+    if stats is not None:
+        stats["sessionReductionAttempts"] += attempts
+    if minimized == original:
+        finding["reduction"] = {"status": "unsupported", "reason": "no smaller request sequence preserved the failure",
+                                 "attempts": attempts, "budget": budget, "failureSignature": signature}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    oracle, result = replay_session_finding(finding, minimized)
+    if oracle.get("classification") != "confirmed-bug" or oracle.get("failureSignature") != signature:
+        finding["reduction"] = {"status": "unsupported", "reason": "minimized request sequence failed the original oracle",
+                                 "attempts": attempts, "budget": budget, "failureSignature": signature}
+        if stats is not None:
+            stats["sessionReductionUnsupported"] += 1
+        return
+    responses = result.get("responses", [])
+    history = history_from_record(record)
+    reduced_transcript = write_session_transcript(history, minimized, responses, "reduced")
+    finding["reducedTranscript"] = (str(reduced_transcript.relative_to(ROOT))
+                                    if reduced_transcript.is_relative_to(ROOT)
+                                    else str(reduced_transcript))
+    finding["originalRequestCount"] = len(original)
+    finding["reducedRequestCount"] = len(minimized)
+    finding["reducedResponses"] = responses
+    finding["reduction"] = {"status": "reduced", "attempts": attempts, "budget": budget,
+                             "failureSignature": signature}
+    if stats is not None:
+        stats["sessionReductionSuccess"] += 1
+
+
+def reduce_findings(findings: list[dict[str, Any]], max_cases: int,
+                    stats: dict[str, Any] | None = None) -> None:
     reduced = 0
+    if stats is not None:
+        for key in ("reductionAttempts", "reductionSuccess", "reductionUnsupported",
+                    "sessionReductionAttempts", "sessionReductionSuccess", "sessionReductionUnsupported"):
+            stats.setdefault(key, 0)
     for finding in findings:
         if reduced >= max_cases or finding.get("classification") != "confirmed-bug":
+            continue
+        if finding.get("kind") == "session-history":
+            reduce_session_finding(finding, budget=80, stats=stats)
+            if finding.get("reduction", {}).get("status") == "reduced":
+                reduced += 1
             continue
         case_id = finding.get("caseId")
         if not case_id:
@@ -895,9 +1018,13 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
             finding["reduction"] = {"status": "unsupported", "reason": "original failure oracle did not reproduce"}
             continue
         minimized, attempts = reduce_bytes(original, lambda candidate: replay_finding(finding, candidate, case_id) is True)
+        if stats is not None:
+            stats["reductionAttempts"] += attempts
         if replay_finding(finding, minimized, case_id) is not True:
             finding["reduction"] = {"status": "unsupported", "reason": "minimized bytes failed the original failure oracle",
                                      "attempts": attempts}
+            if stats is not None:
+                stats["reductionUnsupported"] += 1
             continue
         reduced_path = OUT / "counterexamples" / f"{case_id}.pep"
         reduced_path.parent.mkdir(parents=True, exist_ok=True)
@@ -908,6 +1035,8 @@ def reduce_findings(findings: list[dict[str, Any]], max_cases: int) -> None:
         finding["reducedHex"] = minimized.hex()
         finding["reduction"] = {"status": "reduced", "attempts": attempts,
                                  "budget": 80, "oracle": finding.get("kind")}
+        if stats is not None:
+            stats["reductionSuccess"] += 1
         reduced += 1
 
 
@@ -937,8 +1066,19 @@ def report_text(result: dict[str, Any]) -> str:
         ("grammarBoundaryVectors", "independent integer boundary vectors"),
         ("metamorphicPairs", "metamorphic source pairs"),
         ("metamorphicPreserved", "metamorphic relations preserved"),
-        ("sessionHistories", "generated session histories"),
-        ("sessionHistoryRequests", "generated session-history requests"),
+        ("sessionHistoriesGenerated", "generated session histories"),
+        ("sessionHistoriesExecuted", "executed session histories"),
+        ("sessionHistoryRequests", "session-history requests"),
+        ("sessionHistoryResponses", "session-history responses"),
+        ("sessionHistoryPassed", "session histories satisfying the oracle"),
+        ("sessionHistoryFailures", "session-history confirmed findings"),
+        ("sessionHistoryInfrastructure", "session-history infrastructure findings"),
+        ("sessionReductionAttempts", "session-history reduction attempts"),
+        ("sessionReductionSuccess", "session-history reductions preserved"),
+        ("sessionReductionUnsupported", "session-history reductions unsupported"),
+        ("reductionAttempts", "byte reduction attempts"),
+        ("reductionSuccess", "byte reductions preserved"),
+        ("reductionUnsupported", "byte reductions unsupported"),
         ("expectedRejection", "expected rejections"), ("controlledRuntimeFailures", "controlled runtime failures"),
         ("sessionRequests", "session requests"), ("malformedInputs", "malformed/byte-boundary inputs"),
         ("largeResponseProbes", "large-response probes"),
@@ -957,6 +1097,8 @@ def report_text(result: dict[str, Any]) -> str:
                 lines.append(f"  - check: `{finding['reproducer']['checkCommand']}`")
             if finding.get("reducedPath"):
                 lines.append(f"  - reduced counterexample: `{finding['reducedPath']}` ({finding['reducedBytes']} bytes; hex `{finding['reducedHex']}`)")
+            if finding.get("reducedTranscript"):
+                lines.append(f"  - reduced session transcript: `{finding['reducedTranscript']}` ({finding['reducedRequestCount']} requests; signature `{finding.get('failureSignature')}`)")
             elif finding.get("reduction", {}).get("status") == "unsupported":
                 lines.append(f"  - reduction unsupported: {finding['reduction'].get('reason', 'unspecified')}")
     lines += ["", "## Classification counts", "", "| Classification | Count |", "|---|---:|"]
@@ -996,9 +1138,13 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
         "grammarExpectedOutput": 0, "grammarExpectedRejection": 0,
         "grammarBoundaryVectors": len(boundary_vectors()),
         "metamorphicPairs": 0, "metamorphicPreserved": 0,
-        "sessionHistories": 0, "sessionHistoryRequests": 0,
+        "sessionHistories": 0, "sessionHistoriesGenerated": 0, "sessionHistoriesExecuted": 0,
+        "sessionHistoryRequests": 0, "sessionHistoryResponses": 0, "sessionHistoryPassed": 0,
+        "sessionHistoryFailures": 0, "sessionHistoryInfrastructure": 0,
         "sessionRequests": 0, "malformedInputs": 0, "largeResponseProbes": 0,
         "largeResponseLimitRejections": 0, "largeResponseSuccessfulWithinLimit": 0,
+        "reductionAttempts": 0, "reductionSuccess": 0, "reductionUnsupported": 0,
+        "sessionReductionAttempts": 0, "sessionReductionSuccess": 0, "sessionReductionUnsupported": 0,
         "classificationCounts": {},
     }
     findings: list[dict[str, Any]] = []
@@ -1022,7 +1168,7 @@ def run_lab(args: argparse.Namespace) -> dict[str, Any]:
             run_session_histories(seed, args.history_count, findings, stats)
     session_invariants(findings, stats)
     if args.reduce:
-        reduce_findings(findings, args.reduce)
+        reduce_findings(findings, args.reduce, stats)
     git_revision = run_bounded(["git", "rev-parse", "HEAD"], timeout=3)
     git_branch = run_bounded(["git", "branch", "--show-current"], timeout=3)
     lab_command = [sys.executable, "conformance/harness.py", "--seeds", *map(str, args.seeds),
