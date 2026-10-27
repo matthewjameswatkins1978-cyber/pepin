@@ -158,6 +158,16 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn constant(unused: Int) -> Int { return 42 }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { return combine(19, 23) }\n"
+            "fn combine(left: Int, right: Int) -> Int { return right }",
+            23,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { return first(41, 900) }\n"
+            "fn first(value: Int, unused: Int) -> Int { return value }",
+            41,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
@@ -230,10 +240,17 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(call_order_failure["status"]), "unsupported")
         self.assertEqual(call_order_failure["sourceParts"]["value"], [])
         self.assertIn("evaluation order is unspecified", scalar(call_order_failure["diagnostic"]))
+        two_argument_failures = self._emit(
+            "fn main() -> Int { return combine(1 / 0, 2 / 0) }\n"
+            "fn combine(left: Int, right: Int) -> Int { return left }"
+        )
+        self.assertEqual(scalar(two_argument_failures["status"]), "unsupported")
+        self.assertEqual(two_argument_failures["sourceParts"]["value"], [])
+        self.assertIn("two fallible call arguments", scalar(two_argument_failures["diagnostic"]))
         parameterized_main = self._emit("fn main(value: Int) -> Int { return value }")
         self.assertEqual(scalar(parameterized_main["status"]), "unsupported")
         self.assertEqual(parameterized_main["sourceParts"]["value"], [])
-        self.assertIn("functions require zero or one Int parameter", scalar(parameterized_main["diagnostic"]))
+        self.assertIn("functions require zero to two Int parameters", scalar(parameterized_main["diagnostic"]))
         local_return_call = self._emit(
             "fn main() -> Int { return maybe() }\n"
             "fn maybe() -> Int {\n  let seed = 0\n  return 1 / seed\n}"

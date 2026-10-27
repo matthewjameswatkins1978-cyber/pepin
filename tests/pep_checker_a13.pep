@@ -1327,7 +1327,21 @@ fn analyze() -> CheckerReport {
   }
   if !complete { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
   if parseStatus != "complete" { return invalid_report(authority.document, authority.revision, 0, errorCode, errorMessage, errorNode) } else {}
-  let nodes = sort_nodes(reverse(nodesReversed))
+  let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorNode.startByte, errorEnd: errorNode.endByte, errorLine: errorNode.line, errorColumn: errorNode.column }
+  return analyze_parsed(parsed)
+}
+fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision {
+    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
+  } else {}
+  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
+  if parsed.status != "complete" {
+    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
+  } else {}
+  let sourceLength = byte_length(source_bytes())
+  let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
   let functions = collect_functions(nodes)
   let bindingResult = collect_bindings(nodes, functions)
