@@ -22,6 +22,7 @@ from tests import performance03_lab as performance
 
 MANIFEST = ROOT / "docs" / "integration" / "PEP-INTEGRATION-01-MANIFEST.json"
 MATRIX = ROOT / "docs" / "integration" / "PEP-INTEGRATION-01-MATRIX.json"
+CONTRACT = ROOT / "docs" / "integration" / "PEP-INTEGRATION-01-CONTRACT.json"
 
 
 class IntegrationError(AssertionError):
@@ -36,6 +37,27 @@ def load_matrix() -> dict[str, Any]:
     return json.loads(MATRIX.read_text(encoding="utf-8"))
 
 
+def load_contract() -> dict[str, Any]:
+    return json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+
+def validate_contract(contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    contract = contract or load_contract()
+    required_sections = {"syntaxInputFromA12", "a13FactsRequiredBeforeCheckerConsumer",
+                         "a14FactsRequiredBeforeNativeEmitter", "mustRejectOrDefer", "limits"}
+    if not required_sections.issubset(contract):
+        raise IntegrationError("integration contract is missing an authority boundary")
+    if "stableSemanticId" not in contract["a13FactsRequiredBeforeCheckerConsumer"]:
+        raise IntegrationError("A13 contract does not require checker-owned semantic identity")
+    if "syntaxIdUsedAsSemanticId" not in contract["mustRejectOrDefer"]:
+        raise IntegrationError("integration contract allows syntax IDs to escape as semantics")
+    if contract["limits"] != {"sourceBytes": 65536, "toolStepBudget": 100000,
+                               "messageBytes": 1048576,
+                               "policy": "no integration stage raises or bypasses existing limits"}:
+        raise IntegrationError("integration contract limits drifted")
+    return contract
+
+
 def validate_matrix(matrix: dict[str, Any] | None = None) -> dict[str, Any]:
     matrix = matrix or load_matrix()
     cases = matrix.get("cases", [])
@@ -43,7 +65,7 @@ def validate_matrix(matrix: dict[str, Any] | None = None) -> dict[str, Any]:
     if not cases or any(not case.get("expected") for case in cases) or len(ids) != len(set(ids)):
         raise IntegrationError("integration matrix has missing expectations or duplicate IDs")
     required = {"valid-minimal", "invalid-syntax", "incomplete-source", "wrong-source-revision",
-                "forged-continuation", "missing-chunk", "wrong-parent-role", "unresolved-binding",
+                "forged-continuation", "missing-chunk", "wrong-parent-role", "wrong-type-identity", "unresolved-binding",
                 "unsupported-native-feature", "runtime-overflow", "resource-exhaustion", "utf8-crlf",
                 "failure-recovery"}
     if not required.issubset(set(ids)):
@@ -150,10 +172,15 @@ def run_source_limit() -> dict[str, Any]:
 def run_real() -> dict[str, Any]:
     manifest = validate_manifest()
     matrix = validate_matrix()
+    contract = validate_contract()
     result = run_a12_boundary()
     result["manifest"] = {"mission": manifest["mission"], "inputs": len(manifest["inputs"]),
                            "sourceBytes": manifest["limits"]["sourceBytes"]}
     result["matrix"] = {"cases": len(matrix["cases"]), "oracleRule": matrix["oracleRule"]}
+    result["contract"] = {"a12Inputs": len(contract["syntaxInputFromA12"]),
+                           "a13RequiredFacts": len(contract["a13FactsRequiredBeforeCheckerConsumer"]),
+                           "a14RequiredFacts": len(contract["a14FactsRequiredBeforeNativeEmitter"]),
+                           "limitsPreserved": True}
     result["resourceBoundary"] = run_source_limit()
     result["a13"] = {"status": "not-executed", "reason": "no accepted A13 semantic contract or branch"}
     result["c23"] = {"status": "experimental-only", "sha": "ff0ad3fe513419a2317cc0e9616e1c5ce13f3701",

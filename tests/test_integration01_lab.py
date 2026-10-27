@@ -23,8 +23,21 @@ class Integration01LabTests(unittest.TestCase):
 
     def test_matrix_has_independent_expected_outcomes(self):
         matrix = lab.validate_matrix()
-        self.assertGreaterEqual(len(matrix["cases"]), 14)
+        self.assertGreaterEqual(len(matrix["cases"]), 15)
         self.assertIn("subprocess exit alone is never success", matrix["oracleRule"])
+
+    def test_contract_keeps_syntax_and_semantic_authority_separate(self):
+        contract = lab.validate_contract()
+        self.assertIn("document", contract["syntaxInputFromA12"])
+        self.assertIn("resolvedCallTarget", contract["a13FactsRequiredBeforeCheckerConsumer"])
+        self.assertIn("syntaxIdUsedAsSemanticId", contract["mustRejectOrDefer"])
+
+    def test_contract_rejects_limit_drift(self):
+        contract = lab.load_contract()
+        mutated = json.loads(json.dumps(contract))
+        mutated["limits"]["sourceBytes"] = 131072
+        with self.assertRaises(lab.IntegrationError):
+            lab.validate_contract(mutated)
 
     def test_matrix_rejects_duplicate_case_ids(self):
         matrix = lab.load_matrix()

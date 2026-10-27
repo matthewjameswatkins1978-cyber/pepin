@@ -1,0 +1,47 @@
+{
+  "mission": "PEP-INTEGRATION-01-READINESS",
+  "authorityRule": "A12 syntax evidence does not become A13 semantic evidence by being consumed",
+  "syntaxInputFromA12": [
+    "document",
+    "sourceRevision",
+    "status",
+    "FlatAstNode.id",
+    "FlatAstNode.parentId",
+    "FlatAstNode.role",
+    "FlatAstNode.childIndex",
+    "originalByteSpan",
+    "typedSyntaxPayload"
+  ],
+  "a13FactsRequiredBeforeCheckerConsumer": [
+    "stableSemanticId",
+    "resolvedBindingIdentity",
+    "resolvedCallTarget",
+    "nominalTypeIdentity",
+    "checkedExpressionType",
+    "typedHoleExpectationAndBindings",
+    "exhaustivenessResult",
+    "ownershipAndLifetimeFacts",
+    "diagnosticCodeAndOriginalByteSpan"
+  ],
+  "a14FactsRequiredBeforeNativeEmitter": [
+    "acceptedCheckedAstRevision",
+    "deterministicC23Subset",
+    "explicitCheckedArithmeticErrorSites",
+    "unsupportedFeatureDiagnostics",
+    "nativeInterpreterEqualityOracle"
+  ],
+  "mustRejectOrDefer": [
+    "syntaxIdUsedAsSemanticId",
+    "callerForgedContinuation",
+    "skippedContinuationChunk",
+    "unresolvedBinding",
+    "wrongSemanticTypeIdentity",
+    "unsupportedNativeFeature"
+  ],
+  "limits": {
+    "sourceBytes": 65536,
+    "toolStepBudget": 100000,
+    "messageBytes": 1048576,
+    "policy": "no integration stage raises or bypasses existing limits"
+  }
+}

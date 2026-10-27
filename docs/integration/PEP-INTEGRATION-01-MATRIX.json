@@ -10,6 +10,7 @@
     {"id": "forged-continuation", "stage": "A12", "source": "caller-made cursor", "expected": "not completion proof", "verification": "P03 continuation negative control"},
     {"id": "missing-chunk", "stage": "integration", "source": "dropped parser chunk", "expected": "fail closed", "verification": "integration oracle design; implementation pending"},
     {"id": "wrong-parent-role", "stage": "A12", "source": "mutated FlatAstNode", "expected": "topology rejection", "verification": "P03 topology negative control"},
+    {"id": "wrong-type-identity", "stage": "A13", "source": "mutated semantic type identity", "expected": "blocked until checker oracle", "verification": "contract-only; syntax IDs cannot stand in for semantic types"},
     {"id": "unresolved-binding", "stage": "A13", "source": "name without resolved identity", "expected": "blocked until accepted checker", "verification": "contract-only; no inferred semantic fact"},
     {"id": "unsupported-native-feature", "stage": "C23", "source": "union/borrowed-list path", "expected": "controlled unsupported diagnostic", "verification": "Artifact-05 R1 capability gate"},
     {"id": "runtime-overflow", "stage": "runtime", "source": "checked arithmetic overflow", "expected": "explicit checked failure", "verification": "C23 fixture contract; A13 input required"},

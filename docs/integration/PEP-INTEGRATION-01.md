@@ -66,7 +66,7 @@ semantic IDs, and the host does not invent semantic facts from them.
 
 ## Integration conformance matrix
 
-[`PEP-INTEGRATION-01-MATRIX.json`](PEP-INTEGRATION-01-MATRIX.json) contains 14
+[`PEP-INTEGRATION-01-MATRIX.json`](PEP-INTEGRATION-01-MATRIX.json) contains 15
 cases and the rule that process exit alone is never an oracle. The five A12
 boundary cases above are executable in this slice. The remaining cases retain
 explicit expected classifications for the next accepted component:
@@ -74,6 +74,8 @@ explicit expected classifications for the next accepted component:
 - revision mismatch and forged continuation: reject or fail closed; a caller
   cannot manufacture parser authority;
 - missing chunk and wrong parent role: reject incomplete/mutated topology;
+- wrong semantic type identity: defer until A13 owns and independently checks
+  semantic identities; a syntax node kind or ID is not a type oracle;
 - unresolved binding: blocked until an accepted A13 checker contract;
 - union/borrowed-list native paths: controlled unsupported diagnostic in the
   Artifact-05 experiment, not A14 capability;
@@ -101,6 +103,13 @@ restricted checked-fixture/native route with strict toolchain evidence and
 controlled unsupported diagnostics. It is not an A14 compiler and is not
 composed into this executable A12 path. Union, borrowed-list/ownership and
 parameterized-entry paths remain explicit boundaries.
+
+[`PEP-INTEGRATION-01-CONTRACT.json`](PEP-INTEGRATION-01-CONTRACT.json) makes
+that seam machine-readable. It lists the syntax facts A12 may provide, the
+checker-owned facts required before an A13 consumer is trusted, the additional
+facts a future A14 emitter must receive, and the inputs that must be rejected
+or deferred. The contract is deliberately a gate: it does not fabricate a
+semantic result for any unavailable stage.
 
 ## Architecture decision
 
@@ -149,7 +158,7 @@ The integration harness and its negative-control tests pass as follows:
 python -m unittest tests.test_integration01_lab tests.test_performance03_lab tests.test_performance02_lab -v
 ```
 
-This focused command passed 35/35 tests. The real A12 command above passed;
+This focused command passed 37/37 tests. The real A12 command above passed;
 the receipt records the five rows and the source-cap rejection. The existing
 P03 adapter checks remain separate and continue to cover continuation identity,
 topology mutations, source caps and bounded coalescing models. Full repository
