@@ -43,6 +43,15 @@ class PepC23CliTests(unittest.TestCase):
             result = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "23\n")
+            source.write_text(
+                "fn main() -> Int { return countdown(6) }\n"
+                "fn countdown(value: Int) -> Int {\n"
+                "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+            recursive = self.invoke("run-c23", source, "--compiler", CLANG)
+            self.assertEqual(recursive.returncode, 0, recursive.stdout + recursive.stderr)
+            self.assertEqual(recursive.stdout, "42\n")
             source.write_text("fn main() -> Int { return length([1, 2]) }\n",
                               encoding="utf-8", newline="\n")
             rejected = self.invoke("run-c23", source, "--compiler", CLANG)
