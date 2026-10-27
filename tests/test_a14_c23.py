@@ -136,6 +136,10 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { return answer() } fn answer() -> Int { return 29 }",
             29,
         )
+        self._compile_and_run(
+            "fn main() -> Int {\n  let answer = 6 * 7\n  return answer\n}",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (

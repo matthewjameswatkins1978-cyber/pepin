@@ -39,9 +39,21 @@ fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> B
   } else {}
   return true
 }
-fn pep_c23_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emission {
+fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "integer" {
     return PepC23Emission { status: "emitted", sourceParts: [int_text(node.integerValue)], diagnostic: "" }
+  } else {}
+  if node.kind == "name" {
+    var localFound = false
+    var localId = -1
+    for candidate in nodes {
+      if candidate.parentId == function.id && candidate.role == "statement" && candidate.kind == "let" && candidate.text == node.text {
+        localFound = true
+        localId = candidate.id
+      } else {}
+    }
+    if !localFound { return pep_c23_unsupported("Pep C23 name lowering requires a direct immutable local let") } else {}
+    return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(localId)], diagnostic: "" }
   } else {}
   if node.kind == "call" {
     let argument = pep_c23_child(nodes, node.id, "argument", 0)
@@ -73,15 +85,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emis
       return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
     } else {}
     if node.text == "neg" {
-      let lowered = pep_c23_expression(nodes, right.node)
+      let lowered = pep_c23_expression(nodes, function, right.node)
       if lowered.status != "emitted" { return lowered } else {}
       var parts: List[Str] = ["pep_neg("]
       for part in lowered.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     } else {}
-    let loweredLeft = pep_c23_expression(nodes, left.node)
-    let loweredRight = pep_c23_expression(nodes, right.node)
+    let loweredLeft = pep_c23_expression(nodes, function, left.node)
+    let loweredRight = pep_c23_expression(nodes, function, right.node)
     if loweredLeft.status != "emitted" { return loweredLeft } else {}
     if loweredRight.status != "emitted" { return loweredRight } else {}
     let helper = if node.text == "+" { "pep_add" } else {
@@ -112,7 +124,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emis
   if node.kind == "unary" && node.text == "-" {
     let operand = pep_c23_child(nodes, node.id, "operand", 0)
     if !operand.found { return pep_c23_unsupported("Pep C23 unary expression has no operand") } else {}
-    let lowered = pep_c23_expression(nodes, operand.node)
+    let lowered = pep_c23_expression(nodes, function, operand.node)
     if lowered.status != "emitted" { return lowered } else {}
     var parts: List[Str] = ["pep_neg("]
     for part in lowered.sourceParts { parts = append(parts, part) }
@@ -126,13 +138,23 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
   let statement = pep_c23_child(nodes, function.id, "statement", 0)
   let second = pep_c23_child(nodes, function.id, "statement", 1)
+  let third = pep_c23_child(nodes, function.id, "statement", 2)
+  let hasLocal = statement.found && statement.node.kind == "let"
+  let returnStatement = if hasLocal { second } else { statement }
   if parameter.found || !result.found || result.node.kind != "type_scalar" || result.node.text != "Int" ||
-     !statement.found || second.found || statement.node.kind != "return" {
-    return pep_c23_unsupported("Pep C23 functions require zero parameters, Int results, and one return statement")
+     !statement.found || third.found || !returnStatement.found || returnStatement.node.kind != "return" ||
+     (hasLocal && !second.found) {
+    return pep_c23_unsupported("Pep C23 functions require zero parameters, Int results, and one return with an optional direct let")
   } else {}
-  let value = pep_c23_child(nodes, statement.node.id, "value", 0)
+  if hasLocal {
+    let initialValue = pep_c23_child(nodes, statement.node.id, "value", 0)
+    if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+    let initial = pep_c23_expression(nodes, function, initialValue.node)
+    if initial.status != "emitted" { return initial } else {}
+  } else {}
+  let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
   if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
-  return pep_c23_expression(nodes, value.node)
+  return pep_c23_expression(nodes, function, value.node)
 }
 fn emit_c23() -> PepC23Emission {
   let parsed = parser_parse_program()
@@ -175,12 +197,24 @@ fn emit_c23() -> PepC23Emission {
   for node in parsed.nodes {
     if node.parentId == -1 && node.kind == "function" {
       let lowered = pep_c23_function_expression(parsed.nodes, node)
+      if lowered.status != "emitted" { return lowered } else {}
+      var bodyParts: List[Str] = []
+      let statement = pep_c23_child(parsed.nodes, node.id, "statement", 0)
+      if statement.found && statement.node.kind == "let" {
+        let initialValue = pep_c23_child(parsed.nodes, statement.node.id, "value", 0)
+        if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+        let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+        for part in ["  int64_t pep_local_", int_text(statement.node.id), " = "] { bodyParts = append(bodyParts, part) }
+        for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+        bodyParts = append(bodyParts, ";\n")
+      } else {}
+      bodyParts = append(bodyParts, "  return ")
+      for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
+      bodyParts = append(bodyParts, ";\n")
       reversed = prepend(reversed, "int64_t pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       reversed = prepend(reversed, " (void) {\n")
-      reversed = prepend(reversed, "  return ")
-      for part in lowered.sourceParts { reversed = prepend(reversed, part) }
-      reversed = prepend(reversed, ";\n")
+      for part in bodyParts { reversed = prepend(reversed, part) }
       reversed = prepend(reversed, "}\n")
     } else {}
   }
