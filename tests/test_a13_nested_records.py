@@ -92,6 +92,52 @@ class A13NestedRecordTests(unittest.TestCase):
         shape = fields(parameter["typeShape"])
         self.assertEqual((scalar(shape["name"]), scalar(shape["listDepth"])), ("Int", 16))
 
+    def test_triple_nested_lists_round_trip_through_structural_shapes(self):
+        source = (
+            "fn values() -> List[List[List[Int]]] { "
+            "return [[[1]], [[2, 3]]] }"
+        )
+        report = self._assert_matches_reference("triple-nested-list", source)
+        self.assertEqual(scalar(report["status"]), "valid")
+        expression_types = report["expressionTypes"]["value"]
+        self.assertTrue(any(
+            scalar(fields(fields(item)["typeShape"])["kind"]) == "builtin"
+            and scalar(fields(fields(item)["typeShape"])["name"]) == "Int"
+            and scalar(fields(fields(item)["typeShape"])["listDepth"]) == 3
+            for item in expression_types
+        ))
+
+        mismatch = (
+            "fn values() -> List[List[List[Int]]] { "
+            "return [[[true]]] }"
+        )
+        mismatch_report = self._assert_matches_reference("triple-nested-list-mismatch", mismatch)
+        self.assertEqual(scalar(mismatch_report["status"]), "invalid")
+
+        nominal_mismatch = (
+            "type Point { x: Int }\n"
+            "fn wrong(value: List[List[List[Point]]]) "
+            "-> List[List[List[Int]]] { return value }"
+        )
+        nominal_report = self._assert_matches_reference("triple-nested-nominal-mismatch", nominal_mismatch)
+        self.assertEqual(scalar(nominal_report["status"]), "invalid")
+
+        nested_append = (
+            "fn add(values: List[List[List[Int]]], item: List[List[Int]]) "
+            "-> List[List[List[Int]]] { return append(values, item) }"
+        )
+        append_report = self._assert_matches_reference("triple-nested-append", nested_append)
+        self.assertEqual(scalar(append_report["status"]), "valid")
+
+        nested_append_mismatch = (
+            "fn add(values: List[List[List[Int]]], item: List[List[Bool]]) "
+            "-> List[List[List[Int]]] { return append(values, item) }"
+        )
+        append_mismatch_report = self._assert_matches_reference(
+            "triple-nested-append-mismatch", nested_append_mismatch
+        )
+        self.assertEqual(scalar(append_mismatch_report["status"]), "invalid")
+
     def test_structural_list_types_flow_through_calls_returns_and_inferred_bindings(self):
         cases = (
             (
