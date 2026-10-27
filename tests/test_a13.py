@@ -735,6 +735,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
         cases = [
             ("one-hole", "fn f(flag: Bool) -> Int { return if flag { ?yes } else { 0 } }", "incomplete", {"yes": "Int"}),
             ("both-holes", "fn f(flag: Bool) -> Int { return if flag { ?yes } else { ?no } }", "incomplete", {"yes": "Int", "no": "Int"}),
+            ("annotated-binding", "fn f(flag: Bool) -> Int { let x: Int = if flag { ?h } else { 0 }; return x }", "incomplete", {"h": "Int"}),
+            ("function-argument", "fn use(x: Int) -> Int { return x }\nfn f(flag: Bool) -> Int { return use(if flag { ?h } else { 0 }) }", "incomplete", {"h": "Int"}),
+            ("list-element", "fn f(flag: Bool) -> List[Int] { return [if flag { ?h } else { 0 }] }", "incomplete", {"h": "Int"}),
+            ("record-field", "type R { x: Int }\nfn f(flag: Bool) -> R { return R { x: if flag { ?h } else { 0 } } }", "incomplete", {"h": "Int"}),
             ("context-first-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { 0 } }", "invalid", {}),
             ("context-last-mismatch", "fn f(flag: Bool) -> Int { return if flag { 0 } else { true } }", "invalid", {}),
             ("context-both-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { false } }", "invalid", {}),
