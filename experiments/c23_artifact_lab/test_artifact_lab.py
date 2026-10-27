@@ -153,6 +153,7 @@ class ArtifactLabTests(unittest.TestCase):
         original = json.loads((ROOT / "fixtures" / "primitive_add.json").read_text())
         parameterized = copy.deepcopy(original)
         parameterized["functions"][0]["parameters"] = [{"binding_id": "binding.x", "name": "x", "type": "Int"}]
+        parameterized["ownership"]["parameters"] = {"binding.x": "borrowed"}
         parameterized["functions"][0]["result"] = {"node_id": "node.x", "kind": "param_ref", "binding_id": "binding.x", "type": "Int", "span": {"start": 0, "end": 1}}
         parameterized["supported_features"] = ["parameters"]
         validate_manifest(parameterized)
@@ -197,6 +198,44 @@ class ArtifactLabTests(unittest.TestCase):
         with self.assertRaises(FixtureError) as raised:
             validate_manifest(bad_node_span)
         self.assertEqual(raised.exception.code, "source_span_out_of_bounds")
+
+    def test_ownership_is_exact_and_borrowed_lists_are_not_emitted(self):
+        manifest = json.loads((ROOT / "fixtures" / "function_call.json").read_text())
+        missing = copy.deepcopy(manifest)
+        del missing["ownership"]["parameters"]["binding.left"]
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(missing)
+        self.assertEqual(raised.exception.code, "ownership_coverage")
+
+        unknown = copy.deepcopy(manifest)
+        unknown["ownership"]["results"]["fn.unknown"] = "owned"
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(unknown)
+        self.assertEqual(raised.exception.code, "ownership_coverage")
+
+        bad_value = copy.deepcopy(manifest)
+        bad_value["ownership"]["parameters"]["binding.left"] = "maybe"
+        with self.assertRaises(FixtureError) as raised:
+            validate_manifest(bad_value)
+        self.assertEqual(raised.exception.code, "ownership_value")
+
+        borrowed_list = copy.deepcopy(manifest)
+        borrowed_list["functions"][0]["parameters"] = [{"binding_id": "binding.items", "name": "items", "type": "List[Int]"}]
+        borrowed_list["functions"][0]["return_type"] = "Int"
+        borrowed_list["functions"][0]["result"] = {"node_id": "node.sum", "kind": "list_sum", "type": "Int", "span": {"start": 0, "end": 1}, "target": {"node_id": "node.items", "kind": "param_ref", "binding_id": "binding.items", "type": "List[Int]", "span": {"start": 0, "end": 1}}}
+        borrowed_list["entry_function"] = "fn.main"
+        borrowed_list["ownership"]["parameters"] = {"binding.items": "borrowed", "binding.left": "borrowed", "binding.right": "borrowed"}
+        borrowed_list["ownership"]["results"] = {"fn.main": "owned", "fn.add": "owned"}
+        borrowed_list["supported_features"] = ["checked_arithmetic", "list_sum", "parameters"]
+        validate_manifest(borrowed_list)
+        with self.assertRaises(FixtureError) as raised:
+            render_c(borrowed_list)
+        self.assertEqual(raised.exception.code, "borrowed_list_unsupported")
+
+        source = render_c(json.loads((ROOT / "fixtures" / "list_sum.json").read_text()))
+        with self.assertRaises(FixtureError) as raised:
+            validate_generated_source(source.replace("&list_3", "&list_wrong"), json.loads((ROOT / "fixtures" / "list_sum.json").read_text()))
+        self.assertEqual(raised.exception.code, "missing_cleanup")
 
 
 if __name__ == "__main__":

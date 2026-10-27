@@ -17,6 +17,8 @@ PRIMITIVES = {"Int", "Bool", "Str", "Unit"}
 ID_RE = re.compile(r"^[a-z0-9_.-]+$")
 EMIT_KINDS = {"int", "bool", "unit", "str", "binary", "call", "param_ref", "record", "field_access", "list", "list_sum"}
 SOURCE_MODES = {"comparison_source", "synthetic"}
+PARAMETER_OWNERSHIP = {"borrowed", "owned"}
+RESULT_OWNERSHIP = {"borrowed", "owned", "borrowed_source_bytes"}
 
 
 class FixtureError(Exception):
@@ -312,9 +314,24 @@ def validate_manifest(manifest: Any, expected_revision: str | None = None) -> di
     ownership = manifest["ownership"]
     if not isinstance(ownership, dict) or set(ownership) != {"parameters", "results", "lifetimes"} or not isinstance(ownership["parameters"], dict) or not isinstance(ownership["results"], dict) or not isinstance(ownership["lifetimes"], list):
         fail("missing_ownership_annotation", "ownership facts are incomplete")
-    for function_id in functions:
-        if function_id not in ownership["results"]:
-            fail("missing_ownership_annotation", "function result has no ownership fact", function_id=function_id)
+    expected_parameters = {parameter["binding_id"] for function in functions.values() for parameter in function["parameters"]}
+    actual_parameters = set(ownership["parameters"])
+    if actual_parameters != expected_parameters:
+        fail("ownership_coverage", "parameter ownership facts do not exactly cover checked bindings", missing=sorted(expected_parameters - actual_parameters), extra=sorted(actual_parameters - expected_parameters))
+    for binding_id, ownership_kind in ownership["parameters"].items():
+        if ownership_kind not in PARAMETER_OWNERSHIP:
+            fail("ownership_value", "parameter ownership fact is not recognised", binding_id=binding_id, ownership=ownership_kind)
+    expected_results = set(functions)
+    actual_results = set(ownership["results"])
+    if actual_results != expected_results:
+        fail("ownership_coverage", "result ownership facts do not exactly cover checked functions", missing=sorted(expected_results - actual_results), extra=sorted(actual_results - expected_results))
+    for function_id, ownership_kind in ownership["results"].items():
+        if ownership_kind not in RESULT_OWNERSHIP:
+            fail("ownership_value", "result ownership fact is not recognised", function_id=function_id, ownership=ownership_kind)
+    if any(not isinstance(lifetime, str) or not lifetime.strip() for lifetime in ownership["lifetimes"]):
+        fail("ownership_lifetime_shape", "lifetime facts must be non-empty text")
+    if len(set(ownership["lifetimes"])) != len(ownership["lifetimes"]):
+        fail("ownership_lifetime_shape", "lifetime facts must not be duplicated")
     return manifest
 
 
@@ -501,8 +518,11 @@ def validate_generated_source(source: str, manifest: dict[str, Any]) -> None:
     features = set(manifest["supported_features"])
     if "checked_arithmetic" in features and not any(helper in source for helper in ("pep_checked_add", "pep_checked_sub", "pep_checked_mul", "pep_checked_div")):
         fail("missing_checked_status", "arithmetic artifact has no checked runtime helper")
-    if "list_sum" in features and "pep_list_dispose(&" not in source:
-        fail("missing_cleanup", "list artifact has no deterministic disposal path")
+    if "list_sum" in features:
+        allocated = re.findall(r"pep_list_from_array\([^;]*&(?P<name>list_[0-9]+)\);", source)
+        disposed = re.findall(r"pep_list_dispose\(&(?P<name>list_[0-9]+)\);", source)
+        if not allocated or not set(allocated).issubset(set(disposed)):
+            fail("missing_cleanup", "list artifact has no deterministic disposal path for every allocated list", allocated=allocated, disposed=disposed)
     if "string_literals" in features and "pep_str_from_bytes" not in source:
         fail("missing_string_validation", "string artifact has no UTF-8 validation call")
 
