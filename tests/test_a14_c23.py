@@ -141,6 +141,10 @@ class A14C23EmissionTests(unittest.TestCase):
             42,
         )
         self._compile_and_run(
+            "fn main() -> Int {\n  let first = 6 * 7\n  let second = first + 5\n  return second\n}",
+            47,
+        )
+        self._compile_and_run(
             "fn main() -> Int { return answer() }\nfn answer() -> Int { return 20 + 22 }",
             42,
         )
@@ -191,6 +195,8 @@ class A14C23EmissionTests(unittest.TestCase):
             ("fn main() -> Int { return (0 - 9223372036854775807 - 1) / -1 }", "PEP_RUNTIME_OVERFLOW"),
             ("fn main() -> Int { return -(0 - 9223372036854775807 - 1) }", "PEP_RUNTIME_OVERFLOW"),
             ("fn main() -> Int { return fail() }\nfn fail() -> Int { return 1 / 0 }", "PEP_RUNTIME_DIVISION_BY_ZERO"),
+            ("fn main() -> Int {\n  let first = 1 / 0\n  let second = 9223372036854775807 + 1\n  return first + second\n}",
+             "PEP_RUNTIME_DIVISION_BY_ZERO"),
         )
         for source, expected_code in cases:
             with self.subTest(source=source):

@@ -24,7 +24,7 @@ fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
-  if node.kind == "integer" { return false } else {}
+  if node.kind == "integer" || node.kind == "name" { return false } else {}
   if node.kind == "call" { return true } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
@@ -153,22 +153,31 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
 fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
-  let statement = pep_c23_child(nodes, function.id, "statement", 0)
-  let second = pep_c23_child(nodes, function.id, "statement", 1)
-  let third = pep_c23_child(nodes, function.id, "statement", 2)
-  let hasLocal = statement.found && statement.node.kind == "let"
-  let returnStatement = if hasLocal { second } else { statement }
-  if parameter.found || !result.found || result.node.kind != "type_scalar" || result.node.text != "Int" ||
-     !statement.found || third.found || !returnStatement.found || returnStatement.node.kind != "return" ||
-     (hasLocal && !second.found) {
-    return pep_c23_unsupported("Pep C23 functions require zero parameters, Int results, and one return with an optional direct let")
+  if parameter.found || !result.found || result.node.kind != "type_scalar" || result.node.text != "Int" {
+    return pep_c23_unsupported("Pep C23 functions require zero parameters and Int results")
   } else {}
-  if hasLocal {
-    let initialValue = pep_c23_child(nodes, statement.node.id, "value", 0)
-    if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
-    let initial = pep_c23_expression(nodes, function, initialValue.node)
-    if initial.status != "emitted" { return initial } else {}
-  } else {}
+  var returned = false
+  var statementCount = 0
+  var returnStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" {
+      statementCount = statementCount + 1
+      if statement.kind == "let" && !returned {
+        let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+        if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+        let initial = pep_c23_expression(nodes, function, initialValue.node)
+        if initial.status != "emitted" { return initial } else {}
+      } else {
+        if statement.kind == "return" && !returned {
+          returned = true
+          returnStatement = PepC23NodeLookup { found: true, node: statement }
+        } else {
+          return pep_c23_unsupported("Pep C23 functions require direct local lets followed by one return")
+        }
+      }
+    } else {}
+  }
+  if statementCount == 0 || !returned { return pep_c23_unsupported("Pep C23 functions require a return statement") } else {}
   let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
   if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
   return pep_c23_expression(nodes, function, value.node)
@@ -216,15 +225,16 @@ fn emit_c23() -> PepC23Emission {
       let lowered = pep_c23_function_expression(parsed.nodes, node)
       if lowered.status != "emitted" { return lowered } else {}
       var bodyParts: List[Str] = []
-      let statement = pep_c23_child(parsed.nodes, node.id, "statement", 0)
-      if statement.found && statement.node.kind == "let" {
-        let initialValue = pep_c23_child(parsed.nodes, statement.node.id, "value", 0)
-        if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
-        let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
-        for part in ["  int64_t pep_local_", int_text(statement.node.id), " = "] { bodyParts = append(bodyParts, part) }
-        for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
-        bodyParts = append(bodyParts, ";\n")
-      } else {}
+      for statement in parsed.nodes {
+        if statement.parentId == node.id && statement.role == "statement" && statement.kind == "let" {
+          let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
+          if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+          let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+          for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+          for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+          bodyParts = append(bodyParts, ";\n")
+        } else {}
+      }
       bodyParts = append(bodyParts, "  return ")
       for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
       bodyParts = append(bodyParts, ";\n")
