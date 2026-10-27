@@ -286,14 +286,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       let collection = child_at(nodes, node.id, "argument", 0)
       if collection.found { return infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { return "" }
     } else {}
-    if is_constructor(nodes, node.text) {
-      for variant in nodes {
-        if variant.kind == "variant_declaration" && variant.text == node.text {
-          let owner = lookup_node(nodes, variant.parentId)
-          if owner.found { return owner.node.text } else {}
-        } else {}
-      }
-    } else {}
+    if is_constructor(nodes, node.text) { return "" } else {}
     return ""
   } else {}
   if node.kind == "binary" {
@@ -318,7 +311,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     let thenValue = child_at(nodes, node.id, "then", 1)
     if thenValue.found { return infer_expression_type(nodes, thenValue.node.id, functions, bindings, references) } else { return "" }
   } else {}
-  if node.kind == "record" { return node.text } else {}
+  if node.kind == "record" { return "" } else {}
   return ""
 }
 fn list_type_name(elementType: Str) -> Str {
@@ -475,6 +468,22 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if (name == "byte_slice" || name == "utf8_slice") && (index == 1 || index == 2) { return "Int" } else {}
   return ""
 }
+fn branch_always_returns(nodes: List[FlatAstNode], parentId: Int, role: Str) -> Bool {
+  var covered = false
+  for statement in nodes {
+    if statement.parentId == parentId && statement.role == role && statement_always_returns(nodes, statement) { covered = true } else {}
+  }
+  return covered
+}
+fn statement_always_returns(nodes: List[FlatAstNode], statement: FlatAstNode) -> Bool {
+  if statement.kind == "return" { return true } else {}
+  if statement.kind == "block" { return branch_always_returns(nodes, statement.id, "statement") } else {}
+  if statement.kind == "if_statement" {
+    if count_children(nodes, statement.id, "else") == 0 { return false } else {}
+    return branch_always_returns(nodes, statement.id, "then") && branch_always_returns(nodes, statement.id, "else")
+  } else {}
+  return false
+}
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -488,6 +497,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Parameter type is outside the implemented primitive checker subset", parameter))
         } else {}
       }
+      if declared_return_type(nodes, node.id) != "Unit" {
+        var returnsOnAllPaths = false
+        for statement in nodes {
+          if statement.parentId == node.id && statement.role == "statement" && statement_always_returns(nodes, statement) { returnsOnAllPaths = true } else {}
+        }
+        if !returnsOnAllPaths {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Non-Unit function return completeness is not established", node))
+        } else {}
+      } else {}
     } else {}
     if (node.kind == "let" || node.kind == "var") {
       let annotation = child_at(nodes, node.id, "annotation", 0)
@@ -495,12 +513,19 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Binding annotation is outside the implemented primitive checker subset", node))
       } else {}
     } else {}
+    if node.kind == "record_declaration" || node.kind == "union_declaration" {
+      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Nominal declarations are outside the implemented checker subset", node))
+    } else {}
+    if node.kind == "assignment" || node.kind == "for_in" {
+      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Assignment and for-in semantics are outside the implemented checker subset", node))
+    } else {}
     if is_expression_kind(node.kind) {
       let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
       if actual == "" {
         if node.kind == "hole" { } else {
         if node.kind == "call" {
           if known_builtin(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
+          if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
           if node.kind != "name" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
         }

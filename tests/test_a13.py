@@ -1,5 +1,7 @@
+import json
 import os
 import pathlib
+import subprocess
 import unittest
 
 from tests.test_a11 import JsonLineClient, revision, typed, typed_list, typed_record
@@ -328,12 +330,73 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
+    def _reference_check(self, name, source):
+        path = BUILD / ("oracle-" + name + ".pep")
+        path.write_text(source, encoding="utf-8", newline=NL)
+        completed = subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "check", str(path), "--json"],
+            cwd=ROOT, env=os.environ.copy(), capture_output=True, text=True, timeout=60,
+        )
+        self.assertIn(completed.returncode, (0, 1), completed.stderr)
+        return json.loads(completed.stdout)
+
+    def test_unimplemented_semantics_fail_closed_against_ocaml(self):
+        cases = [
+            ("record-field", "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: true }; return 0 }", "PEP_TYPE_MISMATCH", "PEP_A13_TYPE_UNSUPPORTED"),
+            ("constructor-payload", "type Maybe = Some(Int) | None()" + NL + "fn main() -> Int { let value = Some(true); return 0 }", "PEP_TYPE_MISMATCH", "PEP_A13_TYPE_UNSUPPORTED"),
+            ("if-condition", "fn main() -> Int { if 1 { return 1 } else { return 2 } }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
+            ("while-condition", "fn main() -> Unit { while 1 {} }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
+            ("builtin-arity", "fn main() -> Int { return length() }", "PEP_ARGUMENT_COUNT", "PEP_ARGUMENT_COUNT"),
+            ("builtin-type", "fn main() -> Int { return length(1) }", "PEP_LIST_EXPECTED", "PEP_LIST_EXPECTED"),
+            ("assignment-type", "fn main() -> Int { var x: Int = 0; x = true; return x }", "PEP_TYPE_MISMATCH", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
+            ("for-in-source", "fn main() -> Int { for item in 1 {} return 0 }", "PEP_FOR_REQUIRES_LIST", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
+            ("missing-return", "fn main() -> Int { let x: Int = 1 }", "PEP_MISSING_RETURN", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
+        ]
+        for name, source, reference_code, checker_code in cases:
+            reference = self._reference_check(name, source)
+            _, report = self._analyze(source)
+            self.assertEqual(reference["status"], "invalid", (name, reference))
+            self.assertIn(reference_code, [item["code"] for item in reference["diagnostics"]], (name, reference))
+            self.assertEqual(scalar(report["status"]), "invalid", (name, report))
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn(checker_code, codes, (name, codes))
+
+        source = "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: ?field }; return 0 }"
+        reference = self._reference_check("record-hole", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "incomplete", reference)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
+        self.assertEqual([scalar(fields(item)["name"]) for item in report["holes"]["value"]], ["field"])
+
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
         _, report = self._analyze(source)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertEqual(scalar(report["status"]), "invalid", report)
         self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
+
+    def test_non_unit_return_completeness_follows_nested_blocks_and_if_branches(self):
+        valid_sources = [
+            "fn main() -> Int { return 1 }",
+            "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 2 } }",
+            "fn main() -> Int { { return 1 } }",
+        ]
+        for source in valid_sources:
+            _, report = self._analyze(source)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(scalar(report["status"]), "valid", (source, report))
+            self.assertNotIn("PEP_A13_CONTROL_FLOW_UNSUPPORTED", codes)
+
+        incomplete_sources = [
+            "fn main() -> Int { let x = 1 }",
+            "fn main(flag: Bool) -> Int { if flag { return 1 } else { let x = 2 } }",
+        ]
+        for source in incomplete_sources:
+            _, report = self._analyze(source)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(scalar(report["status"]), "invalid", (source, report))
+            self.assertIn("PEP_A13_CONTROL_FLOW_UNSUPPORTED", codes)
 
     def test_typed_holes_keep_context_scope_candidates_and_original_spans(self):
         source = ("fn id(value: Int) -> Int { return value }" + NL +
