@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "a05.list.sum",
+  "entry_function": "fn.main",
+  "source": {"mode": "comparison_source", "document_id": "doc.artifact05", "revision": "sha256:37b95748782059b29fdef342300492a318a423b601eac0a947f90c0cc7007301", "span": {"start": 0, "end": 142}},
+  "pep_source": "fn sum(items: List[Int]) -> Int { var total = 0 for item in items { total = total + item } return total }\nsay(int_text(sum([10, 12, 20, 7])))\n",
+  "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Int", "statements": [], "result": {"node_id": "node.list.sum", "kind": "list_sum", "type": "Int", "span": {"start": 0, "end": 40}, "target": {"node_id": "node.list.literal", "kind": "list", "type": "List[Int]", "span": {"start": 0, "end": 0}, "items": [{"node_id": "node.list.10", "kind": "int", "value": 10, "type": "Int", "span": {"start": 0, "end": 0}}, {"node_id": "node.list.12", "kind": "int", "value": 12, "type": "Int", "span": {"start": 0, "end": 0}}, {"node_id": "node.list.20", "kind": "int", "value": 20, "type": "Int", "span": {"start": 0, "end": 0}}, {"node_id": "node.list.7", "kind": "int", "value": 7, "type": "Int", "span": {"start": 0, "end": 0}}]}}}],
+  "types": [],
+  "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": ["list node.list.literal is disposed after sum"]},
+  "potential_failures": ["allocation", "overflow"],
+  "supported_features": ["int_literals", "list_literals", "list_sum"],
+  "expected": {"status": "success", "value": 49, "error": null, "interpreter_comparable": true, "value_encoding": "plain"}
+}
