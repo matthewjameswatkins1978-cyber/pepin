@@ -471,6 +471,80 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", report)
             self.assertIn("PEP_EQUALITY_UNSUPPORTED", codes)
 
+    def test_match_bindings_are_arm_local_and_union_coverage_is_checked(self):
+        source = (
+            "type Maybe = None() | Some(Int)" + NL
+            + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => number } }"
+        )
+        reference = self._reference_check("match-valid", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        binding = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == "number")
+        self.assertEqual(scalar(binding["typeName"]), "Int")
+        references = [fields(item) for item in report["references"]["value"]]
+        number_reference = next(item for item in references if scalar(item["name"]) == "number")
+        self.assertEqual(scalar(number_reference["bindingId"]), scalar(binding["semanticId"]))
+
+        wildcard = "type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { Some(number) => number _ => 0 } }"
+        _, report = self._analyze(wildcard)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+
+        invalid_cases = [
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { Some(number) => number } }", "PEP_MATCH_NON_EXHAUSTIVE"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 None() => 1 Some(number) => number } }", "PEP_DUPLICATE_PATTERN"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some() => 1 } }", "PEP_PATTERN_ARITY"),
+            ("type Maybe = None() | Some(Int)" + NL + "type Other = Other()" + NL + "fn pick(value: Maybe) -> Int { return match value { Other() => 0 _ => 1 } }", "PEP_PATTERN_TYPE"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => true } }", "PEP_TYPE_MISMATCH"),
+        ]
+        for source, expected_code in invalid_cases:
+            reference = self._reference_check("match-invalid", source)
+            _, report = self._analyze(source)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(reference["status"], "invalid", reference)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            self.assertIn(expected_code, codes)
+
+        out_of_scope = "type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { match value { Some(number) => number _ => 0 }; return number }"
+        _, report = self._analyze(out_of_scope)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertIn("PEP_UNKNOWN_BINDING", codes)
+
+    def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
+        source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v B() => 0 } }"
+        reference = self._reference_check("match-valid", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        binding = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == "v")
+        self.assertEqual(scalar(binding["typeName"]), "Int")
+        reference_fact = next(fields(item) for item in report["references"]["value"] if scalar(fields(item)["name"]) == "v")
+        self.assertEqual(scalar(reference_fact["bindingId"]), scalar(binding["semanticId"]))
+
+        source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => ?answer B() => 0 } }"
+        reference = self._reference_check("match-hole", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "incomplete", reference)
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+        cases = [
+            ("nonexhaustive", "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v } }", "PEP_NON_EXHAUSTIVE_MATCH"),
+            ("wrong-union", "type M = A(Int) | B()" + NL + "type N = C(Int)" + NL + "fn f(x: M) -> Int { return match x { C(v) => v B() => 0 } }", "PEP_PATTERN_TYPE_MISMATCH"),
+            ("duplicate", "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v A(w) => w B() => 0 } }", "PEP_DUPLICATE_MATCH_ARM"),
+            ("subject-hole", "type M = A(Int) | B()" + NL + "fn f() -> Int { return match ?subject { A(v) => v B() => 0 } }", "PEP_MATCH_UNTYPED"),
+            ("scalar-subject", "fn f(x: Int) -> Int { return match x { A(v) => v } }", "PEP_MATCH_NON_UNION"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("match-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertIn(expected_code, [item["code"] for item in reference["diagnostics"]])
+                self.assertIn(expected_code, [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
+
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
         _, report = self._analyze(source)

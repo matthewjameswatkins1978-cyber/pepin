@@ -217,6 +217,7 @@ fn scope_chain(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxId: In
       if !parent.found || current.parentId == -1 { done = true } else {
         if parent.node.kind == "block" && current.role == "statement" { reversed = prepend(reversed, scope_key(parent.node, current.role)) } else {}
         if parent.node.kind == "if_statement" && (current.role == "then" || current.role == "else") { reversed = prepend(reversed, scope_key(parent.node, current.role)) } else {}
+        if parent.node.kind == "match_arm" && (current.role == "pattern" || current.role == "result") { reversed = prepend(reversed, scope_key(parent.node, current.role)) } else {}
         if (parent.node.kind == "for_in" || parent.node.kind == "while") && current.role == "body" { reversed = prepend(reversed, scope_key(parent.node, current.role)) } else {}
         current = parent.node
       }
@@ -231,6 +232,22 @@ fn first_scope(scopes: List[Int], fallback: Int) -> Int {
   for scope in scopes { if !found { answer = scope; found = true } else {} }
   return answer
 }
+fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) -> Int {
+  let arm = lookup_node(nodes, pattern.parentId)
+  if arm.found {
+    let result = child_at(nodes, arm.node.id, "result", 1)
+    if result.found { return result.node.startByte } else {}
+  } else {}
+  let constructor = lookup_node(nodes, pattern.parentId)
+  if constructor.found {
+    let arm = lookup_node(nodes, constructor.node.parentId)
+    if arm.found {
+      let result = child_at(nodes, arm.node.id, "result", 1)
+      if result.found { return result.node.startByte } else {}
+    } else {}
+  } else {}
+  return pattern.endByte
+}
 fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) -> BindingCollection {
   var reversed: List[BindingFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -238,14 +255,14 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
   for function in functions {
     for node in nodes {
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
-      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in") && inside_function(nodes, node, function.syntaxId)
+      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(nodes, node, function.syntaxId)
       if parameter || local {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         let scope = if parameter { function.semanticId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, function.semanticId) } }
-        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { node.endByte } }
+        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == function.semanticId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declared_binding_type(nodes, node) }
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) } }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
@@ -352,6 +369,14 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     let value = child_at(nodes, node.id, "value", 0)
     if value.found { return record_field_type(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references), node.text) } else { return "" }
   } else {}
+  if node.kind == "match" {
+    for arm in nodes {
+      if arm.parentId == node.id && arm.kind == "match_arm" {
+        let result = child_at(nodes, arm.id, "result", 1)
+        if result.found { return infer_expression_type(nodes, result.node.id, functions, bindings, references) } else { return "" }
+      } else {}
+    }
+  } else {}
   return ""
 }
 fn list_type_name(elementType: Str) -> Str {
@@ -406,6 +431,21 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
   } else {}
   return ""
 }
+fn pattern_binding_type(nodes: List[FlatAstNode], pattern: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+  let parent = lookup_node(nodes, pattern.parentId)
+  if !parent.found { return "" } else {}
+  if parent.node.kind == "constructor_pattern" {
+    return variant_payload_type(nodes, parent.node.text, pattern.childIndex)
+  } else {}
+  if parent.node.kind == "match_arm" {
+    let expression = lookup_node(nodes, parent.node.parentId)
+    if expression.found {
+      let subject = child_at(nodes, expression.node.id, "value", 0)
+      if subject.found { return infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { return "" }
+    } else { return "" }
+  } else {}
+  return ""
+}
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   var typed: List[BindingFact] = []
   for binding in bindings {
@@ -414,7 +454,9 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
       let declaration = lookup_node(nodes, binding.syntaxId)
       if declaration.found {
         let value = child_at(nodes, declaration.node.id, "value", 0)
-        if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+        if declaration.found && declaration.node.kind == "binding_pattern" { typeName = pattern_binding_type(nodes, declaration.node, functions, typed, references) } else {
+          if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+        }
       } else {}
     } else {}
     typed = append(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName })
@@ -661,6 +703,64 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let value = child_at(nodes, node.id, "value", 0)
         if value.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
+        } else {}
+      } else {}
+      if node.kind == "match" {
+        let subject = child_at(nodes, node.id, "value", 0)
+        let subjectType = if subject.found { infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { "" }
+        let union = union_declaration(nodes, subjectType)
+        if !union.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_SUBJECT_UNSUPPORTED", "Match subject must have a supported tagged-union type", node)) } else {}
+        var catchAll = false
+        var resultType = ""
+        for arm in nodes {
+          if arm.parentId == node.id && arm.kind == "match_arm" {
+            let pattern = child_at(nodes, arm.id, "pattern", 0)
+            let result = child_at(nodes, arm.id, "result", 1)
+            if pattern.found {
+              if pattern.node.kind == "wildcard_pattern" || pattern.node.kind == "binding_pattern" { catchAll = true } else {}
+              if pattern.node.kind == "constructor_pattern" {
+                let patternUnion = constructor_union_type(nodes, pattern.node.text)
+                if patternUnion == "" || patternUnion != subjectType {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE", "Constructor pattern does not belong to the match subject type", pattern.node))
+                } else {}
+                let variant = variant_declaration(nodes, pattern.node.text)
+                let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
+                if expectedArity != count_children(nodes, pattern.node.id, "argument") {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Constructor pattern payload count does not match its variant", pattern.node))
+                } else {}
+                for payload in nodes {
+                  if payload.parentId == pattern.node.id && payload.role == "argument" && payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" {
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Nested constructor patterns are outside the scalar-payload checker subset", payload))
+                  } else {}
+                }
+              } else {}
+              if pattern.node.kind != "wildcard_pattern" && pattern.node.kind != "binding_pattern" && pattern.node.kind != "constructor_pattern" {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Pattern form is outside the implemented checker subset", pattern.node))
+              } else {}
+            } else {}
+            if result.found {
+              let actualResult = infer_expression_type(nodes, result.node.id, functions, bindings, references)
+              if resultType == "" && actualResult != "" { resultType = actualResult } else {}
+              if resultType != "" && actualResult != "" && resultType != actualResult {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
+              } else {}
+            } else {}
+          } else {}
+        }
+        if union.found && !catchAll {
+          for variant in nodes {
+            if variant.parentId == union.node.id && variant.kind == "variant_declaration" {
+              var matches = 0
+              for arm in nodes {
+                if arm.parentId == node.id && arm.kind == "match_arm" {
+                  let pattern = child_at(nodes, arm.id, "pattern", 0)
+                  if pattern.found && pattern.node.kind == "constructor_pattern" && pattern.node.text == variant.text { matches = matches + 1 } else {}
+                } else {}
+              }
+              if matches == 0 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_NON_EXHAUSTIVE", "Match does not cover every constructor", node)) } else {}
+              if matches != 1 { if matches != 0 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_PATTERN", "Match constructor pattern is repeated", node)) } else {} } else {}
+            } else {}
+          }
         } else {}
       } else {}
       if node.kind == "binary" {
