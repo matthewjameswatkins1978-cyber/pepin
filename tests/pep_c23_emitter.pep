@@ -33,7 +33,7 @@ fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   return lastStatement
 }
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
-  if node.kind == "integer" || node.kind == "name" { return false } else {}
+  if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" { return false } else {}
   if node.kind == "call" { return true } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
@@ -42,7 +42,7 @@ fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> B
     if node.text == "neg" {
       if right.node.kind == "integer" { return false } else { return true }
     } else {}
-    if node.text == "<=" {
+    if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
       return pep_c23_expression_may_fail(nodes, left.node) || pep_c23_expression_may_fail(nodes, right.node)
     } else {}
     return true
@@ -225,10 +225,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       parts = append(parts, ")")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     } else {}
-    if node.text == "<=" {
+    if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
       var parts: List[Str] = ["("]
       for part in loweredLeft.sourceParts { parts = append(parts, part) }
-      parts = append(parts, " <= ")
+      parts = append(parts, " ")
+      parts = append(parts, node.text)
+      parts = append(parts, " ")
       for part in loweredRight.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }

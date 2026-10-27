@@ -206,6 +206,20 @@ class A14C23EmissionTests(unittest.TestCase):
             42,
         )
 
+    def test_c23_comparisons_and_short_circuit_logic_match_the_interpreter(self):
+        self._compile_and_run(
+            "fn main() -> Int { if 2 == 2 && 2 != 3 && 2 <= 3 { return 42 } else { return 0 } }",
+            42,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { if false && (1 / 0 == 0) { return 0 } else { return 42 } }",
+            42,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { if true || (1 / 0 == 0) { return 42 } else { return 0 } }",
+            42,
+        )
+
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
             ("fn main() -> Int { return 1 + 2 * 3 }", 7),
