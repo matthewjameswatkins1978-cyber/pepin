@@ -712,9 +712,9 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
         }
       } else {}
     } else {}
-    typed = append(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape })
+    typed = prepend(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape })
   }
-  return typed
+  return reverse(typed)
 }
 fn named_type_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
   var count = 0
