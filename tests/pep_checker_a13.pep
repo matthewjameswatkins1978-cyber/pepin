@@ -534,6 +534,7 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     for element in nodes {
       if element.parentId == found.node.id && element.role == "element" && element.kind != "hole" && elementShape.kind == "" {
         elementShape = expression_type_shape(nodes, element.id, functions, bindings, references)
+        if elementShape.kind != "" { return with_one_more_list(elementShape) } else {}
       } else {}
     }
     return with_one_more_list(elementShape)
