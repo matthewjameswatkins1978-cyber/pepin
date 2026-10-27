@@ -177,6 +177,80 @@ class Performance02LabTests(unittest.TestCase):
     def test_lifecycle_input_validation_is_bounded(self):
         with self.assertRaises(ValueError):
             lab.run_session_lifecycle(count=0)
+        with self.assertRaises(ValueError):
+            lab.run_session_lifecycle(count=lab.MAX_LIFECYCLE_COUNT + 1)
+        with self.assertRaises(ValueError):
+            lab.run_session_lifecycle(repeated_invokes=lab.MAX_LIFECYCLE_INVOKES + 1)
+        with self.assertRaises(ValueError):
+            lab.run_session_lifecycle(cold_trials=lab.MAX_LIFECYCLE_COLD_TRIALS + 1)
+
+    def test_lifecycle_verifier_rejects_fail_open_negative_controls(self):
+        source = "fn f() -> Int { return 1 }\n"
+        edited_source = " " + source
+        recovery_source = edited_source + " "
+        initial = lab.base.revision(source.encode())
+        edited = lab.base.revision(edited_source.encode())
+        recovery = lab.base.revision(recovery_source.encode())
+        document = "doc-1"
+
+        def query(revision, status="valid", marker=1):
+            return {
+                "outcome": "ok", "operation": "query", "document": document,
+                "revision": revision, "status": status, "ast": {"marker": marker},
+                "typedTree": {"marker": marker}, "holes": [], "diagnostics": [],
+            }
+
+        valid = {
+            "opened": {**query(initial), "operation": "open"},
+            "edited": {"outcome": "ok", "operation": "apply_edit", "document": document, "revision": edited},
+            "before_stale": query(edited),
+            "stale": {"outcome": "error", "operation": "apply_edit", "document": document,
+                      "currentRevision": edited, "error": {"code": "PEP_STALE_REVISION"}},
+            "recovered": query(edited),
+            "recovery_edit": {"outcome": "ok", "operation": "apply_edit", "document": document, "revision": recovery},
+            "final": query(recovery),
+        }
+
+        def assert_rejected(**changes):
+            case = {key: value.copy() for key, value in valid.items()}
+            for key, value in changes.items():
+                case[key] = value
+            with self.assertRaises(lab.LifecycleInvariantError):
+                lab.verify_revision_lifecycle(
+                    **case, source=source, edited_source=edited_source, recovery_source=recovery_source,
+                )
+
+        assert_rejected(edited={**valid["edited"], "outcome": "error"})
+        assert_rejected(edited={**valid["edited"], "revision": initial})
+        assert_rejected(stale={**valid["stale"], "outcome": "ok"})
+        assert_rejected(stale={**valid["stale"], "error": {"code": "WRONG_CODE"}})
+        assert_rejected(recovered=query(edited, marker=2))
+        assert_rejected(recovery_edit={**valid["recovery_edit"], "outcome": "error"})
+        assert_rejected(final={**valid["final"], "outcome": "error"})
+
+    def test_lifecycle_verifier_accepts_exact_recovery_contract(self):
+        source = "fn f() -> Int { return 1 }\n"
+        edited_source = " " + source
+        recovery_source = edited_source + " "
+        initial = lab.base.revision(source.encode())
+        edited = lab.base.revision(edited_source.encode())
+        recovery = lab.base.revision(recovery_source.encode())
+        document = "doc-1"
+        state = {"status": "valid", "ast": {"n": 1}, "typedTree": {"n": 1}, "holes": [], "diagnostics": []}
+        query = lambda revision: {"outcome": "ok", "operation": "query", "document": document, "revision": revision, **state}
+        result = lab.verify_revision_lifecycle(
+            opened={"outcome": "ok", "operation": "open", "document": document, "revision": initial},
+            edited={"outcome": "ok", "operation": "apply_edit", "document": document, "revision": edited},
+            before_stale=query(edited),
+            stale={"outcome": "error", "operation": "apply_edit", "document": document,
+                   "currentRevision": edited, "error": {"code": "PEP_STALE_REVISION"}},
+            recovered=query(edited),
+            recovery_edit={"outcome": "ok", "operation": "apply_edit", "document": document, "revision": recovery},
+            final=query(recovery), source=source, edited_source=edited_source, recovery_source=recovery_source,
+        )
+        self.assertTrue(result["verified"])
+        self.assertTrue(result["stateUnchangedAfterStale"])
+        self.assertEqual(result["recoveryRevision"], recovery)
 
 
 if __name__ == "__main__":

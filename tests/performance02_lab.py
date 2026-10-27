@@ -31,6 +31,9 @@ DEFAULT_MAX_TRIALS = 20
 DEFAULT_MAX_BYTES = 65_536
 TOOL_STEP_BUDGET = 100_000
 TOOL_MESSAGE_BUDGET = 1_048_576
+MAX_LIFECYCLE_COUNT = 64
+MAX_LIFECYCLE_INVOKES = 32
+MAX_LIFECYCLE_COLD_TRIALS = 8
 
 
 class AstValidationError(ValueError):
@@ -40,6 +43,10 @@ class AstValidationError(ValueError):
         super().__init__(f"{code}: {detail}")
         self.code = code
         self.detail = detail
+
+
+class LifecycleInvariantError(ValueError):
+    """A session lifecycle response violated a fail-closed invariant."""
 
 
 def elapsed_ms(start_ns: int, end_ns: int | None = None) -> float:
@@ -372,6 +379,77 @@ def _timed_send(client: base.SessionClient, request: dict[str, Any]) -> tuple[di
     return response, timing, elapsed_ms(started)
 
 
+def _lifecycle_fail(detail: str) -> None:
+    raise LifecycleInvariantError(detail)
+
+
+def lifecycle_state_projection(response: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: response.get(key)
+        for key in ("status", "ast", "typedTree", "holes", "diagnostics")
+    }
+
+
+def verify_revision_lifecycle(
+    *, opened: dict[str, Any], edited: dict[str, Any], before_stale: dict[str, Any],
+    stale: dict[str, Any], recovered: dict[str, Any], recovery_edit: dict[str, Any],
+    final: dict[str, Any], source: str, edited_source: str, recovery_source: str,
+) -> dict[str, Any]:
+    """Verify document identity, revision ownership and stale-write recovery."""
+
+    document = opened.get("document")
+    initial_revision = base.revision(source.encode("utf-8"))
+    edited_revision = base.revision(edited_source.encode("utf-8"))
+    recovery_revision = base.revision(recovery_source.encode("utf-8"))
+    if opened.get("outcome") != "ok" or opened.get("operation") != "open":
+        _lifecycle_fail("initial open did not succeed")
+    if not isinstance(document, str) or not document:
+        _lifecycle_fail("initial open did not return a document identity")
+    if opened.get("revision") != initial_revision:
+        _lifecycle_fail("initial open revision does not match the source")
+    if edited.get("outcome") != "ok" or edited.get("operation") != "apply_edit":
+        _lifecycle_fail("valid edit did not succeed")
+    if edited.get("document") != document or edited.get("revision") != edited_revision:
+        _lifecycle_fail("valid edit changed document identity or returned the wrong revision")
+    if edited_revision == initial_revision:
+        _lifecycle_fail("valid edit did not advance the revision")
+    if before_stale.get("outcome") != "ok" or before_stale.get("document") != document:
+        _lifecycle_fail("pre-stale recovery read did not succeed")
+    if before_stale.get("revision") != edited_revision:
+        _lifecycle_fail("pre-stale read does not identify the current revision")
+    if stale.get("outcome") != "error" or stale.get("operation") != "apply_edit":
+        _lifecycle_fail("stale edit was accepted")
+    if stale.get("error", {}).get("code") != "PEP_STALE_REVISION":
+        _lifecycle_fail("stale edit returned the wrong diagnostic code")
+    if stale.get("document") != document or stale.get("currentRevision") != edited_revision:
+        _lifecycle_fail("stale error did not report the live document revision")
+    if recovered.get("outcome") != "ok" or recovered.get("document") != document:
+        _lifecycle_fail("recovery read did not succeed")
+    if recovered.get("revision") != edited_revision:
+        _lifecycle_fail("recovery read observed a mutated revision")
+    if lifecycle_state_projection(recovered) != lifecycle_state_projection(before_stale):
+        _lifecycle_fail("stale write mutated observable document state")
+    if recovery_edit.get("outcome") != "ok" or recovery_edit.get("operation") != "apply_edit":
+        _lifecycle_fail("current-revision recovery edit did not succeed")
+    if recovery_edit.get("document") != document or recovery_edit.get("revision") != recovery_revision:
+        _lifecycle_fail("recovery edit returned the wrong document or revision")
+    if final.get("outcome") != "ok" or final.get("document") != document or final.get("revision") != recovery_revision:
+        _lifecycle_fail("final recovery read did not observe the current revision")
+    return {
+        "verified": True,
+        "document": document,
+        "initialRevision": initial_revision,
+        "editedRevision": edited_revision,
+        "recoveryRevision": recovery_revision,
+        "staleOutcome": stale["outcome"],
+        "staleCode": stale["error"]["code"],
+        "staleRejected": True,
+        "stateUnchangedAfterStale": True,
+        "recoveryReadSucceeded": True,
+        "recoveryEditSucceeded": True,
+    }
+
+
 def run_session_lifecycle(
     *,
     count: int = 8,
@@ -386,6 +464,11 @@ def run_session_lifecycle(
     if min(count, repeated_invokes, cold_trials) < 1:
         raise ValueError("lifecycle counts must be positive")
     source, expected = base.typed_result_source(count)
+    source_bytes = len(source.encode("utf-8"))
+    if count > MAX_LIFECYCLE_COUNT or repeated_invokes > MAX_LIFECYCLE_INVOKES or cold_trials > MAX_LIFECYCLE_COLD_TRIALS:
+        raise ValueError("lifecycle campaign exceeds the laboratory bounds")
+    if source_bytes > DEFAULT_MAX_BYTES:
+        raise ValueError("lifecycle source exceeds the laboratory source bound")
     cold = []
     for _ in range(cold_trials):
         row = base.run_typed_result(
@@ -419,16 +502,41 @@ def run_session_lifecycle(
             if response.get("outcome") != "ok" or response.get("result") != expected:
                 raise AssertionError("same-session result changed")
             invoke_rows.append({"wire": timing, "elapsedMs": elapsed})
+        edited_source = " " + source
         edit, _, edit_ms = _timed_send(client, {
             "schemaVersion": 3, "op": "apply_edit", "document": document,
             "expected_revision": source_revision, "start_byte": 0, "end_byte": 0,
             "replacement": " ",
+        })
+        before_stale, _, before_stale_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "query", "document": document,
+            "revision": edit.get("revision"),
         })
         stale, _, stale_ms = _timed_send(client, {
             "schemaVersion": 3, "op": "apply_edit", "document": document,
             "expected_revision": source_revision, "start_byte": 0, "end_byte": 0,
             "replacement": " ",
         })
+        recovered, _, recovered_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "query", "document": document,
+            "revision": edit.get("revision"),
+        })
+        recovery_source = edited_source + " "
+        recovery_edit, _, recovery_edit_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "apply_edit", "document": document,
+            "expected_revision": edit.get("revision"),
+            "start_byte": len(edited_source.encode("utf-8")),
+            "end_byte": len(edited_source.encode("utf-8")), "replacement": " ",
+        })
+        final, _, final_ms = _timed_send(client, {
+            "schemaVersion": 3, "op": "query", "document": document,
+            "revision": recovery_edit.get("revision"),
+        })
+        lifecycle = verify_revision_lifecycle(
+            opened=opened, edited=edit, before_stale=before_stale, stale=stale,
+            recovered=recovered, recovery_edit=recovery_edit, final=final,
+            source=source, edited_source=edited_source, recovery_source=recovery_source,
+        )
         stderr = client.close()
         return {
             "kind": "session-lifecycle",
@@ -447,14 +555,14 @@ def run_session_lifecycle(
                 "peakMemory": base.peak_memory(client.samples),
             },
             "revisionLifecycle": {
+                **lifecycle,
                 "editOutcome": edit.get("outcome"),
                 "editElapsedMs": edit_ms,
-                "staleOutcome": stale.get("outcome"),
-                "staleCode": stale.get("error", {}).get("code"),
-                "staleRejected": stale.get("outcome") == "error",
                 "staleElapsedMs": stale_ms,
-                "oldRevision": source_revision,
-                "newRevision": edit.get("revision"),
+                "preStaleReadMs": before_stale_ms,
+                "recoveryReadMs": recovered_ms,
+                "recoveryEditMs": recovery_edit_ms,
+                "finalReadMs": final_ms,
             },
             "stderrProfileRecords": len(base.parse_profile(stderr)),
         }
