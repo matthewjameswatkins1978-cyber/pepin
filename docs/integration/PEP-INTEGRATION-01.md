@@ -173,15 +173,21 @@ python -m unittest tests.test_integration01_lab tests.test_performance03_lab tes
 ```
 
 The R0 completion receipt reported 142/142 for the full repository. The R1
-focused command now covers exact-AST, status/diagnostic and bounded-JSONL
-negative controls; its final count and the rerun full-suite count are recorded
-with the final pushed receipt. The pinned A12 parser suite at
+focused command passed 47/47 and covers exact-AST, status/diagnostic and
+bounded-JSONL negative controls. The final repository regression passed
+152/152, including the seven A11 differential tests, and the pinned A12 parser
+suite at
 `69a47fe77187666bdd045b8dc8a9f633a7dd49d7` also passed 22/22, including
 revision-mismatch rejection, malformed-input recovery, topology mutation
 rejection and source-limit protection. The real A12 command above passed;
 the receipt records the five rows and the source-cap rejection. The existing
 P03 adapter checks remain separate and continue to cover continuation identity,
-topology mutations, source caps and bounded coalescing models. No A12, A13, C23
+topology mutations, source caps and bounded coalescing models. The final real
+receipt verifies five parser rows, matrix execution counts of 8 executed / 3
+tested-elsewhere / 4 blocked, accepted A12 checkout HEAD
+`69a47fe77187666bdd045b8dc8a9f633a7dd49d7` with a clean tree, and the
+unchanged `PEP_SOURCE_BYTE_LIMIT` rejection. `python -m compileall -q tests`
+and `git diff --check` also passed. No A12, A13, C23
 production/compiler, JSONL schema, budget or packet pointer files were
 changed.
 
