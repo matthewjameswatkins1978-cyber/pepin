@@ -307,7 +307,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
         cases = [
             ("fn bad() -> List[Int] { return [1, true] }", "PEP_TYPE_MISMATCH"),
-            ("fn bad() -> List[Int] { return [\"text\"] }", "PEP_RETURN_TYPE"),
+            ("fn bad() -> List[Int] { return [\"text\"] }", "PEP_TYPE_MISMATCH"),
         ]
         for source, expected_code in cases:
             _, report = self._analyze(source)
@@ -348,6 +348,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("append-value", 'fn bad() -> List[Int] { return append([1], "text") }', '"text"'),
             ("contains-value", 'fn bad() -> Bool { return contains([1], "text") }', '"text"'),
             ("annotated-element", 'fn bad() -> Int { let values: List[Int] = ["x"]; return 0 }', '"x"'),
+            ("returned-element", 'fn bad() -> List[Int] { return ["text"] }', '"text"'),
         ]
         for name, source, offending in cases:
             with self.subTest(name=name):
