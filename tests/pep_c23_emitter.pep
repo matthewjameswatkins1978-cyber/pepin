@@ -23,6 +23,15 @@ fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23NodeLookup {
+  var lastStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.parentId == function.id && candidate.role == "statement" {
+      lastStatement = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  return lastStatement
+}
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "integer" || node.kind == "name" { return false } else {}
   if node.kind == "call" { return true } else {}
@@ -114,16 +123,17 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if extraParameter.found || !result.found || result.node.kind != "type_scalar" || result.node.text != "Int" {
       return pep_c23_unsupported("Pep C23 calls require a zero-, one- or two-Int-parameter Int-returning target")
     } else {}
-    let targetStatement = pep_c23_child(nodes, target.node.id, "statement", 0)
+    let targetStatement = pep_c23_last_statement(nodes, target.node)
     let targetValue = if targetStatement.found {
       pep_c23_child(nodes, targetStatement.node.id, "value", 0)
     } else { PepC23NodeLookup { found: false, node: empty_node() } }
-    if !targetStatement.found || targetStatement.node.kind != "return" || !targetValue.found {
-      return pep_c23_unsupported("Pep C23 calls require a target with one direct return; recursive calls are unsupported")
+    let conditionalTarget = targetStatement.found && targetStatement.node.kind == "if_statement"
+    if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
+      return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
     if parameter.found {
       if secondParameter.found {
-        if !argument.found || !secondArgument.found || targetValue.node.kind != "name" || (targetValue.node.text != parameter.node.text && targetValue.node.text != secondParameter.node.text) {
+        if !argument.found || !secondArgument.found || (!conditionalTarget && (targetValue.node.kind != "name" || (targetValue.node.text != parameter.node.text && targetValue.node.text != secondParameter.node.text))) {
           return pep_c23_unsupported("Pep C23 two-parameter calls require two arguments and a direct parameter result")
         } else {}
         if pep_c23_expression_may_fail(nodes, argument.node) && pep_c23_expression_may_fail(nodes, secondArgument.node) {
@@ -140,7 +150,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         parts = append(parts, ")")
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       } else {
-        if !argument.found || secondArgument.found || !pep_c23_parameter_expression(nodes, parameter.node.text, "", targetValue.node) {
+        if !argument.found || secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, parameter.node.text, "", targetValue.node)) {
           return pep_c23_unsupported("Pep C23 one-parameter calls require one argument and a call-free target expression")
         } else {}
         let loweredArgument = pep_c23_expression(nodes, function, argument.node)
@@ -151,7 +161,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       }
     } else {
-      if argument.found || secondArgument.found || !pep_c23_call_free_expression(nodes, targetValue.node) {
+      if argument.found || secondArgument.found || (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node)) {
         return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free integer result; recursive calls are unsupported")
       } else {}
       return PepC23Emission { status: "emitted", sourceParts: ["pep_fn_", int_text(target.node.id), "()"], diagnostic: "" }
@@ -286,11 +296,11 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   if loweredElse.status != "emitted" { return loweredElse } else {}
   var parts: List[Str] = ["if ("]
   for part in loweredCondition.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ") {\n  return ")
+  parts = append(parts, ") {\n  int64_t pep_result = ")
   for part in loweredThen.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ";\n} else {\n  return ")
+  parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n} else {\n  int64_t pep_result = ")
   for part in loweredElse.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ";\n}\n")
+  parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n}\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 
@@ -358,7 +368,7 @@ fn emit_c23() -> PepC23Emission {
   reversed = prepend(reversed, "#include <stdio.h>\n")
   reversed = prepend(reversed, "#include <stdint.h>\n")
   reversed = prepend(reversed, "#include <stdlib.h>\n")
-  reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n")
+  reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n")
   for node in parsed.nodes {
     if node.parentId == -1 && node.kind == "function" {
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
@@ -384,7 +394,7 @@ fn emit_c23() -> PepC23Emission {
       if lowered.status != "emitted" { return lowered } else {}
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
-      var bodyParts: List[Str] = []
+      var bodyParts: List[Str] = ["  pep_enter();\n"]
       if parameter.found {
         bodyParts = append(bodyParts, "  (void)pep_arg_")
         bodyParts = append(bodyParts, int_text(parameter.node.id))
@@ -408,9 +418,9 @@ fn emit_c23() -> PepC23Emission {
       if hasConditionalBody {
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
       } else {
-        bodyParts = append(bodyParts, "  return ")
+        bodyParts = append(bodyParts, "  int64_t pep_result = ")
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
-        bodyParts = append(bodyParts, ";\n")
+        bodyParts = append(bodyParts, ";\n  pep_leave();\n  return pep_result;\n")
       }
       reversed = prepend(reversed, "int64_t pep_fn_")
       reversed = prepend(reversed, int_text(node.id))

@@ -154,6 +154,13 @@ class A14C23EmissionTests(unittest.TestCase):
             42,
         )
         self._compile_and_run(
+            "fn main() -> Int { return countdown(6) }\n"
+            "fn countdown(value: Int) -> Int {\n"
+            "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
+            "}",
+            42,
+        )
+        self._compile_and_run(
             "fn main() -> Int { return constant(41) }\n"
             "fn constant(unused: Int) -> Int { return 42 }",
             42,
@@ -251,6 +258,15 @@ class A14C23EmissionTests(unittest.TestCase):
         for source, expected_code in cases:
             with self.subTest(source=source):
                 self._compile_and_expect_runtime_error(source, expected_code)
+
+    def test_recursive_native_calls_enforce_pep_depth(self):
+        self._compile_and_expect_runtime_error(
+            "fn main() -> Int { return countdown(600) }\n"
+            "fn countdown(value: Int) -> Int {\n"
+            "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
+            "}",
+            "PEP_RUNTIME_CALL_DEPTH",
+        )
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
         emitted = self._emit("fn main() -> Int { return length([1, 2]) }")
