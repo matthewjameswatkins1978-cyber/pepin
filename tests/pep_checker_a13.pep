@@ -370,12 +370,17 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if value.found { return record_field_type(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references), node.text) } else { return "" }
   } else {}
   if node.kind == "match" {
+    var resultType = ""
     for arm in nodes {
       if arm.parentId == node.id && arm.kind == "match_arm" {
         let result = child_at(nodes, arm.id, "result", 1)
-        if result.found { return infer_expression_type(nodes, result.node.id, functions, bindings, references) } else { return "" }
+        if resultType == "" && result.found {
+          let actual = infer_expression_type(nodes, result.node.id, functions, bindings, references)
+          if actual != "" { resultType = actual } else {}
+        } else {}
       } else {}
     }
+    if resultType != "" { return resultType } else { return contextual_expected_type(nodes, node, functions, bindings, references) }
   } else {}
   return ""
 }
@@ -493,6 +498,22 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if parent.node.kind == "return" && hole.role == "value" {
     let owner = owner_function(nodes, hole, functions)
     if owner.found { return owner.function.returnType } else { return "" }
+  } else {}
+  if parent.node.kind == "match_arm" && hole.role == "result" {
+    let expression = lookup_node(nodes, parent.node.parentId)
+    if expression.found {
+      let expected = contextual_expected_type(nodes, expression.node, functions, bindings, references)
+      if expected != "" { return expected } else {}
+      for arm in nodes {
+        if arm.parentId == expression.node.id && arm.kind == "match_arm" && arm.id != parent.node.id {
+          let sibling = child_at(nodes, arm.id, "result", 1)
+          if sibling.found {
+            let actual = infer_expression_type(nodes, sibling.node.id, functions, bindings, references)
+            if actual != "" { return actual } else {}
+          } else {}
+        } else {}
+      }
+    } else {}
   } else {}
   if parent.node.kind == "call" && hole.role == "argument" {
     let target = find_function(functions, parent.node.text)
@@ -709,8 +730,13 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let subject = child_at(nodes, node.id, "value", 0)
         let subjectType = if subject.found { infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { "" }
         let union = union_declaration(nodes, subjectType)
-        if !union.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_SUBJECT_UNSUPPORTED", "Match subject must have a supported tagged-union type", node)) } else {}
+        if !union.found {
+          let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", node))
+        } else {}
         var catchAll = false
+        var invalidPattern = false
+        var seenConstructors: List[Str] = []
         var resultType = ""
         for arm in nodes {
           if arm.parentId == node.id && arm.kind == "match_arm" {
@@ -720,8 +746,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               if pattern.node.kind == "wildcard_pattern" || pattern.node.kind == "binding_pattern" { catchAll = true } else {}
               if pattern.node.kind == "constructor_pattern" {
                 let patternUnion = constructor_union_type(nodes, pattern.node.text)
-                if patternUnion == "" || patternUnion != subjectType {
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE", "Constructor pattern does not belong to the match subject type", pattern.node))
+                if union.found && (patternUnion == "" || patternUnion != subjectType) {
+                  invalidPattern = true
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Constructor pattern does not belong to the match subject type", pattern.node))
+                } else {}
+                if union.found && patternUnion == subjectType {
+                  if contains(seenConstructors, pattern.node.text) {
+                    invalidPattern = true
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_MATCH_ARM", "Match constructor pattern is repeated", pattern.node))
+                  } else { seenConstructors = prepend(seenConstructors, pattern.node.text) }
                 } else {}
                 let variant = variant_declaration(nodes, pattern.node.text)
                 let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
@@ -747,18 +780,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           } else {}
         }
-        if union.found && !catchAll {
+        if union.found && !catchAll && !invalidPattern {
           for variant in nodes {
-            if variant.parentId == union.node.id && variant.kind == "variant_declaration" {
-              var matches = 0
-              for arm in nodes {
-                if arm.parentId == node.id && arm.kind == "match_arm" {
-                  let pattern = child_at(nodes, arm.id, "pattern", 0)
-                  if pattern.found && pattern.node.kind == "constructor_pattern" && pattern.node.text == variant.text { matches = matches + 1 } else {}
-                } else {}
-              }
-              if matches == 0 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_NON_EXHAUSTIVE", "Match does not cover every constructor", node)) } else {}
-              if matches != 1 { if matches != 0 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_PATTERN", "Match constructor pattern is repeated", node)) } else {} } else {}
+            if variant.parentId == union.node.id && variant.kind == "variant_declaration" && !contains(seenConstructors, variant.text) {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_NON_EXHAUSTIVE_MATCH", "Match does not cover every constructor", node))
             } else {}
           }
         } else {}

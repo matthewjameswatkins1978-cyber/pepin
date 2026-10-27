@@ -491,10 +491,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["status"]), "valid", report)
 
         invalid_cases = [
-            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { Some(number) => number } }", "PEP_MATCH_NON_EXHAUSTIVE"),
-            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 None() => 1 Some(number) => number } }", "PEP_DUPLICATE_PATTERN"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { Some(number) => number } }", "PEP_NON_EXHAUSTIVE_MATCH"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 None() => 1 Some(number) => number } }", "PEP_DUPLICATE_MATCH_ARM"),
             ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some() => 1 } }", "PEP_PATTERN_ARITY"),
-            ("type Maybe = None() | Some(Int)" + NL + "type Other = Other()" + NL + "fn pick(value: Maybe) -> Int { return match value { Other() => 0 _ => 1 } }", "PEP_PATTERN_TYPE"),
+            ("type Maybe = None() | Some(Int)" + NL + "type Other = Other()" + NL + "fn pick(value: Maybe) -> Int { return match value { Other() => 0 _ => 1 } }", "PEP_PATTERN_TYPE_MISMATCH"),
             ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => true } }", "PEP_TYPE_MISMATCH"),
         ]
         for source, expected_code in invalid_cases:
@@ -532,7 +532,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         cases = [
             ("nonexhaustive", "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v } }", "PEP_NON_EXHAUSTIVE_MATCH"),
             ("wrong-union", "type M = A(Int) | B()" + NL + "type N = C(Int)" + NL + "fn f(x: M) -> Int { return match x { C(v) => v B() => 0 } }", "PEP_PATTERN_TYPE_MISMATCH"),
-            ("duplicate", "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v A(w) => w B() => 0 } }", "PEP_DUPLICATE_MATCH_ARM"),
+            ("duplicate", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => 0 A() => 1 B() => 0 } }", "PEP_DUPLICATE_MATCH_ARM"),
             ("subject-hole", "type M = A(Int) | B()" + NL + "fn f() -> Int { return match ?subject { A(v) => v B() => 0 } }", "PEP_MATCH_UNTYPED"),
             ("scalar-subject", "fn f(x: Int) -> Int { return match x { A(v) => v } }", "PEP_MATCH_NON_UNION"),
         ]
