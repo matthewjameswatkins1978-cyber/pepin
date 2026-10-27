@@ -11,6 +11,8 @@ from test_feasibility import REPO, fixture_executable, resolve_compiler
 
 ROOT = Path(__file__).resolve().parent
 BUILD_TIMEOUT_SECONDS = 45
+EXECUTION_TIMEOUT_SECONDS = 30
+REVISION_TIMEOUT_SECONDS = 5
 
 
 def fields(line):
@@ -30,7 +32,13 @@ def run_fixture(name):
     if build.returncode != 0:
         raise RuntimeError(f"{name} fixture build failed: {build.stdout}{build.stderr}")
     executable = fixture_executable(name)
-    proof = subprocess.run([str(executable)], cwd=REPO, text=True, capture_output=True, check=False)
+    try:
+        proof = subprocess.run(
+            [str(executable)], cwd=REPO, text=True, capture_output=True,
+            check=False, timeout=EXECUTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"{name} fixture execution timed out after {EXECUTION_TIMEOUT_SECONDS}s: {exc}") from exc
     if proof.returncode != 0:
         raise RuntimeError(f"{name} fixture execution failed: {proof.stdout}{proof.stderr}")
     lines = proof.stdout.splitlines()
@@ -64,7 +72,8 @@ def main():
         "schema": 1,
         "status": "passed" if semantic_equal and errors_equal else "failed",
         "source_revision": subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=REPO, text=True, capture_output=True, check=True
+            ["git", "rev-parse", "HEAD"], cwd=REPO, text=True, capture_output=True,
+            check=True, timeout=REVISION_TIMEOUT_SECONDS,
         ).stdout.strip(),
         "source_sha256": {
             str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()

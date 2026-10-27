@@ -88,8 +88,9 @@ def compare_interpreter(manifest: dict[str, Any], root: Path, build: Path, timeo
     if timed_out:
         return {"status": "timeout", "command": command_text(command), "match": False}
     if expected["status"] == "success":
-        actual = output.strip().splitlines()
-        match = code == 0 and actual == [expected_value(expected)]
+        actual_text = output.rstrip("\r\n")
+        actual = actual_text.encode("utf-8").hex() if expected.get("value_encoding") == "utf8_hex" else actual_text
+        match = code == 0 and actual == expected_value(expected)
         return {"status": "success" if match else "mismatch", "exit": code, "output": output, "match": match}
     marker = "PEP_RUNTIME_" + str(expected["error"]).upper()
     match = code != 0 and marker in output

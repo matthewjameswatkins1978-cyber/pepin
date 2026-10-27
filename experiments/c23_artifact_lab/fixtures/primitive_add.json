@@ -9,5 +9,5 @@
   "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": []},
   "potential_failures": ["overflow"],
   "supported_features": ["checked_arithmetic", "int_literals"],
-  "expected": {"status": "success", "value": 42, "error": null, "interpreter_comparable": true}
+  "expected": {"status": "success", "value": 42, "error": null, "interpreter_comparable": true, "value_encoding": "plain"}
 }

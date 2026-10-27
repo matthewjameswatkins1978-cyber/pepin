@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "fixture_id": "a05.record.field",
+  "entry_function": "fn.main",
+  "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 44}},
+  "pep_source": "type Point { x: Int y: Int }\nlet point = Point { x: 20, y: 22 }\nsay(int_text(point.x + point.y))\n",
+  "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Int", "statements": [], "result": {"node_id": "node.point.sum", "kind": "binary", "op": "+", "type": "Int", "span": {"start": 0, "end": 44}, "left": {"node_id": "node.point.x", "kind": "field_access", "field_id": "field.point.x", "target_type": "type.point", "type": "Int", "span": {"start": 0, "end": 0}, "target": {"node_id": "node.point.literal", "kind": "record", "type": "type.point", "span": {"start": 0, "end": 0}, "fields": {"field.point.x": {"node_id": "node.point.x.value", "kind": "int", "value": 20, "type": "Int", "span": {"start": 0, "end": 0}}, "field.point.y": {"node_id": "node.point.y.value", "kind": "int", "value": 22, "type": "Int", "span": {"start": 0, "end": 0}}}}}, "right": {"node_id": "node.point.y", "kind": "field_access", "field_id": "field.point.y", "target_type": "type.point", "type": "Int", "span": {"start": 0, "end": 0}, "target": {"node_id": "node.point.literal2", "kind": "record", "type": "type.point", "span": {"start": 0, "end": 0}, "fields": {"field.point.x": {"node_id": "node.point.x.value2", "kind": "int", "value": 20, "type": "Int", "span": {"start": 0, "end": 0}}, "field.point.y": {"node_id": "node.point.y.value2", "kind": "int", "value": 22, "type": "Int", "span": {"start": 0, "end": 0}}}}}}}],
+  "types": [{"id": "type.point", "kind": "record", "fields": [{"id": "field.point.x", "name": "x", "type": "Int"}, {"id": "field.point.y", "name": "y", "type": "Int"}]}],
+  "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": []},
+  "potential_failures": ["overflow"],
+  "supported_features": ["checked_arithmetic", "field_access", "int_literals", "record_literals"],
+  "expected": {"status": "success", "value": 42, "error": null, "interpreter_comparable": true, "value_encoding": "plain"}
+}

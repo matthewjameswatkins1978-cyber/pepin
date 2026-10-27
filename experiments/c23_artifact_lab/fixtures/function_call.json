@@ -12,5 +12,5 @@
   "ownership": {"parameters": {"binding.left": "borrowed", "binding.right": "borrowed"}, "results": {"fn.main": "owned", "fn.add": "owned"}, "lifetimes": []},
   "potential_failures": ["overflow"],
   "supported_features": ["checked_arithmetic", "function_calls", "int_literals", "parameters"],
-  "expected": {"status": "success", "value": 42, "error": null, "interpreter_comparable": true}
+  "expected": {"status": "success", "value": 42, "error": null, "interpreter_comparable": true, "value_encoding": "plain"}
 }
