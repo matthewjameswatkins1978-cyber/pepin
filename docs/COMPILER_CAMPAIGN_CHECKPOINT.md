@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-27
 **Repository:** `matthewjameswatkins1978-cyber/pepin`
-**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `7bce56e21de7b1706513830a831603e6787ab31d` (remote-equal)
+**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `11a8b34c1133bda8e38a35d2b1069dc1afb1330e` (remote-equal)
 
 ## Baselines and authority
 
@@ -13,12 +13,12 @@
 
 ## Verified implementation and evidence
 
-The isolated Pep-written A13 checker resolves lexical names and function calls, types scalar expressions, scalar-element lists and scalar-field records, and checks scalar union constructors. It rejects duplicate nominal/type members and unsupported composite payloads, equality on aggregate values, assignment, `for-in`, and unimplemented pattern semantics. Non-Unit return validity is reported only when the current bounded block/if analysis proves coverage. The checker does not replace the OCaml production checker.
+The isolated Pep-written A13 checker resolves lexical names and function calls, types scalar expressions, scalar-element lists and scalar-field records, checks scalar union constructors, and types the implemented scalar-payload constructor-pattern subset. It checks arm-local payload bindings, match result agreement, typed match-result holes, wrong-union patterns, duplicate constructor arms and exhaustiveness. Nested constructor patterns and broader pattern forms remain unsupported. It rejects duplicate nominal/type members and unsupported composite payloads, equality on aggregate values, assignment, and `for-in`. Non-Unit return validity is reported only when the current bounded block/if analysis proves coverage. The checker does not replace the OCaml production checker.
 
-At code SHA `7bce56e`, `python -m unittest tests.test_a13 -v` passed **22/22**. The suite invokes the checker through real Pep tools and compares selected valid, invalid and incomplete cases with the OCaml CLI. New list mismatch tests matched OCaml diagnostic codes and original byte spans for `append`, `contains` and an annotated list element. Union constructor, typed-hole, duplicate declaration, arity, payload and unsupported equality cases also pass. `git diff --check` passed before the commit; no full repository suite was run in this slice.
+At code SHA `11a8b34`, `python -m unittest tests.test_a13 -v` passed **24/24**. The suite invokes the checker through real Pep tools and compares selected valid, invalid and incomplete cases with the OCaml CLI. List mismatch cases match OCaml diagnostic codes and original byte spans for `append`, `contains` and an annotated list element. Match binding identity, expected hole types, subject/pattern errors, duplicate arms and exhaustiveness also match the reference. A larger duplicate-arm case with multiple payload bindings exceeded the unchanged 100,000-step tool budget; a compact duplicate-arm case passes, and no budget was raised. `git diff --check` passed before the code commit; no full repository suite was run.
 
 ## Remaining risks and next action
 
-A13 remains partial and unaccepted. List diagnostics for unconstrained empty lists still differ from OCaml and can cascade into a second list-type diagnostic. Record and union recursive/composite payloads, match typing and exhaustiveness, broader bidirectional inference, complete control-flow analysis and the checked-program contract remain unfinished. The reviewed fail-closed gate must remain active until each rule is independently implemented and differentially tested.
+A13 remains partial and unaccepted. List diagnostics for unconstrained empty lists still differ from OCaml and can cascade into a second list-type diagnostic. Record and union recursive/composite payloads, nested and broader pattern forms, broader bidirectional inference, complete control-flow analysis and the checked-program contract remain unfinished. Large match analyses can exhaust the fixed tool-step budget; the checker must preserve that limit and report the practical envelope honestly. The reviewed fail-closed gate must remain active until each rule is independently implemented and differentially tested.
 
 Next slice: align unconstrained empty-list handling and suppress derivative diagnostics without weakening rejection. Preserve the 65,536-byte source, 100,000-step tool and transport limits; do not promote A13 results into production authority.
