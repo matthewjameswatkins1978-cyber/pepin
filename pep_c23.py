@@ -153,13 +153,16 @@ def main(argv=None):
     if args.command == "build-c23" and args.output is None:
         print("build-c23 requires -o/--output", file=sys.stderr)
         return 2
-    source_identity = hashlib.sha256(source_path.read_bytes()).hexdigest()[:12]
-    default_name = f"{source_path.stem}-{source_identity}.exe"
-    output = (args.output or (ROOT / "_build" / "native" / default_name)).resolve()
-    c_path = (args.emit_c or output.with_suffix(".c")).resolve()
     try:
+        source_bytes = source_path.read_bytes()
+        source_identity = hashlib.sha256(source_bytes).hexdigest()[:12]
+        default_name = f"{source_path.stem}-{source_identity}.exe"
+        output = (args.output or (ROOT / "_build" / "native" / default_name)).resolve()
+        c_path = (args.emit_c or output.with_suffix(".c")).resolve()
+        if source_path == output or source_path == c_path or output == c_path:
+            raise ValueError("Pep source, generated C, and executable paths must be distinct")
         compiler = compiler_path(args.compiler)
-        source = emit(source_path.read_bytes())
+        source = emit(source_bytes)
         c_path.parent.mkdir(parents=True, exist_ok=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         c_path.write_text(source, encoding="utf-8", newline="\n")

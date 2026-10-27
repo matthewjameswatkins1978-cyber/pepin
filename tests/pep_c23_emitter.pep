@@ -238,6 +238,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
 fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
+  let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
+  let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
+  let extraParameter = pep_c23_child(nodes, function.id, "parameter", 2)
+  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let result = pep_c23_child(nodes, function.id, "return_type", 0)
+  if extraParameter.found || (secondParameter.found && !parameter.found) || (function.text == "main" && (parameter.found || secondParameter.found)) || (parameter.found && (!parameterType.found || parameterType.node.kind != "type_scalar" || parameterType.node.text != "Int")) || (secondParameter.found && (!secondParameterType.found || secondParameterType.node.kind != "type_scalar" || secondParameterType.node.text != "Int")) || !result.found || result.node.kind != "type_scalar" || result.node.text != "Int" {
+    return pep_c23_unsupported("Pep C23 functions require zero to two Int parameters and an Int result")
+  } else {}
   var statementCount = 0
   var conditionalCount = 0
   var prefixValid = true

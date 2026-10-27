@@ -281,6 +281,17 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(parameterized_main["status"]), "unsupported")
         self.assertEqual(parameterized_main["sourceParts"]["value"], [])
         self.assertIn("functions require zero to two Int parameters", scalar(parameterized_main["diagnostic"]))
+        conditional_parameterized_main = self._emit(
+            "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 0 } }"
+        )
+        self.assertEqual(scalar(conditional_parameterized_main["status"]), "unsupported")
+        self.assertEqual(conditional_parameterized_main["sourceParts"]["value"], [])
+        conditional_non_int_helper = self._emit(
+            'fn main() -> Int { return helper() }\n'
+            'fn helper() -> Str { if true { return "yes" } else { return "no" } }'
+        )
+        self.assertEqual(scalar(conditional_non_int_helper["status"]), "unsupported")
+        self.assertEqual(conditional_non_int_helper["sourceParts"]["value"], [])
         local_return_call = self._emit(
             "fn main() -> Int { return maybe() }\n"
             "fn maybe() -> Int {\n  let seed = 0\n  return 1 / seed\n}"

@@ -51,5 +51,17 @@ class PepC23CliTests(unittest.TestCase):
             self.assertFalse((folder / "answer.exe").exists())
 
 
+    def test_emit_c_collision_does_not_overwrite_pep_source(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "protected.pep"
+            original = b"fn main() -> Int { return 42 }\\n"
+            source.write_bytes(original)
+            result = self.invoke("build-c23", source, "--output",
+                                 pathlib.Path(temp) / "program.exe", "--emit-c", source,
+                                 "--compiler", CLANG)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("paths must be distinct", result.stderr)
+            self.assertEqual(source.read_bytes(), original)
+
 if __name__ == "__main__":
     unittest.main()
