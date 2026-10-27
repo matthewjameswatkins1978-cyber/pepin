@@ -75,6 +75,27 @@ fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "record_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
+fn union_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+  for node in nodes { if node.parentId == -1 && node.kind == "union_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
+  return NodeLookup { found: false, node: empty_node() }
+}
+fn variant_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+  for node in nodes { if node.kind == "variant_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
+  return NodeLookup { found: false, node: empty_node() }
+}
+fn constructor_union_type(nodes: List[FlatAstNode], name: Str) -> Str {
+  let variant = variant_declaration(nodes, name)
+  if variant.found {
+    let owner = lookup_node(nodes, variant.node.parentId)
+    if owner.found { return owner.node.text } else { return "" }
+  } else { return "" }
+}
+fn variant_payload_type(nodes: List[FlatAstNode], variantName: Str, index: Int) -> Str {
+  let variant = variant_declaration(nodes, variantName)
+  if !variant.found { return "" } else {}
+  let payload = child_at(nodes, variant.node.id, "field_type", index)
+  if payload.found { return type_name_at(nodes, payload.node.id) } else { return "" }
+}
 fn record_field_type(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) -> Str {
   let record = record_declaration(nodes, recordName)
   if !record.found { return "" } else {}
@@ -301,7 +322,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       let collection = child_at(nodes, node.id, "argument", 0)
       if collection.found { return infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { return "" }
     } else {}
-    if is_constructor(nodes, node.text) { return "" } else {}
+    if is_constructor(nodes, node.text) { return constructor_union_type(nodes, node.text) } else {}
     return ""
   } else {}
   if node.kind == "binary" {
@@ -363,6 +384,7 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
   if parent.node.kind == "call" && node.role == "argument" {
     let target = find_function(functions, parent.node.text)
     if target.found { return function_parameter_type(nodes, target.function.syntaxId, node.childIndex) } else {}
+    if is_constructor(nodes, parent.node.text) { return variant_payload_type(nodes, parent.node.text, node.childIndex) } else {}
     if (parent.node.text == "append" || parent.node.text == "prepend") && node.childIndex == 0 {
       let value = child_at(nodes, parent.node.id, "argument", 1)
       if value.found {
@@ -399,11 +421,29 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
   }
   return typed
 }
+fn named_type_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
+  var count = 0
+  for node in nodes { if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name { count = count + 1 } else {} }
+  return count
+}
+fn record_field_declaration_count(nodes: List[FlatAstNode], parentId: Int, name: Str) -> Int {
+  var count = 0
+  for node in nodes { if node.parentId == parentId && node.kind == "field_declaration" && node.text == name { count = count + 1 } else {} }
+  return count
+}
+fn constructor_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
+  var count = 0
+  for node in nodes { if node.kind == "variant_declaration" && node.text == name { count = count + 1 } else {} }
+  return count
+}
 fn supported_primitive_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" || list_element_type(typeName) != ""
 }
 fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
-  return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found
+  return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found
+}
+fn equality_supported_type(typeName: Str) -> Bool {
+  return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit"
 }
 fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
@@ -415,6 +455,7 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if parent.node.kind == "call" && hole.role == "argument" {
     let target = find_function(functions, parent.node.text)
     if target.found { return function_parameter_type(nodes, target.function.syntaxId, hole.childIndex) } else {}
+    if is_constructor(nodes, parent.node.text) { return variant_payload_type(nodes, parent.node.text, hole.childIndex) } else {}
     if (parent.node.text == "append" || parent.node.text == "prepend" || parent.node.text == "contains") && hole.childIndex == 1 {
       let collection = child_at(nodes, parent.node.id, "argument", 0)
       if collection.found { return list_element_type(infer_expression_type(nodes, collection.node.id, functions, bindings, references)) } else { return "" }
@@ -540,8 +581,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "record_declaration" {
+      if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
       for field in nodes {
         if field.parentId == node.id && field.kind == "field_declaration" {
+          if record_field_declaration_count(nodes, node.id, field.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
           let fieldType = child_at(nodes, field.id, "type", 0)
           if fieldType.found && !supported_primitive_type(type_name_at(nodes, fieldType.node.id)) {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Record field type is outside the implemented scalar record subset", field))
@@ -550,7 +593,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       }
     } else {}
     if node.kind == "union_declaration" {
-      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Tagged unions and exhaustive matching are outside the implemented checker subset", node))
+      if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      for variant in nodes {
+        if variant.parentId == node.id && variant.kind == "variant_declaration" {
+          if constructor_declaration_count(nodes, variant.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
+          for payload in nodes {
+            if payload.parentId == variant.id && payload.role == "field_type" && !supported_primitive_type(type_name_at(nodes, payload.id)) {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Union constructor payload type is outside the implemented scalar payload subset", payload))
+            } else {}
+          }
+        } else {}
+      }
     } else {}
     if node.kind == "assignment" || node.kind == "for_in" {
       reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Assignment and for-in semantics are outside the implemented checker subset", node))
@@ -616,6 +669,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let leftType = if left.found { infer_expression_type(nodes, left.node.id, functions, bindings, references) } else { "" }
         let rightType = if right.found { infer_expression_type(nodes, right.node.id, functions, bindings, references) } else { "" }
         let expected = if node.text == "&&" || node.text == "||" { "Bool" } else { if node.text == "==" || node.text == "!=" { leftType } else { "Int" } }
+        if (node.text == "==" || node.text == "!=") && leftType != "" && !equality_supported_type(leftType) && left.found {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNSUPPORTED", "Equality is not defined for this value type", left.node))
+        } else {}
         if expected != "" && leftType != "" && leftType != expected && left.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", left.node)) } else {}
         if expected != "" && rightType != "" && rightType != expected && right.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", right.node)) } else {}
       } else {}
@@ -655,7 +711,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 index = index + 1
               } else {}
             }
-            if node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains" {
+          if node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains" {
               let collection = child_at(nodes, node.id, "argument", 0)
               let collectionType = if collection.found { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
               let elementType = list_element_type(collectionType)
@@ -669,7 +725,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 if value.found && value.node.kind != "hole" {
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   if actualValue != "" && actualValue != elementType {
-                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "List built-in value type does not match the collection element type", value.node))
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
                   } else {}
                 } else {}
                 if node.text == "contains" && (elementType == "SourceBytes" || elementType == "Unit") {
@@ -677,6 +733,24 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 } else {}
               } else {}
             } else {}
+          } else {}
+        }
+      } else {}
+      if node.kind == "call" && is_constructor(nodes, node.text) {
+        let variant = variant_declaration(nodes, node.text)
+        let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
+        if expectedArity != count_children(nodes, node.id, "argument") {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Constructor payload count does not match its declared variant", node))
+        } else {}
+        var payloadIndex = 0
+        for argument in nodes {
+          if argument.parentId == node.id && argument.role == "argument" {
+            let expected = variant_payload_type(nodes, node.text, payloadIndex)
+            let actual = infer_expression_type(nodes, argument.id, functions, bindings, references)
+            if expected != "" && actual != "" && expected != actual {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", argument))
+            } else {}
+            payloadIndex = payloadIndex + 1
           } else {}
         }
       } else {}
@@ -719,7 +793,21 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let expected = type_name_at(nodes, annotation.node.id)
         let actualInitializer = infer_expression_type(nodes, value.node.id, functions, bindings, references)
         if expected != "" && actualInitializer != "" && expected != actualInitializer {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_BINDING_TYPE", "Initialiser type does not match the declared binding type", value.node))
+          let expectedElement = list_element_type(expected)
+          let actualElement = list_element_type(actualInitializer)
+          if value.node.kind == "list" && expectedElement != "" {
+            for element in nodes {
+              if element.parentId == value.node.id && element.role == "element" && element.kind != "hole" {
+                let actual = infer_expression_type(nodes, element.id, functions, bindings, references)
+                if actual != "" && actual != expectedElement {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "List element type does not match the annotation", element))
+                } else {}
+              } else {}
+            }
+          } else {
+            let code = if expectedElement != "" && actualElement != "" { "PEP_TYPE_MISMATCH" } else { "PEP_BINDING_TYPE" }
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Initialiser type does not match the declared binding type", value.node))
+          }
         } else {}
       } else {}
     } else {}

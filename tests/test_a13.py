@@ -283,7 +283,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(function["returnType"]), result_type)
 
         cases = [
-            ("fn bad() -> List[Int] { return append([1], \"text\") }", "PEP_ARGUMENT_TYPE"),
+            ("fn bad() -> List[Int] { return append([1], \"text\") }", "PEP_TYPE_MISMATCH"),
             ("fn bad() -> Int { return length(1) }", "PEP_LIST_EXPECTED"),
             ("fn bad() -> Int { return length([]) }", "PEP_LIST_UNTYPED"),
             ("fn bad() -> List[Int] { return reverse() }", "PEP_ARGUMENT_COUNT"),
@@ -295,6 +295,30 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
+
+    def test_list_type_mismatches_match_ocaml_codes_and_byte_spans(self):
+        cases = [
+            ("append-value", 'fn bad() -> List[Int] { return append([1], "text") }', '"text"'),
+            ("contains-value", 'fn bad() -> Bool { return contains([1], "text") }', '"text"'),
+            ("annotated-element", 'fn bad() -> Int { let values: List[Int] = ["x"]; return 0 }', '"x"'),
+        ]
+        for name, source, offending in cases:
+            with self.subTest(name=name):
+                _, report = self._analyze(source)
+                reference = self._reference_check(name, source)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(reference["status"], "invalid", reference)
+                pep_diagnostics = [fields(item) for item in report["diagnostics"]["value"]]
+                canonical = [item for item in pep_diagnostics if scalar(item["code"]) == "PEP_TYPE_MISMATCH"]
+                self.assertEqual(len(canonical), 1, report)
+                expected_start = source.index(offending)
+                expected_end = expected_start + len(offending)
+                self.assertEqual(scalar(canonical[0]["startByte"]), expected_start)
+                self.assertEqual(scalar(canonical[0]["endByte"]), expected_end)
+                reference_diagnostic = reference["diagnostics"][0]
+                self.assertEqual(reference_diagnostic["code"], "PEP_TYPE_MISMATCH")
+                self.assertEqual(reference_diagnostic["span"]["start"]["offset"], expected_start)
+                self.assertEqual(reference_diagnostic["span"]["endOffset"], expected_end)
 
     def test_list_holes_inherit_element_type_and_empty_context(self):
         source = "fn main(items: List[Int]) -> List[Int] { return append(items, ?item) }"
@@ -343,7 +367,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
     def test_unimplemented_semantics_fail_closed_against_ocaml(self):
         cases = [
             ("record-field", "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: true }; return 0 }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
-            ("constructor-payload", "type Maybe = Some(Int) | None()" + NL + "fn main() -> Int { let value = Some(true); return 0 }", "PEP_TYPE_MISMATCH", "PEP_A13_TYPE_UNSUPPORTED"),
+            ("constructor-payload", "type Maybe = Some(Int) | None()" + NL + "fn main() -> Int { let value = Some(true); return 0 }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("if-condition", "fn main() -> Int { if 1 { return 1 } else { return 2 } }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("while-condition", "fn main() -> Unit { while 1 {} }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("builtin-arity", "fn main() -> Int { return length() }", "PEP_ARGUMENT_COUNT", "PEP_ARGUMENT_COUNT"),
@@ -404,6 +428,48 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertEqual(scalar(report["status"]), "invalid", report)
             self.assertIn(expected_code, codes)
+
+    def test_union_constructors_and_duplicate_names_match_reference_errors(self):
+        source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
+        reference = self._reference_check("constructor-valid", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        constructor = next(fields(item) for item in report["expressionTypes"]["value"] if scalar(fields(item)["startByte"]) == source.index("Some(4)"))
+        self.assertEqual(scalar(constructor["typeName"]), "Maybe")
+
+        source = "type Maybe = Some(Int) | None()" + NL + "fn main() -> Maybe { return Some(?payload) }"
+        _, report = self._analyze(source)
+        hole = fields(report["holes"]["value"][0])
+        self.assertEqual(scalar(report["status"]), "incomplete", report)
+        self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+        invalid_cases = [
+            ("type Point { x: Int }" + NL + "type Point { y: Bool }" + NL + "fn main() -> Int { let p = Point { x: 1 }; return p.x }", "PEP_DUPLICATE_TYPE"),
+            ("type Point { x: Int, x: Bool }" + NL + "fn main() -> Int { let p = Point { x: 1 }; return p.x }", "PEP_DUPLICATE_FIELD"),
+            ("type Point { x: Int }" + NL + "type Point = A() | B()" + NL + "fn main() -> Int { return 0 }", "PEP_DUPLICATE_TYPE"),
+            ("type First = Shared()" + NL + "type Second = Shared()" + NL + "fn main() -> Int { return 0 }", "PEP_DUPLICATE_CONSTRUCTOR"),
+            ("type Maybe = Some(Int) | None()" + NL + "fn main() -> Maybe { return Some() }", "PEP_ARGUMENT_COUNT"),
+            ("type Maybe = Some(Int) | None()" + NL + "fn main() -> Maybe { return Some(true) }", "PEP_TYPE_MISMATCH"),
+        ]
+        for source, expected_code in invalid_cases:
+            reference = self._reference_check("nominal-invalid", source)
+            _, report = self._analyze(source)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(reference["status"], "invalid", reference)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            self.assertIn(expected_code, codes)
+
+        for source in [
+            "type Point { x: Int }" + NL + "fn same(a: Point, b: Point) -> Bool { return a == b }",
+            "fn same(a: List[Int], b: List[Int]) -> Bool { return a == b }",
+        ]:
+            reference = self._reference_check("aggregate-equality", source)
+            _, report = self._analyze(source)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertEqual(reference["status"], "invalid", reference)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            self.assertIn("PEP_EQUALITY_UNSUPPORTED", codes)
 
     def test_unknown_nominal_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
