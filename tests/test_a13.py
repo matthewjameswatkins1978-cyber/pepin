@@ -577,6 +577,30 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertIn(expected_code, [item["code"] for item in reference["diagnostics"]])
                 self.assertIn(expected_code, [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
+    def test_contextual_match_expected_type_checks_each_arm(self):
+        cases = [
+            ("all-arms-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => false } }"),
+            ("first-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => 0 } }"),
+            ("later-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => 0 B() => true } }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("contextual-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(len(expected), 1, reference)
+                self.assertEqual(expected[0][0], "PEP_MATCH_ARM_TYPE_MISMATCH")
+                self.assertEqual(actual, expected)
+
     def test_match_wildcard_catchall_rejects_later_constructor_pattern(self):
         source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { _ => 0 A(v) => v } }"
         reference = self._reference_check("match-unreachable-wildcard", source)

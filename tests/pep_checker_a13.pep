@@ -748,7 +748,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         var catchAll = false
         var invalidPattern = false
         var seenConstructors: List[Str] = []
+        let expectedResultType = contextual_expected_type(nodes, node, functions, bindings, references)
         var resultType = ""
+        var contextualMismatchReported = false
         for arm in nodes {
           if arm.parentId == node.id && arm.kind == "match_arm" {
             let pattern = child_at(nodes, arm.id, "pattern", 0)
@@ -790,9 +792,16 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             if result.found && !unreachable {
               let actualResult = infer_expression_type(nodes, result.node.id, functions, bindings, references)
               if resultType == "" && actualResult != "" { resultType = actualResult } else {}
-              if resultType != "" && actualResult != "" && resultType != actualResult {
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
-              } else {}
+              if expectedResultType != "" {
+                if actualResult != "" && actualResult != expectedResultType && !contextualMismatchReported {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
+                  contextualMismatchReported = true
+                } else {}
+              } else {
+                if resultType != "" && actualResult != "" && resultType != actualResult {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
+                } else {}
+              }
             } else {}
           } else {}
         }
