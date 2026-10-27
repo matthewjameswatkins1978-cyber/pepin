@@ -479,6 +479,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("type Point { x: Int, x: Bool }" + NL + "fn main() -> Int { let p = Point { x: 1 }; return p.x }", "PEP_DUPLICATE_FIELD"),
             ("type Point { x: Int }" + NL + "type Point = A() | B()" + NL + "fn main() -> Int { return 0 }", "PEP_DUPLICATE_TYPE"),
             ("type First = Shared()" + NL + "type Second = Shared()" + NL + "fn main() -> Int { return 0 }", "PEP_DUPLICATE_CONSTRUCTOR"),
+            ("type Int = A() | B()" + NL + "fn f(x: Int) -> Int { return 1 }", "PEP_DUPLICATE_TYPE"),
+            ("type M = Value(Int) | Empty()" + NL + "fn Value(x: Int) -> Int { return x }" + NL + "fn f() -> Int { return Value(1) }", "PEP_RESERVED_FUNCTION"),
             ("type Maybe = Some(Int) | None()" + NL + "fn main() -> Maybe { return Some() }", "PEP_ARGUMENT_COUNT"),
             ("type Maybe = Some(Int) | None()" + NL + "fn main() -> Maybe { return Some(true) }", "PEP_TYPE_MISMATCH"),
         ]
@@ -525,7 +527,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 None() => 1 Some(number) => number } }", "PEP_DUPLICATE_MATCH_ARM"),
             ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some() => 1 } }", "PEP_PATTERN_ARITY"),
             ("type Maybe = None() | Some(Int)" + NL + "type Other = Other()" + NL + "fn pick(value: Maybe) -> Int { return match value { Other() => 0 _ => 1 } }", "PEP_PATTERN_TYPE_MISMATCH"),
-            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => true } }", "PEP_TYPE_MISMATCH"),
+            ("type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => true } }", "PEP_MATCH_ARM_TYPE_MISMATCH"),
         ]
         for source, expected_code in invalid_cases:
             reference = self._reference_check("match-invalid", source)

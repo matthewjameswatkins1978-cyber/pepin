@@ -370,6 +370,8 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if value.found { return record_field_type(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references), node.text) } else { return "" }
   } else {}
   if node.kind == "match" {
+    let expected = contextual_expected_type(nodes, node, functions, bindings, references)
+    if expected != "" { return expected } else {}
     var resultType = ""
     for arm in nodes {
       if arm.parentId == node.id && arm.kind == "match_arm" {
@@ -380,7 +382,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
         } else {}
       } else {}
     }
-    if resultType != "" { return resultType } else { return contextual_expected_type(nodes, node, functions, bindings, references) }
+    if resultType != "" { return resultType } else { return "" }
   } else {}
   return ""
 }
@@ -622,6 +624,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if !supported_type(nodes, declared_return_type(nodes, node.id)) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Function result type is outside the implemented primitive checker subset", node))
       } else {}
+      if known_builtin(node.text) || is_constructor(nodes, node.text) {
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_RESERVED_FUNCTION", "Function name is reserved for a builtin or constructor", node))
+      } else {}
       for parameter in nodes {
         if parameter.parentId == node.id && parameter.kind == "parameter" && !supported_type(nodes, declared_binding_type(nodes, parameter)) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Parameter type is outside the implemented primitive checker subset", parameter))
@@ -645,6 +650,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
     if node.kind == "record_declaration" {
       if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for field in nodes {
         if field.parentId == node.id && field.kind == "field_declaration" {
           if record_field_declaration_count(nodes, node.id, field.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
@@ -657,6 +663,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
     if node.kind == "union_declaration" {
       if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for variant in nodes {
         if variant.parentId == node.id && variant.kind == "variant_declaration" {
           if constructor_declaration_count(nodes, variant.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
@@ -784,7 +791,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               let actualResult = infer_expression_type(nodes, result.node.id, functions, bindings, references)
               if resultType == "" && actualResult != "" { resultType = actualResult } else {}
               if resultType != "" && actualResult != "" && resultType != actualResult {
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
               } else {}
             } else {}
           } else {}
