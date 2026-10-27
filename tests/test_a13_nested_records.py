@@ -46,6 +46,16 @@ class A13NestedRecordTests(unittest.TestCase):
         self.assertEqual(scalar(report["status"]), "invalid")
         self.assertIn("PEP_TYPE_MISMATCH", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
+        for name, source in (
+            ("nested-all-mismatch", "fn values() -> List[List[Int]] { return [[true, false]] }"),
+            ("nested-first-mismatch", "fn values() -> List[List[Int]] { return [[true, 1]] }"),
+            ("nested-append-mismatch", "fn add() -> List[List[Int]] { return append([[1]], [true, false]) }"),
+        ):
+            with self.subTest(name=name):
+                report = self._assert_matches_reference(name, source)
+                self.assertEqual(scalar(report["status"]), "invalid")
+                self.assertIn("PEP_TYPE_MISMATCH", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
+
         unsupported_contains = "fn has() -> Bool { return contains([[1]], [1]) }"
         report = self._assert_matches_reference("nested-list-contains", unsupported_contains)
         self.assertEqual(scalar(report["status"]), "invalid")

@@ -348,6 +348,13 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   } else {}
   if node.kind == "unary" { if node.text == "!" { return "Bool" } else { return "Int" } } else {}
   if node.kind == "list" {
+    let expected = contextual_expected_type(nodes, node, functions, bindings, references)
+    let expectedElement = list_element_type(expected)
+    let parent = lookup_node(nodes, node.parentId)
+    let nestedListContext = list_element_type(expectedElement) != "" ||
+      (parent.found && parent.node.kind == "list" && node.role == "element") ||
+      (parent.found && parent.node.kind == "call" && (parent.node.text == "append" || parent.node.text == "prepend") && node.role == "argument" && node.childIndex == 1)
+    if expectedElement != "" && (nestedListContext || count_children(nodes, node.id, "element") == 0) { return expected } else {}
     var elementType = ""
     for element in nodes {
       if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
@@ -355,10 +362,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
         if elementType == "" && actual != "" { elementType = actual } else {}
       } else {}
     }
-    if elementType != "" { return list_type_name(elementType) } else {
-      let expected = contextual_expected_type(nodes, node, functions, bindings, references)
-      if list_element_type(expected) != "" { return expected } else { return "" }
-    }
+    if elementType != "" { return list_type_name(elementType) } else { return "" }
   } else {}
   if node.kind == "if_expression" {
     let expected = contextual_expected_type(nodes, node, functions, bindings, references)
@@ -439,10 +443,20 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
     if target.found { return function_parameter_type(nodes, target.function.syntaxId, node.childIndex) } else {}
     if is_constructor(nodes, parent.node.text) { return variant_payload_type(nodes, parent.node.text, node.childIndex) } else {}
     if (parent.node.text == "append" || parent.node.text == "prepend") && node.childIndex == 0 {
-      let value = child_at(nodes, parent.node.id, "argument", 1)
-      if value.found {
-        let elementType = infer_expression_type(nodes, value.node.id, functions, bindings, references)
-        return list_type_name(elementType)
+      let enclosingExpected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
+      if list_element_type(enclosingExpected) != "" { return enclosingExpected } else {}
+      let collection = child_at(nodes, parent.node.id, "argument", 0)
+      if collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0 {
+        let value = child_at(nodes, parent.node.id, "argument", 1)
+        if value.found { return list_type_name(infer_expression_type(nodes, value.node.id, functions, bindings, references)) } else { return "" }
+      } else { return "" }
+    } else {}
+    if (parent.node.text == "append" || parent.node.text == "prepend") && node.childIndex == 1 {
+      let enclosingExpected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
+      if list_element_type(enclosingExpected) != "" { return list_element_type(enclosingExpected) } else {}
+      let collection = child_at(nodes, parent.node.id, "argument", 0)
+      if collection.found && !(collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0) {
+        return list_element_type(infer_expression_type(nodes, collection.node.id, functions, bindings, references))
       } else { return "" }
     } else {}
     return ""
@@ -753,20 +767,24 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
       if node.kind == "list" {
         let expectedElement = list_element_type(infer_expression_type(nodes, node.id, functions, bindings, references))
+        var mismatchReported = false
         for element in nodes {
           if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
             let actualElement = infer_expression_type(nodes, element.id, functions, bindings, references)
-            if expectedElement != "" && actualElement != "" && expectedElement != actualElement {
+            if !mismatchReported && expectedElement != "" && actualElement != "" && expectedElement != actualElement {
               var mismatchNode = element
               let nestedExpectedElement = list_element_type(expectedElement)
               if element.kind == "list" && nestedExpectedElement != "" {
+                var nestedMismatchReported = false
                 for nested in nodes {
-                  if nested.parentId == element.id && nested.role == "element" && nested.kind != "hole" && infer_expression_type(nodes, nested.id, functions, bindings, references) != nestedExpectedElement {
+                  if !nestedMismatchReported && nested.parentId == element.id && nested.role == "element" && nested.kind != "hole" && infer_expression_type(nodes, nested.id, functions, bindings, references) != nestedExpectedElement {
                     mismatchNode = nested
+                    nestedMismatchReported = true
                   } else {}
                 }
               } else {}
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "List element type does not match the inferred element type", mismatchNode))
+              mismatchReported = true
             } else {}
           } else {}
         }
