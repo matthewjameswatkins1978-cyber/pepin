@@ -260,11 +260,15 @@ class A14C23EmissionTests(unittest.TestCase):
                 self._compile_and_expect_runtime_error(source, expected_code)
 
     def test_recursive_native_calls_enforce_pep_depth(self):
-        self._compile_and_expect_runtime_error(
-            "fn main() -> Int { return countdown(600) }\n"
+        recursive_source = (
+            "fn main() -> Int { return countdown({DEPTH}) }\n"
             "fn countdown(value: Int) -> Int {\n"
             "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
-            "}",
+            "}"
+        )
+        self._compile_and_run(recursive_source.replace("{DEPTH}", "510"), 42)
+        self._compile_and_expect_runtime_error(
+            recursive_source.replace("{DEPTH}", "511"),
             "PEP_RUNTIME_CALL_DEPTH",
         )
 
