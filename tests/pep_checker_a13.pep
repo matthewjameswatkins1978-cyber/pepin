@@ -956,7 +956,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         }
         }
       } else {
-        reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: empty_type_shape(), startByte: node.startByte, endByte: node.endByte })
+        reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: legacy_type_shape(nodes, actual), startByte: node.startByte, endByte: node.endByte })
       }
       if node.kind == "record" {
         let declaration = record_declaration(nodes, node.text)

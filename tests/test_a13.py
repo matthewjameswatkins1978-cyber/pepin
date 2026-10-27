@@ -185,6 +185,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual([scalar(item["typeName"]) for item in bindings], ["Int", "Int"])
         types = [fields(item) for item in report["expressionTypes"]["value"]]
         self.assertEqual([scalar(item["typeName"]) for item in types], ["Int", "Int", "Int", "Int"])
+        shapes = [fields(item["typeShape"]) for item in types]
+        self.assertEqual(
+            [(scalar(shape["kind"]), scalar(shape["name"]), scalar(shape["listDepth"])) for shape in shapes],
+            [("builtin", "Int", 0)] * 4,
+        )
         binary = next(item for item in types if scalar(item["startByte"]) == source.index("x + 1"))
         self.assertEqual((scalar(binary["startByte"]), scalar(binary["endByte"])),
                          (source.index("x + 1"), source.index("x + 1") + len("x + 1")))
