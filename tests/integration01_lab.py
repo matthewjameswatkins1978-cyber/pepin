@@ -86,6 +86,11 @@ def validate_matrix(matrix: dict[str, Any] | None = None) -> dict[str, Any]:
                 "failure-recovery"}
     if not required.issubset(set(ids)):
         raise IntegrationError("integration matrix is missing a required boundary")
+    for case in cases:
+        if case.get("execution") not in {"executed", "tested-elsewhere", "blocked"}:
+            raise IntegrationError(f"integration matrix has invalid execution classification: {case.get('id')}")
+        if not case.get("coverage"):
+            raise IntegrationError(f"integration matrix is missing coverage evidence: {case.get('id')}")
     return matrix
 
 
@@ -279,7 +284,12 @@ def run_real() -> dict[str, Any]:
     result = run_a12_boundary()
     result["manifest"] = {"mission": manifest["mission"], "inputs": len(manifest["inputs"]),
                            "sourceBytes": manifest["limits"]["sourceBytes"]}
-    result["matrix"] = {"cases": len(matrix["cases"]), "oracleRule": matrix["oracleRule"]}
+    execution_counts: dict[str, int] = {}
+    for case in matrix["cases"]:
+        execution = case["execution"]
+        execution_counts[execution] = execution_counts.get(execution, 0) + 1
+    result["matrix"] = {"cases": len(matrix["cases"]), "oracleRule": matrix["oracleRule"],
+                         "execution": execution_counts}
     result["contract"] = {"a12Inputs": len(contract["syntaxInputFromA12"]),
                            "a13RequiredFacts": len(contract["a13FactsRequiredBeforeCheckerConsumer"]),
                            "a14RequiredFacts": len(contract["a14FactsRequiredBeforeNativeEmitter"]),

@@ -111,6 +111,10 @@ class Integration01LabTests(unittest.TestCase):
         reject(replace(measurement, nodes=nodes))
 
         nodes = copy.deepcopy(measurement.nodes)
+        nodes[0]["parentId"] = 0
+        reject(replace(measurement, nodes=nodes))
+
+        nodes = copy.deepcopy(measurement.nodes)
         nodes[0]["span"]["start"] = 999
         reject(replace(measurement, nodes=nodes))
 
@@ -130,6 +134,17 @@ class Integration01LabTests(unittest.TestCase):
         ast_literal[0]["value"]["left"]["left"]["value"] = 99
         with self.assertRaises(lab.IntegrationError):
             lab.verify_measurement("literal", source, replace(measurement, target_ast=ast_literal), expected_status="complete")
+
+    def test_diagnostic_code_and_span_mutations_are_rejected(self):
+        source = "fn main() -> Int { return @ }"
+        measurement = lab.performance.parse_source(source)
+        expected = lab.EXPECTED_FIXTURES["invalid-syntax"]["diagnostic"]
+        wrong_code = dict(expected, code="PEP_PARSE_EXPECTED")
+        wrong_span = dict(expected, start=25)
+        for name, diagnostic in (("wrong-code", wrong_code), ("wrong-span", wrong_span)):
+            with self.assertRaises(lab.IntegrationError):
+                lab.verify_measurement(name, source, measurement, expected_status="invalid",
+                                       expected_diagnostic=diagnostic)
 
     def test_jsonl_timeout_terminates_nonresponsive_child_with_partial_evidence(self):
         session = self._child("import sys, time; sys.stdin.readline(); time.sleep(10)", timeout=0.1)

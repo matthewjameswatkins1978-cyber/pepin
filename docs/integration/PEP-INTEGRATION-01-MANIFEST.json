@@ -2,6 +2,7 @@
   "mission": "PEP-INTEGRATION-01-READINESS",
   "branch": "exp/pep-performance-03",
   "baseline": "4e497bf192b33e76cb0fdf59bfc30e9b3ef3127f",
+  "baselineRole": "accepted Performance 02 laboratory baseline; not the A11 source revision",
   "parentPerformance03Head": "fb9cbef4dfcf0e32c6f886cf7a3371cfae3b717a",
   "integrationSlice2Head": "72f0283d98bbf64b76aa3cc57d5eb32aef9fbea8",
   "authority": "GitHub SHAs and SHA-bound tests; this manifest does not replace CURRENT.md or manifest.json",

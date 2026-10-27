@@ -1,6 +1,6 @@
 # PEP-INTEGRATION-01 — Working Components to One Compiler Pipeline
 
-Status: final integration-readiness evidence on `exp/pep-performance-03`. This is
+Status: R1 acceptance-hardening evidence on `exp/pep-performance-03`. This is
 an isolated harness/report slice. It does not modify A12, add A13, promote
 the C23 experiment to A14, change the JSONL protocol, raise interpreter
 budgets, or advance a milestone pointer.
@@ -9,8 +9,10 @@ budgets, or advance a milestone pointer.
 
 The machine-readable dependency record is
 [`PEP-INTEGRATION-01-MANIFEST.json`](PEP-INTEGRATION-01-MANIFEST.json). The
-baseline is the reviewed A11 integration candidate
-`4e497bf192b33e76cb0fdf59bfc30e9b3ef3127f`.
+baseline is the accepted Performance 02 laboratory head
+`4e497bf192b33e76cb0fdf59bfc30e9b3ef3127f`; it is not the A11 source
+revision. The A11 source/evidence revision is separately pinned at
+`3fb83b7fb9eeb82674f12b021b1f21f2d677c795`.
 
 The manifest records the P03 parent head separately from the latest completed
 integration slice (`72f0283d98bbf64b76aa3cc57d5eb32aef9fbea8`); it is a pinned
@@ -59,8 +61,10 @@ The run completed with five boundary rows and the unchanged resource limit:
 | unclosed expression | 32 | incomplete | 1 partial | 4 | 10,220 | 16,046 | 6,097 |
 | UTF-8 string with CRLF | 39 | complete | 4 | 6 | 15,566 | 25,098 | 5,895 |
 
-The complete rows matched the independent OCaml node counts and passed
-topology/span checks. The oversized 65,537-byte probe failed closed with
+The complete rows matched the independently flattened accepted-A12 OCaml
+node facts (including IDs, parent/child indices, roles, kinds, values and
+spans) and passed source-span checks. Invalid and incomplete rows matched
+their exact diagnostic codes and offsets. The oversized 65,537-byte probe failed closed with
 `PEP_SOURCE_BYTE_LIMIT` (131,149 request bytes, 217 response bytes). No source
 cap or tool budget was raised.
 
@@ -71,8 +75,10 @@ semantic IDs, and the host does not invent semantic facts from them.
 ## Integration conformance matrix
 
 [`PEP-INTEGRATION-01-MATRIX.json`](PEP-INTEGRATION-01-MATRIX.json) contains 15
-cases and the rule that process exit alone is never an oracle. The five A12
-boundary cases above are executable in this slice. The remaining cases retain
+cases and the rule that process exit alone is never an oracle. Six real
+boundary rows are executed in this slice: five parser scenarios plus the
+source-cap rejection. Every row is classified as `executed`,
+`tested-elsewhere`, or `blocked`; the remaining cases retain
 explicit expected classifications for the next accepted component:
 
 - revision mismatch and forged continuation: reject or fail closed; a caller
@@ -90,7 +96,10 @@ explicit expected classifications for the next accepted component:
   for the next integration slice, not inferred from this receipt.
 
 This separation prevents a planned or experimental case from being reported
-as an end-to-end compiler result.
+as an end-to-end compiler result. The JSONL session harness also applies a
+finite configurable response deadline, terminates an unresponsive child and
+classifies timeout, launcher/early-close and malformed-response failures
+separately; semantic error responses remain ordinary protocol results.
 
 ## A13 and C23 boundaries
 
@@ -163,15 +172,16 @@ The integration harness and its negative-control tests pass as follows:
 python -m unittest tests.test_integration01_lab tests.test_performance03_lab tests.test_performance02_lab -v
 ```
 
-This focused command passed 37/37 tests. The pinned A12 parser suite at
+The R0 completion receipt reported 142/142 for the full repository. The R1
+focused command now covers exact-AST, status/diagnostic and bounded-JSONL
+negative controls; its final count and the rerun full-suite count are recorded
+with the final pushed receipt. The pinned A12 parser suite at
 `69a47fe77187666bdd045b8dc8a9f633a7dd49d7` also passed 22/22, including
 revision-mismatch rejection, malformed-input recovery, topology mutation
 rejection and source-limit protection. The real A12 command above passed;
 the receipt records the five rows and the source-cap rejection. The existing
 P03 adapter checks remain separate and continue to cover continuation identity,
-topology mutations, source caps and bounded coalescing models. The full
-repository regression passed 140/140 before these final provenance edits, and
-the final staged diff passed `git diff --check`. No A12, A13, C23
+topology mutations, source caps and bounded coalescing models. No A12, A13, C23
 production/compiler, JSONL schema, budget or packet pointer files were
 changed.
 
