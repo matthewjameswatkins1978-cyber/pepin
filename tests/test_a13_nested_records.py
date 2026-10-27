@@ -77,6 +77,29 @@ class A13NestedRecordTests(unittest.TestCase):
         expression_shapes = [fields(item)["typeShape"] for item in report["expressionTypes"]["value"] if scalar(fields(item)["typeShape"]["fields"][0]["value"]) == "nominal"]
         self.assertTrue(any(scalar(fields(item)["name"]) == "Point" and scalar(fields(item)["listDepth"]) == 1 for item in expression_shapes))
 
+    def test_if_expression_preserves_nominal_list_shapes_and_rejects_mismatch(self):
+        valid = (
+            "type Point { x: Int }\n"
+            "fn choose(flag: Bool, left: List[Point], right: List[Point]) -> List[Point] { "
+            "return if flag { left } else { right } }"
+        )
+        report = self._assert_matches_reference("if-expression-nominal-list-shape", valid)
+        self.assertEqual(scalar(report["status"]), "valid")
+        self.assertTrue(any(
+            scalar(fields(fields(item)["typeShape"])["kind"]) == "nominal"
+            and scalar(fields(fields(item)["typeShape"])["name"]) == "Point"
+            and scalar(fields(fields(item)["typeShape"])["listDepth"]) == 1
+            for item in report["expressionTypes"]["value"]
+        ))
+
+        invalid = (
+            "type Point { x: Int }\n"
+            "fn choose(flag: Bool, left: List[Point], right: Point) -> List[Point] { "
+            "return if flag { left } else { right } }"
+        )
+        report = self._assert_matches_reference("if-expression-nominal-list-mismatch", invalid)
+        self.assertEqual(scalar(report["status"]), "invalid")
+
     def test_unknown_nominal_leaf_in_nested_list_matches_reference_diagnostic(self):
         source = "fn accept(values: List[List[Missing]]) -> Unit {}"
         report = self._assert_matches_reference("unknown-nested-list-leaf", source)

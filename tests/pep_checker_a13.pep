@@ -480,6 +480,15 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   if found.node.kind == "integer" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
   if found.node.kind == "boolean" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
   if found.node.kind == "string" { return PepTypeShape { kind: "builtin", name: "Str", listDepth: 0 } } else {}
+  if found.node.kind == "if_expression" {
+    let thenValue = child_at(nodes, found.node.id, "then", 1)
+    let elseValue = child_at(nodes, found.node.id, "else", 2)
+    if !thenValue.found || !elseValue.found { return empty_type_shape() } else {}
+    let thenShape = expression_type_shape(nodes, thenValue.node.id, functions, bindings, references)
+    let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
+    if thenShape.kind != "" && same_type_shape(thenShape, elseShape) { return thenShape } else {}
+    return empty_type_shape()
+  } else {}
   if found.node.kind == "record" { return PepTypeShape { kind: "nominal", name: found.node.text, listDepth: 0 } } else {}
   if found.node.kind == "name" {
     let reference = find_reference(references, found.node.id)
@@ -872,6 +881,22 @@ fn statement_always_returns(nodes: List[FlatAstNode], statement: FlatAstNode) ->
   } else {}
   return false
 }
+fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType: Str, expectedShape: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let expression = lookup_node(nodes, id)
+  if !expression.found || expression.node.kind != "if_expression" { return false } else {}
+  let thenValue = child_at(nodes, id, "then", 1)
+  let elseValue = child_at(nodes, id, "else", 2)
+  if !thenValue.found || !elseValue.found { return false } else {}
+  let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
+  let elseType = infer_expression_type(nodes, elseValue.node.id, functions, bindings, references)
+  if expectedType != "" && ((thenType != "" && thenType != expectedType) || (elseType != "" && elseType != expectedType)) { return true } else {}
+  let thenShape = expression_type_shape(nodes, thenValue.node.id, functions, bindings, references)
+  let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
+  if expectedShape.kind != "" && ((thenShape.kind != "" && !same_type_shape(expectedShape, thenShape)) || (elseShape.kind != "" && !same_type_shape(expectedShape, elseShape))) { return true } else {}
+  if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
+  return false
+}
+
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -1212,6 +1237,13 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if thenValue.found && elseValue.found {
           let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
           let elseType = infer_expression_type(nodes, elseValue.node.id, functions, bindings, references)
+          let needsStructuralCheck = thenType == "" || elseType == ""
+          let thenShape = if needsStructuralCheck { expression_type_shape(nodes, thenValue.node.id, functions, bindings, references) } else { empty_type_shape() }
+          let elseShape = if needsStructuralCheck { expression_type_shape(nodes, elseValue.node.id, functions, bindings, references) } else { empty_type_shape() }
+          let structuralMismatch = needsStructuralCheck && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape)
+          if structuralMismatch {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match the other branch type", elseValue.node))
+          } else {}
           if expectedResult != "" {
             var mismatchReported = false
             if thenType != "" && thenType != expectedResult {
@@ -1244,7 +1276,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let expectedShape = if owner.function.returnShape.kind != "" { owner.function.returnShape } else { legacy_type_shape(nodes, owner.function.returnType) }
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
         let nestedListMismatchHandled = returned.node.kind == "list" && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && actualReturn != "" && owner.function.returnType != ""
-        if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch) && !nestedListMismatchHandled {
+        let conditionalMismatchHandled = if returned.node.kind == "if_expression" { if_expression_branch_mismatch(nodes, returned.node.id, owner.function.returnType, expectedShape, functions, bindings, references) } else { false }
+        if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch) && !nestedListMismatchHandled && !conditionalMismatchHandled {
           let code = if owner.function.returnType == "" || actualReturn == "" { "PEP_TYPE_MISMATCH" } else { "PEP_RETURN_TYPE" }
           let mismatch = list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references)
           let mismatchNode = if (owner.function.returnType == "" || actualReturn == "") && mismatch.found { mismatch.node } else { returned.node }
