@@ -3,7 +3,7 @@
   "fixture_id": "a05.function.call",
   "entry_function": "fn.main",
   "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 40}},
-  "pep_source": "fn add(left: Int, right: Int) -> Int = left + right\nadd(20, 22)\n",
+  "pep_source": "fn add(left: Int, right: Int) -> Int { return left + right }\nsay(int_text(add(20, 22)))\n",
   "functions": [
     {"id": "fn.main", "name": "main", "parameters": [], "return_type": "Int", "statements": [], "result": {"node_id": "node.call", "kind": "call", "target": "fn.add", "type": "Int", "span": {"start": 0, "end": 9}, "args": [{"node_id": "node.arg.left", "kind": "int", "value": 20, "type": "Int", "span": {"start": 4, "end": 6}}, {"node_id": "node.arg.right", "kind": "int", "value": 22, "type": "Int", "span": {"start": 7, "end": 9}}]}},
     {"id": "fn.add", "name": "add", "parameters": [{"binding_id": "binding.left", "name": "left", "type": "Int"}, {"binding_id": "binding.right", "name": "right", "type": "Int"}], "return_type": "Int", "statements": [], "result": {"node_id": "node.body.add", "kind": "binary", "op": "+", "type": "Int", "span": {"start": 0, "end": 10}, "left": {"node_id": "node.ref.left", "kind": "param_ref", "binding_id": "binding.left", "type": "Int", "span": {"start": 0, "end": 4}}, "right": {"node_id": "node.ref.right", "kind": "param_ref", "binding_id": "binding.right", "type": "Int", "span": {"start": 7, "end": 11}}}}

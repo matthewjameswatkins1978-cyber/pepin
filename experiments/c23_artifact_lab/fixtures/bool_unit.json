@@ -3,7 +3,7 @@
   "fixture_id": "a05.bool.comparison",
   "entry_function": "fn.main",
   "source": {"document_id": "doc.artifact05", "revision": "sha256:artifact-05-fixtures-v1", "span": {"start": 0, "end": 7}},
-  "pep_source": "20 == 20\n",
+  "pep_source": "say(if 20 == 20 { \"true\" } else { \"false\" })\n",
   "functions": [{"id": "fn.main", "name": "main", "parameters": [], "return_type": "Bool", "statements": [], "result": {"node_id": "node.equal", "kind": "binary", "op": "==", "type": "Bool", "span": {"start": 0, "end": 7}, "left": {"node_id": "node.twenty.left", "kind": "int", "value": 20, "type": "Int", "span": {"start": 0, "end": 2}}, "right": {"node_id": "node.twenty.right", "kind": "int", "value": 20, "type": "Int", "span": {"start": 5, "end": 7}}}}],
   "types": [],
   "ownership": {"parameters": {}, "results": {"fn.main": "owned"}, "lifetimes": []},
