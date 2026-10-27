@@ -156,6 +156,62 @@ class A13NestedRecordTests(unittest.TestCase):
                 report = self._assert_matches_reference(name, source)
                 self.assertEqual(scalar(report["status"]), expected_status)
 
+    def test_structural_nominal_list_builtins_preserve_and_check_shapes(self):
+        cases = (
+            (
+                "append-nominal",
+                "type Point { x: Int }\n"
+                "fn add(points: List[Point], point: Point) -> List[Point] { return append(points, point) }",
+                "valid",
+                1,
+            ),
+            (
+                "reverse-nominal",
+                "type Point { x: Int }\n"
+                "fn reversePoints(points: List[Point]) -> List[Point] { return reverse(points) }",
+                "valid",
+                1,
+            ),
+            (
+                "append-nested-nominal",
+                "type Point { x: Int }\n"
+                "fn add(points: List[List[Point]], point: List[Point]) -> List[List[Point]] { return append(points, point) }",
+                "valid",
+                2,
+            ),
+            (
+                "append-nominal-mismatch",
+                "type Point { x: Int }\n"
+                "type Other { x: Int }\n"
+                "fn add(points: List[Point], point: Other) -> List[Point] { return append(points, point) }",
+                "invalid",
+                1,
+            ),
+            (
+                "contains-nominal-unsupported-equality",
+                "type Point { x: Int }\n"
+                "fn has(points: List[Point], point: Point) -> Bool { return contains(points, point) }",
+                "invalid",
+                1,
+            ),
+        )
+        for name, source, expected_status, expected_depth in cases:
+            with self.subTest(name=name):
+                report = self._assert_matches_reference(name, source)
+                self.assertEqual(scalar(report["status"]), expected_status)
+                shapes = [
+                    fields(item)["typeShape"]
+                    for item in report["expressionTypes"]["value"]
+                    if scalar(fields(item)["typeShape"]["fields"][0]["value"]) != ""
+                ]
+                if name in ("append-nominal", "reverse-nominal", "append-nested-nominal"):
+                    self.assertTrue(any(
+                        scalar(fields(shape)["kind"]) == "nominal"
+                        and scalar(fields(shape)["name"]) == "Point"
+                        and scalar(fields(shape)["listDepth"]) == expected_depth
+                        for shape in shapes
+                    ))
+
     def test_length_accepts_a_list_with_a_nominal_element_type(self):
         source = (
             "type Point { x: Int }\n"

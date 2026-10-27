@@ -510,6 +510,12 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       let unionName = constructor_union_type(nodes, found.node.text)
       return PepTypeShape { kind: "nominal", name: unionName, listDepth: 0 }
     } else {}
+    if found.node.text == "append" || found.node.text == "prepend" || found.node.text == "reverse" {
+      let collection = child_at(nodes, found.node.id, "argument", 0)
+      if collection.found { return expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { return empty_type_shape() }
+    } else {}
+    if found.node.text == "length" || found.node.text == "byte_length" || found.node.text == "byte_at" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
+    if found.node.text == "contains" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
     let inferredName = infer_expression_type(nodes, id, functions, bindings, references)
     return legacy_type_shape(nodes, inferredName)
   } else {}
@@ -949,7 +955,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if shape.kind != "" { reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: "", typeShape: shape, startByte: node.startByte, endByte: node.endByte }) } else {}
         if node.kind == "hole" { } else {
         if node.kind == "call" {
-          if known_builtin(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
+          if known_builtin(node.text) && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
           if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
           if node.kind == "list" && count_children(nodes, node.id, "element") == 0 {
@@ -1169,11 +1175,16 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 let value = child_at(nodes, node.id, "argument", 1)
                 if value.found && value.node.kind != "hole" {
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
-                  if elementType != "" && actualValue != "" && actualValue != elementType {
+                  let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+                  let expectedElementShape = without_one_list(collectionShape)
+                  let structuralMismatch = (elementType == "" || actualValue == "") && expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
+                  if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
                   } else {}
                 } else {}
-                if node.text == "contains" && elementType != "" && !equality_supported_type(elementType) {
+                let elementShape = without_one_list(collectionShape)
+                let elementName = legacy_type_name(elementShape)
+                if node.text == "contains" && collectionShape.listDepth != 0 && !equality_supported_type(elementName) {
                   let atNode = if collection.found { collection.node } else { node }
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MEMBERSHIP_UNSUPPORTED", "Membership is not defined for this list element type", atNode))
                 } else {}
