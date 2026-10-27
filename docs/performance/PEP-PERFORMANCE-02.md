@@ -22,6 +22,26 @@ were 67,408 and 69,118 bytes respectively. This is accepted-version measurement
 evidence, not an import of A12 implementation files; the source cap and protocol
 remained unchanged.
 
+### R1 provenance ledger
+
+The measured harness revision was `794c93b522911479dd373ea2dcceb87a7ee63408` on
+`exp/pep-performance-02`; the final report-only receipt commit follows it. The
+A11 workload was `examples/pep_lexer.pep`, 19,425 bytes,
+`sha256:729e01acdbbb538ef6578220c69e9fb62881874fcc0ae592735051d089587c46`.
+The direct profile executable was `_build/perf/pep-profile.exe`,
+`sha256:e88c41b8fb3dbf84b34ce33cc897d90383a567ca03aac63042ca5b851c5713dc`,
+built from `pep_ocaml.ml` source SHA
+`8372fdcd9f5f60c58e3abafb9ee806148f7255023fb2a21ed417c6a90c7bbc06` with the
+existing profile-build path. Clock sources were Python
+`time.perf_counter_ns` and isolated OCaml `Unix.gettimeofday`; direct A11 used
+one verified profile trial and PowerShell one host-only trial. The result oracle
+was the existing test-only OCaml differential machinery; the AST oracle used 54
+synthetic corruption outcomes. Limits remained 100,000 tool steps, 1 MiB tool
+messages, 65,536 source bytes and the stated lifecycle campaign caps. These
+measurements include host/process/JSONL costs where labelled; internal phase
+attribution overlaps response wait, and typed construction, allocation behaviour
+and exact CPU-vs-wall attribution remain limitations.
+
 The lab records the clock source in every result. Python host timings use
 `time.perf_counter_ns`; the opt-in internal profile uses an isolated executable
 with `Unix.gettimeofday`. Internal profile phases are therefore elapsed wall time,

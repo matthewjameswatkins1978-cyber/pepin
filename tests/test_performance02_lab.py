@@ -47,6 +47,10 @@ class Performance02LabTests(unittest.TestCase):
             candidate.update(mutation)
             with self.assertRaises(lab.ProfileIntegrityError):
                 lab.validate_profile_records([candidate], requested=True)
+        missing_timing = valid.copy()
+        missing_timing.pop("decodeCpuUs")
+        with self.assertRaises(lab.ProfileIntegrityError):
+            lab.validate_profile_records([missing_timing], requested=True)
         with self.assertRaises(lab.ProfileIntegrityError):
             lab.validate_profile_records([valid], requested=True, expected_records=2)
         with self.assertRaises(lab.ProfileIntegrityError):
