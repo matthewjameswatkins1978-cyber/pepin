@@ -25,7 +25,8 @@ def checker_report(document, source, *, status="valid", nodes=0, functions=(), c
     funcs = [typed_record("CheckedFunction", [
         ("semanticId", typed("Int", str(item[0]))), ("syntaxId", typed("Int", str(item[1]))),
         ("name", typed("Str", item[2])), ("arity", typed("Int", str(item[3]))),
-        ("startByte", typed("Int", str(item[4]))), ("endByte", typed("Int", str(item[5]))),
+        ("returnType", typed("Str", item[6])), ("startByte", typed("Int", str(item[4]))),
+        ("endByte", typed("Int", str(item[5]))),
     ]) for item in functions]
     edges = [typed_record("ResolvedCall", [
         ("callerId", typed("Int", str(item[0]))), ("calleeId", typed("Int", str(item[1]))),
@@ -42,7 +43,9 @@ def checker_report(document, source, *, status="valid", nodes=0, functions=(), c
         ("status", typed("Str", status)), ("syntaxNodeCount", typed("Int", str(nodes))),
         ("functions", typed_list("CheckedFunction", funcs)),
         ("bindings", typed_list("BindingFact", [])), ("references", typed_list("ResolvedName", [])),
-        ("calls", typed_list("ResolvedCall", edges)), ("diagnostics", typed_list("CheckDiagnostic", errors)),
+        ("calls", typed_list("ResolvedCall", edges)),
+        ("expressionTypes", typed_list("ExpressionTypeFact", [])),
+        ("diagnostics", typed_list("CheckDiagnostic", errors)),
     ])
 
 
@@ -169,6 +172,50 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["status"]), "invalid", report)
         diagnostic = fields(report["diagnostics"]["value"][0])
         self.assertEqual(scalar(diagnostic["code"]), "PEP_UNKNOWN_BINDING")
+    def test_primitive_synth_check_and_type_facts(self):
+        source = "fn add(x: Int) -> Int { let y: Int = x + 1; return y }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        function = fields(report["functions"]["value"][0])
+        self.assertEqual(scalar(function["returnType"]), "Int")
+        bindings = [fields(item) for item in report["bindings"]["value"]]
+        self.assertEqual([scalar(item["typeName"]) for item in bindings], ["Int", "Int"])
+        types = [fields(item) for item in report["expressionTypes"]["value"]]
+        self.assertEqual([scalar(item["typeName"]) for item in types], ["Int", "Int", "Int", "Int"])
+        binary = next(item for item in types if scalar(item["startByte"]) == source.index("x + 1"))
+        self.assertEqual((scalar(binary["startByte"]), scalar(binary["endByte"])),
+                         (source.index("x + 1"), source.index("x + 1") + len("x + 1")))
+
+    def test_return_argument_and_operator_type_errors_are_explicit(self):
+        source = "fn wrong(x: Bool) -> Int { return x }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertIn("PEP_RETURN_TYPE", codes)
+
+        source = "fn id(x: Int) -> Int { return x }" + NL + "fn main() -> Int { return id(true) }"
+        _, report = self._analyze(source)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertIn("PEP_ARGUMENT_TYPE", codes)
+
+        source = "fn main() -> Int { return 1 + true }"
+        _, report = self._analyze(source)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertIn("PEP_TYPE_MISMATCH", codes)
+
+    def test_unimplemented_nominal_and_list_types_fail_closed(self):
+        source = "fn identity(x: Missing) -> Missing { return x }"
+        _, report = self._analyze(source)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
+
+        source = "fn empty() -> List[Int] { return [] }"
+        _, report = self._analyze(source)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        self.assertIn("PEP_A13_TYPE_UNSUPPORTED", codes)
+
     def test_utf8_and_crlf_keep_original_function_byte_spans(self):
         prefix = '"λ🙂"' + CRLF
         source = prefix + "fn main() -> Int { return 1 }" + CRLF
