@@ -60,10 +60,8 @@ pub type Frame {
     channels: Int
 }
 
-pub fn scale[T: Numeric](data: List[T], factor: T) -> List[T] {
-    return list.map(data, fn(sample: T) -> T {
-        return sample * factor
-    })
+pub fn identity[T](value: T) -> T {
+    return value
 }
 
 fn load(path: Str) -> Result[Str, fs.Error]
@@ -81,7 +79,7 @@ test "simple arithmetic" {
 }
 ~~~
 
-**Important:** Numeric is NOT an accepted new generic ability. It is an unresolved *placeholder* demonstrating that arithmetic on type parameter T must require a checked contract; the initial accepted abilities are Equal, Ordered and Hashable. Before including an equivalent example in normative conformance, either use a concrete numeric type or separately decide numeric constraints. list.map, Float32, Result, tests, effects, generic declarations and annotations shown above are future work. This example is descriptive only, not a canonical compiling test.
+**Important:** This is descriptive future-source syntax, not a compiling seed fixture. Float32, Result, tests, effects, user-defined generics and annotations are not yet shipped. Arithmetic on an unconstrained generic T would require a separately specified numeric ability; the example intentionally avoids inventing one.
 
 ### Lexical and layout direction
 
