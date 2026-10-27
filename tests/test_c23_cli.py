@@ -52,6 +52,15 @@ class PepC23CliTests(unittest.TestCase):
             recursive = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(recursive.returncode, 0, recursive.stdout + recursive.stderr)
             self.assertEqual(recursive.stdout, "42\n")
+            source.write_text(
+                "fn main() -> Int { return countdown(600) }\n"
+                "fn countdown(value: Int) -> Int {\n"
+                "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+            too_deep = self.invoke("run-c23", source, "--compiler", CLANG)
+            self.assertNotEqual(too_deep.returncode, 0)
+            self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
             source.write_text("fn main() -> Int { return length([1, 2]) }\n",
                               encoding="utf-8", newline="\n")
             rejected = self.invoke("run-c23", source, "--compiler", CLANG)
