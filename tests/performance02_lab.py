@@ -33,6 +33,15 @@ TOOL_STEP_BUDGET = 100_000
 TOOL_MESSAGE_BUDGET = 1_048_576
 
 
+class AstValidationError(ValueError):
+    """A serialized AST failed an independent laboratory oracle."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+        self.detail = detail
+
+
 def elapsed_ms(start_ns: int, end_ns: int | None = None) -> float:
     return round(((time.perf_counter_ns() if end_ns is None else end_ns) - start_ns) / 1_000_000, 4)
 
@@ -542,7 +551,14 @@ def synthetic_checked_ast_fixture(count: int, revision: str = "sha256:synthetic"
             "value": str(index) if index % 3 else "int_text",
             "diagnostic": None,
         })
-    return {"schemaVersion": 1, "kind": "synthetic-checked-ast", "revision": revision, "nodes": nodes}
+    return {
+        "schemaVersion": 1,
+        "kind": "synthetic-checked-ast",
+        "document": "synthetic-document",
+        "revision": revision,
+        "sourceBytes": count * 3,
+        "nodes": nodes,
+    }
 
 
 def synthetic_c23_emission_fixture(count: int) -> dict[str, Any]:
@@ -564,7 +580,11 @@ def _typed_ast_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         for node in fixture["nodes"]
     ]
     return base.typed_record("CheckedAst", [
+        ("schemaVersion", base.typed("Int", str(fixture["schemaVersion"]))),
+        ("kind", base.typed("Str", fixture["kind"])),
+        ("document", base.typed("Str", fixture["document"])),
         ("revision", base.typed("Str", fixture["revision"])),
+        ("sourceBytes", base.typed("Int", str(fixture["sourceBytes"]))),
         ("nodes", base.typed_list("AstNode", nodes)),
     ])
 
@@ -573,7 +593,11 @@ def representation_variants(fixture: dict[str, Any]) -> dict[str, Callable[[], t
     """Return local-only encoders and decoders for the same logical AST."""
 
     nodes = fixture["nodes"]
-    flat = {"schemaVersion": 1, "kind": fixture["kind"], "revision": fixture["revision"], "nodes": nodes}
+    flat = {
+        "schemaVersion": fixture["schemaVersion"], "kind": fixture["kind"],
+        "document": fixture["document"], "revision": fixture["revision"],
+        "sourceBytes": fixture["sourceBytes"], "nodes": nodes,
+    }
     strings: dict[str, int] = {}
     for node in nodes:
         for key in ("role", "kind", "type", "revision", "value"):
@@ -588,7 +612,11 @@ def representation_variants(fixture: dict[str, Any]) -> dict[str, Callable[[], t
          node["diagnostic"]]
         for node in nodes
     ]
-    compact = {"v": 1, "r": fixture["revision"], "s": string_table, "n": compact_rows}
+    compact = {
+        "v": fixture["schemaVersion"], "k": fixture["kind"], "d": fixture["document"],
+        "r": fixture["revision"], "b": fixture["sourceBytes"], "s": string_table,
+        "n": compact_rows,
+    }
 
     def dumps(value: Any) -> bytes:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -612,7 +640,14 @@ def representation_variants(fixture: dict[str, Any]) -> dict[str, Callable[[], t
                     raw = None
                 node[key] = raw
             decoded_nodes.append(node)
-        return {"schemaVersion": 1, "kind": "synthetic-checked-ast", "revision": fields["revision"]["value"], "nodes": decoded_nodes}
+        return {
+            "schemaVersion": int(fields["schemaVersion"]["value"]),
+            "kind": fields["kind"]["value"],
+            "document": fields["document"]["value"],
+            "revision": fields["revision"]["value"],
+            "sourceBytes": int(fields["sourceBytes"]["value"]),
+            "nodes": decoded_nodes,
+        }
 
     def decode_compact(payload: bytes) -> dict[str, Any]:
         value = json.loads(payload)
@@ -625,7 +660,10 @@ def representation_variants(fixture: dict[str, Any]) -> dict[str, Callable[[], t
                 "startByte": row[6], "endByte": row[7], "revision": table[row[8]],
                 "value": table[row[9]], "diagnostic": row[10],
             })
-        return {"schemaVersion": 1, "kind": "synthetic-checked-ast", "revision": value["r"], "nodes": decoded_nodes}
+        return {
+            "schemaVersion": value["v"], "kind": value["k"], "document": value["d"],
+            "revision": value["r"], "sourceBytes": value["b"], "nodes": decoded_nodes,
+        }
 
     return {
         "existing-typed-json": lambda: (dumps(_typed_ast_fixture(fixture)), decode_typed),
@@ -638,6 +676,268 @@ def canonical_fixture(value: dict[str, Any]) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _ast_fail(code: str, detail: str) -> None:
+    raise AstValidationError(code, detail)
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_checked_ast_fixture(
+    value: dict[str, Any], *, expected_document: str | None = None,
+    expected_revision: str | None = None, source_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Validate an AST independently of its representation decoder.
+
+    This deliberately checks identity, topology, semantic labels and spans;
+    the caller separately compares the validated logical value with an
+    independently retained expected fixture.
+    """
+
+    if not isinstance(value, dict):
+        _ast_fail("structural-invalidity", "AST envelope is not an object")
+    if value.get("schemaVersion") != 1 or value.get("kind") != "synthetic-checked-ast":
+        _ast_fail("structural-invalidity", "unexpected schema version or kind")
+    for key in ("document", "revision"):
+        if not isinstance(value.get(key), str) or not value[key]:
+            _ast_fail("structural-invalidity", f"{key} is not a non-empty string")
+    if expected_document is not None and value["document"] != expected_document:
+        _ast_fail("revision-mismatch", "document identity differs from the expected document")
+    if expected_revision is not None and value["revision"] != expected_revision:
+        _ast_fail("revision-mismatch", "source revision differs from the expected revision")
+    if not _is_int(value.get("sourceBytes")) or value["sourceBytes"] < 0:
+        _ast_fail("structural-invalidity", "sourceBytes is not a non-negative integer")
+    if source_bytes is not None and value["sourceBytes"] != source_bytes:
+        _ast_fail("revision-mismatch", "source byte boundary differs from the expected source")
+    nodes = value.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        _ast_fail("structural-invalidity", "nodes is empty or not a list")
+
+    ids: set[int] = set()
+    by_id: dict[int, dict[str, Any]] = {}
+    required = {
+        "id", "parentId", "childIndex", "role", "kind", "type", "startByte",
+        "endByte", "revision", "value", "diagnostic",
+    }
+    for position, node in enumerate(nodes):
+        if not isinstance(node, dict) or not required.issubset(node):
+            _ast_fail("structural-invalidity", f"node {position} is missing a required field")
+        node_id = node["id"]
+        if not _is_int(node_id):
+            _ast_fail("structural-invalidity", f"node {position} id is not an integer")
+        if node_id in ids:
+            _ast_fail("structural-invalidity", f"duplicate node id {node_id}")
+        ids.add(node_id)
+        by_id[node_id] = node
+        if not _is_int(node["childIndex"]) or node["childIndex"] < 0:
+            _ast_fail("structural-invalidity", f"node {node_id} childIndex is invalid")
+        for field in ("startByte", "endByte"):
+            if not _is_int(node[field]):
+                _ast_fail("structural-invalidity", f"node {node_id} {field} is not an integer")
+        if node["startByte"] < 0 or node["endByte"] < node["startByte"] or node["endByte"] > value["sourceBytes"]:
+            _ast_fail("structural-invalidity", f"node {node_id} source span is outside the source")
+        if node["role"] not in {"root", "body"} or node["kind"] not in {"Call", "IntLiteral"}:
+            _ast_fail("structural-invalidity", f"node {node_id} has an invalid semantic label")
+        if node["type"] not in {"Unit", "Int", "Bool", "Str"}:
+            _ast_fail("structural-invalidity", f"node {node_id} has an invalid type identity")
+        if not isinstance(node["revision"], str) or node["revision"] != value["revision"]:
+            _ast_fail("revision-mismatch", f"node {node_id} revision is not the envelope revision")
+        if not isinstance(node["value"], str) or node["diagnostic"] is not None and not isinstance(node["diagnostic"], str):
+            _ast_fail("structural-invalidity", f"node {node_id} has an invalid value or diagnostic")
+
+    if ids != set(range(len(nodes))):
+        _ast_fail("structural-invalidity", "node IDs are not a dense parent-addressable sequence")
+    root = by_id.get(0)
+    if root is None or root["parentId"] is not None or root["role"] != "root":
+        _ast_fail("structural-invalidity", "root identity or parent is invalid")
+    child_indexes: dict[int, set[int]] = {}
+    for position, node in enumerate(nodes):
+        node_id = node["id"]
+        parent = node["parentId"]
+        if node_id == 0:
+            continue
+        if not _is_int(parent) or parent not in by_id or parent >= node_id:
+            _ast_fail("structural-invalidity", f"node {node_id} violates parent-before-child ordering")
+        if node["role"] == "root":
+            _ast_fail("structural-invalidity", f"non-root node {node_id} has root role")
+        indexes = child_indexes.setdefault(parent, set())
+        if node["childIndex"] in indexes:
+            _ast_fail("structural-invalidity", f"parent {parent} has duplicate childIndex")
+        indexes.add(node["childIndex"])
+        cursor = parent
+        seen: set[int] = set()
+        while cursor is not None:
+            if cursor in seen or cursor not in by_id:
+                _ast_fail("structural-invalidity", f"node {node_id} has cyclic or missing ancestry")
+            seen.add(cursor)
+            cursor = by_id[cursor]["parentId"]
+    return {
+        "valid": True,
+        "checkedNodes": len(nodes),
+        "document": value["document"],
+        "revision": value["revision"],
+        "sourceBytes": value["sourceBytes"],
+    }
+
+
+def _typed_top_fields(value: dict[str, Any]) -> dict[str, Any]:
+    return base.record_fields(value)
+
+
+def _typed_node_list(value: dict[str, Any]) -> list[dict[str, Any]]:
+    return _typed_top_fields(value)["nodes"]["value"]
+
+
+def _set_typed_field(value: dict[str, Any], field_name: str, field_value: Any) -> None:
+    fields = _typed_top_fields(value)
+    fields[field_name]["value"] = str(field_value)
+
+
+def _set_typed_node_field(value: dict[str, Any], index: int, field_name: str, field_value: Any) -> None:
+    fields = base.record_fields(_typed_node_list(value)[index])
+    fields[field_name]["value"] = str(field_value)
+
+
+def _remove_typed_node_field(value: dict[str, Any], index: int, field_name: str) -> None:
+    node = _typed_node_list(value)[index]
+    node["fields"] = [field for field in node["fields"] if field.get("name") != field_name]
+
+
+def _mutate_encoded_payload(name: str, payload: bytes, mutation: str) -> bytes:
+    value = json.loads(payload)
+    if name == "existing-typed-json":
+        nodes = _typed_node_list(value)
+        set_top = lambda key, new: _set_typed_field(value, key, new)
+        set_node = lambda index, key, new: _set_typed_node_field(value, index, key, new)
+        remove_node = lambda index, key: _remove_typed_node_field(value, index, key)
+        pop_node = lambda index: nodes.pop(index)
+    elif name == "flat-node-array":
+        nodes = value["nodes"]
+        set_top = lambda key, new: value.__setitem__(key, new)
+        set_node = lambda index, key, new: nodes[index].__setitem__(key, new)
+        remove_node = lambda index, key: nodes[index].pop(key)
+        pop_node = lambda index: nodes.pop(index)
+    else:
+        nodes = value["n"]
+        set_top = lambda key, new: value.__setitem__({"schemaVersion": "v", "kind": "k", "document": "d", "revision": "r", "sourceBytes": "b"}[key], new)
+        role_index = {"role": 3, "kind": 4, "type": 5, "revision": 8, "value": 9}
+        set_node = lambda index, key, new: nodes[index].__setitem__(role_index[key], new)
+        remove_node = lambda index, key: nodes[index].pop()
+        pop_node = lambda index: nodes.pop(index)
+
+    if mutation == "invalid-parent":
+        set_node(1, "parentId", 999) if name != "compact-interned-array" else nodes[1].__setitem__(1, 999)
+    elif mutation == "parent-cycle":
+        set_node(1, "parentId", 2) if name != "compact-interned-array" else nodes[1].__setitem__(1, 2)
+        set_node(2, "parentId", 1) if name != "compact-interned-array" else nodes[2].__setitem__(1, 1)
+    elif mutation == "duplicate-node-id":
+        set_node(1, "id", 0) if name != "compact-interned-array" else nodes[1].__setitem__(0, 0)
+    elif mutation == "missing-node":
+        pop_node(1)
+    elif mutation == "duplicate-child-index":
+        set_node(2, "childIndex", 0) if name != "compact-interned-array" else nodes[2].__setitem__(2, 0)
+    elif mutation == "swapped-child-order":
+        nodes[1], nodes[2] = nodes[2], nodes[1]
+    elif mutation == "invalid-role":
+        if name == "compact-interned-array":
+            value["s"].append("not-a-role")
+            nodes[1][3] = len(value["s"]) - 1
+        else:
+            set_node(1, "role", "not-a-role")
+    elif mutation == "negative-source-offset":
+        set_node(1, "startByte", -1) if name != "compact-interned-array" else nodes[1].__setitem__(6, -1)
+    elif mutation == "end-before-start":
+        set_node(1, "startByte", 2) if name != "compact-interned-array" else nodes[1].__setitem__(6, 2)
+        set_node(1, "endByte", 1) if name != "compact-interned-array" else nodes[1].__setitem__(7, 1)
+    elif mutation == "span-exceeds-source":
+        if name == "existing-typed-json":
+            end = int(_typed_top_fields(value)["sourceBytes"]["value"]) + 1
+        elif name == "flat-node-array":
+            end = value["sourceBytes"] + 1
+        else:
+            end = value["b"] + 1
+        set_node(1, "endByte", end) if name != "compact-interned-array" else nodes[1].__setitem__(7, end)
+    elif mutation == "wrong-revision":
+        set_top("revision", "sha256:wrong")
+    elif mutation == "changed-type-identity":
+        if name == "compact-interned-array":
+            value["s"].append("Bool")
+            nodes[1][5] = len(value["s"]) - 1
+        else:
+            set_node(1, "type", "Bool")
+    elif mutation == "missing-required-field":
+        remove_node(1, "type")
+    elif mutation == "corrupt-string-table-index":
+        if name == "compact-interned-array":
+            nodes[1][3] = 999
+        else:
+            set_node(1, "role", "not-a-role")
+    elif mutation == "incorrect-compact-row-length":
+        if name == "compact-interned-array":
+            nodes[1].pop()
+        else:
+            remove_node(1, "type")
+    elif mutation == "truncated-payload":
+        return payload[:-1]
+    elif mutation == "wrong-schema-version":
+        set_top("schemaVersion", 99)
+    elif mutation == "changed-value":
+        if name == "compact-interned-array":
+            value["s"].append("changed")
+            nodes[1][9] = len(value["s"]) - 1
+        else:
+            set_node(1, "value", "changed")
+    else:
+        raise ValueError(f"unknown AST mutation {mutation}")
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+AST_MUTATIONS = (
+    "invalid-parent", "parent-cycle", "duplicate-node-id", "missing-node",
+    "duplicate-child-index", "swapped-child-order", "invalid-role",
+    "negative-source-offset", "end-before-start", "span-exceeds-source",
+    "wrong-revision", "changed-type-identity", "missing-required-field",
+    "corrupt-string-table-index", "incorrect-compact-row-length",
+    "truncated-payload", "wrong-schema-version", "changed-value",
+)
+
+
+def validate_serialized_payload(
+    name: str, payload: bytes, expected: dict[str, Any], decoder: Callable[[bytes], dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        decoded = decoder(payload)
+    except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise AstValidationError("decode-error", str(exc)) from exc
+    validate_checked_ast_fixture(
+        decoded, expected_document=expected["document"], expected_revision=expected["revision"],
+        source_bytes=expected["sourceBytes"],
+    )
+    if canonical_fixture(decoded) != canonical_fixture(expected):
+        raise AstValidationError("reference-equivalence-mismatch", f"{name} differs from independent expected structure")
+    return {"valid": True, "checkedNodes": len(decoded["nodes"])}
+
+
+def representation_mutation_corpus(fixture: dict[str, Any]) -> list[dict[str, Any]]:
+    """Corrupt encoded bytes and classify the first independent rejection."""
+
+    if len(fixture["nodes"]) < 4:
+        raise ValueError("mutation corpus requires at least four nodes")
+    rows = []
+    for name, factory in representation_variants(fixture).items():
+        payload, decoder = factory()
+        for mutation in AST_MUTATIONS:
+            corrupted = _mutate_encoded_payload(name, payload, mutation)
+            try:
+                validate_serialized_payload(name, corrupted, fixture, decoder)
+            except AstValidationError as exc:
+                rows.append({"representation": name, "mutation": mutation, "oracle": exc.code, "detail": exc.detail})
+            else:
+                raise AssertionError(f"{name} accepted serialized corruption {mutation}")
+    return rows
+
+
 def measure_representations(fixture: dict[str, Any]) -> list[dict[str, Any]]:
     expected = canonical_fixture(fixture)
     rows = []
@@ -646,8 +946,7 @@ def measure_representations(fixture: dict[str, Any]) -> list[dict[str, Any]]:
         payload, decoder = factory()
         encode_ms = elapsed_ms(started)
         decoded, decode_ms = measured(lambda: decoder(payload))
-        if canonical_fixture(decoded) != expected:
-            raise AssertionError(f"representation {name} changed the logical fixture")
+        validation = validate_serialized_payload(name, payload, fixture, decoder)
         rows.append({
             "representation": name,
             "fixtureKind": fixture["kind"],
@@ -656,6 +955,7 @@ def measure_representations(fixture: dict[str, Any]) -> list[dict[str, Any]]:
             "encodeMs": encode_ms,
             "decodeMs": decode_ms,
             "nodes": len(fixture["nodes"]),
+            "independentOracle": validation,
             "clockSource": CLOCK_SOURCE,
         })
     return rows
@@ -722,6 +1022,7 @@ def self_test() -> dict[str, Any]:
     fixture = synthetic_checked_ast_fixture(8)
     representation_rows = measure_representations(fixture)
     cursor_rows = cursor_size_rows()
+    mutation_rows = representation_mutation_corpus(fixture)
     assert_mutation_rejected(fixture, lambda value: value["nodes"][3].__setitem__("parentId", 0))
     assert_mutation_rejected(fixture, lambda value: value["nodes"][4].__setitem__("startByte", 999))
     return {
@@ -729,6 +1030,12 @@ def self_test() -> dict[str, Any]:
         "schemaVersion": LAB_SCHEMA_VERSION,
         "clockSource": CLOCK_SOURCE,
         "representations": representation_rows,
+        "serializedMutationCorpus": {
+            "cases": len(mutation_rows),
+            "mutations": len(AST_MUTATIONS),
+            "representations": sorted({row["representation"] for row in mutation_rows}),
+            "oracleKinds": sorted({row["oracle"] for row in mutation_rows}),
+        },
         "cursorRows": cursor_rows,
         "syntheticStages": [
             synthetic_checked_ast_fixture(2)["kind"],

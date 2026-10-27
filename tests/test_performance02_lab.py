@@ -48,6 +48,51 @@ class Performance02LabTests(unittest.TestCase):
         typed = next(row for row in rows if row["representation"] == "existing-typed-json")
         self.assertLess(compact["jsonBytes"], typed["jsonBytes"])
 
+    def test_independent_ast_validator_checks_identity_topology_and_spans(self):
+        fixture = lab.synthetic_checked_ast_fixture(8)
+        checked = lab.validate_checked_ast_fixture(
+            fixture, expected_document=fixture["document"],
+            expected_revision=fixture["revision"], source_bytes=fixture["sourceBytes"],
+        )
+        self.assertEqual(checked["checkedNodes"], 8)
+        bad = json.loads(json.dumps(fixture))
+        bad["nodes"][1]["parentId"] = 999
+        with self.assertRaises(lab.AstValidationError) as error:
+            lab.validate_checked_ast_fixture(bad)
+        self.assertEqual(error.exception.code, "structural-invalidity")
+        bad = json.loads(json.dumps(fixture))
+        bad["revision"] = "sha256:wrong"
+        with self.assertRaises(lab.AstValidationError) as error:
+            lab.validate_checked_ast_fixture(
+                bad, expected_document=fixture["document"], expected_revision=fixture["revision"],
+                source_bytes=fixture["sourceBytes"],
+            )
+        self.assertEqual(error.exception.code, "revision-mismatch")
+
+    def test_serialized_corruption_corpus_rejects_every_representation(self):
+        fixture = lab.synthetic_checked_ast_fixture(8)
+        rows = lab.representation_mutation_corpus(fixture)
+        self.assertEqual(len(rows), 3 * len(lab.AST_MUTATIONS))
+        self.assertEqual({row["oracle"] for row in rows}, {
+            "decode-error", "structural-invalidity", "revision-mismatch",
+            "reference-equivalence-mismatch",
+        })
+        self.assertIn({
+            "representation": "compact-interned-array",
+            "mutation": "changed-value",
+            "oracle": "reference-equivalence-mismatch",
+        }, [dict((key, row[key]) for key in ("representation", "mutation", "oracle")) for row in rows])
+
+    def test_roundtrippable_corruption_fails_independent_reference_oracle(self):
+        fixture = lab.synthetic_checked_ast_fixture(8)
+        payload, decoder = lab.representation_variants(fixture)["flat-node-array"]()
+        corrupted = lab._mutate_encoded_payload("flat-node-array", payload, "changed-value")
+        decoded = decoder(corrupted)
+        self.assertEqual(lab.validate_checked_ast_fixture(decoded)["valid"], True)
+        with self.assertRaises(lab.AstValidationError) as error:
+            lab.validate_serialized_payload("flat-node-array", corrupted, fixture, decoder)
+        self.assertEqual(error.exception.code, "reference-equivalence-mismatch")
+
     def test_topology_and_span_mutations_are_detectable(self):
         fixture = lab.synthetic_checked_ast_fixture(6)
         lab.assert_mutation_rejected(fixture, lambda value: value["nodes"][2].__setitem__("parentId", 1))
