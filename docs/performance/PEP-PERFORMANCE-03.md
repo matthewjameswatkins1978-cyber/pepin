@@ -66,6 +66,48 @@ The evidence supports measuring a larger safe stage batch and retained-session
 reuse next. It does not yet justify a production protocol change, cursor
 compression, compact AST wire schema, or a changed interpreter budget.
 
+## Slice 2: retained sessions and bounded aggregation model
+
+The retained-session experiment reused one A12 process and one registered
+parser pair for three targets (199, 372 and 724 bytes). One run reported
+272.60 ms process startup and 550.03 ms one-time setup. The target rows were:
+
+| bytes | nodes | calls | requests | responses | parser loop |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 199 | 28 | 14 | 53,042 | 86,702 | 14.90 ms |
+| 372 | 52 | 23 | 92,294 | 150,869 | 24.50 ms |
+| 724 | 100 | 40 | 168,129 | 275,823 | 46.88 ms |
+
+The same-session A11-sized control parsed two identical 19,425-byte targets in
+1,230.29 ms and 1,211.28 ms after one 580.09 ms setup, with 4,114,743 request
+bytes and 6,098,671 response bytes per target. The corresponding cold run had
+roughly 586.76 ms setup per target. This is an experimentally verified
+benefit of retained session/tool state, not a claim that parser state is safe
+to share across documents: every target still received a new document and
+revision, and every continuation used the returned cursor for that target.
+
+The test-only coalescing model groups already-produced parser-step responses
+without changing execution or the JSONL protocol. On the 19,425-byte A12
+lexer source, the model produced these bounds:
+
+| grouping width | modelled host calls | largest grouped response | under 1 MiB |
+| ---: | ---: | ---: | --- |
+| 1 | 568 | 69,118 | yes |
+| 2 | 285 | 83,271 | yes |
+| 4 | 143 | 120,301 | yes |
+| 8 | 72 | 179,127 | yes |
+| 16 | 37 | 358,045 | yes |
+| 32 | 19 | 632,778 | yes |
+| 64 | 10 | 953,944 | yes |
+| 128 | 6 | 1,822,472 | no |
+
+This model identifies 64 as a workload-specific upper candidate under the
+existing message limit and 128 as a demonstrated unsafe candidate. It is not
+a production improvement: aggregation changes the transport contract and
+would need an independently reviewed bounded envelope, ordering/error model
+and A13 consumer. The safe near-term improvement is retained session/tool
+state where document/revision ownership remains explicit.
+
 ## Reproduction
 
 From the repository root, with the disposable `_build/perf03-a12` checkout at

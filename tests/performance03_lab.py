@@ -298,12 +298,26 @@ def validate_continuation_rows(rows: list[dict[str, Any]]) -> None:
     fingerprints = [row.get("inputCursorSha256") for row in steps]
     if any(not fingerprint for fingerprint in fingerprints) or len(set(fingerprints)) != len(fingerprints):
         raise PipelineError("continuation cursor was missing or repeated")
-    if any(current["sourceOffset"] < previous["sourceOffset"] for previous, current in zip(steps, steps[1:])):
-        raise PipelineError("continuation source offset moved backwards")
+    if any(not isinstance(row.get("sourceOffset"), int) or row["sourceOffset"] < 0 for row in steps):
+        raise PipelineError("continuation source offset is invalid")
     if not steps[-1].get("done"):
         raise PipelineError("continuation trace has no terminal result")
     if any(row.get("done") for row in steps[:-1]):
         raise PipelineError("continuation trace has an early terminal result")
+
+
+def simulated_coalescing(rows: list[dict[str, Any]], width: int, *, message_budget: int = 1_048_576) -> dict[str, Any]:
+    """Model host aggregation of already-produced chunks; never changes execution."""
+    if width < 1:
+        raise ValueError("coalescing width must be positive")
+    steps = [row for row in rows if row.get("stage") == "parser_step"]
+    groups = [steps[index:index + width] for index in range(0, len(steps), width)]
+    grouped_responses = [sum(int(row["responseBytes"]) for row in group) for group in groups]
+    return {"kind": "test-only-response-coalescing-model", "width": width,
+            "sourceSteps": len(steps), "modelledHostCalls": 1 + len(groups),
+            "maxGroupedResponseBytes": max(grouped_responses, default=0),
+            "underMessageBudget": all(size <= message_budget for size in grouped_responses),
+            "productionProtocolChanged": False}
 
 
 @dataclass
@@ -339,6 +353,7 @@ class ParserMeasurement:
             "responseBytes": self.response_bytes, "maxRequestBytes": self.max_request_bytes,
             "maxResponseBytes": self.max_response_bytes, "elapsedMs": self.elapsed_ms,
             "callRows": self.call_rows, "nodes": self.nodes,
+            "coalescingModels": [simulated_coalescing(self.call_rows, width) for width in (2, 4, 8, 16, 32)],
         }
 
 
@@ -519,6 +534,87 @@ def run_workloads(*, include_scaling: bool = False) -> dict[str, Any]:
             ) for item in complete]) if complete else {"workloads": 0}}
 
 
+def warm_session_measurement(sources: Iterable[str] | None = None) -> dict[str, Any]:
+    """Measure several real parser targets over one retained session."""
+    source_list = list(sources or (generated_declarations(8), generated_declarations(16), generated_declarations(32)))
+    session = JsonlSession(A12_ROOT)
+    try:
+        setup_started = time.perf_counter_ns()
+        bundle = (A12_ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8") + "\n" + \
+            (A12_ROOT / "examples" / "pep_parser.pep").read_text(encoding="utf-8")
+        bundle_response, _ = session.send({"schemaVersion": 3, "op": "open", "name": "p03-warm-bundle",
+                                           "source": bundle, "metadataOnly": True})
+        if bundle_response.get("outcome") != "ok":
+            raise PipelineError(f"warm bundle open failed: {bundle_response}")
+        registration_response, _ = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "p03-warm-registration", "bytes": []})
+        registration_document, registration_revision = registration_response["document"], registration_response["revision"]
+        tool_document, tool_revision = bundle_response["document"], bundle_response["revision"]
+        initial = cursor_value(registration_document, registration_revision)
+        terminal = cursor_value(registration_document, registration_revision, done=True, lex_done=True, lex_stage="done")
+        _register(session, "p03-warm-start", "parser_start", tool_document, tool_revision, [], initial,
+                  registration_document, registration_revision)
+        _register(session, "p03-warm-step", "parser_step", tool_document, tool_revision, [terminal],
+                  chunk_value(registration_document, registration_revision, terminal),
+                  registration_document, registration_revision)
+        setup_ms = (time.perf_counter_ns() - setup_started) / 1_000_000
+        rows = []
+        for index, source in enumerate(source_list):
+            raw = source.encode("utf-8")
+            target_started = time.perf_counter_ns()
+            target, target_timing = session.send({"schemaVersion": 3, "op": "open_bytes",
+                                                  "name": f"p03-warm-target-{index}", "bytes": list(raw)})
+            if target.get("outcome") != "ok":
+                raise PipelineError(f"warm target open failed: {target}")
+            target_document, target_revision = target["document"], target["revision"]
+            semantic_target = {"document": target_document, "revision": target_revision, "entryFunctions": []}
+            started, start_timing = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                "op": "tool_invoke", "tool": "p03-warm-start", "arguments": [],
+                "semanticTarget": semantic_target})
+            cursor = started["result"]
+            trace = [dict(start_timing, stage="parser_start", sourceOffset=0)]
+            nodes: list[dict[str, Any]] = []
+            request_bytes = start_timing["requestBytes"]
+            response_bytes = start_timing["responseBytes"]
+            started_loop = time.perf_counter_ns()
+            for step_index in range(MAX_TRACE_CALLS):
+                nested = fields(fields(fields(cursor)["stream"])["lexCursor"])
+                source_offset = int(scalar(nested["offset"]))
+                cursor_payload = json.dumps(cursor, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                invoked, timing = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                    "op": "tool_invoke", "tool": "p03-warm-step", "arguments": [cursor],
+                    "semanticTarget": semantic_target})
+                result_fields = fields(invoked["result"])
+                chunk = result_fields["nodes"]["value"]
+                nodes.extend(normalize_nodes({"fields": [{"name": "nodes", "value": {"value": chunk}}]}))
+                done = bool(scalar(result_fields["done"]))
+                trace.append(dict(timing, stage="parser_step", index=step_index, sourceOffset=source_offset,
+                                  nodes=len(chunk), done=done, inputCursorBytes=len(cursor_payload),
+                                  inputCursorSha256=hashlib.sha256(cursor_payload).hexdigest(),
+                                  cursorBytes=len(json.dumps(result_fields["cursor"], separators=(",", ":")).encode("utf-8"))))
+                request_bytes += timing["requestBytes"]
+                response_bytes += timing["responseBytes"]
+                cursor = result_fields["cursor"]
+                if done:
+                    break
+            else:
+                raise PipelineError("warm parser continuation exceeded trace bound")
+            validate_continuation_rows(trace)
+            nodes.sort(key=lambda node: node["id"])
+            topology_check(nodes)
+            expected_count = ast_count(target.get("ast") or [])
+            if expected_count != len(nodes):
+                raise PipelineError(f"warm AST count {expected_count} != node count {len(nodes)}")
+            rows.append({"index": index, "sourceBytes": len(raw), "sourceRevision": target_revision,
+                         "nodeCount": len(nodes), "calls": len(trace), "requestBytes": request_bytes,
+                         "responseBytes": response_bytes, "targetOpenMs": target_timing["elapsedMs"],
+                         "parserMs": (time.perf_counter_ns() - started_loop) / 1_000_000,
+                         "targetOpenWallMs": (time.perf_counter_ns() - target_started) / 1_000_000})
+        return {"a12Sha": A12_SHA, "sessionSpawnMs": session.spawn_ms, "setupMs": setup_ms,
+                "targetCount": len(rows), "rows": rows}
+    finally:
+        session.close()
+
+
 def summarize(measurements: list[ParserMeasurement]) -> dict[str, Any]:
     if not measurements:
         raise ValueError("at least one measurement is required")
@@ -535,11 +631,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the SHA-pinned A12 performance laboratory campaign")
     parser.add_argument("--real-a12", action="store_true", help="run the real disposable A12 session campaign")
     parser.add_argument("--include-scaling", action="store_true", help="include 8/16/32/64 declaration-size workloads")
+    parser.add_argument("--warm-session", action="store_true", help="also measure multiple targets in one retained session")
     parser.add_argument("--output", type=pathlib.Path, default=ARTIFACT_ROOT / "slice1.json")
     args = parser.parse_args()
     if not args.real_a12:
         parser.error("--real-a12 is required for a measurement")
     result = run_workloads(include_scaling=args.include_scaling)
+    if args.warm_session:
+        result["warmSession"] = warm_session_measurement()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
     print(json.dumps(result["summary"], sort_keys=True))

@@ -49,6 +49,19 @@ class Performance03LabTests(unittest.TestCase):
         with self.assertRaises(lab.PipelineError):
             lab.validate_continuation_rows(early)
 
+    def test_coalescing_is_explicitly_simulated_and_budget_checked(self):
+        rows = [
+            {"stage": "parser_start"},
+            {"stage": "parser_step", "responseBytes": 400, "done": False},
+            {"stage": "parser_step", "responseBytes": 500, "done": False},
+            {"stage": "parser_step", "responseBytes": 300, "done": True},
+        ]
+        model = lab.simulated_coalescing(rows, 2, message_budget=800)
+        self.assertEqual(model["sourceSteps"], 3)
+        self.assertEqual(model["modelledHostCalls"], 3)
+        self.assertFalse(model["underMessageBudget"])
+        self.assertFalse(model["productionProtocolChanged"])
+
     def test_source_cap_is_preserved(self):
         with self.assertRaises(ValueError):
             lab.parse_source(b"x" * (lab.MAX_SOURCE_BYTES + 1))
