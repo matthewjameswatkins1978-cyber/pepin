@@ -69,6 +69,19 @@ class A13NestedRecordTests(unittest.TestCase):
         report = self._assert_matches_reference("union-payload", source)
         self.assertEqual(scalar(report["status"]), "valid")
 
+    def test_union_pattern_binding_retains_named_record_payload_type(self):
+        source = (
+            "type Point { x: Int }\n"
+            "type Message = At(Point) | Missing()\n"
+            "fn read(message: Message) -> Int { return match message { At(point) => 0 Missing() => 1 } }"
+        )
+        report = self._assert_matches_reference("union-record-pattern", source)
+        self.assertEqual(scalar(report["status"]), "valid")
+        binding_types = [scalar(fields(item)["typeName"]) for item in report["bindings"]["value"]]
+        self.assertIn("Point", binding_types)
+        expression_types = [scalar(fields(item)["typeName"]) for item in report["expressionTypes"]["value"]]
+        self.assertIn("Int", expression_types)
+
     def test_nested_record_fields_construction_and_mismatch_match_ocaml(self):
         valid_read = (
             "type Inner { value: Int }\n"
