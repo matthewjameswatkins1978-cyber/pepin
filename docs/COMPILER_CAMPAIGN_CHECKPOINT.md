@@ -2,8 +2,8 @@
 
 **Date:** 2026-10-27
 **Repository:** `matthewjameswatkins1978-cyber/pepin`
-**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `3dcd88b47fc016f9649eb5b310ed14f7bf6f38d6` (remote-equal)
-**Verification test head:** `0346120f93aab874587612b7f935d78db3d7ce67` (remote-equal)
+**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `3d6484a419de2dd82aa6ca7c9047ff0c769988eb` (remote-equal)
+**Verification test head:** `3d6484a419de2dd82aa6ca7c9047ff0c769988eb` (remote-equal)
 
 ## Baselines and authority
 
@@ -18,8 +18,12 @@ The isolated Pep-written A13 checker resolves lexical names and function calls; 
 
 At checker code SHA `3dcd88b47fc016f9649eb5b310ed14f7bf6f38d6`, tested with the committed test source at `0346120f93aab874587612b7f935d78db3d7ce67`, `python -m unittest tests.test_a13 tests.test_a13_nested_records -q` passed **33/33** in 79.143 seconds. This is 29 A13 checker tests plus four nested-record/list tests. Ten if-expression fixtures compare status, exact diagnostic codes/spans and typed-hole expectations with OCaml across returns, annotations, function arguments, list elements, record fields and branch mismatches. Four minimal record-field match-with-hole variants still return `PEP_RUNTIME_STEP_LIMIT`; the 100,000-step budget is unchanged. The earlier 32/32 attribution to the older `7533f4c` candidate is superseded: replaying that stale checker against newer nested-list mismatch cases exposed three expected failures, while the current `3dcd88b` checker passes the exact branch suite. The existing `_build/ocaml/pep.exe` provided the OCaml CLI oracle. No clean OCaml rebuild or full repository suite was run.
 
+### Latest fail-closed differential follow-up
+
+At checker/test SHA `3d6484a419de2dd82aa6ca7c9047ff0c769988eb`, `python -m unittest tests.test_a13 tests.test_a13_nested_records -q` passed **33/33** in 85.415 seconds. The strengthened gate compares exact diagnostic codes and byte spans with OCaml for wrong record fields, constructor payloads, if/while conditions, builtin arity and builtin argument types. It exposed an extra `PEP_LIST_UNTYPED` after `length()` already failed arity; Pep now skips list-specific validation for wrong-arity calls, matching OCaml's single `PEP_ARGUMENT_COUNT`. Statement-if and while holes match OCaml's `Bool` expectation and byte spans; candidate and visible IDs resolve to the scoped `Bool` parameter. The four record-field match-with-hole variants still hit the unchanged 100,000-step ceiling. This run predates the current uncommitted structural type-shape edits in `tests/pep_checker_a13.pep` and `tests/test_a13_nested_records.py`; those edits are not part of SHA `3d6484a` or its evidence. `git diff --check` passed; no clean OCaml rebuild or full repository run was performed.
+
 ## Remaining risks and next action
 
-A13 remains partial and unaccepted. Recursive nominal/union relationships, nested constructor patterns, broader patterns, complete control-flow analysis and the checked-program contract remain unfinished. Four minimized record-field match-with-hole variants still hit the unchanged 100,000-step ceiling, so their hole facts remain unverified; do not increase the budget. The reviewed fail-closed gate remains required until each rule is independently implemented and differentially tested. The worktree was clean at verification head `0346120`.
+A13 remains partial and unaccepted. Recursive nominal/union relationships, nested constructor patterns, broader patterns, complete control-flow analysis and the checked-program contract remain unfinished. Four minimized record-field match-with-hole variants still hit the unchanged 100,000-step ceiling, so their hole facts remain unverified; do not increase the budget. The reviewed fail-closed gate remains required until each rule is independently implemented and differentially tested. Verification commit `3d6484a` was remote-equal when tested. The current checkout contains uncommitted structural type-shape edits in `tests/pep_checker_a13.pep` and `tests/test_a13_nested_records.py`; preserve and review them before relying on or extending that slice.
 
-Next slice: inspect repeated checker traversals in the minimal hole case and make only a measured bounded optimization. A13 remains experimental; no acceptance, merge, `CURRENT.md` or manifest advancement.
+Next slice: review the pending structural type-shape edits and verify them on the same branch before relying on them; then resume measurement of the fixed-budget record-field match-with-hole cases. A13 remains experimental; no acceptance, merge, `CURRENT.md` or manifest advancement.
