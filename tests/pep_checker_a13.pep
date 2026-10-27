@@ -375,6 +375,15 @@ fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindin
   }
   return facts
 }
+fn primitive_builtin_arity(name: Str) -> Int {
+  if name == "say" || name == "int_text" { return 1 } else {}
+  return -1
+}
+fn primitive_builtin_parameter_type(name: Str, index: Int) -> Str {
+  if name == "say" && index == 0 { return "Str" } else {}
+  if name == "int_text" && index == 0 { return "Int" } else {}
+  return ""
+}
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -436,7 +445,25 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               index = index + 1
             } else {}
           }
-        } else {}
+        } else {
+          let requiredArity = primitive_builtin_arity(node.text)
+          if requiredArity != -1 {
+            if count_children(nodes, node.id, "argument") != requiredArity {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Built-in call argument count does not match its signature", node))
+            } else {}
+            var index = 0
+            for argument in nodes {
+              if argument.parentId == node.id && argument.role == "argument" {
+                let expected = primitive_builtin_parameter_type(node.text, index)
+                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                if expected != "" && actualArgument != "" && expected != actualArgument {
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
+                } else {}
+                index = index + 1
+              } else {}
+            }
+          } else {}
+        }
       } else {}
       if node.kind == "if_expression" {
         let condition = child_at(nodes, node.id, "condition", 0)

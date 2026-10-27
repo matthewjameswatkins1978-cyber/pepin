@@ -204,6 +204,26 @@ class A13FunctionResolutionTests(unittest.TestCase):
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertIn("PEP_TYPE_MISMATCH", codes)
 
+    def test_primitive_builtin_signatures_are_checked(self):
+        source = "fn main() -> Unit { say(int_text(7)); return say(\"done\") }"
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        types_by_start = {scalar(fields(item)["startByte"]): scalar(fields(item)["typeName"]) for item in report["expressionTypes"]["value"]}
+        for call, expected_type in [("say(int_text(7))", "Unit"), ("int_text(7)", "Str"), ("say(\"done\")", "Unit")]:
+            self.assertEqual(types_by_start[source.index(call)], expected_type)
+
+        cases = [
+            ("fn main() -> Unit { return say() }", "PEP_ARGUMENT_COUNT"),
+            ("fn main() -> Unit { return say(1) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Str { return int_text() }", "PEP_ARGUMENT_COUNT"),
+            ("fn main() -> Str { return int_text(true) }", "PEP_ARGUMENT_TYPE"),
+        ]
+        for source, expected_code in cases:
+            _, report = self._analyze(source)
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn(expected_code, codes)
+
     def test_unimplemented_nominal_and_list_types_fail_closed(self):
         source = "fn identity(x: Missing) -> Missing { return x }"
         _, report = self._analyze(source)
