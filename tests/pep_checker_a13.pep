@@ -659,8 +659,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if field.parentId == node.id && field.kind == "field_declaration" {
           if record_field_declaration_count(nodes, node.id, field.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
           let fieldType = child_at(nodes, field.id, "type", 0)
-          if fieldType.found && !supported_primitive_type(type_name_at(nodes, fieldType.node.id)) {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Record field type is outside the implemented scalar record subset", field))
+          if fieldType.found && !supported_type(nodes, type_name_at(nodes, fieldType.node.id)) {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Record field type is outside the implemented checker subset", field))
           } else {}
         } else {}
       }
@@ -672,8 +672,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if variant.parentId == node.id && variant.kind == "variant_declaration" {
           if constructor_declaration_count(nodes, variant.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
           for payload in nodes {
-            if payload.parentId == variant.id && payload.role == "field_type" && !supported_primitive_type(type_name_at(nodes, payload.id)) {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Union constructor payload type is outside the implemented scalar payload subset", payload))
+            if payload.parentId == variant.id && payload.role == "field_type" && !supported_type(nodes, type_name_at(nodes, payload.id)) {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Union constructor payload type is outside the implemented checker subset", payload))
             } else {}
           }
         } else {}
