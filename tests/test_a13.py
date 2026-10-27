@@ -582,6 +582,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("all-arms-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => false } }"),
             ("first-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => true B() => 0 } }"),
             ("later-arm-mismatch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return match x { A() => 0 B() => true } }"),
+            ("function-argument", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return f(match x { A() => true B() => false }) }"),
             ("annotated-binding", "type M = A() | B()" + NL + "fn f(x: M) -> Int { let n: Int = match x { A() => true B() => false }; return n }"),
             ("conditional-branch", "type M = A() | B()" + NL + "fn f(x: M) -> Int { return if true { match x { A() => true B() => false } } else { 0 } }"),
             ("list-element", "type M = A() | B()" + NL + "fn f(x: M) -> List[Int] { return [match x { A() => true B() => false }] }"),
