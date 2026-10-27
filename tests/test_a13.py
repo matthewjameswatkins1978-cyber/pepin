@@ -731,6 +731,35 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertTrue(report["holes"]["value"], report)
         self.assertIn("PEP_RETURN_TYPE", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
+    def test_if_expression_propagates_context_and_reports_branch_spans(self):
+        cases = [
+            ("one-hole", "fn f(flag: Bool) -> Int { return if flag { ?yes } else { 0 } }", "incomplete", {"yes": "Int"}),
+            ("both-holes", "fn f(flag: Bool) -> Int { return if flag { ?yes } else { ?no } }", "incomplete", {"yes": "Int", "no": "Int"}),
+            ("context-first-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { 0 } }", "invalid", {}),
+            ("context-last-mismatch", "fn f(flag: Bool) -> Int { return if flag { 0 } else { true } }", "invalid", {}),
+            ("context-both-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { false } }", "invalid", {}),
+            ("uncontextual-mismatch", "fn f(flag: Bool) -> Int { let value = if flag { 0 } else { true }; return 1 }", "invalid", {}),
+        ]
+        for name, source, expected_status, expected_holes in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("if-expression-" + name, source)
+                opened, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                reference_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, reference_diagnostics, report)
+                reference_holes = {item["name"]: item["expectedType"] for item in opened.get("holes", [])}
+                actual_holes = {scalar(fields(item)["name"]): scalar(fields(item)["expectedType"]) for item in report["holes"]["value"]}
+                self.assertEqual(reference_holes, expected_holes)
+                self.assertEqual(actual_holes, expected_holes, report)
+
     def test_utf8_and_crlf_keep_original_function_byte_spans(self):
         prefix = '"λ🙂"' + CRLF
         source = prefix + "fn main() -> Int { return 1 }" + CRLF

@@ -361,8 +361,15 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     }
   } else {}
   if node.kind == "if_expression" {
+    let expected = contextual_expected_type(nodes, node, functions, bindings, references)
+    if expected != "" { return expected } else {}
     let thenValue = child_at(nodes, node.id, "then", 1)
-    if thenValue.found { return infer_expression_type(nodes, thenValue.node.id, functions, bindings, references) } else { return "" }
+    if thenValue.found {
+      let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
+      if thenType != "" { return thenType } else {}
+    } else {}
+    let elseValue = child_at(nodes, node.id, "else", 2)
+    if elseValue.found { return infer_expression_type(nodes, elseValue.node.id, functions, bindings, references) } else { return "" }
   } else {}
   if node.kind == "record" { if record_declaration(nodes, node.text).found { return node.text } else { return "" } } else {}
   if node.kind == "field_access" {
@@ -441,6 +448,8 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
     return ""
   } else {}
   if parent.node.kind == "if_expression" && (node.role == "then" || node.role == "else") {
+    let enclosingExpected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
+    if enclosingExpected != "" { return enclosingExpected } else {}
     let siblingRole = if node.role == "then" { "else" } else { "then" }
     let siblingIndex = if node.role == "then" { 2 } else { 1 }
     let sibling = child_at(nodes, parent.node.id, siblingRole, siblingIndex)
@@ -514,6 +523,14 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if parent.node.kind == "return" && hole.role == "value" {
     let owner = owner_function(nodes, hole, functions)
     if owner.found { return owner.function.returnType } else { return "" }
+  } else {}
+  if parent.node.kind == "if_expression" && (hole.role == "then" || hole.role == "else") {
+    let expected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
+    if expected != "" { return expected } else {}
+    let siblingRole = if hole.role == "then" { "else" } else { "then" }
+    let siblingIndex = if hole.role == "then" { 2 } else { 1 }
+    let sibling = child_at(nodes, parent.node.id, siblingRole, siblingIndex)
+    if sibling.found { return infer_expression_type(nodes, sibling.node.id, functions, bindings, references) } else { return "" }
   } else {}
   if parent.node.kind == "match_arm" && hole.role == "result" {
     let expression = lookup_node(nodes, parent.node.parentId)
@@ -935,15 +952,27 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let condition = child_at(nodes, node.id, "condition", 0)
         let thenValue = child_at(nodes, node.id, "then", 1)
         let elseValue = child_at(nodes, node.id, "else", 2)
+        let expectedResult = contextual_expected_type(nodes, node, functions, bindings, references)
         if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If condition must have type Bool", condition.node))
         } else {}
         if thenValue.found && elseValue.found {
           let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
           let elseType = infer_expression_type(nodes, elseValue.node.id, functions, bindings, references)
-          if thenType != "" && elseType != "" && thenType != elseType {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branches must have the same type", node))
-          } else {}
+          if expectedResult != "" {
+            var mismatchReported = false
+            if thenType != "" && thenType != expectedResult {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenValue.node))
+              mismatchReported = true
+            } else {}
+            if !mismatchReported && elseType != "" && elseType != expectedResult {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseValue.node))
+            } else {}
+          } else {
+            if thenType != "" && elseType != "" && thenType != elseType {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match the other branch type", elseValue.node))
+            } else {}
+          }
         } else {}
       } else {}
     } else {}
