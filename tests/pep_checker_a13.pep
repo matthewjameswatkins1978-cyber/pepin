@@ -692,6 +692,7 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
       } else {}
     } else {}
     var typeShape = binding.typeShape
+    if typeShape.kind == "" && typeName != "" { typeShape = legacy_type_shape(nodes, typeName) } else {}
     if typeShape.kind == "" {
       if typeShape.kind == "" && typeName == "" && declaration.found {
         if declaration.node.kind == "binding_pattern" {

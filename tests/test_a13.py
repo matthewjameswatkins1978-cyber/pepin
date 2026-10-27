@@ -294,6 +294,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("fn values() -> List[Int] { return [1, 2] }", "List[Int]"),
             ("fn empty() -> List[Int] { return [] }", "List[Int]"),
             ("fn main() -> Int { let values: List[Int] = []; return length(values) }", "Int"),
+            ("fn main() -> Int { let values = [1, 2]; return length(values) }", "Int"),
         ]
         for source, result_type in cases:
             _, report = self._analyze(source)
@@ -304,6 +305,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 binding = fields(report["bindings"]["value"][0])
                 self.assertEqual(scalar(binding["typeName"]), "List[Int]")
                 self.assertGreater(len(report["expressionTypes"]["value"]), 0)
+                if "let values =" in source:
+                    shape = fields(binding["typeShape"])
+                    self.assertEqual(scalar(shape["kind"]), "builtin")
+                    self.assertEqual(scalar(shape["name"]), "Int")
+                    self.assertEqual(scalar(shape["listDepth"]), 1)
 
         cases = [
             ("fn bad() -> List[Int] { return [1, true] }", "PEP_TYPE_MISMATCH"),
@@ -452,8 +458,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
         facts = [fields(item) for item in report["expressionTypes"]["value"]]
         field_fact = next(item for item in facts if scalar(item["startByte"]) == source.index("point.x"))
         self.assertEqual(scalar(field_fact["typeName"]), "Int")
-        binding_types = [scalar(fields(item)["typeName"]) for item in report["bindings"]["value"]]
+        bindings = [fields(item) for item in report["bindings"]["value"]]
+        binding_types = [scalar(item["typeName"]) for item in bindings]
         self.assertIn("Point", binding_types)
+        point_binding = next(item for item in bindings if scalar(item["typeName"]) == "Point")
+        point_shape = fields(point_binding["typeShape"])
+        self.assertEqual(scalar(point_shape["kind"]), "nominal")
+        self.assertEqual(scalar(point_shape["name"]), "Point")
+        self.assertEqual(scalar(point_shape["listDepth"]), 0)
 
         source = "type Point { x: Int }" + NL + "fn read(point: Point) -> Int { return point.x }"
         _, report = self._analyze(source)
