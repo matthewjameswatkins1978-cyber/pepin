@@ -1,6 +1,6 @@
 # PEP-INTEGRATION-01 — Working Components to One Compiler Pipeline
 
-Status: integration-readiness evidence on `exp/pep-performance-03`. This is
+Status: final integration-readiness evidence on `exp/pep-performance-03`. This is
 an isolated harness/report slice. It does not modify A12, add A13, promote
 the C23 experiment to A14, change the JSONL protocol, raise interpreter
 budgets, or advance a milestone pointer.
@@ -11,6 +11,10 @@ The machine-readable dependency record is
 [`PEP-INTEGRATION-01-MANIFEST.json`](PEP-INTEGRATION-01-MANIFEST.json). The
 baseline is the reviewed A11 integration candidate
 `4e497bf192b33e76cb0fdf59bfc30e9b3ef3127f`.
+
+The manifest records the P03 parent head separately from the latest completed
+integration slice (`72f0283d98bbf64b76aa3cc57d5eb32aef9fbea8`); it is a pinned
+input record, not a self-referential branch pointer.
 
 | component | exact revision | current evidence boundary |
 | --- | --- | --- |
@@ -124,9 +128,10 @@ calls, 953,944-byte largest grouped response) but width 128 exceeded it
 
 | candidate | evidence and consequence | decision |
 | --- | --- | --- |
-| Separate host lexer/parser streams | easiest audit baseline, but repeats token transport and host round trips | retain as diagnostic baseline |
+| Separate host lexer/parser streams | easiest audit baseline; P03's 568-call A12-sized route carries about 10.2 MB aggregate wire traffic and repeats stage transfer | retain as diagnostic baseline |
 | Parser-internal bounded composition | A12 already performs lexer/parser work internally, avoiding per-token host transfer; needs accepted checker ownership/error contracts | preferred execution direction |
-| One retained local session | setup amortisation is measured; each document still needs a fresh authorised revision and exact cursor chain | safe operational improvement to pursue |
+| One retained local session | setup amortisation is measured at about 580 ms across two A11-sized targets; each document still needs a fresh authorised revision and exact cursor chain | safe operational improvement to pursue |
+| Host-retained intermediate semantic state | no accepted measurement or authority contract; opaque state would make revision, recovery and audit ambiguous | design-only; reject for now |
 | Host-side response coalescing | width 64 is only a workload-specific model; framing, diagnostics and ordering would need review and width 128 is unsafe | test-only evidence; do not land now |
 
 Recommendation: use bounded composition inside Pep-written compiler stages and
@@ -158,13 +163,17 @@ The integration harness and its negative-control tests pass as follows:
 python -m unittest tests.test_integration01_lab tests.test_performance03_lab tests.test_performance02_lab -v
 ```
 
-This focused command passed 37/37 tests. The real A12 command above passed;
+This focused command passed 37/37 tests. The pinned A12 parser suite at
+`69a47fe77187666bdd045b8dc8a9f633a7dd49d7` also passed 22/22, including
+revision-mismatch rejection, malformed-input recovery, topology mutation
+rejection and source-limit protection. The real A12 command above passed;
 the receipt records the five rows and the source-cap rejection. The existing
 P03 adapter checks remain separate and continue to cover continuation identity,
-topology mutations, source caps and bounded coalescing models. Full repository
-regression and `git diff --check` are the next acceptance checks for this
-slice. No A12, A13, C23 production/compiler, JSONL schema, budget or packet
-pointer files were changed.
+topology mutations, source caps and bounded coalescing models. The full
+repository regression passed 140/140 before these final provenance edits, and
+the final staged diff passed `git diff --check`. No A12, A13, C23
+production/compiler, JSONL schema, budget or packet pointer files were
+changed.
 
 ## Remaining uncertainty
 
