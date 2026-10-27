@@ -1,6 +1,7 @@
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
+type PepTypeShape { kind: Str, name: Str, listDepth: Int }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, startByte: Int, endByte: Int }
@@ -919,7 +920,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 index = index + 1
               } else {}
             }
-          if node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains" {
+          if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && count_children(nodes, node.id, "argument") == requiredArity {
               let collection = child_at(nodes, node.id, "argument", 0)
               let collectionType = if collection.found { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
               let elementType = list_element_type(collectionType)

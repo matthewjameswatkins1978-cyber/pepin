@@ -236,11 +236,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn("PEP_TYPE_MISMATCH", codes)
 
-        for source in ["fn main() -> Unit { if ?condition {} else {} }", "fn main() -> Unit { while ?condition {} }"]:
+        for name, source in [("if", "fn main(flag: Bool) -> Unit { if ?condition {} else {} }"), ("while", "fn main(flag: Bool) -> Unit { while ?condition {} }")]:
+            reference = self._reference_check("statement-condition-hole-" + name, source)
             _, report = self._analyze(source)
+            self.assertEqual(reference["status"], "incomplete", reference)
             self.assertEqual(scalar(report["status"]), "incomplete", report)
-            holes = [fields(item) for item in report["holes"]["value"]]
-            self.assertEqual([scalar(item["expectedType"]) for item in holes], ["Bool"])
+            self.assertEqual(len(report["holes"]["value"]), 1)
+            hole = fields(report["holes"]["value"][0])
+            ref_hole = reference["holes"][0]
+            self.assertEqual(scalar(hole["expectedType"]), ref_hole["expectedType"])
+            self.assertEqual(ref_hole["expectedType"], "Bool")
+            self.assertEqual((scalar(hole["startByte"]), scalar(hole["endByte"])), (ref_hole["span"]["start"]["offset"], ref_hole["span"]["endOffset"]))
+            bindings = [fields(item) for item in report["bindings"]["value"]]
+            binding_names = {scalar(item["semanticId"]): scalar(item["name"]) for item in bindings}
+            visible_names = {binding_names[scalar(item)] for item in hole["visibleBindingIds"]["value"]}
+            candidate_names = {binding_names[scalar(item)] for item in hole["candidateBindingIds"]["value"]}
+            self.assertEqual(visible_names, {item["name"] for item in ref_hole["bindings"]})
+            self.assertEqual(candidate_names, {item["name"] for item in ref_hole["actions"][0]["candidates"]})
+            self.assertEqual(visible_names, {"flag"})
+            self.assertEqual(candidate_names, {"flag"})
+            flag = next(item for item in bindings if scalar(item["name"]) == "flag")
+            self.assertEqual(scalar(hole["scopeId"]), scalar(flag["scopeId"]))
+            self.assertIn(scalar(flag["semanticId"]), [scalar(item) for item in hole["visibleBindingIds"]["value"]])
 
     def test_unconstrained_empty_lists_match_reference_diagnostic(self):
         cases = [
@@ -414,6 +431,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", (name, report))
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(checker_code, codes, (name, codes))
+            if name in {"record-field", "constructor-payload", "if-condition", "while-condition", "builtin-arity", "builtin-type"}:
+                expected = [(item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"]) for item in reference["diagnostics"]]
+                actual = [(scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"])) for item in report["diagnostics"]["value"]]
+                self.assertEqual(actual, expected, (name, expected, actual))
 
         source = "type Point { x: Int }" + NL + "fn main() -> Int { let p = Point { x: ?field }; return 0 }"
         reference = self._reference_check("record-hole", source)
