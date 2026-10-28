@@ -2037,18 +2037,11 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
     } else {
       var firstFound = false
       var unknownTypeFound = false
-      var candidateCount = 0
       var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       var firstOrderByte = 0
       var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       for candidate in collectedDiagnostics {
         let orderByte = diagnostic_order_byte(nodes, candidate)
-        if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
-            candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
-            candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_CONSTRUCTOR" ||
-            candidate.code == "PEP_UNKNOWN_TYPE" {
-          candidateCount = candidateCount + 1
-        } else {}
         if candidate.code == "PEP_UNKNOWN_TYPE" {
           if !unknownTypeFound || candidate.startByte + 1 <= unknownType.startByte {
             unknownTypeFound = true
@@ -2066,10 +2059,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
           } else {}
         }
       }
-      if candidateCount == 0 {
-      } else {
-        if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
-      }
+      if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
     }
   }
   }
