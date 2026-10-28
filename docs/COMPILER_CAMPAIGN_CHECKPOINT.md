@@ -355,3 +355,11 @@ Agent 2's latest outbox reports separate C23 collection-binding work and Lucy's 
 The new OCaml differential checks exact status, code and byte spans for a mismatched leaf and a valid control. Focused match-span plus formerly failing nested-pattern tests passed **2/2**. `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **70/70 passed** in **230.398 seconds**. `python -m py_compile tests/test_a13.py` and `git diff --check`: passed. No isolated performance measurement; the 100,000-step ceiling is unchanged.
 
 **Nonblocking 3/3 review:** independent read-only review found no correctness or diagnostic-order blocker. The shared mismatch flag preserves source-order reporting and exact OCaml spans. It flagged that valid list-valued match arms each scan structural nodes; many arms or large literals may approach the fixed step ceiling. The current 70/70 corpus passes, but this is not a general size bound; no traversal savings were measured. A13 remains partial and unaccepted; no master, A14, `CURRENT.md`, manifest, budget or release change.
+
+## Continuation 03 — deduplicate contextual match-list diagnostics (2026-10-28; cycle 1/3)
+
+**Implementation/test SHA:** `a3796fb5f58ab92083bea2bdaa2a2a1bd06b573a`, pushed to `campaign/pep-v01-sustained-build-20261027` and verified remote-equal. A heterogeneous list arm such as `[1, true]` produced the correct OCaml-matching `PEP_MATCH_ARM_TYPE_MISMATCH` at `true`, but also leaked a generic `PEP_TYPE_MISMATCH` at the same span from list validation. Diagnostic selection now suppresses a generic type mismatch only when a match-arm-specific diagnostic already exists at the identical byte span. Added the heterogeneous arm to the OCaml differential matrix.
+
+Focused match-list, constructor payload, and nested-list cases passed **3/3 methods**. `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **70/70 passed** in **230.856 seconds**. Python compilation and `git diff --check` passed. No performance measurement; runtime budget unchanged.
+
+A13 remains partial and unaccepted. No master, A14, `CURRENT.md`, manifest, budget or release change.
