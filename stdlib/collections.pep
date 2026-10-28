@@ -80,6 +80,12 @@ fn list_int_all_nonpositive(values: List[Int]) -> Bool {
   return all
 }
 
+fn list_int_all_positive(values: List[Int]) -> Bool {
+  var all = true
+  for item in values { all = all && (item != 0 && !(item <= -1)) }
+  return all
+}
+
 fn list_int_any_positive(values: List[Int]) -> Bool {
   var found = false
   for item in values { found = found || (item != 0 && !(item <= -1)) }
