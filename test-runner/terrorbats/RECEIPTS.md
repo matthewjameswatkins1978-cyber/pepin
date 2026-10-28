@@ -25,6 +25,7 @@ be clean, and each run gets its own disposable worktree from the framework.
 | `01-parser-composition-ceiling` | `composed_forwarding_wrapper.pep` | **NOT OBSERVED** | **reaches the emitter**: `Pep C23 unsupported: Pep C23 one-parameter calls require one argument and a call-free target expression` |
 | `02-session-continuation-invariants` | six hostile session probes | **NOT OBSERVED** | every probe `HOLD`: `PEP_SESSION_UNKNOWN_OPERATION`, `PEP_SESSION_MALFORMED_JSON`, `PEP_SESSION_FIELD_REQUIRED`, `PEP_TOOL_NOT_ACTIVE`, stable content revisions, liveness intact |
 | `03-session-stateful-handshake` | supervised session, one piped request | **NOT OBSERVED** | `observe` returned `{"outcome":"ok","operation":"open","document":"doc-1","revision":"sha256:09d129…","status":"valid",…}` |
+| `04-parser-cursor-protocol` | seven cursor/AST attacks | **NOT OBSERVED** | all seven HOLD, including ceiling uplift: monolithic aborts, cursor protocol completes in 24 steps / 58 nodes |
 
 ## Receipts
 
@@ -37,6 +38,7 @@ be clean, and each run gets its own disposable worktree from the framework.
 | forwarding wrapper | `receipt:sha256:9ca557c2100af9b877d1fc4366317868a3ab54f8a92e9cdb10f8326e4a43e90f` | `243813775ce9` | 2 | `evidence:sha256:edb3bd4e0a6a18d89ef5543334b2a782c02df0e562dc1b93edd2e69c15386569` |
 | continuation invariants | `receipt:sha256:6bfb2023e67ecb41e3ddcae190f1d3a43ea07619f4f598521d12326536c8801d` | `0d01279a622b` | 0 | driver stdout (ATTACK/HOLD/SUMMARY lines) |
 | stateful handshake | `receipt:sha256:3553920a3727271ace1826361b81bccd493c542c57b72e54dca93a152b82a873` | `0d01279a622b` | — | `observe` stream on step 3 |
+| cursor protocol | `receipt:sha256:1b3271d7d3e863898bfbb420fccec5ad507bde6cfc7c52f69122ac568ff92412` | `28c41a4e2292` | 0 | driver stdout (seven ATTACK lines + SUMMARY) |
 
 ## Exact commands
 
@@ -102,6 +104,43 @@ compiler bundle; that is the next slice, and it is where a chunked-parser repair
 could most plausibly go wrong: `parser_step` answers `done: true` together with
 `status: "invalid"` for a stale cursor (`PEP_PARSER_CURSOR_REVISION`), so an
 orchestrator that treats `done` as success would silently accept an empty AST.
+
+## Cursor protocol (#20 core question)
+
+Bat `04` registers the repository's own `parser_start` / `parser_step` tools
+(A12 registration recipe reused read-only; `pep_c23` supplies the monolithic
+builder) and attacks the protocol seven ways on target `28c41a4e2292`:
+
+| Attack | Observed | Verdict |
+| --- | --- | --- |
+| ceiling uplift | monolithic `PEP_RUNTIME_STEP_LIMIT`; cursor protocol `complete` in **24 steps / 58 nodes**, no budget hit, statuses `{complete, continuing}` | HOLD |
+| parity after id sort | chunked AST **equals** the monolithic AST (8/8 nodes) | HOLD |
+| arrival order | chunks emit children before parents; consuming in arrival order is misordered from index 0 | HOLD (trap confirmed) |
+| false completion | stale cursor → `status: invalid`, `done: true`, `PEP_PARSER_CURSOR_REVISION`, **0 nodes** | HOLD (trap confirmed) |
+| terminal idempotence | `complete` / `done` / empty `errorCode` / 0 nodes | HOLD |
+| node ids | 58 ids, unique and contiguous from 0 after sorting; arrival order not monotonic | HOLD |
+| spans | 58 extents checked, all inside the 317-byte source | HOLD |
+
+**The important result:** on this revision the cursor protocol already parses the
+composition the monolithic parser aborts on, at the fixed 100 000-step
+per-invocation budget, and produces an AST identical to the monolithic parser's
+once sorted by node id. That is evidence for the #20 hypothesis, not proof of a
+finished repair — the C23 pipeline still calls the monolithic tool.
+
+Three traps a repair must handle, all measured here:
+
+1. **Sort by node id.** Chunk arrival order is child-first, so appending in
+   arrival order yields a misordered AST that still looks complete.
+2. **`done` is not success.** A stale cursor returns `done: true` with
+   `status: "invalid"`. A loop that trusts `done` alone accepts an empty AST.
+3. **Terminal steps are idempotent** — asserting that a repeat step adds no nodes
+   protects against duplicated subtrees.
+
+Two of my own attacks were wrong before they were right, and both are fixed:
+parity first compared typed representation wrappers (false VIOLATED), and the
+span attack searched for a `span` object that does not exist in the inline
+`startByte`/`endByte` representation, producing a vacuous HOLD across zero
+checked nodes.
 
 ## Deliberately failing control
 
