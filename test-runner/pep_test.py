@@ -317,6 +317,17 @@ def run_native_fixture(cli, fx, manifest_dir, timeout_default, evidence_dir,
     expect = fx.get("expect", {}) or {}
     base = {"id": fid, "file": rel, "kind": "native",
             "backends": list(backends)}
+    pep_file = manifest_dir / rel if rel else None
+    if fx.get("skip"):
+        skipped = {"status": "skip", "detail": str(fx["skip"])}
+        if pep_file is not None and pep_file.is_file():
+            skipped["source_sha256"] = sha256_file(pep_file)
+        base.update(skipped)
+        return base
+    problem = pep_native.validate_expect(expect)
+    if problem:
+        base.update(status="infra_error", detail=problem)
+        return base
     fx_timeout = fx.get("timeoutSeconds")
     if fx_timeout is None:
         timeout = timeout_default
@@ -329,7 +340,6 @@ def run_native_fixture(cli, fx, manifest_dir, timeout_default, evidence_dir,
     if not rel:
         base.update(status="infra_error", detail="fixture has no file")
         return base
-    pep_file = manifest_dir / rel
     if not pep_file.is_file():
         base.update(status="infra_error", detail="fixture file missing: %s" % rel)
         return base
@@ -542,6 +552,10 @@ def finish(doc, infra, args, failed=0):
         if doc.get("evidence_root"):
             print("evidence: %s" % doc["evidence_root"])
     if infra is not None:
+        return EXIT_INFRA
+    if (doc.get("counts") or {}).get("infra_error"):
+        # A fixture that could not be evaluated is not a test failure: the run
+        # cannot vouch for that case at all, so exit 2 keeps CI honest.
         return EXIT_INFRA
     return EXIT_OK if failed == 0 else EXIT_TESTS_FAILED
 

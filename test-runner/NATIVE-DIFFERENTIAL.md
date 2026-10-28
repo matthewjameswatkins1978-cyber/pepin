@@ -111,12 +111,39 @@ that agreement rather than assuming it.
   that itself prints `C23: ...` is compared verbatim.
 * Declared-unsupported fixtures are counted as `unsupported`, never as `pass`.
 
+* A `skip` on a native fixture is honoured: it is recorded with its reason and
+  source SHA-256 and never executed, so nothing is compiled on its behalf.
+* Incoherent declarations are `infra_error` *before* anything runs: an unknown
+  `match` mode, `diagnostic`/`reject` without `diagnosticCode`, or a fixture
+  declaring both `nativeUnsupported` and `match: reject`.
+* A native fixture with no `expect` block is a strict expectation — empty
+  stdout and exit 0 — never "anything goes".
+* Any fixture that could not be evaluated makes the run exit `2`, distinct from
+  a test that genuinely failed.
+
 ## Evidence
 
 Each native fixture records, per backend, in the JSON result and under
 `--evidence-dir` as `native-<backend>.json`: command, exit code, stdout, program
 stderr (metadata removed), elapsed seconds, timeout flag, build metadata lines
 and the resolved compiler path. The run document also records `backends`.
+
+## When Agent 2's native backend lands
+
+The fixtures pin the boundary measured on this branch's base (`52a75d6`) with the
+campaign emitter. Agent 2's `codex/native-collections-loop` branch already adds
+`List[Int]`/`List[Bool]` descriptors, `contains`, `length`, for-in and mutable
+lists. When that work merges:
+
+* `native/unsupported-record` and any future declared-unsupported fixture will
+  **fail** rather than quietly pass, because a declaration that a backend has
+  outgrown is a failure by design. The fix is a deliberate manifest edit —
+  move the fixture to `exact`/`diagnostic` mode with the newly measured
+  expectation — and that one-line change is the whole migration.
+* Newly supported shapes should be added as `exact`/`diagnostic` fixtures rather
+  than widening the existing ones, so each capability keeps its own evidence.
+* Re-measure before encoding: this suite exists precisely so a boundary is
+  claimed from a real run instead of from another agent's receipt.
 
 ## Current limits
 

@@ -137,9 +137,15 @@ def split_build_metadata(stderr):
 def classify_native(exit_code, stdout, program_stderr):
     """Classify a `run-c23` result into one native outcome class."""
     combined = (stdout or "") + (program_stderr or "")
-    if exit_code == 2 and UNSUPPORTED_PREFIX in combined:
+    if UNSUPPORTED_PREFIX in combined:
         tail = combined.split(UNSUPPORTED_PREFIX, 1)[1].strip()
-        return UNSUPPORTED, (tail.splitlines() or ["unspecified"])[0]
+        reason = (tail.splitlines() or ["unspecified"])[0]
+        if exit_code != 2:
+            # An unsupported marker carrying another status is a malformed
+            # response: not a clean refusal, and certainly not a run.
+            return BUILD_ERROR, ("malformed unsupported response (exit %s): %s"
+                                 % (exit_code, reason))
+        return UNSUPPORTED, reason
     if ERROR_PREFIX in combined:
         tail = combined.split(ERROR_PREFIX, 1)[1].strip()
         return TOOL_ERROR, (tail.splitlines() or ["unspecified"])[0]
@@ -200,6 +206,29 @@ def _format(observations):
         parts.append("%s(exit=%s, out=%r)" % (
             item["backend"], item.get("exit"), (item.get("stdout") or "")[:80]))
     return " ".join(parts)
+
+
+def validate_expect(expect):
+    """Reject incoherent native expectations before anything runs."""
+    if not isinstance(expect, dict):
+        return "expect must be an object"
+    mode = expect.get("match", "exact")
+    if mode not in ("exact", "diagnostic", "reject"):
+        return ("unknown match mode %r for a native fixture "
+                "(want exact|diagnostic|reject)" % mode)
+    if mode in ("diagnostic", "reject") and not expect.get("diagnosticCode"):
+        return "match=%s requires expect.diagnosticCode" % mode
+    if "nativeUnsupported" in expect and mode == "reject":
+        return ("expect declares both nativeUnsupported and match=reject; "
+                "a fixture must declare one outcome")
+    if "nativeUnsupported" in expect and not isinstance(expect["nativeUnsupported"], str):
+        return "expect.nativeUnsupported must be a string substring"
+    if "stdout" in expect and not isinstance(expect["stdout"], str):
+        return "expect.stdout must be a string"
+    if "exit" in expect and (isinstance(expect["exit"], bool)
+                             or not isinstance(expect["exit"], int)):
+        return "expect.exit must be an integer"
+    return None
 
 
 def _check_interpreter(expect, observations):

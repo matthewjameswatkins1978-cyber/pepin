@@ -16,11 +16,14 @@ The runner never interprets Pep itself: every verdict comes from
 .\pep.ps1 test --backend clang --compiler-clang C:\path\to\clang.exe
 ```
 
-Exit code: `0` when every executed test passes or skips, `1` when any
-test fails/errors/times out, `2` for runner infrastructure problems
-(missing or malformed manifest, empty fixture selection). A `--filter`
-that matches nothing, or a manifest with no fixtures, fails loudly
-instead of reporting a vacuous all-green run.
+Exit code: `0` when every executed test passes, skips or is a declared
+`unsupported`, `1` when any test fails, diverges, errors or times out,
+`2` for infrastructure problems — missing or malformed manifest, empty
+fixture selection, an unavailable native compiler, or any fixture that
+could not be evaluated at all (`infra_error`). Exit 2 means the run
+cannot vouch for a case, which is not the same as a test failing. A
+`--filter` that matches nothing, or a manifest with no fixtures, fails
+loudly instead of reporting a vacuous all-green run.
 
 Each executed test writes per-test evidence artifacts (`check.json`,
 `stdout.txt`, `stderr.txt` under `--evidence-dir`, default

@@ -317,6 +317,82 @@ class NativeDifferentialTests(unittest.TestCase):
         self.assertEqual(len(clang["metadata"]), 2)
 
 
+    # -- declaration validation ------------------------------------------
+    def test_native_fixture_skip_never_executes(self):
+        manifest, stub = self.build()
+        manifest.write_text(json.dumps({
+            "schemaVersion": 1,
+            "fixtures": [{"id": "n/skipped", "file": "p.pep", "kind": "native",
+                          "skip": "declared native gap",
+                          "expect": {"exit": 0, "stdout": "42\n"}}],
+        }), encoding="utf-8")
+        proc = self.run_native(manifest, stub, "--json")
+        doc = json.loads(proc.stdout)
+        test = doc["tests"][0]
+        self.assertEqual(test["status"], "skip", test.get("detail"))
+        self.assertIn("declared native gap", test["detail"])
+        self.assertNotIn("observed", test)  # nothing was executed
+        self.assertEqual(proc.returncode, 0)
+
+    def test_duplicate_native_ids_are_infra_error(self):
+        manifest, stub = self.build()
+        entry = {"id": "n/dup", "file": "p.pep", "kind": "native",
+                 "expect": {"exit": 0, "stdout": "42\n"}}
+        manifest.write_text(json.dumps({"schemaVersion": 1,
+                                        "fixtures": [entry, dict(entry)]}),
+                            encoding="utf-8")
+        proc = self.run_native(manifest, stub, "--json")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("duplicate fixture ids", proc.stdout + proc.stderr)
+
+    def test_unknown_native_match_mode_is_infra_error(self):
+        manifest, stub = self.build(expect={"match": "vibes", "stdout": "42\n"})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, _ = self.status_of(proc)
+        self.assertEqual(status, "infra_error", test.get("detail"))
+        self.assertEqual(proc.returncode, 2)
+
+    def test_diagnostic_mode_without_code_is_infra_error(self):
+        manifest, stub = self.build(expect={"match": "diagnostic", "exit": 0})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, _ = self.status_of(proc)
+        self.assertEqual(status, "infra_error", test.get("detail"))
+        self.assertEqual(proc.returncode, 2)
+
+    def test_conflicting_declarations_are_infra_error(self):
+        manifest, stub = self.build(expect={"match": "reject",
+                                            "diagnosticCode": "PEP_TYPE_MISMATCH",
+                                            "nativeUnsupported": "anything"})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, _ = self.status_of(proc)
+        self.assertEqual(status, "infra_error", test.get("detail"))
+        self.assertIn("one outcome", test.get("detail", ""))
+
+    def test_unsupported_marker_with_zero_exit_is_not_a_run(self):
+        confused = {"stderr": "Pep C23 unsupported: somehow exit 0\n", "exit": 0}
+        manifest, stub = self.build(clang=confused, gcc=confused,
+                                    expect={"exit": 0, "stdout": "42\n"})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, doc = self.status_of(proc)
+        self.assertNotEqual(status, "pass", test.get("detail"))
+        self.assertEqual(doc["counts"]["pass"], 0)
+
+    def test_interpreter_garbage_output_is_a_failure_not_a_pass(self):
+        manifest, stub = self.build(run={"stderr": "crashed mid-run\n", "exit": 7})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, _ = self.status_of(proc)
+        self.assertEqual(status, "fail", test.get("detail"))
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_native_fixture_without_expect_is_a_strict_expectation(self):
+        # No expect block means "empty stdout, exit 0" — never "anything goes".
+        manifest, stub = self.build(expect={})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, _ = self.status_of(proc)
+        self.assertEqual(status, "fail", test.get("detail"))
+        self.assertNotEqual(proc.returncode, 0)
+
+
 @unittest.skipUnless(shutil.which("clang") and shutil.which("gcc"),
                      "clang and gcc are required for the real differential")
 class RealToolchainDifferentialTests(unittest.TestCase):
