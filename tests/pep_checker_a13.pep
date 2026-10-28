@@ -1484,10 +1484,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         } else {}
       } else {}
       if node.kind == "match" {
+        let matchArmCount = count_children(nodes, node.id, "arm")
+        if matchArmCount == 0 {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_MATCH", "A match expression must have at least one arm", node))
+        } else {}
         let subject = child_at(nodes, node.id, "value", 0)
         let subjectType = if subject.found { infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { "" }
         let union = union_declaration(nodes, subjectType)
-        if !union.found {
+        if !union.found && matchArmCount != 0 {
           let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", node))
         } else {}
@@ -1609,7 +1613,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           } else {}
         }
-        if union.found && !catchAll && !invalidPattern {
+        if union.found && matchArmCount != 0 && !catchAll && !invalidPattern {
           for variant in nodes {
             if variant.parentId == union.node.id && variant.kind == "variant_declaration" && !contains(seenConstructors, variant.text) {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_NON_EXHAUSTIVE_MATCH", "Match does not cover every constructor", node))

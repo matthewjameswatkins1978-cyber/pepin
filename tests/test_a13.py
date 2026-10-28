@@ -1571,6 +1571,29 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(actual, expected, (name, expected, actual, report))
                 self.assertEqual([item[0] for item in actual], [expected_code])
 
+    def test_empty_match_diagnostics_match_ocaml(self):
+        cases = [
+            ("union-subject", "type Maybe = A(Int) | B()" + NL + "fn f(x: Maybe) -> Int { return match x {} }"),
+            ("scalar-subject", "fn f() -> Int { return match 1 {} }"),
+            ("unknown-subject", "fn f() -> Int { return match missing {} }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("empty-match-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], ["PEP_EMPTY_MATCH"])
+
     def test_nested_single_variant_constructor_patterns_match_ocaml(self):
         cases = [
             ("singleton-valid", "type Inner = I(Int)" + NL + "type Outer = O(Inner) | N()" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value N() => 0 } }", "valid"),
