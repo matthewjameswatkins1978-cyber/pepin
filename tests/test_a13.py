@@ -352,6 +352,15 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("duplicate-nested", nested_prefix +
              "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(M(L(_))) => 2 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_DUPLICATE_MATCH_ARM"),
+            ("collective-depth-two-conservative-incomplete", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(M(OtherLeaf())) => 2 O(N()) => 3 Empty() => 0 } }",
+             "invalid", "PEP_NON_EXHAUSTIVE_MATCH"),
+            ("collective-depth-two-wildcard-fallback", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(M(OtherLeaf())) => 2 O(N()) => 3 O(_) => 4 Empty() => 0 } }",
+             "valid", None),
+            ("collective-depth-two-partial", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(N()) => 3 Empty() => 0 } }",
+             "invalid", "PEP_NON_EXHAUSTIVE_MATCH"),
             ("wrong-nested-type", nested_prefix + "type Wrong = W()" + NL +
              "fn f(x: Outer) -> Int { return match x { O(M(W())) => 1 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_PATTERN_TYPE_MISMATCH"),
