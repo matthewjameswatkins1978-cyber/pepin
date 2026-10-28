@@ -364,8 +364,8 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         }
 
         if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
-          let code = if node.kind == "assignment" { "PEP_UNKNOWN_VARIABLE" } else { "PEP_UNKNOWN_BINDING" }
-          let message = if node.kind == "assignment" { "No visible variable has this name" } else { "No visible local binding has this name" }
+          let code = "PEP_UNKNOWN_VARIABLE"
+          let message = "No visible variable has this name"
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, message, node))
         }
       } else {}

@@ -170,11 +170,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
                          [scalar(bindings[0]["semanticId"]), scalar(bindings[1]["semanticId"]), scalar(bindings[2]["semanticId"])])
         self.assertNotEqual(scalar(bindings[0]["scopeId"]), scalar(bindings[2]["scopeId"]))
 
-        source = "fn main() -> Int { return missing }"
-        _, report = self._analyze(source)
-        self.assertEqual(scalar(report["status"]), "invalid", report)
-        diagnostic = fields(report["diagnostics"]["value"][0])
-        self.assertEqual(scalar(diagnostic["code"]), "PEP_UNKNOWN_BINDING")
+        cases = [
+            ("unknown-local", "fn main() -> Int { return missing }"),
+            ("for-in-binding-does-not-escape", "fn main() -> Int { for item in [1] {} return item }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("unknown-reference-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                self.assertEqual(len(actual), 1)
+                self.assertEqual(actual[0][0], "PEP_UNKNOWN_VARIABLE")
+
     def test_primitive_synth_check_and_type_facts(self):
         source = "fn add(x: Int) -> Int { let y: Int = x + 1; return y }"
         _, report = self._analyze(source)
@@ -675,9 +692,21 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertIn(expected_code, codes)
 
         out_of_scope = "type Maybe = None() | Some(Int)" + NL + "fn pick(value: Maybe) -> Int { match value { Some(number) => number _ => 0 }; return number }"
+        reference = self._reference_check("match-out-of-scope", out_of_scope)
         _, report = self._analyze(out_of_scope)
-        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-        self.assertIn("PEP_UNKNOWN_BINDING", codes)
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(actual, expected, report)
+        self.assertEqual(len(actual), 1)
+        self.assertEqual(actual[0][0], "PEP_UNKNOWN_VARIABLE")
 
     def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
         source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v B() => 0 } }"
