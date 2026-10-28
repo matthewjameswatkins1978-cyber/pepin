@@ -1763,18 +1763,71 @@ class A13FunctionResolutionTests(unittest.TestCase):
         reference = self._reference_check(name, source)
         self.assertEqual(reference["status"], "valid", reference)
         self.assertEqual(reference["diagnostics"], [], reference)
+
+        empty = self._open("")
+        empty_target = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        empty_parsed = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        for tool, function, arguments, expected in [
+            ("pep-a13-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-a13-checker-staged", "analyze_parsed", [empty_parsed], checker_report(empty["document"], "")),
+        ]:
+            registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": self.tool_document, "revision": self.tool_revision,
+                                           "function": function})
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision,
+                                          "testVectors": [{"arguments": arguments, "expect": expected,
+                                                           "semanticTarget": empty_target}]})
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision})
+            self.assertEqual(activated.get("status"), "Active", activated)
+
         opened = self._open(source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                   "semanticTarget": target})
+        self.assertEqual(parsed.get("outcome"), "ok", parsed)
+        staged = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                   "arguments": [parsed["result"]], "semanticTarget": target})
+        self.assertEqual(staged.get("outcome"), "ok", staged)
+        report = fields(staged["result"])
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (expected, actual, report))
+
         result = self.client.send({
             "schemaVersion": 3,
             "toolProtocolVersion": 2,
             "op": "tool_invoke",
             "tool": "pep-a13-checker",
             "arguments": [],
-            "semanticTarget": {
-                "document": opened["document"],
-                "revision": opened["revision"],
-                "entryFunctions": [],
-            },
+            "semanticTarget": target,
         })
         self.assertEqual(result.get("outcome"), "error", result)
         self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT", result)
