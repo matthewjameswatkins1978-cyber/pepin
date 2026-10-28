@@ -1,0 +1,52 @@
+version: terrorbat/v1
+
+id: pep-parser-source-handling
+
+claim:
+  text: >
+    The parser cursor protocol mishandles source reality: a CRLF copy of the same
+    program does not shift byte extents predictably, a multibyte literal yields a
+    slice that is not valid UTF-8, malformed input completes with a plausible tree
+    instead of an error, or growing compositions stop completing under the fixed
+    100 000-step per-invocation budget.
+
+requires:
+  - process.spawn
+
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args:
+        - -NoProfile
+        - -Command
+        - >-
+          python test-runner/terrorbats/drivers/parser_source_attack.py;
+          exit $LASTEXITCODE
+
+oracle:
+  # Falsifying evidence: any source-handling or scaling attack broke.
+  all:
+    - type: text_contains
+      step: run:0
+      stream: stdout
+      substring: VIOLATED
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 900s
+  total: 1200s
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, parser, crlf, utf8, invalid-input, scaling, step-budget]
+  description: >
+    Four attacks: CRLF span equivalence (exactly one extra byte per prior line,
+    identical line/column), UTF-8 byte extents (multibyte literal slice decodes),
+    invalid-input truthfulness (never `complete`, always a code), and growth
+    scaling under a fixed budget. PROVEN means one of those broke.
