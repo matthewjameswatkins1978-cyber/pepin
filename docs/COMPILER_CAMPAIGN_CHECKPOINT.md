@@ -107,4 +107,17 @@ Verification at implementation/test SHA `f73130b50c56730e38b2824931d88f81f606100
 
 Limitations: A13 remains a partial experimental checker. Existing expression-type and fail-closed gaps are unchanged; this repair only aligns unresolved variable diagnostics. The full worktree is isolated and main checkout changes remain preserved.
 
-Next: reread the coordination board/outboxes and inspect the currently partial nested-pattern rules; choose a minimal OCaml-differential checker rule with bounded runtime and fail-closed behavior.
+## Continuation 03 — shallow nested constructor patterns (2026-10-28)
+
+**Implementation and test SHA:** `47ddb970006e63c97744585dc8e5fccf63c749fe` (pushed to `campaign/pep-v01-sustained-build-20261027`). The A13 checker now accepts depth-one nested constructor patterns only when the nested payload pattern is exhaustive. A nested constructor counts toward outer-union coverage only when it selects the sole inner variant and its own payloads are irrefutable. For multi-variant payload unions, `O(I(value))` alone does not cover `O`; adding `O(_)` supplies the fallback. Wrong nested union and arity produce OCaml-matched `PEP_PATTERN_TYPE_MISMATCH` and `PEP_PATTERN_ARITY` spans. Patterns deeper than this bounded slice remain invalid with `PEP_PATTERN_UNSUPPORTED`; A13 binding inference still resolves the nested value to `Int` and its use to the same binding identity.
+
+Verification:
+
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -v`: **46/46 passed** in 132.196 seconds. This run covered the nested-pattern differential method and surrounding A13/list/record regressions.
+- `python -m unittest tests.test_a13.A13FunctionResolutionTests.test_nested_constructor_patterns_fail_closed_beyond_supported_depth -v`: **1/1 passed** in 1.781 seconds; the OCaml reference accepts the complete deeper pattern while A13 reports the explicit unsupported boundary.
+- `python -m unittest tests.test_a14_c23 -v`: **11/11 passed** in 65.073 seconds.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+
+The runtime ceiling, OCaml seed, protocols, `CURRENT.md`, manifest, `master` and release state are unchanged. Full repository discovery and a clean OCaml rebuild were not repeated. A13 remains experimental and unaccepted.
+
+Next: reread the coordination outboxes before selecting another bounded A13 checker slice; continue against OCaml differential cases and the unchanged runtime ceiling.
