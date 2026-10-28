@@ -1973,7 +1973,29 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
     } else {
       diagnostics = [diagnostic("PEP_UNREACHABLE", "Statement follows an unconditional return", typeResult.unreachable.node)]
     }
-  } else {}
+  } else {
+    if length(collectedDiagnostics) <= 1 {
+    } else {
+      var firstFound = false
+      var candidateCount = 0
+      var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+      for candidate in collectedDiagnostics {
+        if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
+            candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
+            candidate.code == "PEP_ARGUMENT_COUNT" {
+          candidateCount = candidateCount + 1
+          if !firstFound || candidate.startByte + 1 <= first.startByte ||
+              (candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
+               candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
+            firstFound = true
+            first = candidate
+          } else {}
+        } else {}
+      }
+      if candidateCount == 0 || candidateCount == 1 {
+      } else { diagnostics = [first] }
+    }
+  }
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
   return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
 }
