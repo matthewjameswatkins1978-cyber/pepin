@@ -311,6 +311,25 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         parts = append(parts, ")")
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       } else {}
+      let mutableList = if argument.node.kind == "name" {
+        pep_c23_mutable_list_binding(nodes, function, argument.node.text)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      if mutableList.found {
+        let initial = pep_c23_child(nodes, mutableList.node.id, "value", 0)
+        let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+        if !first.found || (first.node.kind != "integer" && first.node.kind != "boolean") {
+          return pep_c23_unsupported("Pep C23 mutable contains requires a non-empty Int or Bool list binding")
+        } else {}
+        if secondArgument.node.kind != "integer" && secondArgument.node.kind != "boolean" && secondArgument.node.kind != "name" {
+          return pep_c23_unsupported("Pep C23 mutable contains requires a scalar literal or local value")
+        } else {}
+        let value = pep_c23_expression(nodes, function, secondArgument.node)
+        if value.status != "emitted" { return value } else {}
+        var parts: List[Str] = [if first.node.kind == "boolean" { "pep_contains_bool(" } else { "pep_contains_int(" }, "pep_local_", int_text(mutableList.node.id), ", "]
+        for part in value.sourceParts { parts = append(parts, part) }
+        parts = append(parts, ")")
+        return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      } else {}
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 contains lowering requires a direct integer list literal or immutable list binding") } else {}
       if secondArgument.node.kind != "integer" && secondArgument.node.kind != "boolean" && secondArgument.node.kind != "name" {
