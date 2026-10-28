@@ -4,25 +4,27 @@ id: pep-control-wrong-expectation-detected
 
 claim:
   text: >
-    The standard-library conformance runner reports a deliberately wrong
-    expectation as a pass.
+    The `pep test` runner reports a deliberately wrong expectation as a pass.
 
 requires:
   - process.spawn
 
 attack:
   run:
+    # pwsh is used EXPLICITLY: Terror Bats never wraps a step in an implicit
+    # shell, and `python` on this host is a .cmd shim that cannot be spawned as
+    # an executable. Driving the real CLI through pwsh keeps the attack honest
+    # and portable without inventing a wrapper.
     - adapter: command
       action: run
-      program: python
+      program: pwsh
       args:
-        - stdlib-conformance/conformance.py
-        - --library
-        - stdlib/intmath.pep
-        - --cases
-        - $param: cases
-        - --out
-        - _build/tb-doctored
+        - -NoProfile
+        - -File
+        - pep.ps1
+        - test
+        - --manifest
+        - $param: manifest
 
 oracle:
   all:
@@ -44,15 +46,16 @@ timeout:
   total: 900s
 
 params:
-  cases:
+  manifest:
     type: string
-    default: test-runner/terrorbats/fixtures/doctored-cases.json
+    default: test-runner/terrorbats/fixtures/doctored-manifest.json
 
 meta:
   origin: agent3-terrorbats
   tags: [pep, control, deliberate-failure, test-honesty]
   description: >
     Deliberately failing control. The claim is false by construction (the runner
-    does NOT pass a wrong expectation), so a working oracle must FALSIFY it and
-    report PROVEN. If this ever returns NOT OBSERVED, the harness has stopped
-    detecting incorrect behaviour and every other passing Bat is suspect.
+    does NOT pass a wrong expectation: control_int_abs.pep prints 7, the doctored
+    manifest expects 99), so a working oracle must FALSIFY it and report PROVEN.
+    If this ever returns NOT OBSERVED, the harness has stopped detecting
+    incorrect behaviour and every other green result here is suspect.

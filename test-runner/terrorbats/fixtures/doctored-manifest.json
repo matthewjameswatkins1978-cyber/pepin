@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "runner": "deliberately wrong control manifest",
+  "about": [
+    "DELIBERATELY WRONG. This manifest exists only as a failing control for",
+    "test-runner/terrorbats/bats/00-control-wrong-expectation-detected.yaml.",
+    "control_int_abs.pep prints 7, so expecting 99 must be reported as a failure.",
+    "Never copy these expectations into a real fixture manifest."
+  ],
+  "fixtures": [
+    {
+      "id": "control/deliberately-wrong",
+      "file": "control_int_abs.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "99\n" }
+    }
+  ],
+  "limits": { "timeoutSeconds": 120 }
+}
