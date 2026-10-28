@@ -8,7 +8,7 @@ The runner never interprets Pep itself: every verdict comes from
 
 ```powershell
 .\pep.ps1 test                                   # whole manifest, human output
-.\pep.ps1 test --json                            # machine-readable JSON document
+.\pep.ps1 test --json                            # machine-readable JSON document (contract: results-schema.json)
 .\pep.ps1 test --filter reject                   # only fixtures whose id contains SUBSTR
 .\pep.ps1 test --timeout 30                      # per-phase seconds override
 .\pep.ps1 test --manifest path/to/manifest.json  # alternate manifest

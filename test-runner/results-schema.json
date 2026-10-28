@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://matthewjameswatkins1978-cyber/pepin/test-runner/results-schema-v1.json",
+  "title": "pep test v1 machine-readable result document",
+  "description": "Contract for `pep test --json` output and the external Terror Bats adapter surface. Execution status and verdict stay separate: `status` reports what happened; a `pass` is evidence for that case, never universal proof.",
+  "type": "object",
+  "required": ["schemaVersion", "runner", "repoRevision", "backend", "toolchain", "manifest", "counts", "tests"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runner": { "const": "pep test v1" },
+    "repoRevision": { "type": "string" },
+    "backend": { "type": "string" },
+    "toolchain": {
+      "type": "object",
+      "required": ["pepCli", "compilerSource"],
+      "properties": {
+        "pepCli": { "type": "string" },
+        "compilerSource": { "type": "string" }
+      }
+    },
+    "manifest": { "type": "string" },
+    "evidence_root": { "type": "string" },
+    "note": { "type": ["string", "null"] },
+    "counts": {
+      "type": "object",
+      "required": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip"],
+      "properties": {
+        "pass": { "type": "integer", "minimum": 0 },
+        "fail": { "type": "integer", "minimum": 0 },
+        "compile_error": { "type": "integer", "minimum": 0 },
+        "runtime_error": { "type": "integer", "minimum": 0 },
+        "timeout": { "type": "integer", "minimum": 0 },
+        "infra_error": { "type": "integer", "minimum": 0 },
+        "skip": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/testResult" }
+    },
+    "error": { "type": "object" }
+  },
+  "$defs": {
+    "testResult": {
+      "type": "object",
+      "required": ["id", "file", "kind", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "file": { "type": "string" },
+        "kind": { "enum": ["run", "reject", "check"] },
+        "status": { "enum": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip"] },
+        "detail": { "type": "string" },
+        "source_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]+$" },
+        "check_elapsed_s": { "type": "number" },
+        "check_rc": { "type": "integer" },
+        "run_elapsed_s": { "type": "number" },
+        "command": { "type": "string" },
+        "exit": { "type": "integer" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "diagnostics": { "type": "array" },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "evidence_note": { "type": "string" },
+        "elapsed_s": { "type": "number" },
+        "phase": { "type": "string" }
+      }
+    },
+    "listEntry": {
+      "type": "object",
+      "required": ["id", "file", "kind"],
+      "properties": {
+        "id": { "type": "string" },
+        "file": { "type": "string" },
+        "kind": { "type": "string" },
+        "skip": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

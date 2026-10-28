@@ -231,5 +231,87 @@ class RunnerHonestyTests(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
 
 
+    def check_schema(self, schema, doc, path="root"):
+        """Minimal JSON Schema validator for the constructs results-schema.json uses."""
+        self.assertIsInstance(doc, dict, path)
+        if schema.get("type") == "object" or "properties" in schema or "required" in schema:
+            self.assertIsInstance(doc, dict, path)
+            for key in schema.get("required", []):
+                self.assertIn(key, doc, "%s missing %s" % (path, key))
+            for key, subschema in schema.get("properties", {}).items():
+                if key in doc:
+                    self.check_value(subschema, doc[key], "%s.%s" % (path, key))
+        return True
+
+    def check_value(self, schema, value, path):
+        if "$ref" in schema:
+            name = schema["$ref"].split("/")[-1]
+            schema = self.DEFS[name]
+        expected = schema.get("type")
+        if expected:
+            kinds = expected if isinstance(expected, list) else [expected]
+            ok = False
+            for kind in kinds:
+                if kind == "object" and isinstance(value, dict):
+                    ok = True
+                elif kind == "array" and isinstance(value, list):
+                    ok = True
+                elif kind == "string" and isinstance(value, str):
+                    ok = True
+                elif kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
+                    ok = True
+                elif kind == "number" and isinstance(value, (int, float)) and not isinstance(value, bool):
+                    ok = True
+                elif kind == "null" and value is None:
+                    ok = True
+            self.assertTrue(ok, "%s: %r is not %s" % (path, value, kinds))
+        if "const" in schema:
+            self.assertEqual(value, schema["const"], path)
+        if "enum" in schema:
+            self.assertIn(value, schema["enum"], path)
+        if "pattern" in schema and isinstance(value, str):
+            import re as _re
+            self.assertTrue(_re.search(schema["pattern"], value), path)
+        if "minimum" in schema and isinstance(value, (int, float)):
+            self.assertGreaterEqual(value, schema["minimum"], path)
+        if isinstance(value, dict):
+            for key in schema.get("required", []):
+                self.assertIn(key, value, "%s missing %s" % (path, key))
+            props = schema.get("properties", {})
+            for key, sub in props.items():
+                if key in value:
+                    self.check_value(sub, value[key], "%s.%s" % (path, key))
+            if isinstance(schema.get("additionalProperties"), dict):
+                for key, item in value.items():
+                    if key not in props:
+                        self.check_value(schema["additionalProperties"], item,
+                                         "%s.%s" % (path, key))
+        if isinstance(value, list) and "items" in schema:
+            for i, item in enumerate(value):
+                self.check_value(schema["items"], item, "%s[%d]" % (path, i))
+
+    DEFS = {}
+
+    def test_results_conform_to_published_schema(self):
+        import pathlib as _pathlib
+        schema_path = ROOT / "test-runner" / "results-schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        type(self).DEFS = schema.get("$defs", {})
+        proc = run_runner("--json", "--filter", "pass/add")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.check_schema(schema, doc)
+        # --list output validates its own entry shape.
+        proc2 = run_runner("--json", "--list")
+        list_doc = json.loads(proc2.stdout)
+        for entry in list_doc["tests"]:
+            self.check_value(type(self).DEFS["listEntry"], entry, "list.tests[]")
+        # The checker is not vacuous: tampered docs must fail.
+        bad = json.loads(json.dumps(doc))
+        bad["tests"][0]["status"] = "PROVEN"
+        with self.assertRaises(AssertionError):
+            self.check_schema(schema, bad)
+
+
 if __name__ == "__main__":
     unittest.main()
