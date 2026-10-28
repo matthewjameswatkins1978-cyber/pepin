@@ -235,6 +235,11 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { if !true { return 0 } else { return 42 } }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { if yes(true) { return 42 } else { return 0 } }\n"
+            "fn yes(value: Bool) -> Bool { return value }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
@@ -336,7 +341,7 @@ class A14C23EmissionTests(unittest.TestCase):
         parameterized_main = self._emit("fn main(value: Int) -> Int { return value }")
         self.assertEqual(scalar(parameterized_main["status"]), "unsupported")
         self.assertEqual(parameterized_main["sourceParts"]["value"], [])
-        self.assertIn("functions require zero to two Int parameters", scalar(parameterized_main["diagnostic"]))
+        self.assertIn("functions require supported scalar parameters", scalar(parameterized_main["diagnostic"]))
         conditional_parameterized_main = self._emit(
             "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 0 } }"
         )
