@@ -643,11 +643,15 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
           let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-          let iterableParameter = if iterable.found && iterable.node.kind == "name" {
+          let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_int_list_parameter(nodes, function, iterable.node.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_bool_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
           if !iterable.found || (!iterableList.found && !iterableParameter.found) || count_children(nodes, statement.id, "body") == 0 {
-            return pep_c23_unsupported("Pep C23 for-in lowering requires an integer-list literal, immutable literal binding or List[Int] parameter and a non-empty assignment body")
+            return pep_c23_unsupported("Pep C23 for-in lowering requires an integer or Bool list literal or immutable literal binding, or a List[Int] or List[Bool] parameter, and a non-empty assignment body")
           } else {}
           if iterableList.found {
             for item in nodes {
@@ -792,11 +796,15 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
             let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-            let iterableParameter = if iterable.found && iterable.node.kind == "name" {
+            let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
+              pep_c23_bool_list_parameter(parsed.nodes, node, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
             if !iterable.found || (!iterableList.found && !iterableParameter.found) {
-              return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding or List[Int] parameter")
+              return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or List[Int]/List[Bool] parameter")
             } else {}
             var elementCount = 0
             if iterableList.found {
