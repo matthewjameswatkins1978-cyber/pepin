@@ -38,6 +38,12 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   return all
 }
 
+fn list_int_count_nonzero(values: List[Int]) -> Int {
+  var total = 0
+  for item in values { total = if item != 0 { total + 1 } else { total } }
+  return total
+}
+
 fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }
