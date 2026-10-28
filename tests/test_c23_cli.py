@@ -117,6 +117,51 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
                     self.assertEqual(result.stdout, "42\n")
 
+    def test_c23_unsupported_programs_fail_closed_consistently_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        cases = (
+            ("record-field",
+             "type Point { x: Int }\n"
+             "fn main() -> Int { let point = Point { x: 42 }; return point.x }\n",
+             "Pep C23 unsupported: Pep C23 expression lowering does not support this expression",
+             "valid"),
+            ("bool-main",
+             "fn main() -> Bool { return true }\n",
+             "Pep C23 unsupported: Pep C23 main function must return Int",
+             "valid"),
+            ("unit-main",
+             "fn main() -> Unit { return say(\"hello\") }\n",
+             "Pep C23 unsupported: Pep C23 main function must return Int",
+             "valid"),
+            ("say-in-main",
+             "fn main() -> Int { say(\"hello\"); return 0 }\n",
+             "Pep C23 unsupported: Pep C23 functions require local bindings and supported loops followed by one return",
+             "valid"),
+            ("ill-typed-main",
+             "fn main() -> Int { return true }\n",
+             "Pep C23 unsupported: Pep C23 emission requires a valid Pep checker report",
+             "invalid"),
+        )
+        for case, source_text, diagnostic, check_status in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    folder = pathlib.Path(temp)
+                    source = folder / f"{case}.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    checked = self.invoke("check", source, "--json")
+                    self.assertIn(f'"status":"{check_status}"', checked.stdout)
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(case=case, compiler=compiler.name):
+                            generated = folder / f"{case}-{compiler.stem}.c"
+                            native = self.invoke("run-c23", source, "--compiler", compiler,
+                                                 "--emit-c", generated)
+                            self.assertEqual(native.returncode, 2,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, "")
+                            self.assertEqual(native.stderr.strip(), diagnostic)
+                            self.assertFalse(generated.exists())
+
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             source = pathlib.Path(temp) / "protected.pep"
