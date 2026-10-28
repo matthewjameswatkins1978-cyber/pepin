@@ -175,3 +175,25 @@ Verification on the test SHA:
 - Python compilation and `git diff --check`: passed. No full repository discovery or clean OCaml rebuild was run.
 
 **Measured boundary:** manually invoking one-shot `analyze` on this exact source still returns `PEP_RUNTIME_STEP_LIMIT` (100,000-step ceiling; runtime message location `2971:6`). The staged parser and checker each complete under their existing per-call cap. This is evidence for the existing staged protocol path, not a fix to the one-shot analyzer or a general large-source guarantee. No budgets were changed; A13 remains experimental.
+
+## Continuation 03 — nested constructor keys across payload positions (2026-10-28; cycle 2/3)
+
+**Implementation/test SHA:** `f314513ad955cc5a507209220b7cfcbaa3b7886f`, pushed to `campaign/pep-v01-sustained-build-20261027`. A differential probe found that two-payload patterns which differ in a later nested constructor position were incorrectly reduced to `PEP_NON_EXHAUSTIVE_MATCH` when the same partial pattern repeated; OCaml reports `PEP_DUPLICATE_MATCH_ARM` at the repeated full arm span. The checker now records each top-level payload position and its supported shallow pattern shape in the duplicate key. Distinct partial patterns such as `O(_, I())` and `O(_, J())` still do not count as exhaustive, and unsupported deeper forms remain excluded. This repairs duplicate identity only; it does not add pattern-matrix coverage.
+
+Verification on the implementation/test SHA:
+
+- Staged JSONL differential regression: **1/1 test passed**, covering the existing typed-hole boundary, distinct later-payload partial patterns and exact duplicate later-payload diagnostics/spans against OCaml.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **51/51 passed** in 149.575 seconds.
+- A14 emitter-boundary regressions: **2/2 passed**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- Instrumented profile for the same 132-byte target fixture: Pep parser **54,158 steps**, staged checker **35,704 steps**, one-shot analyzer still **100,001 steps** and reports `PEP_RUNTIME_STEP_LIMIT` under the unchanged cap. Before this checker change, the same fixture's staged checker measured 35,700; the observed delta is four steps. This narrow profile is not an isolated CPU or memory measurement and does not establish large-file support.
+
+No `CURRENT.md`, manifest, master, release, protocol or budget changes. A13 remains partial and unaccepted; cycle 2/3.
+
+## Continuation 03 — all-payload duplicate-key regressions (2026-10-28; cycle review 3/3)
+
+**Test SHA:** `8206d0e9df325a8bcd53437cfa4e9cef94775eba`; checker implementation remains `f314513ad955cc5a507209220b7cfcbaa3b7886f`. The staged OCaml differential now checks a third/later nested payload position, both exact duplicate and distinct partial patterns, and equivalence of an irrefutable binding pattern with a wildcard. OCaml and Pep agree on exact diagnostic codes and byte spans for each fixture. No implementation semantics changed in this test-only slice.
+
+Verification on the test SHA: the focused staged JSONL test passed **1/1** (the method exercises six source fixtures plus the known one-shot cap case); `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The full A13/nested-record suite **51/51** and A14 boundary tests **2/2** were run on implementation SHA `f314513`; those source files and compiler implementation are unchanged by this test-only commit, but the newly added three fixtures were not included in that full suite run. Profile evidence is inherited from `f314513` and remains valid because only the test file changed.
+
+**Nonblocking 3/3 review:** the implementation key covers each top-level payload position with constructor identity, payload arity and normalized irrefutable shape; eligibility still excludes malformed/deeper unsupported patterns. Full constructor coverage remains separate from duplicate identity. The expanded tests challenge both false-duplicate and missed-duplicate directions against OCaml. No budget/protocol/C23/milestone changes. A13 remains partial, experimental and unaccepted; continue the campaign.
