@@ -40,7 +40,7 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         doc = json.loads(proc.stdout)
         self.assertEqual(doc["schemaVersion"], 1)
-        self.assertEqual(doc["counts"]["pass"], 10)
+        self.assertEqual(doc["counts"]["pass"], 11)
         self.assertEqual(doc["counts"]["skip"], 1)
         self.assertEqual(doc["counts"]["fail"], 0)
         for t in doc["tests"]:
