@@ -673,6 +673,11 @@ fn without_one_list(shape: PepTypeShape) -> PepTypeShape {
   if shape.listDepth == 0 { return empty_type_shape() } else {}
   return PepTypeShape { kind: shape.kind, name: shape.name, listDepth: shape.listDepth - 1 }
 }
+fn has_extra_list_depth(actual: PepTypeShape, expected: PepTypeShape) -> Bool {
+  if expected.listDepth == 0 { return actual.listDepth != 0 } else {}
+  if actual.listDepth == 0 { return false } else {}
+  return has_extra_list_depth(without_one_list(actual), without_one_list(expected))
+}
 fn list_mismatch_node(nodes: List[FlatAstNode], expressionId: Int, expected: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> NodeLookup {
   let expression = lookup_node(nodes, expressionId)
   if !expression.found { return NodeLookup { found: false, node: empty_node() } } else {}
@@ -1631,7 +1636,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
                   let expectedElementShape = elementShape
-                  let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
+                  let contextualExtraList = value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualValueShape, expectedElementShape)
+                  let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape) && !contextualExtraList
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
                     let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
                     let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
@@ -1672,6 +1678,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let thenValue = child_at(nodes, node.id, "then", 1)
         let elseValue = child_at(nodes, node.id, "else", 2)
         let expectedResult = contextual_expected_type(nodes, node, functions, bindings, references)
+        let expectedShape = if expectedResult != "" { legacy_type_shape(nodes, expectedResult) } else { empty_type_shape() }
         if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If condition must have type Bool", condition.node))
         } else {}
@@ -1688,11 +1695,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if expectedResult != "" {
             var mismatchReported = false
             if thenType != "" && thenType != expectedResult {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenValue.node))
+              let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+              let mismatchNode = if mismatch.found { mismatch.node } else { thenValue.node }
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", mismatchNode))
               mismatchReported = true
             } else {}
             if !mismatchReported && elseType != "" && elseType != expectedResult {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseValue.node))
+              let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+              let mismatchNode = if mismatch.found { mismatch.node } else { elseValue.node }
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", mismatchNode))
             } else {}
           } else {
             if thenType != "" && elseType != "" && thenType != elseType {

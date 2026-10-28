@@ -610,6 +610,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("scalar", "fn wrong(x: Bool) -> Int { return x }"),
             ("unit-result", "fn wrong() -> Unit { return 1 }"),
             ("conditional-branch", "fn wrong(flag: Bool) -> Int { return if flag { true } else { 0 } }"),
+            ("conditional-list-leaf", "fn f(flag: Bool) -> List[Int] { return if flag { [1] } else { [true] } }"),
             ("list-leaf", "fn bad() -> List[Int] { return [\"text\"] }"),
         ]
         for name, source in cases:
@@ -618,6 +619,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 _, report = self._analyze(source)
                 self.assertEqual(reference["status"], "invalid", reference)
                 self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+
+    def test_nested_append_return_context_matches_ocaml(self):
+        cases = [
+            ("integer", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[1]]) }", "valid"),
+            ("contextual-inner-bool", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[true]]) }", "valid"),
+            ("exact-depth-mismatch", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [true]) }", "invalid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("nested-append-return-context-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
                 expected = [
                     (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
                     for item in reference["diagnostics"]
