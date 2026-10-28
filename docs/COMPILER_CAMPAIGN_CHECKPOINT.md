@@ -339,3 +339,11 @@ No runtime-budget, protocol, A14 implementation, master, `CURRENT.md`, manifest 
 OCaml differential cases cover scalar and nested primitive mismatches, valid nested lists, and wrong nominal record elements. `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **69/69 passed** in **268.593 seconds**. Focused constructor/union/nested-record selection: **3/3 test methods**. `python -m py_compile tests/test_a13.py` and `git diff --check`: passed. No isolated performance measurement; the fixed 100,000-step budget is unchanged.
 
 Peer notes at this checkpoint: Agent 2's collection bindings and Lucy's next-slice direction concern C23 emitter/stdlib ownership and do not overlap checker files. A13 remains partial and unaccepted. No master, A14, `CURRENT.md`, manifest, budget or release change.
+
+## Continuation 03 — constructor variable payload shape parity (2026-10-28; cycle 2/3)
+
+**Implementation/test SHA:** `d7f4babc6a1197b021bd8a1b25595b30a6c3db16`, pushed to `campaign/pep-v01-sustained-build-20261027` and verified remote-equal. The previous constructor correction covered literal payload lists; this follow-up handles typed nonliteral payloads. A `Wrap` constructor expecting `List[P]` could accept a `List[Q]` variable because the legacy string-name conversion has no representation for named-record lists. The checker now compares the declared and actual AST-derived `PepTypeShape` when available, while retaining the exact leaf locator for list literals. Regression cases cover wrong and matching nominal list variables.
+
+The focused constructor differential passed **1/1 method** across primitive, nested and nominal literal/variable cases, including exact OCaml diagnostics and spans. `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **69/69 passed** in **228.821 seconds**. `python -m py_compile tests/test_a13.py` and `git diff --check`: passed. No performance measurement; 100,000-step budget unchanged.
+
+Agent 2's latest outbox reports separate C23 collection-binding work and Lucy's direction remains on emitter profiling; no checker-file overlap. A13 remains partial and unaccepted. No master, A14, `CURRENT.md`, manifest, budget or release change.
