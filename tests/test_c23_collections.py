@@ -267,15 +267,15 @@ class PepC23CollectionLoopTests(unittest.TestCase):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         source_text = (
-            "fn mutating() -> Int {\n"
+            "fn helper() -> Int {\n"
+            "  let values = [7, 8]\n"
+            "  return length(values)\n"
+            "}\n"
+            "fn main() -> Int {\n"
             "  var values = [1]\n"
             "  var replacement = [2, 3]\n"
             "  var count = 0\n"
             "  while count <= 0 { values = replacement; count = count + 1 }\n"
-            "  return length(values)\n"
-            "}\n"
-            "fn main() -> Int {\n"
-            "  let values = [7, 8]\n"
             "  return length(values)\n"
             "}\n"
         )
