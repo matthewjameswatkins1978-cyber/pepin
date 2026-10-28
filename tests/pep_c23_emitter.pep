@@ -9,6 +9,12 @@ fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_is_negative_int_literal(nodes: List[FlatAstNode], value: FlatAstNode) -> Bool {
+  if value.kind != "binary" || value.text != "neg" { return false } else {}
+  let zero = pep_c23_child(nodes, value.id, "left", 0)
+  let operand = pep_c23_child(nodes, value.id, "right", 1)
+  return zero.found && zero.node.kind == "integer" && zero.node.integerValue == 0 && operand.found && operand.node.kind == "integer"
+}
 fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "list" { return PepC23NodeLookup { found: true, node: value } } else {}
   if value.kind != "name" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
@@ -45,6 +51,13 @@ fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstN
   let initial = pep_c23_child(nodes, binding.id, "value", 0)
   let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   if first.found && (first.node.kind == "integer" || first.node.kind == "boolean") { return first.node.kind } else {}
+  if first.found && first.node.kind == "binary" && first.node.text == "neg" {
+    let zero = pep_c23_child(nodes, first.node.id, "left", 0)
+    let operand = pep_c23_child(nodes, first.node.id, "right", 1)
+    if zero.found && zero.node.kind == "integer" && zero.node.integerValue == 0 && operand.found && operand.node.kind == "integer" {
+      return "integer"
+    } else {}
+  } else {}
   return ""
 }
 fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
@@ -726,7 +739,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           for item in nodes {
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" {
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
               return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
             } else {}
           }
@@ -762,7 +775,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           if iterableList.found {
             for item in nodes {
-              if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" {
+              if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
                 return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
               } else {}
             }
@@ -895,14 +908,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             // Immutable list literals are lowered at their direct length/for-in use sites.
           } else {
             if initialValue.node.kind == "list" && statement.kind == "var" {
-              let elementCount = count_children(parsed.nodes, initialValue.node.id, "element")
-              var elementKind = ""
-              for element in parsed.nodes {
-                if element.parentId == initialValue.node.id && element.role == "element" { elementKind = element.kind } else {}
-              }
-              if elementCount == 0 {
-                elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
-              } else {}
+              let elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
               if elementKind != "boolean" && elementKind != "integer" {
                 return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int or Bool list")
               } else {}
@@ -940,7 +946,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             if iterableList.found {
               for element in parsed.nodes {
                 if element.parentId == iterableList.node.id && element.role == "element" {
-                  if element.kind != "integer" && element.kind != "boolean" { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements") } else {}
+                  if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements") } else {}
                   elementCount = elementCount + 1
                 } else {}
               }
