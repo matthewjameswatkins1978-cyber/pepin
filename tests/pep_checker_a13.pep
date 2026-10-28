@@ -1490,22 +1490,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               if pattern.node.kind == "constructor_pattern" {
                 let patternUnion = constructor_union_type(nodes, pattern.node.text)
                 var duplicatePatternEligible = true
+                let patternErrorCode = if patternUnion == "" { "PEP_UNKNOWN_CONSTRUCTOR" } else { "PEP_PATTERN_TYPE_MISMATCH" }
                 if union.found && (patternUnion == "" || patternUnion != subjectType) {
                   duplicatePatternEligible = false
                   invalidPattern = true
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Constructor pattern does not belong to the match subject type", pattern.node))
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(patternErrorCode, "Unknown constructor or constructor from another union", pattern.node))
                 } else {}
                 var coversVariant = true
                 var patternArgumentCount = 0
                 var reversedArgumentPatterns: List[PatternKeyPart] = []
                 let variant = variant_declaration(nodes, pattern.node.text)
                 let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
-                if expectedArity != count_children(nodes, pattern.node.id, "argument") {
-                  coversVariant = false
-                  duplicatePatternEligible = false
-                  invalidPattern = true
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Constructor pattern payload count does not match its variant", pattern.node))
-                } else {}
                 for payload in nodes {
                   if payload.parentId == pattern.node.id && payload.role == "argument" {
                     patternArgumentCount = patternArgumentCount + 1
@@ -1535,6 +1530,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     }
                   } else {}
                 }
+                if variant.found && expectedArity != patternArgumentCount {
+                  coversVariant = false
+                  duplicatePatternEligible = false
+                  invalidPattern = true
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Constructor pattern payload count does not match its variant", pattern.node))
+                } else {}
                 let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, syntaxId: pattern.node.id, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
                 if union.found && patternUnion == subjectType && duplicatePatternEligible {
                   var samePattern = false
