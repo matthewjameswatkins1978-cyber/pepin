@@ -53,10 +53,15 @@
     { "id": "int_is_even/four", "expr": "int_is_even(4)", "result": "Bool", "expect": "true" },
     { "id": "int_is_even/seven", "expr": "int_is_even(7)", "result": "Bool", "expect": "false" },
     { "id": "int_is_even/negative", "expr": "int_is_even(-4)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_even/min-int", "expr": "int_is_even(0 - 9223372036854775807 - 1)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_even/min-plus-one", "expr": "int_is_even(0 - 9223372036854775807)", "result": "Bool", "expect": "false" },
+    { "id": "int_is_even/max-int", "expr": "int_is_even(9223372036854775807)", "result": "Bool", "expect": "false" },
 
     { "id": "int_is_odd/seven", "expr": "int_is_odd(7)", "result": "Bool", "expect": "true" },
     { "id": "int_is_odd/eight", "expr": "int_is_odd(8)", "result": "Bool", "expect": "false" },
-    { "id": "int_is_odd/negative", "expr": "int_is_odd(-3)", "result": "Bool", "expect": "true" }
+    { "id": "int_is_odd/negative", "expr": "int_is_odd(-3)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_odd/min-int", "expr": "int_is_odd(0 - 9223372036854775807 - 1)", "result": "Bool", "expect": "false" },
+    { "id": "int_is_odd/max-int", "expr": "int_is_odd(9223372036854775807)", "result": "Bool", "expect": "true" }
   ],
   "native": {
     "about": [
@@ -75,8 +80,8 @@
     "excluded": {
       "int_gcd": "closure of 2 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser, before the emitter",
       "int_lcm": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser",
-      "int_is_even": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser",
-      "int_is_odd": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser"
+      "int_is_odd": "closure of 2 functions (int_is_even, int_is_odd) plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser",
+      "int_is_even": "Bool result: native main must return Int, so there is no comparable observable; probed through an Int wrapper it reports 'requires a valid Pep checker report'"
     }
   }
 }

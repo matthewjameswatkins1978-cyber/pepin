@@ -88,6 +88,25 @@ class DependencyTests(unittest.TestCase):
         self.assertTrue(source.endswith("say(int_text(alpha(1)))\n"))
 
 
+class ManifestOracleTests(unittest.TestCase):
+    def test_declared_unsupported_keeps_the_interpreter_oracle(self):
+        # Regression for a real defect: the declared-unsupported entry used to
+        # carry only `nativeUnsupported`, so a wrong interpreter result passed.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = pathlib.Path(tmp)
+            manifest_path = conformance.write_workspace(
+                tmp, [{"id": "n/one", "expr": "lib_double(21)", "result": "Int",
+                       "expect": "42"}], LIBRARY,
+                {"path": "lib.pep", "source": "lib.pep", "sha256": "sha256:0",
+                 "cases": 1},
+                native_supported=(), native_unsupported={"lib_double": "reason"})
+            entry = json.loads(manifest_path.read_text(encoding="utf-8"))["fixtures"][0]
+            self.assertEqual(entry["kind"], "native")
+            self.assertEqual(entry["expect"]["stdout"], "42\n")
+            self.assertEqual(entry["expect"]["exit"], 0)
+            self.assertIn("nativeUnsupported", entry["expect"])
+
+
 class CaseTableTests(unittest.TestCase):
     def test_native_declarations_reject_overlap(self):
         with self.assertRaises(conformance.HarnessError):

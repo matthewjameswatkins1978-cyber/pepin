@@ -126,13 +126,27 @@ was measured with real clang 23.1.4 and gcc 16.2.0:
 | `int_abs`, `int_min`, `int_max` | run and match the interpreter on both compilers |
 | `int_sign`, `int_mod`, `int_pow` | `Pep C23 unsupported: ... require direct local lets followed by one return` |
 | `int_clamp` | `Pep C23 unsupported: ... require supported scalar parameters and results` |
-| `int_gcd`, `int_lcm`, `int_is_even`, `int_is_odd` | **excluded**: their closure is 2–3 functions plus `main`, which hits `PEP_RUNTIME_STEP_LIMIT` in the staged parser before the emitter |
+| `int_gcd`, `int_lcm` | **excluded**: their closure is 2–3 functions plus `main`, which hits `PEP_RUNTIME_STEP_LIMIT` in the staged parser before the emitter |
+| `int_is_even`, `int_is_odd` | **excluded**: Bool results, and native `main` must return `Int`, so there is no comparable observable. Probed through an `Int` wrapper, `int_is_even` reports `requires a valid Pep checker report`; `int_is_odd` adds a second function and meets the composition ceiling |
+
+A declared-unsupported entry still carries the interpreter's `exit` and
+`stdout`, so `unsupported` never means "unchecked": both compilers must reject
+**and** the interpreter must have produced the expected value. Otherwise a
+program that computes the wrong result while both compilers refuse it would
+report `unsupported` and prove nothing.
 
 Current result: **9 pass, 15 declared-unsupported, 1 infra_error**. The
 infra_error is real and recorded rather than hidden: `int_clamp(-5, 0, 10)`
 exceeds the parser budget where the sibling `int_clamp` arguments reach the
 emitter and are cleanly rejected. Argument shape, not only source shape, moves
 that cost — the run exits 2 because it cannot vouch for that case.
+
+`int_abs` carries a narrowed domain: negating the minimum `Int` is not
+representable and raises `PEP_RUNTIME_OVERFLOW` by design. Parity does **not**
+have that gap — `int_is_even` takes the remainder by truncating division
+(`x - 2 * (x / 2)`), never negating the value, and is total over every `Int`
+including both boundaries. Boundary cases for `INT64_MIN` and `INT64_MAX` are in
+the contract and pass.
 
 Two consequences worth knowing before writing more library code:
 

@@ -253,7 +253,12 @@ def write_workspace(out_dir, cases, library_text, provenance, prune=True,
         source = compose(library_text, case, prune=prune, native=is_native)
         (fixtures / (slug + ".pep")).write_text(source, encoding="utf-8", newline="\n")
         if is_native and helper in native_unsupported:
-            expect = {"nativeUnsupported": native_unsupported[helper]}
+            # Keep the interpreter oracle here. Without it, both compilers could
+            # reject a program that computes the wrong value and the fixture
+            # would still report `unsupported` — a green-looking result that
+            # proves nothing about the library.
+            expect = {"exit": 0, "stdout": case["expect"] + "\n",
+                      "nativeUnsupported": native_unsupported[helper]}
             kind = "native"
         elif is_native:
             expect = {"exit": 0, "stdout": case["expect"] + "\n"}

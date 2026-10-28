@@ -15,6 +15,8 @@
 // Domains are stated per function. No negative modulo and no overflow claim is
 // made: PEP_RUNTIME_OVERFLOW is the interpreter's guard, not a library promise.
 
+// Domain: every Int except the minimum, whose magnitude is not representable
+// (negating it raises PEP_RUNTIME_OVERFLOW by design — the guard is not relaxed).
 fn int_abs(x: Int) -> Int {
   if x <= -1 { return -x } else { return x }
 }
@@ -62,9 +64,12 @@ fn int_lcm(a: Int, b: Int) -> Int {
   return a / g * b
 }
 
-// Parity for any Int: taken over the magnitude so negatives are covered too.
+// Parity of every Int, including both boundaries. The remainder is taken by
+// truncating division (Pep `/` truncates toward zero) so the value is never
+// negated: `x - 2 * (x / 2)` is 0 exactly when x is even, and it cannot overflow
+// because `2 * (x / 2)` is always representable for the minimum Int too.
 fn int_is_even(x: Int) -> Bool {
-  let m = int_mod(int_abs(x), 2)
+  let m = x - 2 * (x / 2)
   if m == 0 { return true } else { return false }
 }
 

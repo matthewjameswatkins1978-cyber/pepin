@@ -76,6 +76,45 @@ DEFAULT_RUN = {"stdout": "42\n", "exit": 0}
 DEFAULT_NATIVE = {"stdout": "42\n", "exit": 0}
 
 
+class VerdictUnitTests(unittest.TestCase):
+    """Direct checks on the verdict function, where the oracle rules apply."""
+
+    def setUp(self):
+        import pep_native
+        self.pep_native = pep_native
+
+    def observation(self, backend, exit_code, stdout="", stderr=""):
+        return {"backend": backend, "command": "x", "exit": exit_code,
+                "stdout": stdout, "stderr": stderr, "elapsed_s": 0.0,
+                "timed_out": False, "metadata": []}
+
+    def test_declared_unsupported_still_checks_the_interpreter_result(self):
+        # Both compilers rejecting must not excuse a wrong interpreter value.
+        reasons = "Pep C23 unsupported: Pep C23 nope\n"
+        broken = [
+            self.observation("interpreter", 0, stdout="41\n"),
+            self.observation("clang", 2, stderr=reasons),
+            self.observation("gcc", 2, stderr=reasons),
+        ]
+        status, detail = self.pep_native.verdict(
+            {"exit": 0, "stdout": "42\n", "nativeUnsupported": "nope"},
+            broken, ("interpreter", "clang", "gcc"))
+        self.assertEqual(status, "fail")
+        self.assertIn("interpreter stdout", detail)
+
+    def test_declared_unsupported_passes_when_interpreter_result_is_right(self):
+        reasons = "Pep C23 unsupported: Pep C23 nope\n"
+        good = [
+            self.observation("interpreter", 0, stdout="42\n"),
+            self.observation("clang", 2, stderr=reasons),
+            self.observation("gcc", 2, stderr=reasons),
+        ]
+        status, _detail = self.pep_native.verdict(
+            {"exit": 0, "stdout": "42\n", "nativeUnsupported": "nope"},
+            good, ("interpreter", "clang", "gcc"))
+        self.assertEqual(status, "unsupported")
+
+
 class NativeDifferentialTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
