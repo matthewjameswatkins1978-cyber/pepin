@@ -527,7 +527,7 @@ let check tops =
    |EName(n,s)->(match lookup env n with None->fail "PEP_UNKNOWN_VARIABLE" ("Unknown variable '"^n^"'") s ()
       |Some b->(match b.bty with None->fail "PEP_UNCONSTRAINED_BINDING" ("Binding '"^n^"' has no known type") s ()
         |Some t->{node=XVar b.bid;ety=Some t;espan=s}))
-   |ECall(n,args,s)->call env scope n args s
+   |ECall(n,args,s)->call env scope None n args s
    |EQualifiedCall(_,_,_,s,_)->fail "PEP_PROJECT_REQUIRED" "Qualified module calls require the explicit project command mode" s ()
    |ERecord(name,fields,s)->
       let info=match Hashtbl.find_opt type_table name with Some (`Record info)->info |Some (`Union _)->fail "PEP_NOT_A_RECORD" ("Type '"^name^"' is not a record") s () |None->fail "PEP_UNKNOWN_TYPE" ("Unknown record type '"^name^"'") s () in
@@ -594,8 +594,12 @@ let check tops =
       (match ty.ety,en.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,ty,en);ety=(match expected with Some _ as t->t|None->(match ty.ety with Some _ as t->t|None->en.ety));espan=s}
    |EMatch(subject,arms,s)->match_expr env scope expected subject arms s
+   |ECall(name,args,s)->
+      let checked=call env scope expected name args s in
+      (match expected,checked.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) checked.espan ~expected:want ()|_->());
+      checked
    |_->let t=synth env scope e in (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
-  and call env scope name args s =
+  and call env scope expected name args s =
     match Hashtbl.find_opt constructor_table name with
     |Some (owner,(cid,_,params,_))->
        if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" (internal_constructor_display_name name) (List.length params) (List.length args)) s ();
@@ -688,6 +692,7 @@ let check tops =
              holes:=saved_holes;
              inferred
          in
+         (match expected with Some expected_type when generic_params<>[]->infer_type result expected_type s|_->());
          List.iter2(fun argument parameter_type->
            if type_contains_parameter parameter_type then
              match parameter_type,argument with

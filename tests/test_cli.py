@@ -908,7 +908,7 @@ class PepGenericFunctionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             source = (
                 "fn empty[T]() -> List[T] { return [] }\n"
-                "let values: List[Int] = empty()\n"
+                "let values = empty()\n"
             )
             path = pathlib.Path(temporary) / "ambiguous.pep"
             path.write_text(source, encoding="utf-8", newline="")
@@ -916,6 +916,38 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_GENERIC_INFERENCE")
+
+    def test_expected_result_type_infers_generic_and_nested_empty_calls(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn empty[T]() -> List[T] { return [] }\n"
+                "fn identity[T](value: T) -> T { return value }\n"
+                "let direct: List[Int] = empty()\n"
+                "let nested: List[Int] = identity(empty())\n"
+                "say(int_text(length(direct)))\n"
+                "say(int_text(length(nested)))\n"
+            )
+            path = pathlib.Path(temporary) / "contextual.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            executed = invoke("run", path)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "0\n0\n")
+
+    def test_expected_generic_result_checks_argument_at_inferred_type(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn identity[T](value: T) -> T { return value }\n"
+                "let bad: Int = identity(\"text\")\n"
+            )
+            path = pathlib.Path(temporary) / "context-mismatch.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_GENERIC_ARGUMENT_MISMATCH")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], source.index("\"text\""))
 
     def test_generic_body_does_not_gain_unconstrained_operations(self):
         with tempfile.TemporaryDirectory() as temporary:
