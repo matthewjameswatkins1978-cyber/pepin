@@ -247,3 +247,17 @@ Verification:
 - Final `py_compile` and `git diff --check` passed. No clean standalone OCaml rebuild, historical MoonBit run or full repository discovery.
 
 **Nonblocking 3/3 review:** the cross-stage result and capacity edge are now reproducible, the typed control rules out mismatch-diagnostic complexity as the sole explanation, and the staged hole case preserves semantic facts. Runtime output gives no phase step counts; internal attribution remains unresolved, so this test-only slice makes no speculative checker optimization. The 100,000-step ceiling is unchanged. Agent 2's native/runtime work remains separate. A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — deep structural list parity and literal-append budget edge (2026-10-28; cycle 1/3)
+
+**Test SHA:** pending for this slice; checker implementation remains f314513ad955cc5a507209220b7cfcbaa3b7886f with the campaign’s later return-flow update at b9c7507. Added differential coverage for three- and four-level list signatures, return-context literals, reverse, append, nested call arguments, and exact leaf mismatch spans. The direct four-level append(value, item) control passes when the element is a typed name; append(value, [item]) also passes when item has depth two and the resulting list element has depth three.
+
+Two OCaml-valid sources that pass a depth-three list literal as the depth-four collection's append element—append(value, [[[1]]]) and append(value, [[item]]) with item: List[Int]—hit the unchanged PEP_RUNTIME_STEP_LIMIT in the Pep checker. Tests record this fixed-budget boundary explicitly; they do not increase the budget or claim Pep/OCaml parity for those capped invocations. This narrows the observed boundary to list-literal elements of that nested depth, not all depth-four signatures or list operations. Runtime failure positions vary and are not treated as root-cause attribution; no isolated CPU/step-distribution or memory measurements were collected.
+
+Verification on this slice before its commit:
+
+- Deep structural-list differential and fixed-budget characterization: 6/6 tests passed; valid controls, exact mismatch diagnostics and the two explicit step-limit cases are separated.
+- python -m py_compile tests/test_a13.py and git diff --check: passed.
+- No checker implementation, budget, protocol, A14, master, CURRENT.md, manifest or release changes.
+
+A13 remains partial, experimental and unaccepted; continue the campaign.

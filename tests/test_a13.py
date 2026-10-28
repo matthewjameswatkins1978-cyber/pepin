@@ -1726,6 +1726,81 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual([(scalar(fields(item)["name"]), scalar(fields(item)["expectedType"]))
                           for item in hole_report["holes"]["value"]], [("arg", "Bool")])
 
+    def _assert_nested_list_cases_match_ocaml(self, cases):
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("deep-nested-list-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                self.assertEqual(actual, expected, (expected, actual, report))
+
+    def test_deep_nested_list_signatures_and_returns_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("signature", "fn identity(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return value }", "valid"),
+            ("four-level-signature", "fn identity(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return value }", "valid"),
+            ("literal-under-return-context", "fn make() -> List[List[List[Int]]] { return [[[1]]] }", "valid"),
+            ("four-level-literal-under-return-context", "fn make() -> List[List[List[List[Int]]]] { return [[[[1]]]] }", "valid"),
+        ])
+
+    def test_deep_nested_list_calls_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("four-level-reverse-result", "fn flip(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return reverse(value) }", "valid"),
+            ("three-level-append-element", "fn add(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return append(value, [[1]]) }", "valid"),
+            ("four-level-append-parameter", "fn add(value: List[List[List[List[Int]]]], item: List[List[List[Int]]]) -> List[List[List[List[Int]]]] { return append(value, item) }", "valid"),
+            ("literal-under-call-context", "fn take(value: List[List[List[Int]]]) -> Int { return 0 } fn main() -> Int { return take([[[1]]]) }", "valid"),
+        ])
+
+    def _assert_valid_ocaml_source_hits_checker_budget(self, name, source):
+        reference = self._reference_check(name, source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(reference["diagnostics"], [], reference)
+        opened = self._open(source)
+        result = self.client.send({
+            "schemaVersion": 3,
+            "toolProtocolVersion": 2,
+            "op": "tool_invoke",
+            "tool": "pep-a13-checker",
+            "arguments": [],
+            "semanticTarget": {
+                "document": opened["document"],
+                "revision": opened["revision"],
+                "entryFunctions": [],
+            },
+        })
+        self.assertEqual(result.get("outcome"), "error", result)
+        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT", result)
+
+    def test_four_level_append_single_list_matches_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("four-level-append-single-list", "fn add(value: List[List[List[List[Int]]]], item: List[List[Int]]) -> List[List[List[List[Int]]]] { return append(value, [item]) }", "valid"),
+        ])
+
+    def test_four_level_append_nested_typed_literal_hits_known_runtime_boundary(self):
+        source = "fn add(value: List[List[List[List[Int]]]], item: List[Int]) -> List[List[List[List[Int]]]] { return append(value, [[item]]) }"
+        self._assert_valid_ocaml_source_hits_checker_budget("four-level-append-nested-typed-literal", source)
+
+    def test_four_level_append_nested_literal_hits_known_runtime_boundary(self):
+        source = "fn add(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return append(value, [[[1]]]) }"
+        self._assert_valid_ocaml_source_hits_checker_budget("four-level-append-nested-literal", source)
+
+    def test_deep_nested_list_mismatches_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("literal-leaf-mismatch", "fn bad(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return [[['text']]] }", "invalid"),
+            ("nested-call-argument", "fn take(value: List[List[List[Int]]]) -> Int { return 0 } fn main() -> Int { return take([[['text']]]) }", "invalid"),
+            ("nested-return-leaf-mismatch", "fn bad() -> List[List[List[Int]]] { return [[['text']]] }", "invalid"),
+            ("four-level-return-leaf-mismatch", "fn bad() -> List[List[List[List[Int]]]] { return [[[['text']]]] }", "invalid"),
+            ("four-level-append-leaf-mismatch", "fn bad(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return append(value, [[['text']]]) }", "invalid"),
+        ])
+
     def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
         source = (
             "fn identity(flag: Bool) -> Bool { return flag }\n"
