@@ -145,6 +145,30 @@ fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "record_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
+fn diagnostic_order_byte(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -> Int {
+  if candidate.code != "PEP_MISSING_FIELD" { return candidate.startByte } else {}
+  let missingField = lookup_node(nodes, candidate.syntaxId)
+  if !missingField.found || missingField.node.kind != "field_declaration" { return candidate.startByte } else {}
+  let declaration = lookup_node(nodes, missingField.node.parentId)
+  if !declaration.found || declaration.node.kind != "record_declaration" { return candidate.startByte } else {}
+  var found = false
+  var firstRecordByte = 0
+  for record in nodes {
+    if record.kind == "record" && record.text == declaration.node.text {
+      var supplied = false
+      for field in nodes {
+        if field.parentId == record.id && field.kind == "record_field" && field.text == missingField.node.text {
+          supplied = true
+        } else {}
+      }
+      if !supplied && (!found || record.startByte + 1 <= firstRecordByte) {
+        found = true
+        firstRecordByte = record.startByte
+      } else {}
+    } else {}
+  }
+  if found { return firstRecordByte } else { return candidate.startByte }
+}
 fn union_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "union_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
@@ -1980,8 +2004,10 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
       var unknownTypeFound = false
       var candidateCount = 0
       var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+      var firstOrderByte = 0
       var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       for candidate in collectedDiagnostics {
+        let orderByte = diagnostic_order_byte(nodes, candidate)
         if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
             candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
             candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_TYPE" {
@@ -1994,16 +2020,17 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
           } else {}
         } else {
           if candidate.code != "PEP_A13_TYPE_UNSUPPORTED" {
-            if !firstFound || candidate.startByte + 1 <= first.startByte ||
-                (candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
+            if !firstFound || orderByte + 1 <= firstOrderByte ||
+                (orderByte == firstOrderByte && candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
                  candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
               firstFound = true
               first = candidate
+              firstOrderByte = orderByte
             } else {}
           } else {}
         }
       }
-      if candidateCount == 0 || candidateCount == 1 {
+      if candidateCount == 0 {
       } else {
         if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
       }
