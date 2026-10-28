@@ -1131,33 +1131,71 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if node.kind == "record" {
         let declaration = record_declaration(nodes, node.text)
         if declaration.found {
+          var duplicateFound = false
+          var duplicateNode = empty_node()
+          var fieldDiagnosticFound = false
+          var fieldDiagnosticCode = ""
+          var fieldDiagnosticNode = empty_node()
           for field in nodes {
             if field.parentId == node.id && field.kind == "record_field" {
-              let expected = record_field_type(nodes, node.text, field.text)
-              let expectedShape = record_field_shape(nodes, node.text, field.text)
-              let value = child_at(nodes, field.id, "value", 0)
-              let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
-              let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
-              let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-              let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
-              if expected == "" && expectedShape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Record literal names a field absent from its declaration", field)) } else {}
-              if expected != "" && actual != "" && actual != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", value.node)) } else {}
-              if ((expected == "" || actual == "") && shapeMismatch) || (expected == actual && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found) {
-                let mismatch = listMismatch
-                let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", mismatchNode))
+              if !duplicateFound && is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
+                duplicateFound = true
+                duplicateNode = field
               } else {}
-              if is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record literal supplies a field more than once", field))
+              if !fieldDiagnosticFound {
+                let expected = record_field_type(nodes, node.text, field.text)
+                let expectedShape = record_field_shape(nodes, node.text, field.text)
+                let value = child_at(nodes, field.id, "value", 0)
+                let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+                let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
+                let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+                if expected == "" && expectedShape.kind == "" {
+                  fieldDiagnosticFound = true
+                  fieldDiagnosticCode = "PEP_UNKNOWN_FIELD"
+                  fieldDiagnosticNode = field
+                } else {
+                  if expected != "" && actual != "" && actual != expected {
+                    fieldDiagnosticFound = true
+                    fieldDiagnosticCode = "PEP_TYPE_MISMATCH"
+                    fieldDiagnosticNode = value.node
+                  } else {
+                    let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                    if ((expected == "" || actual == "") && shapeMismatch) || (expected == actual && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found) {
+                      let mismatch = listMismatch
+                      fieldDiagnosticFound = true
+                      fieldDiagnosticCode = "PEP_TYPE_MISMATCH"
+                      fieldDiagnosticNode = if mismatch.found { mismatch.node } else { value.node }
+                    } else {}
+                  }
+                }
               } else {}
             } else {}
           }
+          var missingFound = false
+          var missingNode = empty_node()
           for declared in nodes {
-            if declared.parentId == declaration.node.id && declared.kind == "field_declaration" {
+            if !missingFound && declared.parentId == declaration.node.id && declared.kind == "field_declaration" {
               var supplied = false
-              for field in nodes { if field.parentId == node.id && field.kind == "record_field" && field.text == declared.text { supplied = true } else {} }
-              if !supplied { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_FIELD", "Record literal omits a declared field", node)) } else {}
+              for field in nodes {
+                if field.parentId == node.id && field.kind == "record_field" && field.text == declared.text { supplied = true } else {}
+              }
+              if !supplied {
+                missingFound = true
+                missingNode = declared
+              } else {}
             } else {}
+          }
+          if duplicateFound {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record literal supplies a field more than once", duplicateNode))
+          } else {
+            if missingFound {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_FIELD", "Record literal omits a declared field", missingNode))
+            } else {
+              if fieldDiagnosticFound {
+                let fieldDiagnosticMessage = if fieldDiagnosticCode == "PEP_UNKNOWN_FIELD" { "Record literal names a field absent from its declaration" } else { "Record field value type does not match its declaration" }
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldDiagnosticCode, fieldDiagnosticMessage, fieldDiagnosticNode))
+              } else {}
+            }
           }
         } else {}
       } else {}
