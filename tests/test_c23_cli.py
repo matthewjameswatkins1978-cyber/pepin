@@ -3,6 +3,8 @@ import subprocess
 import tempfile
 import unittest
 
+from pep_c23 import emit
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
 CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
@@ -115,8 +117,67 @@ class PepC23CliTests(unittest.TestCase):
                 with self.subTest(compiler=compiler.name):
                     result = self.invoke("run-c23", source, "--compiler", compiler)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertEqual(result.stdout, reference.stdout)
                     self.assertEqual(result.stdout, "42\n")
+
+    def test_chunked_parser_carries_composed_helpers_through_native_execution(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn identity(value: Int) -> Int { return value }\n"
+            "fn layer0(value: Int) -> Int { return identity(value) }\n"
+            "fn layer1(value: Int) -> Int { return layer0(value) }\n"
+            "fn layer2(value: Int) -> Int { return layer1(value) }\n"
+            "fn layer3(value: Int) -> Int { return layer2(value) }\n"
+            "fn main() -> Int { return layer3(42) }\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "composed-helpers.pep"
+            source.write_text(source_text, encoding="utf-8", newline="")
+            reference_source = folder / "composed-helpers-reference.pep"
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "42\n")
+
+            measurements = {}
+            generated_c = emit(source.read_bytes(), measurements)
+            self.assertIn("pep_fn_", generated_c)
+            self.assertEqual(measurements["parser_status"], "complete")
+            self.assertEqual(measurements["checker_status"], "valid")
+            self.assertEqual(measurements["emitter_status"], "emitted")
+            self.assertGreater(measurements["parser_step_count"], 1)
+            self.assertLessEqual(measurements["parser_max_request_bytes"], 1_048_576)
+            self.assertLessEqual(measurements["parser_max_response_bytes"], 1_048_576)
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
+    def test_chunked_parser_preserves_incomplete_diagnostic_and_fails_closed(self):
+        source_text = "fn main() -> Int { return 42"
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "incomplete.pep"
+            source.write_text(source_text, encoding="utf-8", newline="")
+            generated = folder / "incomplete.c"
+            result = self.invoke("run-c23", source, "--compiler", CLANG, "--emit-c", generated)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(generated.exists())
+
+            measurements = {}
+            with self.assertRaisesRegex(ValueError, "emission inputs do not match"):
+                emit(source.read_bytes(), measurements)
+            self.assertEqual(measurements["parser_status"], "incomplete")
+            self.assertEqual(measurements["parser_error_code"], "PEP_PARSE_EXPECTED")
+            self.assertEqual(measurements["parser_error_start"], "28")
+            self.assertEqual(measurements["parser_error_end"], "28")
+            self.assertEqual(measurements["parser_error_line"], "1")
+            self.assertEqual(measurements["parser_error_column"], "29")
+            self.assertEqual(measurements["checker_status"], "invalid")
+            self.assertEqual(measurements["emitter_status"], "unsupported")
 
     def test_scalar_record_construction_and_field_access_match_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
