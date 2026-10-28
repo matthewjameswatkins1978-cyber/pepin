@@ -1825,7 +1825,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   }
   var selectedDiagnosticsReversed: List[CheckDiagnostic] = []
   for candidate in orderedDiagnostics {
-    if candidate.code != "PEP_TYPE_MISMATCH" || firstMismatchFound && candidate.syntaxId == selectedMismatch.syntaxId && candidate.startByte == selectedMismatch.startByte && candidate.endByte == selectedMismatch.endByte {
+    var hasMatchSpecificSpan = false
+    if candidate.code == "PEP_TYPE_MISMATCH" {
+      for other in orderedDiagnostics {
+        if other.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && other.startByte == candidate.startByte && other.endByte == candidate.endByte {
+          hasMatchSpecificSpan = true
+        } else {}
+      }
+    } else {}
+    if candidate.code != "PEP_TYPE_MISMATCH" || firstMismatchFound && candidate.syntaxId == selectedMismatch.syntaxId && candidate.startByte == selectedMismatch.startByte && candidate.endByte == selectedMismatch.endByte && !hasMatchSpecificSpan {
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
