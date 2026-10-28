@@ -44,6 +44,12 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   return all
 }
 
+fn list_bool_all_false(values: List[Bool]) -> Bool {
+  var all = true
+  for item in values { all = all && !item }
+  return all
+}
+
 fn list_int_count_nonzero(values: List[Int]) -> Int {
   var total = 0
   for item in values { total = if item != 0 { total + 1 } else { total } }

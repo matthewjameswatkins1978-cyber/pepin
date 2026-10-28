@@ -895,6 +895,35 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
 
 
+    def test_pep_written_all_false_helper_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_bool_all_false(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (("[false, false, false]", 42), ("[true, false]", 0), ("[]", 42))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for index, (values, expected) in enumerate(cases):
+                with self.subTest(values=values):
+                    source = pathlib.Path(temp_dir) / f"all_false_{index}.pep"
+                    source.write_text(
+                        helper + f"\nfn main() -> Int {{\n  return if list_bool_all_false({values}) {{ 42 }} else {{ 0 }}\n}}\n",
+                        encoding="utf-8", newline="\n")
+                    reference_source = pathlib.Path(temp_dir) / f"all_false_ref_{index}.pep"
+                    reference_source.write_text(
+                        source.read_text(encoding="utf-8") + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, str(expected) + chr(10))
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            result = self.invoke("run-c23", source, "--compiler", compiler)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertEqual(result.stdout, reference.stdout)
+
     def test_pep_written_collection_helpers_match_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
