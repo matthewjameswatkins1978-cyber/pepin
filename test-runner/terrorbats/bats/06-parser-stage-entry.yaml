@@ -1,0 +1,53 @@
+version: terrorbat/v1
+
+id: pep-parser-stage-entry
+
+claim:
+  text: >
+    The chunked-parser repair does not actually lift the parse ceiling: at least
+    one previously parse-blocked fixture still fails inside the parser, an invalid
+    program advances past the checker, or a build is called successful without an
+    executable that produces the expected value.
+
+requires:
+  - process.spawn
+
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args:
+        - -NoProfile
+        - -Command
+        - >-
+          python test-runner/terrorbats/drivers/stage_entry_attack.py;
+          exit $LASTEXITCODE
+
+oracle:
+  # Falsifying evidence: an affirmative stage check failed.
+  all:
+    - type: text_contains
+      step: run:0
+      stream: stdout
+      substring: VIOLATED
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 1800s
+  total: 2400s
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, parser, stage-evidence, affirmative-oracle, c23-pipeline]
+  description: >
+    The absence of PEP_RUNTIME_STEP_LIMIT is not proof a repair worked, so this
+    Bat asks which stage the pipeline actually reached and demands affirmative
+    evidence for it: parser completion for every previously blocked fixture, an
+    invalid program that never advances, and a "success" that really executed.
+    PROVEN means one of those affirmative checks failed; the STAGE lines name the
+    exact stage per fixture so the verdict is checkable rather than trusted.
