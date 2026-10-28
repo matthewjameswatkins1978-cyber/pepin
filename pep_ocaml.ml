@@ -21,7 +21,17 @@ type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
+let internal_name_display marker name =
+  let marker_length=String.length marker in
+  let rec find index =
+    if index+marker_length>String.length name then name
+    else if String.sub name index marker_length=marker then
+      String.sub name (index+marker_length) (String.length name-index-marker_length)
+    else find (index+1)
+  in find 0
+let internal_type_display_name name = internal_name_display "$type$" name
+let internal_constructor_display_name name = internal_name_display "$ctor$" name
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->internal_type_display_name n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan ?(file = !current_source_file) lo hi line column = {lo;hi;line;column;file}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -435,7 +445,7 @@ let check tops =
         let ctor_ids=Hashtbl.create 8 in
         let resolved=List.map(fun(ctor,args,csp)->
           if List.mem ctor ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] then fail "PEP_RESERVED_CONSTRUCTOR" ("Constructor name '"^ctor^"' is reserved for a builtin") csp ();
-          if Hashtbl.mem ctor_ids ctor || Hashtbl.mem constructor_table ctor then fail "PEP_DUPLICATE_CONSTRUCTOR" ("Duplicate constructor '"^ctor^"'") csp ();
+          if Hashtbl.mem ctor_ids ctor || Hashtbl.mem constructor_table ctor then fail "PEP_DUPLICATE_CONSTRUCTOR" ("Duplicate constructor '"^internal_constructor_display_name ctor^"'") csp ();
           Hashtbl.add ctor_ids ctor ();
           let item=(fresh_ctor(),ctor,args,csp) in Hashtbl.add constructor_table ctor (name,item); item) variants in
         let info={union_id=fresh_type();union_name=name;union_variants=resolved;union_span=sp} in
@@ -475,8 +485,8 @@ let check tops =
         let owner,(cid,_,arg_types,_) = match Hashtbl.find_opt constructor_table name with
           |None->fail "PEP_UNKNOWN_CONSTRUCTOR" ("Unknown constructor '"^name^"'") sp ()
           |Some pair->pair in
-        if expected<>Named owner then fail "PEP_PATTERN_TYPE_MISMATCH" ("Constructor '"^name^"' belongs to "^owner^", not "^type_name expected) sp ~expected () ;
-        if List.length args<>List.length arg_types then fail "PEP_PATTERN_ARITY" (Printf.sprintf "Constructor '%s' pattern expects %d argument(s), found %d" name (List.length arg_types) (List.length args)) sp ();
+        if expected<>Named owner then fail "PEP_PATTERN_TYPE_MISMATCH" ("Constructor '"^internal_constructor_display_name name^"' belongs to "^type_name (Named owner)^", not "^type_name expected) sp ~expected () ;
+        if List.length args<>List.length arg_types then fail "PEP_PATTERN_ARITY" (Printf.sprintf "Constructor '%s' pattern expects %d argument(s), found %d" (internal_constructor_display_name name) (List.length arg_types) (List.length args)) sp ();
         let checked=List.map2(fun arg ty->check_pattern local ty arg)args arg_types in
         let irrefutable=pattern_covers expected pat in
         TPConstructor(cid,List.map fst checked,sp),irrefutable
@@ -563,7 +573,7 @@ let check tops =
   and call env scope name args s =
     match Hashtbl.find_opt constructor_table name with
     |Some (owner,(cid,_,params,_))->
-       if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
+       if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" (internal_constructor_display_name name) (List.length params) (List.length args)) s ();
        let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg) args params in
        let uid=match Hashtbl.find type_table owner with `Union info->info.union_id|_->assert false in
        {node=XConstructor(uid,cid,name,checked);ety=Some(Named owner);espan=s}
@@ -650,12 +660,12 @@ let check tops =
       (match arm.pattern with
        |PWildcard _|PBind _ ->catch_all:=true
        |PConstructor(name,args,_) ->let cid,_,arg_types,_=match Hashtbl.find constructor_table name with _,item->item in
-          if Hashtbl.mem covered cid then fail "PEP_UNREACHABLE_MATCH_ARM" ("Constructor '"^name^"' is already covered") arm.arm_span ();
+          if Hashtbl.mem covered cid then fail "PEP_UNREACHABLE_MATCH_ARM" ("Constructor '"^internal_constructor_display_name name^"' is already covered") arm.arm_span ();
           if List.length args=List.length arg_types && List.for_all2 pattern_covers arg_types args then Hashtbl.replace covered cid ());
       let arm_env=(if !local=[] then env else !local::env) in
       pattern,arm_env,arm
     )arms in
-    if not !catch_all then List.iter(fun(cid,name,_,_)->if not(Hashtbl.mem covered cid) then fail "PEP_NON_EXHAUSTIVE_MATCH" ("Match is missing an irrefutable arm for constructor '"^name^"'") sp ()) union.union_variants;
+    if not !catch_all then List.iter(fun(cid,name,_,_)->if not(Hashtbl.mem covered cid) then fail "PEP_NON_EXHAUSTIVE_MATCH" ("Match is missing an irrefutable arm for constructor '"^internal_constructor_display_name name^"'") sp ()) union.union_variants;
     let inferred_type=match expected with Some _ as ty->ty |None->
       let rec find : (tpattern * binding list list * match_arm) list -> ty option = function
         |[]->None
@@ -2032,12 +2042,54 @@ type project_analysis = {
   project_checked : checked;
 }
 let module_internal_name module_name function_name = module_name ^ "$" ^ function_name
+let module_type_names unit =
+  List.filter_map(function
+    |TopType (RecordDecl(name,_,_))|TopType (UnionDecl(name,_,_))->Some name
+    |_->None)unit.unit_tops
+let module_constructor_names unit =
+  List.concat_map(function
+    |TopType (UnionDecl(_,variants,_))->List.map(fun(name,_,_)->name)variants
+    |_->[])unit.unit_tops
+let module_reserved_type_names = ["Int";"Bool";"Str";"SourceBytes";"Unit";"List";"FunctionInfo";"CallEdge";"SemanticDiagnostic";"ProgramInfo"]
+let module_reserved_constructor_names = ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"]
+let module_builtin_function_names = module_reserved_constructor_names
+let module_internal_type_name unit name =
+  if List.mem name module_reserved_type_names then name
+  else module_internal_name unit.unit_name ("type$"^name)
+let module_internal_constructor_name unit name =
+  if List.mem name module_reserved_constructor_names then name
+  else module_internal_name unit.unit_name ("ctor$"^name)
+let module_map_type unit ty =
+  let type_names=module_type_names unit in
+  let rec map=function
+    |Named name when List.mem name type_names->Named(module_internal_type_name unit name)
+    |List element->List(map element)
+    |other->other
+  in map ty
+let module_map_type_decl unit = function
+  |RecordDecl(name,fields,span)->
+    RecordDecl(module_internal_type_name unit name,
+      List.map(fun(field,ty,field_span)->field,module_map_type unit ty,field_span)fields,span)
+  |UnionDecl(name,variants,span)->
+    UnionDecl(module_internal_type_name unit name,
+      List.map(fun(ctor,args,ctor_span)->
+        module_internal_constructor_name unit ctor,List.map(module_map_type unit)args,ctor_span)variants,span)
 let module_source_name path = Filename.basename path
 let module_stem path =
   let source=module_source_name path in
   if not(Filename.check_suffix source ".pep") then
     fail "PEP_PROJECT_ENTRY_EXTENSION" "Project source files must use the .pep extension" (mkspan ~file:(Some source) 0 0 1 1) ();
   Filename.chop_extension source
+let module_path_is_within_directory directory candidate =
+  let normalize path =
+    if Sys.os_type="Win32" then
+      path |> String.map(fun character->if character='/' then '\\' else character) |> String.lowercase_ascii
+    else path
+  in
+  let directory=normalize directory and candidate=normalize candidate in
+  let prefix=if Filename.check_suffix directory Filename.dir_sep then directory else directory^Filename.dir_sep in
+  String.length candidate>=String.length prefix &&
+  String.sub candidate 0 (String.length prefix)=prefix
 let module_import_path directory module_name import_span =
   let expected=module_name^".pep" in
   let matches =
@@ -2047,43 +2099,45 @@ let module_import_path directory module_name import_span =
   match matches with
   |[]->fail "PEP_MODULE_NOT_FOUND" ("No sibling module file '"^expected^"' exists") import_span ()
   |[actual] when actual<>expected->fail "PEP_MODULE_CASE_MISMATCH" ("Module file spelling must match '"^expected^"' exactly") import_span ()
-  |[_]->Filename.concat directory expected
-  |_ -> fail "PEP_MODULE_CASE_COLLISION" ("More than one sibling file matches module '"^module_name^"' under case-insensitive comparison") import_span ()
+  |[actual]->
+    let candidate=Filename.concat directory actual in
+    let canonical_candidate =
+      try Unix.realpath candidate
+      with Unix.Unix_error _|Sys_error _ ->
+        fail "PEP_MODULE_READ_FAILED" ("Could not resolve module path '"^actual^"'") import_span ()
+    in
+    if not(module_path_is_within_directory directory canonical_candidate) then
+      fail "PEP_MODULE_PATH_ESCAPE" ("Module '"^module_name^"' resolves outside the project directory") import_span ();
+    canonical_candidate
+  |_ ->fail "PEP_MODULE_CASE_COLLISION" ("More than one sibling file matches module '"^module_name^"' under case-insensitive comparison") import_span ()
 let module_function_declarations unit =
   List.filter_map(function TopFun function_->Some function_|_->None)unit.unit_tops
 let module_import_declarations unit =
   List.filter_map(function TopImport import->Some import|_->None)unit.unit_tops
+let module_validate_names unit =
+  let constructors=module_constructor_names unit in
+  List.iter(fun function_->
+    if List.mem function_.fname module_builtin_function_names || List.mem function_.fname constructors then
+      fail "PEP_RESERVED_FUNCTION" ("Function name "^function_.fname^" is reserved for a builtin or constructor") function_.fspan ()
+  )(module_function_declarations unit)
 let rec module_type_has_nominal = function Named _->true|List element->module_type_has_nominal element|_->false
 let module_unsupported span =
-  fail "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED" "Imported module types and nominal values are not supported by this first module slice" span ()
+  fail "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED" "Public imported function signatures with nominal types are not supported by this bounded module slice" span ()
 let module_check_imported_unit unit =
   List.iter(function
     |TopStmt statement->fail "PEP_MODULE_TOP_LEVEL_EXECUTION" "Imported modules may contain declarations only" (stmt_span statement) ()
-    |TopType (RecordDecl(_,_,span))|TopType (UnionDecl(_,_,span))->module_unsupported span
-    |TopFun function_->
+    |TopFun function_ when function_.public->
       List.iter(fun(_,ty,span)->if module_type_has_nominal ty then module_unsupported span)function_.params;
-      if module_type_has_nominal function_.result then module_unsupported function_.fspan;
-      let rec expression = function
-        |ERecord(_,_,span)|EMatch(_,_,span)->module_unsupported span
-        |ECall(name,args,span) when name<>"" && name.[0]>='A' && name.[0]<='Z'->module_unsupported span
-        |ECall(_,args,_)->List.iter expression args
-        |EQualifiedCall(_,_,args,_,_)->List.iter expression args
-        |EBin(_,left,right,_)->expression left;expression right
-        |EUnary(_,value,_)->expression value
-        |EList(items,_)->List.iter expression items
-        |EIf(condition,yes,no,_)->expression condition;expression yes;expression no
-        |EField(value,_,_)->expression value
-        |EInt _|EBool _|EStr _|EName _|EHole _->()
-      and statement = function
-        |SLet(_,_,value,_)|SVar(_,_,value,_)|SAssign(_,value,_)|SReturn(value,_)|SExpr(value,_)->expression value
-        |SBlock(items,_)->List.iter statement items
-        |SIf(condition,yes,no,_)->expression condition;List.iter statement yes;List.iter statement no
-        |SFor(_,iterable,body,_) ->expression iterable;List.iter statement body
-        |SWhile(condition,body,_)->expression condition;List.iter statement body
-      in List.iter statement function_.body
-    |TopImport _->())unit.unit_tops
+      if module_type_has_nominal function_.result then module_unsupported function_.fspan
+    |TopType _|TopFun _|TopImport _->())unit.unit_tops
 let load_project entry_path =
   let directory=Filename.dirname entry_path in
+  let canonical_directory=
+    try Unix.realpath directory
+    with Unix.Unix_error _|Sys_error _ ->
+      fail "PEP_MODULE_DIRECTORY_UNAVAILABLE" "The entry source directory cannot be resolved for module imports"
+        (mkspan ~file:(Some(Filename.basename entry_path)) 0 0 1 1) ()
+  in
   let entry_name=module_stem entry_path in
   let states=Hashtbl.create 8 and units=Hashtbl.create 8 and ordered=ref [] in
   let rec load is_entry module_name source_path import_span =
@@ -2097,7 +2151,7 @@ let load_project entry_path =
       let source=try read_file source_path with Sys_error _->
         let span=match import_span with Some span->span|None->mkspan ~file:(Some(module_source_name source_path)) 0 0 1 1 in
         fail "PEP_MODULE_READ_FAILED" ("Could not read module '"^module_source_name source_path^"'") span () in
-      let source_name=module_source_name source_path in
+      let source_name=if is_entry then module_source_name source_path else module_name^".pep" in
       let tops=parse ~file:source_name source in
       let unit={unit_name=module_name;unit_source_path=source_name;unit_source=source;unit_tops=tops;unit_imports=module_import_declarations {unit_name=module_name;unit_source_path=source_name;unit_source=source;unit_tops=tops;unit_imports=[]}} in
       Hashtbl.add units module_name unit;
@@ -2105,7 +2159,7 @@ let load_project entry_path =
       List.iter(fun import->
         if Hashtbl.mem aliases import.alias then fail "PEP_DUPLICATE_IMPORT_ALIAS" ("Import alias '"^import.alias^"' is declared more than once") import.import_span ();
         Hashtbl.add aliases import.alias ();
-        let target=module_import_path directory import.module_name import.import_span in
+        let target=module_import_path canonical_directory import.module_name import.import_span in
         load false import.module_name target (Some import.import_span)
       )unit.unit_imports;
       if not is_entry then module_check_imported_unit unit;
@@ -2116,9 +2170,19 @@ let load_project entry_path =
   let ordered_units=List.rev !ordered in
   let entry=match Hashtbl.find_opt units entry_name with Some unit->unit|None->assert false in
   ordered_units,entry
+let module_map_pattern unit =
+  let constructors=module_constructor_names unit in
+  let rec map=function
+    |PConstructor(name,args,span) when List.mem name constructors->
+      PConstructor(module_internal_constructor_name unit name,List.map map args,span)
+    |PConstructor(name,args,span)->PConstructor(name,List.map map args,span)
+    |pattern->pattern
+  in map
 let rec module_map_expr unit units expression =
   let map=module_map_expr unit units in
   let local_names=List.map(fun function_->function_.fname)(module_function_declarations unit) in
+  let constructors=module_constructor_names unit in
+  let local_type_names=module_type_names unit in
   match expression with
   |EQualifiedCall(alias,name,args,span,member_span)->
     let import=List.find_opt(fun item->item.alias=alias)unit.unit_imports in
@@ -2131,21 +2195,27 @@ let rec module_map_expr unit units expression =
     ECall(module_internal_name import.module_name name,List.map map args,span)
   |ECall(name,args,span) when List.mem name local_names->
     ECall(module_internal_name unit.unit_name name,List.map map args,span)
+  |ECall(name,args,span) when List.mem name constructors->
+    ECall(module_internal_constructor_name unit name,List.map map args,span)
   |ECall(name,args,span)->ECall(name,List.map map args,span)
-  |ERecord(name,fields,span)->ERecord(name,List.map(fun(field,value,field_span)->field,map value,field_span)fields,span)
+  |ERecord(name,fields,span)->
+    let name=if List.mem name local_type_names then module_internal_type_name unit name else name in
+    ERecord(name,List.map(fun(field,value,field_span)->field,map value,field_span)fields,span)
   |EField(value,name,span)->EField(map value,name,span)
   |EBin(operator,left,right,span)->EBin(operator,map left,map right,span)
   |EUnary(operator,value,span)->EUnary(operator,map value,span)
   |EList(items,span)->EList(List.map map items,span)
   |EIf(condition,yes,no,span)->EIf(map condition,map yes,map no,span)
-  |EMatch(subject,arms,span)->EMatch(map subject,List.map(fun (arm:match_arm)->{arm with result=map arm.result})arms,span)
+  |EMatch(subject,arms,span)->
+    EMatch(map subject,List.map(fun (arm:match_arm)->{arm with pattern=module_map_pattern unit arm.pattern;result=map arm.result})arms,span)
   |EInt _|EBool _|EStr _|EName _|EHole _->expression
 let rec module_map_statement unit units statement =
   let map_expr=module_map_expr unit units in
   let map_stmt=module_map_statement unit units in
+  let map_type=Option.map(module_map_type unit) in
   match statement with
-  |SLet(name,ty,value,span)->SLet(name,ty,map_expr value,span)
-  |SVar(name,ty,value,span)->SVar(name,ty,map_expr value,span)
+  |SLet(name,ty,value,span)->SLet(name,map_type ty,map_expr value,span)
+  |SVar(name,ty,value,span)->SVar(name,map_type ty,map_expr value,span)
   |SAssign(name,value,span)->SAssign(name,map_expr value,span)
   |SReturn(value,span)->SReturn(map_expr value,span)
   |SBlock(items,span)->SBlock(List.map map_stmt items,span)
@@ -2154,11 +2224,17 @@ let rec module_map_statement unit units statement =
   |SWhile(condition,body,span)->SWhile(map_expr condition,List.map map_stmt body,span)
   |SExpr(value,span)->SExpr(map_expr value,span)
 let project_transform_unit unit units =
+  module_validate_names unit;
   List.filter_map(function
     |TopImport _->None
-    |TopFun function_->Some(TopFun{function_ with fname=module_internal_name unit.unit_name function_.fname;body=List.map(module_map_statement unit units)function_.body})
+    |TopFun function_->
+      Some(TopFun{function_ with
+        fname=module_internal_name unit.unit_name function_.fname;
+        params=List.map(fun(name,ty,span)->name,module_map_type unit ty,span)function_.params;
+        result=module_map_type unit function_.result;
+        body=List.map(module_map_statement unit units)function_.body})
     |TopStmt statement->Some(TopStmt(module_map_statement unit units statement))
-    |TopType declaration->Some(TopType declaration))unit.unit_tops
+    |TopType declaration->Some(TopType(module_map_type_decl unit declaration)))unit.unit_tops
 let analyse_project entry_path =
   let units,entry=load_project entry_path in
   let transformed=List.concat_map(fun unit->project_transform_unit unit units)units in

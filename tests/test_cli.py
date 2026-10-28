@@ -936,6 +936,44 @@ class PepModuleCliTests(unittest.TestCase):
             self.assertEqual(diagnostic["span"]["source"], "second.pep")
             self.assertEqual(diagnostic["span"]["start"]["offset"], second.index("import first"))
 
+    def test_duplicate_import_alias_is_rejected_at_second_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import first as shared\nimport second as shared\n"
+            self._write_project(project, {
+                "main.pep": entry,
+                "first.pep": "pub fn value() -> Int { return 1 }\n",
+                "second.pep": "pub fn value() -> Int { return 2 }\n",
+            })
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_DUPLICATE_IMPORT_ALIAS")
+            self.assertEqual(diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("import second"))
+
+    def test_module_symlink_cannot_escape_project_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            entry = "import escape as e\nsay(int_text(e.value()))\n"
+            self._write_project(project, {"main.pep": entry})
+            outside = root / "outside.pep"
+            outside.write_text("pub fn value() -> Int { return 42 }\n", encoding="utf-8")
+            try:
+                (project / "escape.pep").symlink_to(outside)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"symlink creation is unavailable: {error}")
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_MODULE_PATH_ESCAPE")
+            self.assertEqual(diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("import"))
+
     def test_imported_module_top_level_statement_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             project = pathlib.Path(temporary)
@@ -1025,7 +1063,150 @@ class PepModuleCliTests(unittest.TestCase):
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED")
             self.assertEqual(diagnostic["span"]["source"], "geometry.pep")
-            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index("type Point"))
+            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index("pub fn origin"))
+
+    def test_imported_module_private_records_are_isolated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            self._write_project(project, {
+                "main.pep": (
+                    "import geometry as g\n"
+                    "import layout as l\n"
+                    "say(int_text(g.answer() + l.value()))\n"
+                ),
+                "geometry.pep": (
+                    "type Point { x: Int }\n"
+                    "type Holder { point: Point }\n"
+                    "fn read_x(point: Point) -> Int { return point.x }\n"
+                    "fn holder_x(holder: Holder) -> Int { return holder.point.x }\n"
+                    "fn count(points: List[Point]) -> Int { return length(points) }\n"
+                    "pub fn answer() -> Int { return holder_x(Holder { point: Point { x: 40 } }) + count([Point { x: 0 }]) + 1 }\n"
+                ),
+                "layout.pep": (
+                    "type Point { y: Int }\n"
+                    "pub fn value() -> Int { let point: Point = Point { y: 1 }; return point.y }\n"
+                ),
+            })
+
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["status"], "valid")
+
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "43\n")
+
+    def test_imported_module_private_unions_support_constructors_and_match(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            self._write_project(project, {
+                "main.pep": (
+                    "import choices as c\n"
+                    "import alternative as a\n"
+                    "say(int_text(c.answer() + a.answer()))\n"
+                ),
+                "choices.pep": (
+                    "type Choice = Yes(Int) | No()\n"
+                    "fn score(choice: Choice) -> Int { return match choice {\n"
+                    "  Yes(n) => n\n"
+                    "  No() => 0\n"
+                    "} }\n"
+                    "pub fn answer() -> Int { return score(Yes(40)) + 2 }\n"
+                ),
+                "alternative.pep": (
+                    "type Choice = Yes(Int) | No()\n"
+                    "fn score(choice: Choice) -> Int { return match choice {\n"
+                    "  Yes(n) => n\n"
+                    "  No() => 0\n"
+                    "} }\n"
+                    "pub fn answer() -> Int { return score(Yes(1)) }\n"
+                ),
+            })
+
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["status"], "valid")
+
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "43\n")
+
+    def test_imported_private_constructor_arity_diagnostic_uses_source_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            library = (
+                "type Choice = Yes(Int) | No()\n"
+                "pub fn bad() -> Int { return Yes() }\n"
+            )
+            self._write_project(project, {
+                "main.pep": "import choices\n",
+                "choices.pep": library,
+            })
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_ARGUMENT_COUNT")
+            self.assertEqual(diagnostic["span"]["source"], "choices.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index("Yes()"))
+            self.assertIn("Constructor 'Yes' expects 1 argument(s)", diagnostic["message"])
+            self.assertNotIn("$ctor$", diagnostic["message"])
+
+    def test_project_module_builtin_and_constructor_names_stay_reserved(self):
+        cases = [
+            (
+                "type Int { value: Int }\npub fn answer() -> Int { return 1 }\n",
+                "PEP_DUPLICATE_TYPE",
+                "type Int",
+            ),
+            (
+                "type Choice = Same(Int)\nfn Same() -> Int { return 1 }\npub fn answer() -> Int { return Same(1) }\n",
+                "PEP_RESERVED_FUNCTION",
+                "fn Same",
+            ),
+        ]
+        for library, expected_code, source_marker in cases:
+            with self.subTest(expected_code=expected_code), tempfile.TemporaryDirectory() as temporary:
+                project = pathlib.Path(temporary)
+                self._write_project(project, {
+                    "main.pep": "import library\n",
+                    "library.pep": library,
+                })
+
+                result = invoke("check", project / "main.pep", "--project", "--json")
+                self.assertEqual(result.returncode, 1)
+                diagnostic = json.loads(result.stdout)["diagnostics"][0]
+                self.assertEqual(diagnostic["code"], expected_code)
+                self.assertEqual(diagnostic["span"]["source"], "library.pep")
+                self.assertEqual(
+                    diagnostic["span"]["start"]["offset"],
+                    library.index(source_marker),
+                )
+
+    def test_imported_private_type_diagnostic_uses_source_type_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            library = (
+                "type Point { x: Int }\n"
+                "type Holder { point: Point }\n"
+                "pub fn bad() -> Int { let holder: Holder = Holder { point: 1 }; return 0 }\n"
+            )
+            self._write_project(project, {
+                "main.pep": "import geometry\n",
+                "geometry.pep": library,
+            })
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
+            self.assertEqual(diagnostic["span"]["source"], "geometry.pep")
+            self.assertEqual(
+                diagnostic["span"]["start"]["offset"],
+                library.index("point: 1") + len("point: "),
+            )
+            self.assertIn("Point", diagnostic["message"])
+            self.assertNotIn("$type$", diagnostic["message"])
 
     def test_project_function_imports_are_discoverable(self):
         described = invoke("describe", "--json")

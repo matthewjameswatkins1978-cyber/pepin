@@ -59,7 +59,7 @@ $copyHash = if (Test-Path -LiteralPath $compilerCopy) { (Get-FileHash -LiteralPa
 $sourceChanged = $sourceHash -ne $copyHash
 if ($sourceChanged) { Copy-Item -LiteralPath $compilerSource -Destination $compilerCopy -Force }
 if ($sourceChanged -or -not (Test-Path -LiteralPath $compilerExe)) {
-  & $opamCommand.Source exec --root $opamRoot --switch pepin-5.5.2 -- ocamlopt -o $compilerExe $compilerCopy
+  & $opamCommand.Source exec --root $opamRoot --switch pepin-5.5.2 -- ocamlopt -I +unix unix.cmxa -o $compilerExe $compilerCopy
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 $Forward = @($Arguments)
