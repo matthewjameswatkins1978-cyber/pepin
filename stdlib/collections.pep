@@ -10,6 +10,12 @@ fn list_bool_count_true(values: List[Bool]) -> Int {
   return total
 }
 
+fn list_bool_count_false(values: List[Bool]) -> Int {
+  var total = 0
+  for item in values { total = if !item { total + 1 } else { total } }
+  return total
+}
+
 fn list_bool_any(values: List[Bool]) -> Bool {
   var found = false
   for item in values { found = found || item }

@@ -495,6 +495,9 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             ("list_bool_count_true",
              "fn main() -> Int { return if list_bool_count_true([false, true, true]) == 2 "
              "{ 42 } else { 0 } }\n"),
+            ("list_bool_count_false",
+             "fn main() -> Int { return if list_bool_count_false([false, true, false]) == 2 "
+             "{ 42 } else { 0 } }\n"),
             ("list_bool_any",
              "fn main() -> Int { return if list_bool_any([false, true]) && "
              "!list_bool_any([]) { 42 } else { 0 } }\n"),
