@@ -8,6 +8,10 @@
 **Product direction:** implement the accepted Pep language final draft incrementally, with a real native compiler, native testing, a useful standard library and a credible path to self-hosting.
 **Not authorised:** automatic merge to master, modifying an accepted release/tag, force-pushing, enabling network/secret access, or changing docs/packets/CURRENT.md plus manifest.json without separately verified integration acceptance.
 
+## ROADMAP CONTINUITY (28 October 2026)
+
+**Two explicit roads:** [Reproducible compiler bootstrap](../roadmaps/ROAD-1-REPRODUCIBLE-BOOTSTRAP.md) then [Complete Pepin 1.0](../roadmaps/ROAD-2-PEPIN-1.0.md), both indexed at [ROADMAP-INDEX](../roadmaps/ROADMAP-INDEX.md) and audited in [FULL-LANGUAGE-LEDGER](../roadmaps/FULL-LANGUAGE-LEDGER.md). Agents use these as evidence-based dependency/gate guidance within their existing checker or backend missions, **not** as permission to merge or to stop after bootstrap. The latest compiler-derived-knowledge and Pep-first stdlib priorities from 28 October supersede older annotation-led Semantic Notes plans; verify the current Basic Memory priority note and draft PR #17 before building optional semantics.
+
 ## PRODUCT END-STATE OVERRIDE: FULL PEP, NOT BOOTSTRAP ONLY
 
 **Read and follow [FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md](FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md) at every mission start, next slice/review checkpoint and handoff.** Matthew has explicitly clarified: the **complete accepted Pep language** is the final product. Self-hosting and the supported C23 subset are milestones **on the way**, not a substitute or new finish line. Continue after A→B→C bootstrap into every accepted type, language safety, memory, effects, concurrency, stdlib, native testing and AI-first compiler feature. Maintain a full-language completion/gap ledger showing all gaps and exact supported/tested states; do not silently declare a final-draft feature out of scope because the compiler doesn't need it to self-host.
