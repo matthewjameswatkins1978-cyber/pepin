@@ -480,5 +480,49 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
 
 
+    def test_pep_written_collection_helpers_match_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        functions = {
+            definition.split("(", 1)[0].removeprefix("fn "): definition
+            for definition in library.strip().split("\n\n")
+        }
+        cases = (
+            ("list_int_sum",
+             "fn main() -> Int { return if list_int_sum([1, 2, 3]) == 6 && "
+             "list_int_sum([]) == 0 { 42 } else { 0 } }\n"),
+            ("list_bool_count_true",
+             "fn main() -> Int { return if list_bool_count_true([false, true, true]) == 2 "
+             "{ 42 } else { 0 } }\n"),
+            ("list_bool_any",
+             "fn main() -> Int { return if list_bool_any([false, true]) && "
+             "!list_bool_any([]) { 42 } else { 0 } }\n"),
+            ("list_bool_all",
+             "fn main() -> Int { return if !list_bool_all([true, false]) && "
+             "list_bool_all([]) { 42 } else { 0 } }\n"),
+        )
+        for function_name, caller in cases:
+            with self.subTest(function=function_name):
+                source_text = functions[function_name] + "\n" + caller
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    folder = pathlib.Path(temp)
+                    source = folder / f"{function_name}.pep"
+                    reference_source = folder / "reference.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                                encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, "42\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            result = self.invoke("run-c23", source, "--compiler", compiler)
+                            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                            self.assertEqual(result.stdout, reference.stdout)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
