@@ -240,6 +240,11 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn yes(value: Bool) -> Bool { return value }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { if negate(false) { return 42 } else { return 0 } }\n"
+            "fn negate(flag: Bool) -> Bool { return !flag }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
