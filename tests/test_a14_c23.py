@@ -332,7 +332,7 @@ class A14C23EmissionTests(unittest.TestCase):
         )
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
-        emitted = self._emit("type Point { x: Int }\nfn main() -> Int {\n  let point = Point { x: 42 }\n  return point.x\n}")
+        emitted = self._emit("type Point { name: Str }\nfn main() -> Int { return 42 }")
         self.assertEqual(scalar(emitted["status"]), "unsupported")
         self.assertEqual(emitted["sourceParts"]["value"], [])
         self.assertNotEqual(scalar(emitted["diagnostic"]), "")

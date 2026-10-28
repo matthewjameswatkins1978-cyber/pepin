@@ -881,9 +881,9 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   if loweredCondition.status != "emitted" { return loweredCondition } else {}
   if loweredThen.status != "emitted" { return loweredThen } else {}
   if loweredElse.status != "emitted" { return loweredElse } else {}
-  var parts: List[Str] = ["if ("]
+  var parts: List[Str] = ["if (!!("]
   for part in loweredCondition.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ") {\n  int64_t pep_result = ")
+  parts = append(parts, ")) {\n  int64_t pep_result = ")
   for part in loweredThen.sourceParts { parts = append(parts, part) }
   parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n} else {\n  int64_t pep_result = ")
   for part in loweredElse.sourceParts { parts = append(parts, part) }
@@ -898,9 +898,9 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   } else {}
   let loweredCondition = pep_c23_expression(nodes, function, condition.node)
   if loweredCondition.status != "emitted" { return loweredCondition } else {}
-  var parts: List[Str] = ["  while ("]
+  var parts: List[Str] = ["  while (!!("]
   for part in loweredCondition.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ") {\n")
+  parts = append(parts, ")) {\n")
   for statement in nodes {
     if statement.parentId == loop.id && statement.role == "body" {
       if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies currently require assignments to mutable locals") } else {}

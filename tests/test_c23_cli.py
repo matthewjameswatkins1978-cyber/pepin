@@ -119,6 +119,35 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(result.stdout, "42\n")
 
+    def test_native_boolean_conditions_avoid_clang_parentheses_warning(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the native differential check")
+        source_text = (
+            "fn is_even(value: Int) -> Bool {\n"
+            "  let remainder = value - 2 * (value / 2)\n"
+            "  if remainder == 0 { return true } else { return false }\n"
+            "}\n"
+            "fn count_once() -> Int {\n"
+            "  var count = 0\n"
+            "  while count == 0 { count = count + 1 }\n"
+            "  return count\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  if is_even(4) { return count_once() } else { return 0 }\n"
+            "}\n"
+            "say(int_text(main()))\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "boolean-conditions.pep"
+            source.write_text(source_text, encoding="utf-8", newline="")
+            reference = self.invoke("run", source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "1" + chr(10))
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    native = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, reference.stdout)
+
     def test_chunked_parser_carries_composed_helpers_through_native_execution(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
