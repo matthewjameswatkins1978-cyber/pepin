@@ -40,6 +40,7 @@ expectation is what all three backends must reproduce.
 """
 import re
 import shutil
+import subprocess
 
 INTERPRETER = "interpreter"
 CLANG = "clang"
@@ -184,6 +185,28 @@ def observe(cli, backend, pep_file, timeout, invoke, compiler=None):
             "stdout": out, "stderr": program_err, "elapsed_s": round(elapsed, 3),
             "timed_out": timed_out, "metadata": metadata,
             "compiler": str(compiler) if compiler else None}
+
+
+def compiler_identity(path, timeout=15):
+    """Record which compiler produced a differential result.
+
+    A receipt that says "clang agreed with gcc" is only reproducible if it
+    names the compilers. A compiler that cannot report itself is recorded as
+    unknown rather than guessed, and never aborts the run.
+    """
+    try:
+        proc = subprocess.run([str(path), "--version"], text=True,
+                              capture_output=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"path": str(path), "version": "unknown: %s" % exc}
+    lines = ((proc.stdout or "") or (proc.stderr or "")).strip().splitlines()
+    version = (lines or ["unknown: no version output"])[0][:200]
+    return {"path": str(path), "version": version}
+
+
+def toolchain_identities(compilers):
+    """Identity for every resolved native compiler, keyed by backend name."""
+    return {name: compiler_identity(path) for name, path in sorted(compilers.items())}
 
 
 def check_toolchains(backends, compilers):

@@ -445,12 +445,15 @@ def main(argv=None):
     except pep_native.ConfigError as exc:
         return finish(None, {"status": "infra_error", "detail": str(exc)}, args)
     compilers = {"clang": args.compiler_clang, "gcc": args.compiler_gcc}
+    native_toolchain = {}
     if pep_native.wants_native(backends):
         try:
             compilers.update(pep_native.check_toolchains(backends, compilers))
         except pep_native.Unavailable as exc:
             return finish(None, {"status": "infra_error",
                                  "detail": "backend unavailable: %s" % exc}, args)
+        native_toolchain = pep_native.toolchain_identities(
+            {name: path for name, path in compilers.items() if path})
     elif any(f.get("kind") == "native" for f in fixtures):
         # --list stays pure discovery; only execution narrows by backend.
         print("note: native differential fixtures are listed but not run without "
@@ -518,6 +521,8 @@ def main(argv=None):
                      "compilerSource": sha256_file(compiler_src) if compiler_src.is_file() else "missing"}
     except OSError:
         toolchain = {"pepCli": str(pep_entry), "compilerSource": "unreadable"}
+    if native_toolchain:
+        toolchain["native"] = native_toolchain
     doc = {"schemaVersion": SCHEMA_VERSION, "runner": "pep test v1",
            "repoRevision": repo_rev, "backends": list(backends),
            "backend": "+".join(backends),

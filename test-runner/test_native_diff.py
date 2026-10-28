@@ -317,6 +317,39 @@ class NativeDifferentialTests(unittest.TestCase):
         self.assertEqual(len(clang["metadata"]), 2)
 
 
+    def test_native_json_conforms_to_published_schema(self):
+        # The published contract must cover the native surface too: backends,
+        # per-backend observed rows and toolchain.native.
+        from test_pep_test import RunnerHonestyTests
+        schema = json.loads((ROOT / "test-runner" / "results-schema.json")
+                            .read_text(encoding="utf-8"))
+        RunnerHonestyTests.DEFS = schema.get("$defs", {})
+        validator = RunnerHonestyTests("test_results_conform_to_published_schema")
+        manifest, stub = self.build()
+        proc = self.run_native(manifest, stub, "--json")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(doc["tests"][0]["status"], "pass", proc.stdout[-1500:])
+        validator.check_schema(schema, doc)
+        # Non-vacuous on the native surface: an unknown backend is rejected.
+        bad = json.loads(json.dumps(doc))
+        bad["tests"][0]["observed"][0]["backend"] = "cobol"
+        with self.assertRaises(AssertionError):
+            validator.check_schema(schema, bad)
+
+    def test_compiler_identity_is_recorded_when_unusable(self):
+        # The stub compiler files are empty, so identity must degrade honestly
+        # instead of aborting the run or inventing a version.
+        manifest, stub = self.build()
+        proc = self.run_native(manifest, stub, "--json")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(doc["tests"][0]["status"], "pass")
+        native = doc["toolchain"]["native"]
+        self.assertEqual(set(native), {"clang", "gcc"})
+        for entry in native.values():
+            self.assertTrue(entry["path"])
+            self.assertTrue(entry["version"])
+            self.assertIn("unknown", entry["version"])
+
     # -- declaration validation ------------------------------------------
     def test_native_fixture_skip_never_executes(self):
         manifest, stub = self.build()
@@ -415,6 +448,10 @@ class RealToolchainDifferentialTests(unittest.TestCase):
         for test in native:
             self.assertIn(test["status"], ("pass", "unsupported"))
             self.assertEqual(len(test["observed"]), 3)
+        # A differential receipt must name the compilers that produced it.
+        native_toolchain = doc["toolchain"]["native"]
+        self.assertIn("clang", native_toolchain["clang"]["version"].lower())
+        self.assertIn("gcc", native_toolchain["gcc"]["version"].lower())
 
 
 if __name__ == "__main__":

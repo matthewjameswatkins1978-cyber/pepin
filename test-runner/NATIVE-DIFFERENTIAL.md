@@ -126,7 +126,11 @@ that agreement rather than assuming it.
 Each native fixture records, per backend, in the JSON result and under
 `--evidence-dir` as `native-<backend>.json`: command, exit code, stdout, program
 stderr (metadata removed), elapsed seconds, timeout flag, build metadata lines
-and the resolved compiler path. The run document also records `backends`.
+and the resolved compiler path. The run document also records `backends`, and
+`toolchain.native` carries each compiler's resolved path plus the first line of
+its `--version`, so a "clang agreed with gcc" receipt names the compilers that
+produced it. A compiler that cannot report itself is recorded as `unknown: ...`
+rather than guessed, and never aborts the run.
 
 ## When Agent 2's native backend lands
 

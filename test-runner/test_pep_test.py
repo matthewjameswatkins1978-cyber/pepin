@@ -300,6 +300,8 @@ class RunnerHonestyTests(unittest.TestCase):
                     ok = True
                 elif kind == "number" and isinstance(value, (int, float)) and not isinstance(value, bool):
                     ok = True
+                elif kind == "boolean" and isinstance(value, bool):
+                    ok = True
                 elif kind == "null" and value is None:
                     ok = True
             self.assertTrue(ok, "%s: %r is not %s" % (path, value, kinds))

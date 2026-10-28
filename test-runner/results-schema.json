@@ -19,7 +19,18 @@
       "required": ["pepCli", "compilerSource"],
       "properties": {
         "pepCli": { "type": "string" },
-        "compilerSource": { "type": "string" }
+        "compilerSource": { "type": "string" },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["path", "version"],
+            "properties": {
+              "path": { "type": "string" },
+              "version": { "type": "string" }
+            }
+          }
+        }
       }
     },
     "manifest": { "type": "string" },
