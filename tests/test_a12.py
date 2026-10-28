@@ -571,11 +571,14 @@ class A12ParserDifferentialTests(unittest.TestCase):
         nodes = []
         final_fields = None
         step_count = 0
+        step_elapsed_ms = []
         while step_count <= len(raw) + 1:
+            step_started = time.perf_counter()
             invoked = self.session.send({
                 "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                 "tool": "pep-parser-step", "arguments": [cursor], "semanticTarget": semantic_target,
             })
+            step_elapsed_ms.append((time.perf_counter() - step_started) * 1000)
             source_offset = scalar(fields(fields(fields(cursor)["stream"])["lexCursor"])["offset"])
             self.assertEqual(invoked.get("outcome"), "ok", {"offset": source_offset, "response": invoked})
             self.assertEqual(invoked["revision"], self.tool_revision)
@@ -613,6 +616,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
             ("errorColumn", final_fields["errorColumn"]),
         ])
         self.last_parser_steps = step_count
+        self.last_parser_step_elapsed_ms = step_elapsed_ms
         self.last_parser_request_bytes = request_bytes
         self.last_parser_response_bytes = response_bytes
         self.last_parser_max_request_bytes = max_request_bytes
@@ -941,6 +945,82 @@ class A12ParserDifferentialTests(unittest.TestCase):
             self.assertLessEqual(after[2], before[2] * 3)
             self.assertLessEqual(after[3], before[3] * 3)
         self.incremental_scaling_measurements = measurements
+
+    def test_budget_blocked_compositions_complete_incrementally(self):
+        empty_progress = typed_record("ParserProgress", [
+            ("document", typed("Str", self.target_document)),
+            ("revision", typed("Str", self.target_revision)),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        self.register_tool("pep-parser-monolithic", "parser_parse_program", [], empty_progress)
+        cases = [
+            ("int_gcd", """fn int_mod(a: Int, b: Int) -> Int {
+  var x = a
+  while !(x <= b - 1) { x = x - b }
+  return x
+}
+fn int_gcd(a: Int, b: Int) -> Int {
+  var x = a
+  var y = b
+  while !(y == 0) {
+    let r = int_mod(x, y)
+    x = y
+    y = r
+  }
+  return x
+}
+fn main() -> Int { return int_gcd(18, 12) }"""),
+            ("int_is_even", """fn int_abs(x: Int) -> Int {
+  if x <= -1 { return -x } else { return x }
+}
+fn int_mod(a: Int, b: Int) -> Int {
+  var x = a
+  while !(x <= b - 1) { x = x - b }
+  return x
+}
+fn int_is_even(x: Int) -> Bool {
+  let m = int_mod(int_abs(x), 2)
+  if m == 0 { return true } else { return false }
+}
+fn main() -> Int {
+  if int_is_even(8) { return 1 } else { return 0 }
+}"""),
+        ]
+        measurements = []
+        for name, source in cases:
+            with self.subTest(name=name):
+                target, progress = self.parse(source)
+                progress_fields = fields(progress)
+                self.assertEqual(scalar(progress_fields["status"]), "complete", progress_fields)
+                self.assertEqual(pep_flat_nodes(progress), ocaml_flat_nodes(target["ast"]))
+                self.assertEqual(pep_topology_nodes(progress), ocaml_tree_nodes(target["ast"]))
+                self.assertEqual(len(self.last_parser_step_elapsed_ms), self.last_parser_steps)
+                self.assertGreater(self.last_parser_steps, 1)
+                measurements.append((
+                    name, len(source.encode("utf-8")), self.last_parser_steps,
+                    round(self.last_parser_elapsed_ms, 2),
+                    round(max(self.last_parser_step_elapsed_ms), 2),
+                ))
+
+                monolithic = self.session.send({
+                    "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                    "tool": "pep-parser-monolithic", "arguments": [],
+                    "semanticTarget": {
+                        "document": target["document"], "revision": target["revision"],
+                        "entryFunctions": [],
+                    },
+                })
+                self.assertEqual(monolithic.get("outcome"), "error", (name, monolithic))
+                self.assertEqual(monolithic["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", (name, monolithic))
+        self.parser_composition_measurements = measurements
 
     def test_unicode_crlf_byte_positions(self):
         self.assert_differential(b'fn text() -> Str {\r\n  return "caf\xc3\xa9"\r\n}')
