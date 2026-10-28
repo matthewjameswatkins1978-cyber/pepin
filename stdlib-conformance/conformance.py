@@ -132,6 +132,19 @@ def read_library_source(repo, library_path, revision=None):
 
 FN_START = re.compile(r"(?m)^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 CALL_SITE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+COMMENT = re.compile(r"//[^\n]*")
+NATIVE_INT_MAIN = "fn main() -> Int { return %s }\n"
+
+
+def strip_comments(text):
+    """Remove line comments so prose cannot invent dependencies or call sites."""
+    return COMMENT.sub("", text)
+
+
+def helper_of(case):
+    """The library function a case starts from (first identifier of its expr)."""
+    match = CALL_SITE.search(case["expr"])
+    return match.group(1) if match else None
 
 
 def library_functions(text):
@@ -153,29 +166,66 @@ def reachable_functions(text, expression):
     case carries only its own closure.
     """
     blocks, order = library_functions(text)
-    needed, pending = set(), [name for name in CALL_SITE.findall(expression)
+    needed, pending = set(), [name for name in CALL_SITE.findall(strip_comments(expression))
                               if name in blocks]
     while pending:
         name = pending.pop()
         if name in needed:
             continue
         needed.add(name)
-        pending.extend(called for called in CALL_SITE.findall(blocks[name])
+        pending.extend(called for called in CALL_SITE.findall(strip_comments(blocks[name]))
                        if called in blocks)
     return [name for name in order if name in needed]
 
 
-def compose(library_text, case, prune=True):
-    """Concatenate the library (or just the case's closure) with one caller."""
+def compose(library_text, case, prune=True, native=False):
+    """Concatenate the library (or just the case's closure) with one caller.
+
+    `native=True` uses the hybrid shape a three-way comparison needs: the value
+    is computed once in `main` (compiled) and once at top level (interpreted),
+    so all three backends must print the same thing.
+    """
     if prune:
         names = reachable_functions(library_text, case["expr"])
         blocks, _order = library_functions(library_text)
         library_text = "".join(blocks[name] for name in names)
     body = library_text if library_text.endswith("\n") else library_text + "\n"
+    if native:
+        body += NATIVE_INT_MAIN % case["expr"]
     return body + CALL_FORMS[case["result"]] % case["expr"] + "\n"
 
 
-def write_workspace(out_dir, cases, library_text, provenance, prune=True):
+def native_declarations(doc):
+    """Measured native expectations declared by the case table.
+
+    `supported` helpers must run on every native backend; `unsupported` helpers
+    must report `Pep C23 unsupported:` containing the recorded reason. Anything
+    unlisted is not attempted natively, because claiming it either way would be
+    a guess — in this base that is Bool results (main must return Int) and any
+    helper whose closure is large enough to exceed the staged parser budget.
+    """
+    block = doc.get("native") or {}
+    if not isinstance(block, dict):
+        raise HarnessError("case table native block must be an object")
+    supported = block.get("supported") or []
+    unsupported = block.get("unsupported") or {}
+    if not isinstance(supported, list) or not isinstance(unsupported, dict):
+        raise HarnessError("case table native.supported must be a list and "
+                           "native.unsupported an object")
+    for name in supported:
+        if not isinstance(name, str):
+            raise HarnessError("native.supported entries must be strings")
+    for name, reason in unsupported.items():
+        if not isinstance(reason, str) or not reason.strip():
+            raise HarnessError("native.unsupported[%r] needs a non-empty reason" % name)
+    overlap = set(supported) & set(unsupported)
+    if overlap:
+        raise HarnessError("native declaration overlaps: %s" % ", ".join(sorted(overlap)))
+    return supported, unsupported
+
+
+def write_workspace(out_dir, cases, library_text, provenance, prune=True,
+                    native_supported=(), native_unsupported=None):
     """Materialise composed fixtures plus a manifest for the existing runner."""
     out_dir = pathlib.Path(out_dir)
     fixtures = out_dir / "fixtures"
@@ -183,7 +233,15 @@ def write_workspace(out_dir, cases, library_text, provenance, prune=True):
     entries = []
     slug_seen = set()
     pruned = {}
+    native_unsupported = native_unsupported or {}
+    excluded_native = 0
     for case in cases:
+        helper = helper_of(case)
+        native_ok = helper in native_supported or helper in native_unsupported
+        if native_supported or native_unsupported:
+            if not native_ok or case["result"] != "Int":
+                excluded_native += 1
+                continue
         slug = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in case["id"])
         if slug in slug_seen:  # ids are unique, but keep the filename safe anyway
             slug = "%s-%s" % (slug, hashlib.sha1(case["id"].encode()).hexdigest()[:6])
@@ -191,13 +249,23 @@ def write_workspace(out_dir, cases, library_text, provenance, prune=True):
         names = (reachable_functions(library_text, case["expr"]) if prune
                  else [n for n in library_functions(library_text)[1]])
         pruned[case["id"]] = names
-        source = compose(library_text, case, prune=prune)
+        is_native = bool(native_supported or native_unsupported)
+        source = compose(library_text, case, prune=prune, native=is_native)
         (fixtures / (slug + ".pep")).write_text(source, encoding="utf-8", newline="\n")
+        if is_native and helper in native_unsupported:
+            expect = {"nativeUnsupported": native_unsupported[helper]}
+            kind = "native"
+        elif is_native:
+            expect = {"exit": 0, "stdout": case["expect"] + "\n"}
+            kind = "native"
+        else:
+            expect = {"exit": 0, "stdout": case["expect"] + "\n"}
+            kind = "run"
         entries.append({
             "id": case["id"],
             "file": "fixtures/%s.pep" % slug,
-            "kind": "run",
-            "expect": {"exit": 0, "stdout": case["expect"] + "\n"},
+            "kind": kind,
+            "expect": expect,
             "functions": names,
         })
     manifest = {
@@ -207,6 +275,7 @@ def write_workspace(out_dir, cases, library_text, provenance, prune=True):
         "limits": {"timeoutSeconds": 120},
         "library": provenance,
     }
+    manifest["nativeExcluded"] = excluded_native
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest_path
@@ -231,6 +300,9 @@ def main(argv=None):
     ap.add_argument("--filter", default=None, help="passed through to `pep test --filter`")
     ap.add_argument("--evidence-dir", default=None,
                     help="passed through to `pep test --evidence-dir`")
+    ap.add_argument("--native", action="store_true",
+                    help="generate hybrid fn main fixtures declared in the case "
+                         "table's native block, and compare interpreter/clang/gcc")
     ap.add_argument("--no-prune", action="store_true",
                     help="compose the whole library instead of each case's closure")
     ap.add_argument("--json", action="store_true",
@@ -238,12 +310,20 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     try:
-        cases = validate_cases(load_cases(args.cases))
+        table = load_cases(args.cases)
+        cases = validate_cases(table)
+        native_supported, native_unsupported = native_declarations(table)
         library_text, spec = read_library_source(args.repo, args.library,
                                                  args.library_rev)
     except HarnessError as exc:
         print("CONFORMANCE-INFRA-ERROR %s" % exc, file=sys.stderr)
         return 2
+    if args.native and not (native_supported or native_unsupported):
+        print("CONFORMANCE-INFRA-ERROR --native needs native declarations in the "
+              "case table; none are declared", file=sys.stderr)
+        return 2
+    if args.native and not any(b != "interpreter" for b in args.backend.split(",")):
+        args.backend = "interpreter,clang,gcc"
 
     provenance = {
         "path": args.library,
@@ -256,8 +336,10 @@ def main(argv=None):
         pathlib.Path(args.repo) / "_build" / "stdlib-conformance"
         / (args.library_rev or "worktree"))
     try:
-        manifest_path = write_workspace(out_dir, cases, library_text, provenance,
-                                        prune=not args.no_prune)
+        manifest_path = write_workspace(
+            out_dir, cases, library_text, provenance, prune=not args.no_prune,
+            native_supported=native_supported if args.native else (),
+            native_unsupported=native_unsupported if args.native else {})
     except OSError as exc:
         print("CONFORMANCE-INFRA-ERROR cannot write workspace: %s" % exc, file=sys.stderr)
         return 2

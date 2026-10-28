@@ -81,24 +81,9 @@ instead — see "Missing primitives" below.
 - **No imports.** Composition is string concatenation of the real source, so a
   case sees the whole library. When Pep gains modules, this harness should be
   the thing that changes, not the case table.
-- **No native column in the generated manifest (yet).** Generated fixtures are
-  `kind: "run"`, which only ever executes the interpreter. Passing
-  `--backend interpreter,clang,gcc` therefore **fails loudly** — the runner now
-  refuses to label interpreter-only fixtures with compilers they never touched.
-  A real native column needs hybrid fixtures (`fn main() -> Int` returning the
-  same value the top-level statement prints) and is the next slice here.
-
-  Measured by hand on this base so the gap is stated, not guessed:
-
-  | helper shape | clang / gcc |
-  | --- | --- |
-  | single `if`/`else` returning a value (`int_abs`, `int_min`, `int_max`) | runs, matches the interpreter |
-  | nested `if`/`else` returns (`int_sign`, `int_clamp`) | `Pep C23 unsupported: ... require direct local/supported scalar ...` |
-  | `var` + `while` bodies (`int_mod`, `int_gcd`, `int_lcm`, `int_pow`, parity) | `Pep C23 unsupported: ... require direct local ...` |
-  | the whole 11-helper module plus a caller | `PEP_RUNTIME_STEP_LIMIT` in the staged parser, before the emitter |
-
-  That is why each case composes only its own closure: a whole-library
-  composition does not even reach the emitter on this base.
+- **Native coverage is declared, not assumed.** See "Native column" below: the
+  case table states, per helper, what the compilers do, and a declaration that
+  stops being true fails the run.
 - **No ownership of the library.** `stdlib/collections.pep`, the C23 emitter and
   their regression files belong to Agent 2. This harness only reads library
   revisions and asserts public behaviour.
@@ -120,6 +105,44 @@ parser hits `PEP_RUNTIME_STEP_LIMIT`.
 `int_clamp`, `int_mod`, `int_gcd`, `int_lcm`, `int_is_even`, `int_is_odd` and
 `int_pow`, each with its domain documented in the module header. It is written
 only with operators this base accepts, so it needs no language change.
+
+## Native column
+
+```powershell
+python stdlib-conformance/conformance.py --library stdlib/intmath.pep `
+  --cases stdlib-conformance/cases-intmath.json --native
+```
+
+`--native` generates **hybrid** fixtures — the value is computed once in
+`fn main() -> Int` (compiled) and once in a top-level `say` (interpreted) — so
+interpreter, clang and gcc must all print the same text. Only Int-result cases
+can do this, because native `main` must return `Int`.
+
+Every native expectation is declared in the case table's `native` block, which
+was measured with real clang 23.1.4 and gcc 16.2.0:
+
+| helpers | measured native result |
+| --- | --- |
+| `int_abs`, `int_min`, `int_max` | run and match the interpreter on both compilers |
+| `int_sign`, `int_mod`, `int_pow` | `Pep C23 unsupported: ... require direct local lets followed by one return` |
+| `int_clamp` | `Pep C23 unsupported: ... require supported scalar parameters and results` |
+| `int_gcd`, `int_lcm`, `int_is_even`, `int_is_odd` | **excluded**: their closure is 2–3 functions plus `main`, which hits `PEP_RUNTIME_STEP_LIMIT` in the staged parser before the emitter |
+
+Current result: **9 pass, 15 declared-unsupported, 1 infra_error**. The
+infra_error is real and recorded rather than hidden: `int_clamp(-5, 0, 10)`
+exceeds the parser budget where the sibling `int_clamp` arguments reach the
+emitter and are cleanly rejected. Argument shape, not only source shape, moves
+that cost — the run exits 2 because it cannot vouch for that case.
+
+Two consequences worth knowing before writing more library code:
+
+1. **The composition ceiling is the binding constraint.** Two library functions
+   plus `main` already exceed the staged parser's 100,000-step budget, so most
+   multi-function library code cannot be natively tested at all on this base —
+   independent of whether the emitter would accept each helper.
+2. **Declarations go stale loudly.** If a helper starts compiling natively, the
+   declared-unsupported fixture fails; if it stops, the supported fixture fails.
+   Update the `native` block from a fresh measurement, never by guess.
 
 ## Missing primitives found
 

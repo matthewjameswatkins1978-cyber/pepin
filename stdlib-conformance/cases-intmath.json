@@ -57,5 +57,26 @@
     { "id": "int_is_odd/seven", "expr": "int_is_odd(7)", "result": "Bool", "expect": "true" },
     { "id": "int_is_odd/eight", "expr": "int_is_odd(8)", "result": "Bool", "expect": "false" },
     { "id": "int_is_odd/negative", "expr": "int_is_odd(-3)", "result": "Bool", "expect": "true" }
-  ]
+  ],
+  "native": {
+    "about": [
+      "Measured on this branch's base with real clang 23.1.4 and gcc 16.2.0, both",
+      "agreeing. Only Int-result helpers can appear here: native main must return",
+      "Int, so Bool cases have no comparable observable. A helper that is not",
+      "listed is not attempted natively rather than guessed either way."
+    ],
+    "supported": ["int_abs", "int_min", "int_max"],
+    "unsupported": {
+      "int_sign": "require direct local lets followed by one return",
+      "int_clamp": "require supported scalar parameters and results",
+      "int_mod": "require direct local lets followed by one return",
+      "int_pow": "require direct local lets followed by one return"
+    },
+    "excluded": {
+      "int_gcd": "closure of 2 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser, before the emitter",
+      "int_lcm": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser",
+      "int_is_even": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser",
+      "int_is_odd": "closure of 3 functions plus main hits PEP_RUNTIME_STEP_LIMIT in the staged parser"
+    }
+  }
 }

@@ -58,7 +58,54 @@ class ComposeTests(unittest.TestCase):
         self.assertIn("}\nsay(", source)
 
 
+class DependencyTests(unittest.TestCase):
+    COMMENT_LIBRARY = (
+        "fn alpha(x: Int) -> Int { return x + 1 }\n"
+        "// this comment mentions beta( and must not create a dependency\n"
+        "fn beta(x: Int) -> Int { return alpha(x) }\n"
+    )
+
+    def test_dependency_scan_ignores_comments(self):
+        names = conformance.reachable_functions(self.COMMENT_LIBRARY, "alpha(1)")
+        self.assertEqual(names, ["alpha"])
+
+    def test_transitive_dependencies_follow_calls(self):
+        names = conformance.reachable_functions(self.COMMENT_LIBRARY, "beta(1)")
+        self.assertEqual(names, ["alpha", "beta"])
+
+    def test_pruning_keeps_library_order(self):
+        source = conformance.compose(self.COMMENT_LIBRARY,
+                                     {"id": "x", "expr": "beta(1)",
+                                      "result": "Int", "expect": "2"})
+        self.assertLess(source.index("fn alpha"), source.index("fn beta"))
+
+    def test_native_shape_carries_main_and_top_level_call(self):
+        source = conformance.compose(self.COMMENT_LIBRARY,
+                                     {"id": "x", "expr": "alpha(1)",
+                                      "result": "Int", "expect": "2"},
+                                     native=True)
+        self.assertIn("fn main() -> Int { return alpha(1) }", source)
+        self.assertTrue(source.endswith("say(int_text(alpha(1)))\n"))
+
+
 class CaseTableTests(unittest.TestCase):
+    def test_native_declarations_reject_overlap(self):
+        with self.assertRaises(conformance.HarnessError):
+            conformance.native_declarations(
+                {"native": {"supported": ["f"],
+                            "unsupported": {"f": "reason"}}})
+
+    def test_native_declarations_require_reasons(self):
+        with self.assertRaises(conformance.HarnessError):
+            conformance.native_declarations(
+                {"native": {"unsupported": {"f": "  "}}})
+
+    def test_real_table_declares_native_boundary(self):
+        supported, unsupported = conformance.native_declarations(
+            conformance.load_cases(INTMATH_CASES))
+        self.assertIn("int_abs", supported)
+        self.assertIn("int_sign", unsupported)
+        self.assertEqual(set(supported) & set(unsupported), set())
     def test_empty_table_is_refused(self):
         with self.assertRaises(conformance.HarnessError):
             conformance.validate_cases({"cases": []})
@@ -171,11 +218,34 @@ class EndToEndHarnessTests(unittest.TestCase):
         self.assertIn("defines no cases", proc.stderr)
         self.assertNotIn("pass=", proc.stdout)
 
+    def test_native_without_declarations_is_infra_error(self):
+        # --native must never silently fall back to interpreter-only results.
+        proc = self.run_with([
+            {"id": "double", "expr": "lib_double(21)", "result": "Int", "expect": "42"},
+        ], "--native")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("--native needs native declarations", proc.stderr)
+        self.assertNotIn("pass=", proc.stdout)
+
 
 INTMATH_CASES = ROOT / "stdlib-conformance" / "cases-intmath.json"
 
 
 class RealLibraryConformanceTests(unittest.TestCase):
+    def test_native_column_executes_supported_helpers(self):
+        # Real clang and gcc must actually run the declared-supported helpers.
+        proc = run_harness("--library", "stdlib/intmath.pep",
+                           "--cases", str(INTMATH_CASES), "--native",
+                           "--filter", "int_abs/", "--json", timeout=1800)
+        self.assertEqual(proc.returncode, 0,
+                         proc.stdout[-2500:] + proc.stderr[-1500:])
+        doc = json.loads(proc.stdout)
+        self.assertEqual(doc["backends"], ["interpreter", "clang", "gcc"])
+        self.assertGreaterEqual(doc["counts"]["pass"], 3)
+        for test in doc["tests"]:
+            self.assertEqual(test["kind"], "native")
+            self.assertEqual(len(test["observed"]), 3)
+
     def test_intmath_module_satisfies_its_contract(self):
         # stdlib/intmath.pep is owned by this lane, so this always runs.
         proc = run_harness("--library", "stdlib/intmath.pep",
