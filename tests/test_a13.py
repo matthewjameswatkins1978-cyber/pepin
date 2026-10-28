@@ -1347,6 +1347,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("call-before-type", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = g(); return true }"),
             ("type-before-call", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = true; return g() }"),
             ("unknown-call-before-type", "fn f() -> Int { let x: Int = missing(); return true }"),
+            ("mixed-unlisted-missing-field", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; let bad: Int = true; return missing }"),
+            ("unknown-type-declaration-priority", "fn f() -> Int { let bad: Int = true; return 0 } type R { x: Missing }"),
+            ("unknown-type-before-duplicate-function", "fn f() -> Int { return 0 } fn f() -> Int { return 0 } type R { x: Missing } fn g() -> Int { let bad: Int = true; return 0 }"),
         ]
         for name, source in cases:
             with self.subTest(name=name):
