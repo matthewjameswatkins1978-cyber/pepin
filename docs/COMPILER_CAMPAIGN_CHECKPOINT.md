@@ -1,9 +1,9 @@
 # Pepin Compiler Campaign Checkpoint
 
-**Date:** 2026-10-27
+**Date:** 2026-10-28
 **Repository:** `matthewjameswatkins1978-cyber/pepin`
-**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `3d6484a419de2dd82aa6ca7c9047ff0c769988eb` (remote-equal)
-**Verification test head:** `3d6484a419de2dd82aa6ca7c9047ff0c769988eb` (remote-equal)
+**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (remote-equal)
+**Verification test head:** `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (remote-equal)
 
 ## Baselines and authority
 
@@ -26,4 +26,14 @@ At checker/test SHA `3d6484a419de2dd82aa6ca7c9047ff0c769988eb`, `python -m unitt
 
 A13 remains partial and unaccepted. Recursive nominal/union relationships, nested constructor patterns, broader patterns, complete control-flow analysis and the checked-program contract remain unfinished. Four minimized record-field match-with-hole variants still hit the unchanged 100,000-step ceiling, so their hole facts remain unverified; do not increase the budget. The reviewed fail-closed gate remains required until each rule is independently implemented and differentially tested. Verification commit `3d6484a` was remote-equal when tested. The current checkout contains uncommitted structural type-shape edits in `tests/pep_checker_a13.pep` and `tests/test_a13_nested_records.py`; preserve and review them before relying on or extending that slice.
 
-Next slice: review the pending structural type-shape edits and verify them on the same branch before relying on them; then resume measurement of the fixed-budget record-field match-with-hole cases. A13 remains experimental; no acceptance, merge, `CURRENT.md` or manifest advancement.
+## Latest continuation state — 2026-10-28
+
+The campaign branch advanced through `0d8852409aa811bc76608a596c1df19e9cf0745f` (`perf(checker): skip redundant call shape walks`) to `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (`perf(checker): reuse function result shapes`), remote-equal when checked. The A13 diagnostic integration `facc4a34f1e3d60d13a0d3a66abb995d3f610f87` is an ancestor of this head; its list-return `PEP_TYPE_MISMATCH` correction remains present.
+
+On exact code/test SHA `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33`, `python -m unittest tests.test_a13 tests.test_a13_nested_records tests.test_a14_c23.A14C23EmissionTests.test_native_bool_helpers_compose_with_direct_returns -q` ran **43 tests**: the A13 and nested-record/list suites passed **42/42**, while the added A14 case failed with `PEP_RUNTIME_STEP_LIMIT` at emitter position `3804:5`. No clean OCaml rebuild or full suite is implied.
+
+A reduced resource probe found that A13 accepts `negate(negate(false))`, a direct call to either helper, and an unused extra helper, but the valid program `identity(negate(false))` with separate `identity` and `negate` helpers returns `PEP_RUNTIME_STEP_LIMIT` at checker bundle position `2766:15` on `0d88524`. After the `ca1f5a0` function-result-shape optimization, the same A14 case still exceeds the existing limit at emitter position `3804:5`. The 100,000-step budget is unchanged. Root cause is not yet established; repeated `lookup_node` scans during type inference are a concrete candidate, not a measured attribution.
+
+The main checkout has uncommitted work in `tests/test_a14_c23.py` and `tests/test_c23_cli.py`; preserve both. An earlier A14 suite run at pre-optimization base `fe1b24d` passed 11 tests and failed the nested-helper case with the same `PEP_RUNTIME_STEP_LIMIT`, so the failure predates the latest optimization and is not evidence of a new regression.
+
+Next action: profile/reduce the A13 two-distinct-helper nested-call case on a stable snapshot, identify repeated work, and optimize a narrow checker path without changing semantics or budgets. Then rerun the exact reproducer and A13/nested-record regression suites. A13 remains experimental and unaccepted; no merge, master, `CURRENT.md` or manifest advancement.
