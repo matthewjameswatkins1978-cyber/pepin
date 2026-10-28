@@ -1227,6 +1227,40 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if (name == "byte_slice" || name == "utf8_slice") && (index == 1 || index == 2) { return "Int" } else {}
   return ""
 }
+fn builtin_call_has_primary_failure(nodes: List[FlatAstNode], call: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let requiredArity = fixed_builtin_arity(call.text)
+  if requiredArity != -1 && count_children(nodes, call.id, "argument") != requiredArity { return true } else {}
+  var index = 0
+  for argument in nodes {
+    if argument.parentId == call.id && argument.role == "argument" {
+      let expected = fixed_builtin_parameter_type(call.text, index)
+      let actual = infer_expression_type(nodes, argument.id, functions, bindings, references)
+      if expected != "" && actual != "" && expected != actual { return true } else {}
+      index = index + 1
+    } else {}
+  }
+  if call.text == "length" || call.text == "reverse" || call.text == "append" || call.text == "prepend" || call.text == "contains" {
+    let collection = child_at(nodes, call.id, "argument", 0)
+    if collection.found {
+      let shape = expression_type_shape(nodes, collection.node.id, functions, bindings, references)
+      if shape.listDepth == 0 { return true } else {}
+      if call.text == "append" || call.text == "prepend" || call.text == "contains" {
+        let value = child_at(nodes, call.id, "argument", 1)
+        if value.found && value.node.kind != "hole" {
+          let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+          let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+          let elementShape = without_one_list(shape)
+          let elementType = legacy_type_name(elementShape)
+          let contextualExtraList = call.text == "append" && value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualShape, elementShape)
+          let structuralMismatch = elementShape.kind != "" && actualShape.kind != "" && !same_type_shape(elementShape, actualShape) && !contextualExtraList
+          if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch { return true } else {}
+        } else {}
+        if call.text == "contains" && shape.listDepth != 0 && !equality_supported_type(legacy_type_name(without_one_list(shape))) { return true } else {}
+      } else {}
+    } else { return true }
+  } else {}
+  return false
+}
 fn branch_always_returns(nodes: List[FlatAstNode], parentId: Int, role: Str) -> Bool {
   var covered = false
   for statement in nodes {
@@ -1601,7 +1635,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 argumentIndex = argumentIndex + 1
               } else {}
             }
-          } else {}
+          } else {
+            if known_builtin(subject.node.text) {
+              if builtin_call_has_primary_failure(nodes, subject.node, functions, bindings, references) { subjectHasPrimaryError = true } else {}
+            } else {}
+          }
         } else {}
         if subject.found && subject.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, subject.node.id, functions, bindings, references) { subjectHasPrimaryError = true } else {}
         if subject.found && subject.node.kind == "field_access" {
