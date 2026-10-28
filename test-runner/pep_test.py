@@ -128,8 +128,16 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
     rel = fx.get("file", "")
     kind = fx.get("kind", "run")
     expect = fx.get("expect", {}) or {}
-    timeout = fx.get("timeoutSeconds") or timeout_default
     base = {"id": fid, "file": rel, "kind": kind}
+    fx_timeout = fx.get("timeoutSeconds")
+    if fx_timeout is None:
+        timeout = timeout_default
+    elif isinstance(fx_timeout, bool) or not isinstance(fx_timeout, (int, float)) or fx_timeout <= 0:
+        base.update(status="infra_error",
+                    detail="fixture timeoutSeconds must be a positive number of seconds")
+        return base
+    else:
+        timeout = fx_timeout
     pep_file = manifest_dir / rel if rel else None
     if fx.get("skip"):
         skipped = {"status": "skip", "detail": str(fx["skip"])}
@@ -331,7 +339,23 @@ def main(argv=None):
     if not isinstance(fixtures, list):
         return finish(None, {"status": "infra_error",
                              "detail": "manifest.fixtures must be a list"}, args)
-    timeout_default = args.timeout or manifest.get("limits", {}).get("timeoutSeconds", 120)
+    seen_ids = set()
+    dupes = sorted({str(f.get("id", "")) for f in fixtures
+                    if str(f.get("id", "")) in seen_ids or
+                    seen_ids.add(str(f.get("id", "")))})
+    if dupes:
+        return finish(None, {"status": "infra_error",
+                             "detail": "duplicate fixture ids: %s" % ", ".join(dupes)}, args)
+    if args.timeout is not None and args.timeout <= 0:
+        return finish(None, {"status": "infra_error",
+                             "detail": "--timeout must be a positive number of seconds"},
+                      args)
+    manifest_timeout = manifest.get("limits", {}).get("timeoutSeconds", 120)
+    if manifest_timeout is not None and manifest_timeout <= 0:
+        return finish(None, {"status": "infra_error",
+                             "detail": "manifest limits.timeoutSeconds must be positive"},
+                      args)
+    timeout_default = args.timeout or manifest_timeout
 
     if args.filter:
         fixtures = [f for f in fixtures if args.filter in str(f.get("id", ""))]

@@ -19,7 +19,7 @@ JSON object:
 | `file` | yes | `.pep` path relative to the manifest directory. |
 | `kind` | yes | `run` \| `reject` \| `check`. |
 | `expect` | for run/reject | See below. |
-| `timeoutSeconds` | no | Per-phase override. Falls back to `--timeout`, then `limits.timeoutSeconds` (default 120). |
+| `timeoutSeconds` | no | Per-phase override. Falls back to `--timeout`, then `limits.timeoutSeconds` (default 120). Must be a positive number; duplicates ids, non-positive/non-numeric timeouts and unknown `match` modes are `infra_error`, never silent. |
 | `skip` | no | String reason. The fixture is recorded `skip` and never executed. |
 
 ## `expect` by kind

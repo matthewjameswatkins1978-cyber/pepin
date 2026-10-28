@@ -339,5 +339,34 @@ class RunnerHonestyTests(unittest.TestCase):
             self.check_schema(schema, bad)
 
 
+    def test_manifest_validation_rejects_bad_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "f.pep"
+            f.write_text("say(1)\n", encoding="utf-8")
+            good = {"id": "x", "file": "f.pep", "kind": "run",
+                    "expect": {"exit": 0, "stdout": "1\n"}}
+            # Duplicate fixture ids are ambiguous: refuse, do not run.
+            m = write_manifest(tmp, [dict(good), dict(good)])
+            proc = run_runner("--json", manifest=m)
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("duplicate", proc.stdout.lower())
+            # Non-positive or non-numeric timeouts are usage errors.
+            m2 = write_manifest(tmp, [dict(good)])
+            for extra in (["--timeout", "0"], ["--timeout", "-3"]):
+                proc = run_runner("--json", manifest=m2, *extra)
+                self.assertEqual(proc.returncode, 2, extra)
+                self.assertIn("timeout", proc.stdout.lower())
+            m3 = pathlib.Path(tmp) / "m3.json"
+            m3.write_text(json.dumps({"schemaVersion": 1, "fixtures": [dict(good)],
+                                      "limits": {"timeoutSeconds": -1}}), encoding="utf-8")
+            proc = run_runner("--json", manifest=m3)
+            self.assertEqual(proc.returncode, 2)
+            bad_fx = dict(good, id="y", timeoutSeconds="soon")
+            m4 = write_manifest(tmp, [bad_fx])
+            proc = run_runner("--json", manifest=m4)
+            doc = json.loads(proc.stdout)
+            self.assertEqual(doc["tests"][0]["status"], "infra_error")
+
+
 if __name__ == "__main__":
     unittest.main()
