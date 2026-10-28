@@ -2,6 +2,8 @@
 
 Begin every implementation/handoff at [CURRENT.md](CURRENT.md). GitHub code/tests and published receipts, not packet titles, establish implemented truth. Founding Design v0.3 + TR001/TR002 remain binding; future native target is **Pep-written C23**.
 
+**Latest project priority note:** [28 October foundations and semantic model](../PEPIN-PRIORITIES-2026-10-28.md). This steers future library and compiler knowledge work, but leaves the accepted A8 baseline, provisional packet statuses and manifest unchanged. The separate authorised sustained development campaign continues under its own mission/branch rules.
+
 | Stage | Packet | Implementation status | Roadmap priority / dependency |
 |---|---|---|---|
 | A6 | [Collections and control flow](A6-COLLECTIONS-AND-CONTROL-FLOW.md) | Completed | A5 |

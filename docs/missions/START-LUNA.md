@@ -2,6 +2,8 @@
 
 **Main mission:** docs/missions/PEP-SUSTAINED-IMPLEMENTATION-20261027.md on this branch.
 
+**Latest priorities (28 October):** [Pepin priorities and deferrals](../PEPIN-PRIORITIES-2026-10-28.md). Treat compiler knowledge and checkpoints as one semantic system, make bottom-up Pep-written standard-library foundations the practical library priority, and defer rabbit UX, Sartorial/Rust migrations and multiparadigm exploration. This is a prioritisation clarification, not permission to merge, change acceptance markers, or skip correctness work.
+
 ## Copy-and-paste starting instruction
 
 Luna, you have Matthew's authorisation to undertake a **sustained multi-milestone Pepin implementation campaign**, not a three-slice job. Begin on branch `campaign/pep-v01-sustained-build-20261027`, whose ancestor is verified A13 checker checkpoint `54a08f311117fe020db916286aa863b42d5151a1`.
