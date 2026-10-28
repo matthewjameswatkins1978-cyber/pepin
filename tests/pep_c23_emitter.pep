@@ -468,8 +468,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             return pep_c23_unsupported("Pep C23 for-in lowering requires an integer list literal or immutable list binding and a non-empty assignment body")
           } else {}
           for item in nodes {
-            if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" {
-              return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements")
+            if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" {
+              return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
             } else {}
           }
           for bodyStatement in nodes {
@@ -610,7 +610,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             var elementCount = 0
             for element in parsed.nodes {
               if element.parentId == iterableList.node.id && element.role == "element" {
-                if element.kind != "integer" { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements") } else {}
+                if element.kind != "integer" && element.kind != "boolean" { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements") } else {}
                 elementCount = elementCount + 1
               } else {}
             }
@@ -623,7 +623,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
               for element in parsed.nodes {
                 if element.parentId == iterableList.node.id && element.role == "element" {
-                  arrayDeclaration = append(arrayDeclaration, int_text(element.integerValue))
+                  let elementText = if element.kind == "boolean" { if element.booleanValue { "1" } else { "0" } } else { int_text(element.integerValue) }
+                  arrayDeclaration = append(arrayDeclaration, elementText)
                   arrayDeclaration = append(arrayDeclaration, ", ")
                 } else {}
               }
