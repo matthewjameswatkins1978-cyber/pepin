@@ -1173,10 +1173,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
              "fn f() -> Int { let p = P { b: 1, a: true }; return 0 }", "1"),
             ("unknown-only", "type P { a: Int }" + NL +
              "fn f() -> Int { let p = P { a: 1, extra: 2 }; return 0 }", "extra: 2"),
+            ("unknown-precedes-earlier-type", "type P { x: Int }" + NL +
+             "fn f() -> Int { let p = P { x: true, y: 1 }; return 0 }", "y: 1"),
         ]
         expected_codes = [
             "PEP_MISSING_FIELD", "PEP_MISSING_FIELD", "PEP_MISSING_FIELD",
             "PEP_DUPLICATE_FIELD", "PEP_TYPE_MISMATCH", "PEP_UNKNOWN_FIELD",
+            "PEP_UNKNOWN_FIELD",
         ]
         for (name, source, marker), expected_code in zip(cases, expected_codes):
             with self.subTest(name=name):
@@ -1193,6 +1196,32 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     for item in report["diagnostics"]["value"]
                 ]
                 self.assertEqual(expected, [(expected_code, source.index(marker), source.index(marker) + len(marker))])
+                self.assertEqual(actual, expected, report)
+
+    def test_field_access_diagnostics_match_ocaml(self):
+        cases = [
+            ("primitive-receiver", "fn f(x: Int) -> Int { return x.y }", "PEP_FIELD_ON_NON_RECORD", "x.y"),
+            ("unknown-record-field", "type Point { x: Int }" + NL + "fn f(point: Point) -> Int { return point.missing }", "PEP_UNKNOWN_FIELD", "point.missing"),
+            ("untyped-hole-receiver", "fn f() -> Int { return ?.x }", "PEP_FIELD_ON_UNTYPED_VALUE", "?.x"),
+            ("unknown-variable-receiver", "fn f() -> Int { return missing.x }", "PEP_UNKNOWN_VARIABLE", "missing"),
+        ]
+        for name, source, expected_code, marker in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("field-access-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                marker_start = len(source[:source.index(marker)].encode("utf-8"))
+                marker_end = marker_start + len(marker.encode("utf-8"))
+                self.assertEqual(expected, [(expected_code, marker_start, marker_end)])
                 self.assertEqual(actual, expected, report)
 
     def test_record_field_duplicates_report_only_the_first_repetition(self):
