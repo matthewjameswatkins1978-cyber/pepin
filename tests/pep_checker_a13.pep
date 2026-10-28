@@ -268,7 +268,11 @@ fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   var ordinal = 0
   for node in nodes {
     if node.parentId == -1 && node.kind == "function" {
-      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: declared_return_type(nodes, node.id), returnShape: declared_return_shape(nodes, node.id), startByte: node.startByte, endByte: node.endByte })
+      let declaredResult = child_at(nodes, node.id, "return_type", 0)
+      let resultShape = if declaredResult.found { type_shape_at(nodes, declaredResult.node.id) } else { empty_type_shape() }
+      let resultType = if declaredResult.found { legacy_type_name(resultShape) } else { "" }
+      let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
+      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte })
       ordinal = ordinal + 1
     } else {}
   }
