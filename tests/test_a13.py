@@ -1310,6 +1310,36 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 ]
                 self.assertEqual(actual, expected, report)
 
+    def test_first_type_mismatch_matches_ocaml_across_binding_and_match_contexts(self):
+        cases = [
+            (
+                "binding-before-match",
+                "type M = A() | B()" + NL
+                + "fn f(m: M) -> Int { let bad: Int = true; return match m { A() => true B() => 0 } }",
+            ),
+            (
+                "match-before-binding",
+                "type M = A() | B()" + NL
+                + "fn f(m: M) -> Int { let matched: Int = match m { A() => true B() => 0 }; let bad: Int = true; return 0 }",
+            ),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("first-type-mismatch-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(len(expected), 1, reference)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+
     def test_match_list_mismatch_reports_first_leaf_like_ocaml(self):
         cases = [
             ("leaf-mismatch", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[true]}}", "invalid"),

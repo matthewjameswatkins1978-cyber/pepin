@@ -1797,7 +1797,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 } else {}
               }
             } else {
-              let code = if expectedElement != "" && actualElement != "" { "PEP_TYPE_MISMATCH" } else { "PEP_BINDING_TYPE" }
+              let code = "PEP_TYPE_MISMATCH"
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Initialiser type does not match the declared binding type", value.node))
             }
           } else {}
@@ -1809,14 +1809,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var selectedMismatch: CheckDiagnostic = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
   var firstMismatchFound = false
   for candidate in orderedDiagnostics {
-    if candidate.code == "PEP_TYPE_MISMATCH" {
+    if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" {
       var hasMoreSpecificMismatch = false
       for other in orderedDiagnostics {
-        if other.code == "PEP_TYPE_MISMATCH" && other.syntaxId != candidate.syntaxId && candidate.startByte <= other.startByte && other.endByte <= candidate.endByte && (candidate.startByte != other.startByte || other.endByte != candidate.endByte) {
+        if (other.code == "PEP_TYPE_MISMATCH" || other.code == "PEP_MATCH_ARM_TYPE_MISMATCH") && other.syntaxId != candidate.syntaxId && candidate.startByte <= other.startByte && other.endByte <= candidate.endByte && (candidate.startByte != other.startByte || other.endByte != candidate.endByte) {
           hasMoreSpecificMismatch = true
         } else {}
       }
-      let earlierMismatch = candidate.startByte <= selectedMismatch.startByte && candidate.startByte != selectedMismatch.startByte || candidate.startByte == selectedMismatch.startByte && candidate.endByte <= selectedMismatch.endByte
+      let earlierMismatch = candidate.startByte + 1 <= selectedMismatch.startByte || candidate.startByte == selectedMismatch.startByte && (candidate.endByte + 1 <= selectedMismatch.endByte || candidate.endByte == selectedMismatch.endByte && candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && selectedMismatch.code != "PEP_MATCH_ARM_TYPE_MISMATCH")
       if !hasMoreSpecificMismatch && (!firstMismatchFound || earlierMismatch) {
         selectedMismatch = candidate
         firstMismatchFound = true
@@ -1825,15 +1825,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   }
   var selectedDiagnosticsReversed: List[CheckDiagnostic] = []
   for candidate in orderedDiagnostics {
-    var hasMatchSpecificSpan = false
-    if candidate.code == "PEP_TYPE_MISMATCH" {
-      for other in orderedDiagnostics {
-        if other.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && other.startByte == candidate.startByte && other.endByte == candidate.endByte {
-          hasMatchSpecificSpan = true
-        } else {}
-      }
-    } else {}
-    if candidate.code != "PEP_TYPE_MISMATCH" || firstMismatchFound && candidate.syntaxId == selectedMismatch.syntaxId && candidate.startByte == selectedMismatch.startByte && candidate.endByte == selectedMismatch.endByte && !hasMatchSpecificSpan {
+    let isTypeMismatch = candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH"
+    if !isTypeMismatch || firstMismatchFound && candidate.code == selectedMismatch.code && candidate.syntaxId == selectedMismatch.syntaxId && candidate.startByte == selectedMismatch.startByte && candidate.endByte == selectedMismatch.endByte {
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
