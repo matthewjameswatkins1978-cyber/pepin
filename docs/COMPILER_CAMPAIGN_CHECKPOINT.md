@@ -73,3 +73,21 @@ Verification at the exact implementation/test SHA: `python -m unittest tests.tes
 Limitations: assignment checking covers variable targets and the currently represented structural type subset; `for-in`, complete missing-return analysis and broad flow-sensitive semantics remain unsupported. A13 remains experimental and unaccepted. No master merge or release action occurred. The main checkout's unrelated A14 edit remains untouched.
 
 Next slice: after rereading the coordination outboxes, implement the smallest OCaml-matched `for-in` type-checking rule, preserving lexical loop-binding scope and fail-closed behavior for any unimplemented body or flow semantics.
+
+## Continuation 03 — for-in iterable and binding typing (2026-10-28)
+
+**Implementation and test SHA:** `e336970cb3f1e734b5d26283c2a31c06f5fbeef1` (pushed to the sustained campaign branch; the checkpoint is a following documentation commit). A13 now derives for-in binding types from the iterable's structural list shape, including nested lists and nominal elements, and checks that a known iterable is a list. The loop binding remains immutable and scoped to the loop body. A scalar iterable yields OCaml-matched `PEP_FOR_REQUIRES_LIST` at the iterable byte span. An untyped empty list retains `PEP_EMPTY_LIST_NEEDS_TYPE`; unknown names remain invalid under the existing `PEP_UNKNOWN_BINDING` diagnostic, which differs from OCaml's `PEP_UNKNOWN_VARIABLE` and was not changed by this slice.
+
+The OCaml differential covers seven cases: list literal, typed list, `List[Point]` element and field access, nested-list element, scalar iterable, untyped empty iterable, and assignment to the immutable loop binding. It compares status and exact diagnostic code/byte span; valid cases assert the loop binding type, immutable flag, separate scope and body-reference identity. A separate A14 guard verifies a valid for-in input is still rejected as unsupported and produces no generated C.
+
+Verification at implementation/test SHA `e336970cb3f1e734b5d26283c2a31c06f5fbeef1`:
+
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -v`: **45/45 passed** in 118.637 seconds.
+- `python -m unittest tests.test_a14_c23 -v`: **11/11 passed** in 60.841 seconds, including the no-C-output for-in guard.
+- The added for-in differential method and A14 unsupported guard each also passed in focused runs.
+- `python -m py_compile tests/test_a13.py tests/test_a14_c23.py` and `git diff --check` passed.
+- No runtime budget, OCaml implementation, protocol, `CURRENT.md`, manifest, master or release changes. The full repository suite and clean OCaml rebuild were not repeated.
+
+Limitations: this adds for-in element typing and list validation only. It does not establish complete loop/control-flow semantics, count a loop as proving function return completeness, or add A14 for-in lowering. A13 remains experimental and unaccepted. The main checkout's unrelated uncommitted A14 test remains preserved; this worktree is isolated.
+
+Next: reconcile the existing A13 unknown-variable diagnostic name with the OCaml reference, starting from the observed for-in unknown iterable discrepancy and checking all current unknown-reference tests.
