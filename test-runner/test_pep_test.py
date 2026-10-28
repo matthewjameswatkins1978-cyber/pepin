@@ -201,5 +201,35 @@ class RunnerHonestyTests(unittest.TestCase):
             self.assertEqual(doc["evidence_root"], str(exp))
 
 
+    def test_output_match_modes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = pathlib.Path(tmp) / "f.pep"
+            f.write_text('say("hello 42 world")\n', encoding="utf-8")
+            m = write_manifest(tmp, [
+                {"id": "c1", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "42", "match": "contains"}},
+                {"id": "c2", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "nope", "match": "contains"}},
+                {"id": "r1", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "hello \\d+ world", "match": "regex"}},
+                {"id": "r2", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "hello \\d+$", "match": "regex"}},
+                {"id": "b1", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "([", "match": "regex"}},
+                {"id": "u1", "file": "f.pep", "kind": "run",
+                 "expect": {"exit": 0, "stdout": "hello", "match": "fuzzy"}},
+            ])
+            proc = run_runner("--json", manifest=m)
+            doc = json.loads(proc.stdout)
+            by_id = {t["id"]: t for t in doc["tests"]}
+            self.assertEqual(by_id["c1"]["status"], "pass")
+            self.assertEqual(by_id["c2"]["status"], "fail")
+            self.assertEqual(by_id["r1"]["status"], "pass")
+            self.assertEqual(by_id["r2"]["status"], "fail")
+            self.assertEqual(by_id["b1"]["status"], "infra_error")
+            self.assertEqual(by_id["u1"]["status"], "infra_error")
+            self.assertNotEqual(proc.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

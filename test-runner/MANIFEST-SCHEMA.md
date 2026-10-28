@@ -28,6 +28,11 @@ JSON object:
   *deliberate* failure demo, `exit` may be nonzero with
   `"diagnosticCode": "PEP_RUNTIME_..."`; the test passes only when the
   exit, stdout, and code all occur exactly as specified.
+  `"match"` selects stdout comparison: `"exact"` (default, byte equality),
+  `"contains"` (substring), or `"regex"` (Python `re.search`). Use
+  `contains`/`regex` for nondeterministic fragments (timings, paths);
+  keep `exact` whenever output is deterministic. Unknown modes and bad
+  regexes are `infra_error`, never passes.
 - `reject`: `{ "code": "PEP_TYPE_MISMATCH", "span": {...} }`.
   Passes only when `check --json` parses, reports `invalid`, and the
   first diagnostic carries exactly this `code`. `span` is optional;

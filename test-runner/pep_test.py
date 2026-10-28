@@ -238,7 +238,23 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
         # A bare code word in program output must NOT satisfy an expected diagnostic.
         code_ok = re.search(r"(?m)^\d+:\d+:\s*" + re.escape(want_code) + r"\b",
                             out + err_text) is not None
-    if rc == want_exit and out == expect.get("stdout", out) and code_ok:
+    match_mode = expect.get("match", "exact")
+    if match_mode == "exact":
+        output_ok = out == expect.get("stdout", out)
+    elif match_mode == "contains":
+        output_ok = expect.get("stdout", "") in out
+    elif match_mode == "regex":
+        try:
+            output_ok = re.search(expect.get("stdout", ""), out) is not None
+        except re.error as exc:
+            base.update(status="infra_error",
+                        detail="bad regex in fixture %s: %s" % (fid, exc))
+            return base
+    else:
+        base.update(status="infra_error",
+                    detail="unknown match mode %r (want exact|contains|regex)" % match_mode)
+        return base
+    if rc == want_exit and output_ok and code_ok:
         if rc == 0:
             base.update(status="pass", detail="exit 0 and stdout matched")
         else:
