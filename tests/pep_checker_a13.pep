@@ -1421,21 +1421,24 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let target = find_function(functions, node.text)
         if target.found {
           var index = 0
+          var argumentMismatchFound = false
           for argument in nodes {
             if argument.parentId == node.id && argument.role == "argument" {
-              let expected = function_parameter_type(nodes, target.function.syntaxId, index)
-              let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
-              let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
-              let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, index) } else { empty_type_shape() }
-              let needsStructuralCheck = expected == "" || actualArgument == ""
-              let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
-              let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-              let needsNestedListCheck = expectedShape.listDepth != 0 && (expected == "" || actualArgument == "" || expected != actualArgument || argument.kind == "list")
-              let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
-              if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch || listMismatch.found {
-                let code = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found || expected == "" || actualArgument == "" { "PEP_TYPE_MISMATCH" } else { "PEP_ARGUMENT_TYPE" }
-                let mismatchNode = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found { listMismatch.node } else { argument }
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Function argument type does not match its parameter", mismatchNode))
+              if !argumentMismatchFound {
+                let expected = function_parameter_type(nodes, target.function.syntaxId, index)
+                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
+                let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, index) } else { empty_type_shape() }
+                let needsStructuralCheck = expected == "" || actualArgument == ""
+                let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
+                let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+                let needsNestedListCheck = expectedShape.listDepth != 0 && (expected == "" || actualArgument == "" || expected != actualArgument || argument.kind == "list")
+                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch || listMismatch.found {
+                  let mismatchNode = if listMismatch.found { listMismatch.node } else { argument }
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Function argument type does not match its parameter", mismatchNode))
+                  argumentMismatchFound = true
+                } else {}
               } else {}
               index = index + 1
             } else {}

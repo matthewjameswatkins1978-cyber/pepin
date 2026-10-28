@@ -541,6 +541,29 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual((scalar(binary["startByte"]), scalar(binary["endByte"])),
                          (source.index("x + 1"), source.index("x + 1") + len("x + 1")))
 
+    def test_function_argument_diagnostics_match_ocaml(self):
+        cases = [
+            ("scalar", "fn g(a: Int) -> Int { return a }" + NL + "fn f() -> Int { return g(true) }"),
+            ("multiple", "fn g(a: Int, b: Bool, c: Str) -> Int { return a }" + NL + "fn f() -> Int { return g(true, 1, false) }"),
+            ("later-argument", "fn g(a: Int, b: Bool) -> Int { return a }" + NL + "fn f() -> Int { return g(1, 1) }"),
+            ("list-leaf", "fn g(a: List[Int]) -> Int { return 0 }" + NL + "fn f() -> Int { return g([\"text\"]) }"),
+            ("nested-list-leaf", "fn g(a: List[List[Int]]) -> Int { return 0 }" + NL + "fn f() -> Int { return g([[\"text\"]]) }"),
+            ("record", "type Point { x: Int }" + NL + "fn g(a: Point) -> Int { return 0 }" + NL + "fn f() -> Int { return g(true) }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("call-argument-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                expected = [(item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                            for item in reference["diagnostics"]]
+                actual = [(scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                          for item in report["diagnostics"]["value"]]
+                self.assertEqual(expected[0][0], "PEP_TYPE_MISMATCH", (name, expected))
+                self.assertEqual(len(expected), 1, (name, expected))
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual))
+
     def test_return_argument_and_operator_type_errors_are_explicit(self):
         source = "fn wrong(x: Bool) -> Int { return x }"
         _, report = self._analyze(source)
@@ -551,7 +574,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         source = "fn id(x: Int) -> Int { return x }" + NL + "fn main() -> Int { return id(true) }"
         _, report = self._analyze(source)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-        self.assertIn("PEP_ARGUMENT_TYPE", codes)
+        self.assertIn("PEP_TYPE_MISMATCH", codes)
 
         source = "fn main() -> Int { return 1 + true }"
         _, report = self._analyze(source)
