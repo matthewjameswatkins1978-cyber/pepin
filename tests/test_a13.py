@@ -1310,6 +1310,27 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 ]
                 self.assertEqual(actual, expected, report)
 
+    def test_match_list_mismatch_reports_first_leaf_like_ocaml(self):
+        cases = [
+            ("leaf-mismatch", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[true]}}", "invalid"),
+            ("valid-control", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[1]}}", "valid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("match-list-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+
     def test_union_constructors_and_duplicate_names_match_reference_errors(self):
         source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
         reference = self._reference_check("constructor-valid", source)
