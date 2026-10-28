@@ -1636,7 +1636,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
                   let expectedElementShape = elementShape
-                  let contextualExtraList = value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualValueShape, expectedElementShape)
+                  let contextualExtraList = node.text == "append" && value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualValueShape, expectedElementShape)
                   let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape) && !contextualExtraList
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
                     let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
