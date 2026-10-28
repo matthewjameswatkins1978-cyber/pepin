@@ -197,7 +197,15 @@ fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
     if parameter.found {
       return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
     } else {}
-    return pep_c23_unsupported("Pep C23 List[Record] forwarding requires a direct List[Record] parameter")
+    let list = pep_c23_list_literal(nodes, function, node)
+    if list.found {
+      let actualDeclaration = pep_c23_record_list_declaration(nodes, list.node)
+      if !actualDeclaration.found || actualDeclaration.node.id != declaration.node.id {
+        return pep_c23_unsupported("Pep C23 List[Record] binding must match the parameter record type")
+      } else {}
+      return pep_c23_record_list_argument(nodes, function, list.node, parameterType)
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Record] forwarding requires a direct List[Record] parameter or immutable literal binding")
   } else {}
   if node.kind != "list" {
     return pep_c23_unsupported("Pep C23 List[Record] arguments currently require a record list literal or direct parameter forwarding")
@@ -954,11 +962,17 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
+          let recordList = pep_c23_record_list_declaration(nodes, initialValue.node)
+          var hasRecordElement = false
           for item in nodes {
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && item.kind != "record" {
               return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
             } else {}
           }
+          if hasRecordElement && !recordList.found {
+            return pep_c23_unsupported("Pep C23 immutable record list binding has no supported declared record type")
+          } else {}
           // List descriptors have value semantics, so reassignment copies the descriptor.
         } else {
           let initial = pep_c23_expression(nodes, function, initialValue.node)
