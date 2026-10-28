@@ -79,6 +79,12 @@
       }
     },
     {
+      "id": "pass/while-loop",
+      "file": "fixtures/pass_while_loop.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "0\ndone\n" }
+    },
+    {
       "id": "reject/field-on-int",
       "file": "fixtures/reject_field_on_int.pep",
       "kind": "reject",
