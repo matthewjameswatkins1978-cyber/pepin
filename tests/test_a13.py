@@ -636,6 +636,33 @@ class A13FunctionResolutionTests(unittest.TestCase):
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertIn("PEP_TYPE_MISMATCH", codes)
 
+    def test_equality_left_operand_diagnostics_match_ocaml(self):
+        cases = [
+            ("hole", "fn f() -> Bool { return ?lhs == 1 }", "PEP_EQUALITY_UNTYPED"),
+            ("hole-not-equal", "fn f() -> Bool { return ?lhs != 1 }", "PEP_EQUALITY_UNTYPED"),
+            ("hole-before-unknown-right", "fn f() -> Bool { return ?lhs == missing }", "PEP_EQUALITY_UNTYPED"),
+            ("all-hole-if", "fn f(flag: Bool) -> Bool { return (if flag { ?a } else { ?b }) == true }", "PEP_EQUALITY_UNTYPED"),
+            ("unknown-if-condition", "fn f() -> Bool { return (if missing { ?a } else { ?b }) == true }", "PEP_UNKNOWN_VARIABLE"),
+            ("unknown-name", "fn f() -> Bool { return missing == 1 }", "PEP_UNKNOWN_VARIABLE"),
+            ("empty-list", "fn f() -> Bool { return [] == [1] }", "PEP_EMPTY_LIST_NEEDS_TYPE"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("equality-left-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
     def test_return_mismatch_diagnostics_match_ocaml(self):
         cases = [
             ("scalar", "fn wrong(x: Bool) -> Int { return x }"),

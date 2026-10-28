@@ -1709,6 +1709,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if (node.text == "==" || node.text == "!=") && leftType != "" && !equality_supported_type(leftType) && left.found {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNSUPPORTED", "Equality is not defined for this value type", left.node))
         } else {}
+        let untypedEqualityLeft = left.found && leftType == "" && (left.node.kind == "hole" || left.node.kind == "if_expression" && is_all_hole_if_expression(nodes, left.node.id, functions, bindings, references))
+        if (node.text == "==" || node.text == "!=") && untypedEqualityLeft {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNTYPED", "Equality requires a typed left operand", left.node))
+        } else {}
         if expected != "" && leftType != "" && leftType != expected && left.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", left.node)) } else {}
         if expected != "" && rightType != "" && rightType != expected && right.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", right.node)) } else {}
       } else {}
