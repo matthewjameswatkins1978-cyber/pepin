@@ -59,6 +59,8 @@ class SuccessScenarioTests(unittest.TestCase):
                          "--messages", str(self.feed))
             self.assertEqual(rc, 0)
             self.assertEqual([m["id"] for m in out["new_messages"]], ["FIND-001"])
+        for peer in ("outbox-muse.md", "outbox-newton.md"):
+            _, _ = wl(self.state, "board-ack", "--peer", peer, "--all")
         # Newton exits with a resumable handoff; muse keeps working.
         rc, closed = wl(self.state, "clock-out", "--agent", "newton", "--session", "newton-s1",
                         "--next", "run clang/gcc differential on bbb222",

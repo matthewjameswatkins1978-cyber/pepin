@@ -89,6 +89,7 @@ class BoardCheckTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual([m["id"] for m in out["new_messages"]], ["m1", "m2"])
         self.assertTrue(all(m["untrusted"] for m in out["new_messages"]))
+        _, _ = wl(self.state, "board-ack", "--peer", "outbox-lucy.md", "--all")
         # Restart = fresh process, same state dir: nothing new.
         rc, out2 = wl(self.state, "board-check", "--peer", "outbox-lucy.md",
                       "--messages", str(self.feed))
@@ -107,10 +108,13 @@ class BoardCheckTests(unittest.TestCase):
         write_json(self.feed, [{"id": "m1", "text": "a"}])
         _, out = wl(self.state, "board-check", "--peer", "p",
                     "--messages", str(self.feed))
-        self.assertEqual(out["cursor"], "m1")
+        self.assertEqual([m["id"] for m in out["new_messages"]], ["m1"])
+        _, acked = wl(self.state, "board-ack", "--peer", "p", "--all")
+        self.assertEqual(acked["cursor"], "m1")
         # Concurrent writer advanced the cursor; a stale checker must fail, not overwrite.
         write_json(self.feed, [{"id": "m2", "text": "b"}])
         wl(self.state, "board-check", "--peer", "p", "--messages", str(self.feed))
+        wl(self.state, "board-ack", "--peer", "p", "--all")
         write_json(self.feed, [{"id": "m3", "text": "c"}])
         rc, body = wl(self.state, "board-check", "--peer", "p",
                       "--messages", str(self.feed), "--expect-cursor", "m1")
@@ -127,7 +131,9 @@ class BoardCheckTests(unittest.TestCase):
         self.assertEqual(out["new_messages"][0]["content"]["text"], evil)
         self.assertTrue(out["new_messages"][0]["untrusted"])
         # Helper performed no interpretation: cursor advanced exactly once, no side effects.
-        self.assertEqual(out["cursor"], "mX")
+        _, acked = wl(self.state, "board-ack", "--peer", "p", "--ids", "mX")
+        self.assertEqual(acked["acked"], ["mX"])
+        self.assertEqual(acked["cursor"], "mX")
 
 
 class WorkOrderTests(unittest.TestCase):
@@ -160,8 +166,8 @@ class WorkOrderTests(unittest.TestCase):
     def test_read_only_missing_ledger_errors(self):
         rc, body = wl(self.state, "work-orders", "--ledger",
                       str(pathlib.Path(self.tmp.name) / "nope"))
-        self.assertEqual(rc, 0)  # empty view, not a crash
-        self.assertEqual(body["work_orders"], [])
+        self.assertEqual(rc, 1)
+        self.assertEqual(body["error"], "LEDGER_MISSING")
 
 
 if __name__ == "__main__":

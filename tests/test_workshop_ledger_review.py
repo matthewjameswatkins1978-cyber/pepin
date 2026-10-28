@@ -41,7 +41,8 @@ class ReviewHardeningTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual([m["id"] for m in out["new_messages"]], ["m1"])
         self.assertEqual(out["malformed"], 2)
-        self.assertEqual(out["cursor"], "m1")  # id-less input never moves the cursor
+        _, acked = wl(self.state, "board-ack", "--peer", "p", "--ids", "m1")
+        self.assertEqual(acked["cursor"], "m1")  # id-less input never moves the cursor
 
     def test_corrupt_ledger_is_json_error_not_crash(self):
         ledger = pathlib.Path(self.tmp.name) / "ledger"

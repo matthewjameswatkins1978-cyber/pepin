@@ -38,6 +38,7 @@ class OpenEndedParticipationTests(unittest.TestCase):
                          "--messages", str(self.feed))
             self.assertEqual(rc, 0)
             self.assertEqual([m["id"] for m in out["new_messages"]], ["B-001", "B-002"])
+            _, _ = wl(self.state, "board-ack", "--peer", "outbox-%s.md" % agent, "--all")
         # Third finding: everyone gets only the new one, including a re-checker.
         write_json(self.feed, [{"id": "B-001", "text": "seam contract v2"},
                                {"id": "B-002", "text": "sha abc verified"},

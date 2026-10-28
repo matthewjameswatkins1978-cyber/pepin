@@ -36,16 +36,26 @@ All commands take `--state <dir>` (local cursor/shift store).
   when no shift matches; a missing heartbeat is **not** proof of crash and
   never transfers ownership.
 - `board-check --peer <note-path> --messages <json-file> [--expect-cursor ID]`
-  Pi fetches peer messages with `bm_read`/`bm_search` at a natural checkpoint
-  (slice boundary, pre-compaction — never every tool call) and feeds the raw
-  array `[{id, ...}]` here. The helper returns only messages newer than the
-  stored cursor, deduped by stable ID, then advances the cursor. Stale
-  `--expect-cursor` fails with `CONFLICT` (mirrors Basic Memory
-  `expected_checksum` optimistic concurrency). No polling, no auto-reply.
-- `work-orders --ledger <git-common-dir> [--notes <json-file>]`
-  Read-only view: job id, status, owner session, branch/SHA, acceptance
-  criteria from Studio `active-job.*.json` files. Note claims about ownership
-  appear only as `CLAIMED-IN-NOTE (unverified)` and never override the ledger.
+  Delivery half of at-least-once inbox: Pi fetches peer messages at a natural
+  checkpoint and feeds the raw array `[{id, ...}]` here. New IDs are staged as
+  pending and returned once (`redelivered:false`); unacked pending replays on
+  every later check (`redelivered:true`) until explicitly consumed. Consumed
+  IDs never redeliver; id-less input counts as malformed and is never staged.
+  Stale `--expect-cursor` fails with `CONFLICT`. No polling, no auto-reply.
+- `board-ack --peer <note-path> --ids <a,b,...> | --all`
+  Consume half: moves pending IDs to seen and advances the cursor to the last
+  acked ID. Duplicate acks succeed idempotently; unknown IDs are reported, not
+  consumed. Each recipient keeps its own `--state` dir, so two agents reading
+  the same source outbox never consume each other's cursor.
+- `work-orders --ledger <git-common-dir>/matthew-way-studio [--notes <json-file>]`
+  Read-only view over Studio's real layout (`src/ledger.ts`): `active-job.json`
+  (legacy/unscoped snapshot, labelled historical unless Studio adopts it) plus
+  `active-job.<workerKey>.json` (worker-scoped snapshots). Shows job id,
+  status, owner session, branch/SHA, scope label, acceptance and source file.
+  A missing directory fails `LEDGER_MISSING`; an unexpected leaf or an empty
+  but valid ledger returns a qualification, never a silent zero. Note claims
+  about ownership appear only as `CLAIMED-IN-NOTE (unverified)` and never
+  override the ledger.
 
 ## Message rules (Basic Memory outboxes)
 
