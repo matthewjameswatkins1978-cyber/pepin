@@ -914,6 +914,27 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 expected_end = expected_start + len(repeated_declaration.encode("utf-8"))
                 self.assertEqual(actual_diagnostics, [(expected_code, expected_start, expected_end)])
 
+    def test_reserved_constructor_function_duplicates_report_once_at_the_first_function(self):
+        source = ("type Maybe = Some(Int) | None()" + NL +
+                  "fn Some(x: Int) -> Int { return x }" + NL +
+                  "fn Some(x: Int) -> Int { return x }" + NL +
+                  "fn main() -> Int { return 0 }")
+        reference = self._reference_check("reserved-function-duplicate", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "invalid", reference)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(actual, expected, report)
+        declaration = "fn Some(x: Int) -> Int { return x }"
+        start = len(source[:source.index(declaration)].encode("utf-8"))
+        self.assertEqual(actual, [("PEP_RESERVED_FUNCTION", start, start + len(declaration.encode("utf-8")))])
+
     def test_reserved_type_name_duplicates_report_once_at_the_first_declaration(self):
         cases = [
             ("single", "type Int { value: Bool }" + NL +
