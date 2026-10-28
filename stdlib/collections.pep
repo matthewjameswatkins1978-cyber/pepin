@@ -62,6 +62,12 @@ fn list_int_any_zero(values: List[Int]) -> Bool {
   return found
 }
 
+fn list_int_any_nonzero(values: List[Int]) -> Bool {
+  var found = false
+  for item in values { found = found || (item != 0) }
+  return found
+}
+
 fn list_int_count_negative(values: List[Int]) -> Int {
   var total = 0
   for item in values { total = if item <= -1 { total + 1 } else { total } }
