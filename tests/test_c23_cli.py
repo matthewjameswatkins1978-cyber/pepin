@@ -63,9 +63,10 @@ class PepC23CliTests(unittest.TestCase):
             self.assertNotEqual(too_deep.returncode, 0)
             self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
             source.write_text("type Point { x: Int }\n"
+                              "type Located { point: Point }\n"
                               "fn main() -> Int {\n"
-                              "  let point = Point { x: 42 }\n"
-                              "  return point.x\n"
+                              "  let located = Located { point: Point { x: 42 } }\n"
+                              "  return located.point.x\n"
                               "}\n",
                               encoding="utf-8", newline="\n")
             generated = folder / "unsupported.c"
@@ -117,14 +118,53 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
                     self.assertEqual(result.stdout, "42\n")
 
+    def test_scalar_record_construction_and_field_access_match_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        programs = (
+            ("record-parameter-by-value",
+             "type Point { x: Int y: Int }\n"
+             "fn sum(point: Point) -> Int { return point.x + point.y }\n"
+             "fn main() -> Int { let point = Point { y: 22, x: 20 }; return sum(point) }\n"),
+            ("bool-record-field",
+             "type Mark { enabled: Bool code: Int }\n"
+             "fn main() -> Int { let mark = Mark { code: 42, enabled: true }; return if mark.enabled { mark.code } else { 0 } }\n"),
+        )
+        for case, source_text in programs:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    folder = pathlib.Path(temp)
+                    source = folder / f"{case}.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source = folder / f"{case}-reference.pep"
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n", encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, "42\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(case=case, compiler=compiler.name):
+                            generated = folder / f"{case}-{compiler.stem}.c"
+                            native = self.invoke("run-c23", source, "--compiler", compiler,
+                                                 "--emit-c", generated)
+                            self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+                            self.assertIn("typedef struct", generated.read_text(encoding="utf-8"))
+
     def test_c23_unsupported_programs_fail_closed_consistently_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         cases = (
-            ("record-field",
-             "type Point { x: Int }\n"
-             "fn main() -> Int { let point = Point { x: 42 }; return point.x }\n",
-             "Pep C23 unsupported: Pep C23 expression lowering does not support this expression",
+            ("record-string-field",
+             "type Label { text: Str }\n"
+             "fn main() -> Int { let label = Label { text: \"hello\" }; return 42 }\n",
+             "Pep C23 unsupported: Pep C23 records currently require fields of type Int or Bool",
+             "valid"),
+            ("record-fallible-initializer",
+             "type Value { value: Int }\n"
+             "fn calculate() -> Int { return 42 }\n"
+             "fn main() -> Int { let value = Value { value: calculate() }; return value.value }\n",
+             "Pep C23 unsupported: Pep C23 record field initializers currently require expressions without runtime failure",
              "valid"),
             ("bool-main",
              "fn main() -> Bool { return true }\n",
