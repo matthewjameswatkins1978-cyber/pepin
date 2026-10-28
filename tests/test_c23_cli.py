@@ -208,7 +208,7 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(result.stdout, reference.stdout)
 
-    def test_immutable_record_list_binding_can_be_iterated_natively(self):
+    def test_immutable_record_list_binding_supports_length_and_iteration_natively(self):
         if not GCC.is_file():
             self.skipTest(f"GCC not installed at {GCC}")
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
@@ -220,7 +220,7 @@ class PepC23CliTests(unittest.TestCase):
                 "  let points = [Point { x: 20, y: 22 }, Point { x: 0, y: 0 }]\n"
                 "  var total: Int = 0\n"
                 "  for point in points { total = total + point.x + point.y }\n"
-                "  return total\n"
+                "  return total + length(points)\n"
                 "}\n",
                 encoding="utf-8", newline="")
             reference_source = folder / "record-list-local-iteration-reference.pep"
@@ -228,7 +228,7 @@ class PepC23CliTests(unittest.TestCase):
                                         "say(int_text(main()))\n", encoding="utf-8", newline="")
             reference = self.invoke("run", reference_source)
             self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
-            self.assertEqual(reference.stdout, "42\n")
+            self.assertEqual(reference.stdout, "44\n")
             for compiler in (CLANG, GCC):
                 with self.subTest(compiler=compiler.name):
                     result = self.invoke("run-c23", source, "--compiler", compiler)
