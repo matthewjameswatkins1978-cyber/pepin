@@ -693,16 +693,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(types_by_start[source.index(call)], expected_type)
 
         cases = [
-            ("fn main() -> Unit { return say() }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Unit { return say(1) }", "PEP_ARGUMENT_TYPE"),
-            ("fn main() -> Str { return int_text() }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Str { return int_text(true) }", "PEP_ARGUMENT_TYPE"),
+            ("say-wrong-arity", "fn main() -> Unit { return say() }", "PEP_ARGUMENT_COUNT"),
+            ("say-wrong-type", "fn main() -> Unit { return say(1) }", "PEP_TYPE_MISMATCH"),
+            ("int-text-wrong-arity", "fn main() -> Str { return int_text() }", "PEP_ARGUMENT_COUNT"),
+            ("int-text-wrong-type", "fn main() -> Str { return int_text(true) }", "PEP_TYPE_MISMATCH"),
+            ("byte-length-wrong-type", "fn main() -> Int { return byte_length(1) }", "PEP_TYPE_MISMATCH"),
+            ("utf8-slice-wrong-type", "fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_TYPE_MISMATCH"),
+            ("multiple-wrong-builtin-types", "fn main() -> Int { let a = int_text(true); let b = byte_length(1); return 0 }", "PEP_TYPE_MISMATCH"),
         ]
-        for source, expected_code in cases:
+        for name, source, expected_code in cases:
+            reference = self._reference_check("builtin-argument-" + name, source)
             _, report = self._analyze(source)
-            self.assertEqual(scalar(report["status"]), "invalid", report)
-            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-            self.assertIn(expected_code, codes)
+            self.assertEqual(reference["status"], "invalid", reference)
+            expected = [
+                (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                for item in reference["diagnostics"]
+            ]
+            actual = [
+                (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                for item in report["diagnostics"]["value"]
+            ]
+            self.assertEqual(actual, expected, (name, expected, actual, report))
+            self.assertIn(expected_code, [item[0] for item in actual])
 
     def test_statement_conditions_are_typed_and_holes_keep_boolean_expectations(self):
         _, report = self._analyze("fn main() -> Unit { if true {} else {} while false {} }")
@@ -875,10 +887,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
         cases = [
             ("fn main() -> SourceBytes { return source_bytes(1) }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Int { return byte_length(1) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Int { return byte_length(1) }", "PEP_TYPE_MISMATCH"),
             ("fn main() -> Int { return byte_at(source_bytes()) }", "PEP_ARGUMENT_COUNT"),
             ("fn main() -> SourceBytes { return byte_slice(source_bytes(), 0) }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_TYPE_MISMATCH"),
         ]
         for source, expected_code in cases:
             _, report = self._analyze(source)

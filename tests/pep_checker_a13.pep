@@ -1673,7 +1673,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 if expected != "" {
                   let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
                   if actualArgument != "" && expected != actualArgument {
-                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Built-in argument type does not match its signature", argument))
                   } else {}
                 } else {}
                 index = index + 1
