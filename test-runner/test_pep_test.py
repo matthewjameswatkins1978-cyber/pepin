@@ -149,6 +149,17 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertEqual(doc["counts"]["pass"], 4)
         self.assertTrue(all(t["id"].startswith("reject/") for t in doc["tests"]))
 
+    def test_v8_gate_statuses_all_distinct_in_counts(self):
+        # Road 2 V8 gate: pass/fail/compile/runtime/timeout/policy/infra/skip stay
+        # distinct. policy_denied is reserved (no current CLI surface triggers it)
+        # but present in counts and schema so a future enforcing backend plugs in.
+        proc = run_runner("--json", "--filter", "pass/add")
+        doc = json.loads(proc.stdout)
+        for key in ("pass", "fail", "compile_error", "runtime_error",
+                    "timeout", "infra_error", "skip", "policy_denied"):
+            self.assertIn(key, doc["counts"], key)
+        self.assertEqual(doc["counts"]["policy_denied"], 0)
+
     def test_list_lists_without_executing(self):
         proc = run_runner("--json", "--list")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

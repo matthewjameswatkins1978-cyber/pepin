@@ -14,6 +14,9 @@ Outcome taxonomy (mirrors Terror Bats execution splits, unit-test scale):
   infra_error     missing fixture, malformed manifest, CLI crash, non-JSON
                   output, transport failure (never a pass, never a negative pass)
   skip            fixture explicitly marked skipped
+  policy_denied   host-capability refusal (reserved: no current CLI surface
+                  triggers it; recorded distinctly per the Road 2 V8 gate the
+                  moment a backend enforces host grants)
 
 A crash, timeout or transport failure NEVER counts as a successful negative
 test: kind=reject passes only when `check --json` parses AND reports
@@ -31,7 +34,7 @@ import time
 
 SCHEMA_VERSION = 1
 STATUSES = ("pass", "fail", "compile_error", "runtime_error", "timeout",
-            "infra_error", "skip")
+            "infra_error", "skip", "policy_denied")
 EXIT_OK = 0
 EXIT_TESTS_FAILED = 1
 EXIT_INFRA = 2
@@ -394,10 +397,11 @@ def finish(doc, infra, args, failed=0):
             print("%-12s %-28s %s" % (t.get("status", "?").upper(),
                                       t.get("id", "?"), t.get("detail", "")))
         c = doc["counts"]
-        print("pass=%d fail=%d compile_error=%d runtime_error=%d timeout=%d infra_error=%d skip=%d" % (
+        print("pass=%d fail=%d compile_error=%d runtime_error=%d timeout=%d infra_error=%d skip=%d policy_denied=%d" % (
             c.get("pass", 0), c.get("fail", 0), c.get("compile_error", 0),
             c.get("runtime_error", 0), c.get("timeout", 0),
-            c.get("infra_error", 0), c.get("skip", 0)))
+            c.get("infra_error", 0), c.get("skip", 0),
+            c.get("policy_denied", 0)))
         if doc.get("evidence_root"):
             print("evidence: %s" % doc["evidence_root"])
     if infra is not None:

@@ -23,7 +23,7 @@
     "note": { "type": ["string", "null"] },
     "counts": {
       "type": "object",
-      "required": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip"],
+      "required": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"],
       "properties": {
         "pass": { "type": "integer", "minimum": 0 },
         "fail": { "type": "integer", "minimum": 0 },
@@ -31,7 +31,8 @@
         "runtime_error": { "type": "integer", "minimum": 0 },
         "timeout": { "type": "integer", "minimum": 0 },
         "infra_error": { "type": "integer", "minimum": 0 },
-        "skip": { "type": "integer", "minimum": 0 }
+        "skip": { "type": "integer", "minimum": 0 },
+        "policy_denied": { "type": "integer", "minimum": 0 }
       }
     },
     "tests": {
@@ -48,7 +49,7 @@
         "id": { "type": "string" },
         "file": { "type": "string" },
         "kind": { "enum": ["run", "reject", "check"] },
-        "status": { "enum": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip"] },
+        "status": { "enum": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"] },
         "detail": { "type": "string" },
         "source_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]+$" },
         "check_elapsed_s": { "type": "number" },

@@ -34,7 +34,10 @@ no `test {}` grammar or `std.test` APIs until their contracts are accepted.
 ## Outcome taxonomy
 
 `pass` · `fail` (assertion or expected-rejection mismatch) · `compile_error`
-· `runtime_error` · `timeout` · `infra_error` · `skip`.
+· `runtime_error` · `timeout` · `infra_error` · `skip` · `policy_denied`
+(reserved: no current `run` surface triggers a host-grant refusal, but the
+Road 2 V8 gate requires the category distinct so a future enforcing backend
+plugs in without a schema break).
 
 A crash, timeout, transport failure, or malformed compiler output NEVER
 counts as a pass — not even for negative fixtures. A `reject` fixture
