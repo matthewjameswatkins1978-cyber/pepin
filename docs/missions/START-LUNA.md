@@ -2,6 +2,10 @@
 
 **Main mission:** docs/missions/PEP-SUSTAINED-IMPLEMENTATION-20261027.md on this branch.
 
+## Matthew's product goal (28 October 2026)
+
+**Read [FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md](FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md).** Build and verify **ALL of the accepted small Pep language**. The self-hosting compiler is an important early milestone, **not completion**; implement remaining final-draft semantics, runtime, standard library, testing and AI-first facilities afterwards. Maintain an all-feature completion/gap ledger. Use [GitHub #16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16) and the Basic Memory coordination hub to declare and respect two-agent file/branch ownership. Do not collide with the other worker or stop at a three-slice review.
+
 ## Copy-and-paste starting instruction
 
 Luna, you have Matthew's authorisation to undertake a **sustained multi-milestone Pepin implementation campaign**, not a three-slice job. Begin on branch `campaign/pep-v01-sustained-build-20261027`, whose ancestor is verified A13 checker checkpoint `54a08f311117fe020db916286aa863b42d5151a1`.
