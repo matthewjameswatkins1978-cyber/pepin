@@ -83,6 +83,28 @@ class PepC23CliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(result.stdout, "42\n")
 
+    def test_nested_distinct_helpers_fit_staged_compiler_pipeline(self):
+        if not GCC.is_file():
+            self.skipTest(f"GCC not installed at {GCC}")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "nested.pep"
+            source.write_text(
+                "fn negate(value: Bool) -> Bool { return !value }\n"
+                "fn identity(value: Bool) -> Bool { return value }\n"
+                "fn main() -> Int { return if identity(negate(false)) { 42 } else { 0 } }\n",
+                encoding="utf-8", newline="\n")
+            reference_source = pathlib.Path(temp) / "nested_reference.pep"
+            reference_source.write_text(source.read_text(encoding="utf-8") +
+                                        "say(int_text(main()))\n", encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+                    self.assertEqual(result.stdout, "42\n")
+
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             source = pathlib.Path(temp) / "protected.pep"

@@ -91,24 +91,22 @@ fn quick_sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
   if length(nodes) <= 1 { return nodes } else {}
   let pivotIndex = length(nodes) / 2
   var position = 0
-  var pivotId = -1
+  var pivot = empty_node()
   for node in nodes {
-    if position == pivotIndex { pivotId = node.id } else {}
+    if position == pivotIndex { pivot = node } else {}
     position = position + 1
   }
-  let pivot = lookup_node(nodes, pivotId)
-  if !pivot.found { return nodes } else {}
   var less: List[FlatAstNode] = []
   var greater: List[FlatAstNode] = []
   for node in nodes {
-    if node.id + 1 <= pivotId { less = prepend(less, node) } else {}
-    if pivotId + 1 <= node.id { greater = prepend(greater, node) } else {}
+    if node.id + 1 <= pivot.id { less = prepend(less, node) } else {}
+    if pivot.id + 1 <= node.id { greater = prepend(greater, node) } else {}
   }
   let sortedLess = quick_sort_nodes(less)
   let sortedGreater = quick_sort_nodes(greater)
   var reversed: List[FlatAstNode] = []
   for node in sortedLess { reversed = prepend(reversed, node) }
-  reversed = prepend(reversed, pivot.node)
+  reversed = prepend(reversed, pivot)
   for node in sortedGreater { reversed = prepend(reversed, node) }
   return reverse(reversed)
 }

@@ -370,7 +370,17 @@ fn emit_c23() -> PepC23Emission {
   if parsed.status != "complete" {
     return pep_c23_unsupported("Pep C23 emission requires a complete program")
   } else {}
-  if analyze_parsed(parsed).status != "valid" {
+  let checked = analyze_parsed(parsed)
+  return emit_c23_checked(parsed, checked)
+}
+fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emission {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision ||
+     checked.document != authority.document || checked.revision != authority.revision ||
+     checked.syntaxNodeCount != length(parsed.nodes) {
+    return pep_c23_unsupported("Pep C23 emission inputs do not match the authorised source revision")
+  } else {}
+  if parsed.status != "complete" || checked.status != "valid" {
     return pep_c23_unsupported("Pep C23 emission requires a valid Pep checker report")
   } else {}
   var mainFound = false

@@ -65,6 +65,42 @@ def typed_record(status, parts=(), diagnostic=""):
     }
 
 
+def typed(type_name, value):
+    return {"type": type_name, "value": str(value) if type_name == "Int" else value}
+
+
+def typed_list(item_type, values=()):
+    return {"type": f"List[{item_type}]", "value": list(values)}
+
+
+def typed_record_value(type_name, fields):
+    return {"type": type_name, "fields": [
+        {"name": name, "value": value} for name, value in fields
+    ]}
+
+
+def parser_progress(document, revision):
+    return typed_record_value("ParserProgress", [
+        ("document", typed("Str", document)), ("revision", typed("Str", revision)),
+        ("status", typed("Str", "complete")), ("nodes", typed_list("FlatAstNode")),
+        ("done", typed("Bool", True)), ("errorCode", typed("Str", "")),
+        ("message", typed("Str", "")), ("errorStart", typed("Int", 0)),
+        ("errorEnd", typed("Int", 0)), ("errorLine", typed("Int", 0)),
+        ("errorColumn", typed("Int", 0)),
+    ])
+
+
+def checker_report(document, revision):
+    fields = [("document", typed("Str", document)), ("revision", typed("Str", revision)),
+              ("status", typed("Str", "valid")), ("syntaxNodeCount", typed("Int", 0))]
+    for name, item_type in (("functions", "CheckedFunction"), ("bindings", "BindingFact"),
+                            ("references", "ResolvedName"), ("calls", "ResolvedCall"),
+                            ("expressionTypes", "ExpressionTypeFact"), ("holes", "HoleFact"),
+                            ("diagnostics", "CheckDiagnostic")):
+        fields.append((name, typed_list(item_type)))
+    return typed_record_value("CheckerReport", fields)
+
+
 def emit(source_bytes):
     try:
         bundle = "\n".join(path.read_text(encoding="utf-8") for path in SOURCES)
@@ -74,44 +110,74 @@ def emit(source_bytes):
     try:
         opened = session.send({"schemaVersion": 3, "op": "open", "source": bundle,
                               "name": "pep-c23-emitter", "metadataOnly": True})
-        require(opened, "outcome", "ok", "open emitter")
-        require(opened, "status", "valid", "check emitter")
-        document, revision = opened["document"], opened["revision"]
+        require(opened, "outcome", "ok", "open compiler bundle")
+        require(opened, "status", "valid", "check compiler bundle")
+        tool_document, tool_revision = opened["document"], opened["revision"]
+        sample = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "stage-validation", "bytes": []})
+        require(sample, "outcome", "ok", "open stage validation source")
+        empty_parsed = parser_progress(sample["document"], sample["revision"])
+        empty_checked = checker_report(sample["document"], sample["revision"])
+        target_spec = {"document": sample["document"], "revision": sample["revision"], "entryFunctions": []}
+        empty_expected = [
+            ("pep-c23-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
+        ]
+        for tool, function, arguments, expected in empty_expected:
+            registered = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_register", "tool": tool,
+                                      "document": tool_document, "revision": tool_revision,
+                                      "function": function})
+            require(registered, "status", "Registered", f"register {tool}")
+            validated = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_validate", "tool": tool,
+                                      "document": tool_document, "revision": tool_revision,
+                                      "testVectors": [{"arguments": arguments, "expect": expected,
+                                          "semanticTarget": target_spec}]})
+            require(validated, "status", "Validated", f"validate {tool}")
+            active = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_activate", "tool": tool,
+                                   "document": tool_document, "revision": tool_revision})
+            require(active, "status", "Active", f"activate {tool}")
         registered = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
-                                   "op": "tool_register", "tool": "pep-c23-emitter",
-                                   "document": document, "revision": revision,
-                                   "function": "emit_c23"})
+                                  "op": "tool_register", "tool": "pep-c23-emitter",
+                                  "document": tool_document, "revision": tool_revision,
+                                  "function": "emit_c23_checked"})
         require(registered, "status", "Registered", "register emitter")
-        sample = session.send({"schemaVersion": 3, "op": "open",
-                               "source": "fn main() -> Int { return true }",
-                               "metadataOnly": True})
-        expected = typed_record("unsupported", (),
-                                "Pep C23 emission requires a valid Pep checker report")
+        expected_emission = typed_record("unsupported", (),
+                                         "Pep C23 emission requires a top-level function named main")
         validated = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                   "op": "tool_validate", "tool": "pep-c23-emitter",
-                                  "document": document, "revision": revision,
-                                  "testVectors": [{"arguments": [], "expect": expected,
-                                      "semanticTarget": {"document": sample["document"],
-                                          "revision": sample["revision"], "entryFunctions": []}}]})
+                                  "document": tool_document, "revision": tool_revision,
+                                  "testVectors": [{"arguments": [empty_parsed, empty_checked],
+                                      "expect": expected_emission, "semanticTarget": target_spec}]})
         require(validated, "status", "Validated", "validate emitter")
         activated = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                   "op": "tool_activate", "tool": "pep-c23-emitter",
-                                  "document": document, "revision": revision})
+                                  "document": tool_document, "revision": tool_revision})
         require(activated, "status", "Active", "activate emitter")
+
         target = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "native-target",
                                "bytes": list(source_bytes)})
         require(target, "outcome", "ok", "open source")
-        result = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
-                              "op": "tool_invoke", "tool": "pep-c23-emitter", "arguments": [],
-                              "semanticTarget": {"document": target["document"],
-                                  "revision": target["revision"], "entryFunctions": []}})
-        require(result, "outcome", "ok", "invoke emitter")
-        require(result, "revision", revision, "verify emitter revision")
-        fields = {item["name"]: item["value"] for item in result["result"]["fields"]}
-        status = fields["status"]["value"]
-        diagnostic = fields["diagnostic"]["value"]
-        if status != "emitted":
-            raise ValueError(diagnostic or "Pep C23 emitter rejected the program")
+        semantic_target = {"document": target["document"], "revision": target["revision"], "entryFunctions": []}
+        parsed = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                               "op": "tool_invoke", "tool": "pep-c23-parser", "arguments": [],
+                               "semanticTarget": semantic_target})
+        require(parsed, "outcome", "ok", "parse source")
+        parsed_value = parsed["result"]
+        checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                "op": "tool_invoke", "tool": "pep-c23-checker",
+                                "arguments": [parsed_value], "semanticTarget": semantic_target})
+        require(checked, "outcome", "ok", "check parsed source")
+        emitted = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                "op": "tool_invoke", "tool": "pep-c23-emitter",
+                                "arguments": [parsed_value, checked["result"]],
+                                "semanticTarget": semantic_target})
+        require(emitted, "outcome", "ok", "emit checked source")
+        require(emitted, "revision", tool_revision, "verify emitter revision")
+        fields = {item["name"]: item["value"] for item in emitted["result"]["fields"]}
+        if fields["status"]["value"] != "emitted":
+            raise ValueError(fields["diagnostic"]["value"] or "Pep C23 emitter rejected the program")
         return "".join(part["value"] for part in fields["sourceParts"]["value"])
     finally:
         session.close()
