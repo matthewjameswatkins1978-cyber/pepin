@@ -1540,10 +1540,20 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               let actualResult = infer_expression_type(nodes, result.node.id, functions, bindings, references)
               if resultType == "" && actualResult != "" { resultType = actualResult } else {}
               if expectedResultType != "" {
-                if actualResult != "" && actualResult != expectedResultType && !contextualMismatchReported {
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
-                  contextualMismatchReported = true
-                } else {}
+                if result.node.kind == "list" {
+                  let expectedResultShape = legacy_type_shape(nodes, expectedResultType)
+                  let listMismatch = if expectedResultShape.listDepth != 0 && !contextualMismatchReported { list_mismatch_node(nodes, result.node.id, expectedResultShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                  if (actualResult != "" && actualResult != expectedResultType || listMismatch.found) && !contextualMismatchReported {
+                    let mismatchNode = if listMismatch.found { listMismatch.node } else { result.node }
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", mismatchNode))
+                    contextualMismatchReported = true
+                  } else {}
+                } else {
+                  if actualResult != "" && actualResult != expectedResultType && !contextualMismatchReported {
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
+                    contextualMismatchReported = true
+                  } else {}
+                }
               } else {
                 if resultType != "" && actualResult != "" && resultType != actualResult {
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", result.node))
