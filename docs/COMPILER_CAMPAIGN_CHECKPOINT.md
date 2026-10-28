@@ -261,3 +261,19 @@ Verification on this slice before its commit:
 - No checker implementation, budget, protocol, A14, master, CURRENT.md, manifest or release changes.
 
 A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — staged deep-append parity and profile-guided budget investigation (2026-10-28; cycle 1/3)
+
+**Test SHA:** `6f0718e75d2f5607bcfb4cadce13bd39488c9466`, pushed to `campaign/pep-v01-sustained-build-20261027`. Extended the two four-level append budget-boundary regressions to run the Pep-written parser and staged checker on the same authorised revision before asserting the one-shot limit. Both staged reports are valid and match OCaml status and exact diagnostics/spans; the one-shot `analyze` calls still return `PEP_RUNTIME_STEP_LIMIT`. No checker source or protocol change is in the committed slice.
+
+Verification on the test SHA:
+
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **66/66 passed** in 209.544 seconds.
+- The five directly affected reachability, nested-list, helper-budget and staged append cases passed **5/5** in 13.627 seconds after restoring the published checker source.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+
+A temporary, stderr-only `execute` tick profile was used and then removed; `pep_ocaml.ml` was restored byte-for-byte to the checkpoint source. For the 107-byte nested-literal append source, one-shot execution stopped at **100,001 ticks**. The successful 133-byte typed-name control used **88,546 ticks**. In the literal failure profile, the largest grouped Pep-function tick counts were `lexer_step` 21,725; `lookup_node` 10,606; `infer_expression_type` 4,609; `contextual_expected_type` 3,706; `child_at` 3,676; and `expression_type_shape` 2,444. These are interpreter tick counts grouped by active Pep function, not isolated CPU time or memory measurements.
+
+A sorted-node early-stop and builtin constructor-scan fast path were tried locally. The constructor helper's grouped ticks fell from 2,187 to 215 in the same cap probe, but the source still hit the fixed limit and the trial introduced four new step-limit failures in the A13 suite. Both implementation edits were discarded. The final checker implementation remains unchanged; the useful result is staged parity coverage and a clearer profile of the unresolved one-shot cost.
+
+The 100,000-step ceiling, master, `CURRENT.md`, manifest, A14/C23 ownership and release state remain unchanged. No large-file, CPU or memory guarantee is claimed. A13 remains partial, experimental and unaccepted; cycle 1/3.
