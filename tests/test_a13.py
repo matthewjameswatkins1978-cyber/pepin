@@ -508,6 +508,37 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual((scalar(diagnostic["startByte"]), scalar(diagnostic["endByte"])),
                          (len(source[:start].encode()), len(source[:start + len("id()")].encode())))
 
+    def test_unknown_constructor_span_after_utf8_prefix_matches_reference(self):
+        source = "// 🐇\n type M=A(Int)|B() fn f()->M{return C(1)}"
+        reference = self._reference_check("unknown-constructor-unicode-prefix", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "invalid", reference)
+        diagnostic = fields(report["diagnostics"]["value"][0])
+        self.assertEqual(scalar(diagnostic["code"]), "PEP_UNKNOWN_CONSTRUCTOR")
+        start = source.index("C(1)")
+        expected_span = (len(source[:start].encode("utf-8")),
+                         len(source[:start + len("C(1)")].encode("utf-8")))
+        expected = reference["diagnostics"][0]
+        self.assertEqual((expected["span"]["start"]["offset"], expected["span"]["endOffset"]),
+                         expected_span)
+        self.assertEqual((scalar(diagnostic["startByte"]), scalar(diagnostic["endByte"])),
+                         expected_span)
+
+    def test_declared_uppercase_function_is_resolved_before_constructor_classification(self):
+        source = "fn Missing(value: Int)->Int{return value} fn f()->Int{return Missing(7)}"
+        reference = self._reference_check("declared-uppercase-function", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(report["diagnostics"]["value"], [], report)
+        call = fields(report["calls"]["value"][0])
+        self.assertEqual(scalar(call["callerId"]), 100001)
+        self.assertEqual(scalar(call["calleeId"]), 100000)
+        start = source.index("Missing(7)")
+        self.assertEqual((scalar(call["startByte"]), scalar(call["endByte"])),
+                         (len(source[:start].encode("utf-8")),
+                          len(source[:start + len("Missing(7)")].encode("utf-8"))))
+
     def test_nested_block_shadowing_and_unknown_binding(self):
         source = "fn main(x: Int) -> Int { let y = x; { let x = y; return x } }"
         _, report = self._analyze(source)
