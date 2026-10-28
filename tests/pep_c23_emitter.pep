@@ -195,7 +195,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !left.found || !right.found {
       return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
     } else {}
-    if pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
+    if node.text != "&&" && node.text != "||" && pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
       return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
     } else {}
     if node.text == "neg" {

@@ -219,6 +219,14 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { if true || (1 / 0 == 0) { return 42 } else { return 0 } }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { if (0 / 1 == 1) && (1 / 0 == 0) { return 0 } else { return 42 } }",
+            42,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { if (1 / 1 == 1) || (1 / 0 == 0) { return 42 } else { return 0 } }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (
@@ -297,6 +305,12 @@ class A14C23EmissionTests(unittest.TestCase):
         self.assertEqual(scalar(dual_failure["status"]), "unsupported")
         self.assertEqual(dual_failure["sourceParts"]["value"], [])
         self.assertIn("evaluation order is unspecified", scalar(dual_failure["diagnostic"]))
+        comparison_order_failure = self._emit(
+            "fn main() -> Int { return if (1 / 1 == 1 / 1) { 1 } else { 0 } }"
+        )
+        self.assertEqual(scalar(comparison_order_failure["status"]), "unsupported")
+        self.assertEqual(comparison_order_failure["sourceParts"]["value"], [])
+        self.assertIn("evaluation order is unspecified", scalar(comparison_order_failure["diagnostic"]))
         call_order_failure = self._emit(
             "fn main() -> Int { return maybe() + (9223372036854775807 + 1) }\n"
             "fn maybe() -> Int { return 1 / 0 }"
