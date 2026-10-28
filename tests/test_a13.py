@@ -431,7 +431,6 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("while-condition", "fn main() -> Unit { while 1 {} }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("builtin-arity", "fn main() -> Int { return length() }", "PEP_ARGUMENT_COUNT", "PEP_ARGUMENT_COUNT"),
             ("builtin-type", "fn main() -> Int { return length(1) }", "PEP_LIST_EXPECTED", "PEP_LIST_EXPECTED"),
-            ("assignment-type", "fn main() -> Int { var x: Int = 0; x = true; return x }", "PEP_TYPE_MISMATCH", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
             ("for-in-source", "fn main() -> Int { for item in 1 {} return 0 }", "PEP_FOR_REQUIRES_LIST", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
             ("missing-return", "fn main() -> Int { let x: Int = 1 }", "PEP_MISSING_RETURN", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
         ]
@@ -456,6 +455,55 @@ class A13FunctionResolutionTests(unittest.TestCase):
         hole = fields(report["holes"]["value"][0])
         self.assertEqual(scalar(hole["name"]), "field")
         self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+    def test_assignment_typing_mutability_and_spans_match_ocaml(self):
+        cases = [
+            ("mutable-valid", "fn main() -> Int { var x: Int = 0; x = 1; return x }", "valid", None, "", {}),
+            ("scalar-mismatch", "fn main() -> Int { var x: Int = 0; x = true; return x }", "invalid", "PEP_TYPE_MISMATCH", "true", {}),
+            ("immutable-local", "fn main() -> Int { let x: Int = 0; x = 1; return x }", "invalid", "PEP_ASSIGN_IMMUTABLE", "x = 1", {}),
+            ("immutable-precedence", "fn main() -> Int { let x: Int = 0; x = true; return x }", "invalid", "PEP_ASSIGN_IMMUTABLE", "x = true", {}),
+            ("immutable-parameter", "fn set(x: Int) -> Int { x = 1; return x }", "invalid", "PEP_ASSIGN_IMMUTABLE", "x = 1", {}),
+            ("unknown-target", "fn main() -> Int { missing = 1; return 0 }", "invalid", "PEP_UNKNOWN_VARIABLE", "missing = 1", {}),
+            ("inferred-type-mismatch", "fn main() -> Int { var x = 0; x = true; return x }", "invalid", "PEP_TYPE_MISMATCH", "true", {}),
+            ("nested-list-mismatch", "fn main() -> Int { var xs: List[List[Int]] = [[1]]; xs = [[true]]; return 0 }", "invalid", "PEP_TYPE_MISMATCH", "true", {}),
+            ("contextual-empty-list", "fn main() -> Int { var xs: List[Int] = [1]; xs = []; return length(xs) }", "valid", None, "", {}),
+            ("assignment-hole", "fn main() -> Int { var x: Int = 0; x = ?pending; return x }", "incomplete", None, "", {"pending": "Int"}),
+        ]
+        for name, source, expected_status, expected_code, span_text, expected_holes in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("assignment-" + name, source)
+                opened, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                reference_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, reference_diagnostics, report)
+                if expected_code is None:
+                    self.assertEqual(actual_diagnostics, [])
+                else:
+                    self.assertEqual(len(actual_diagnostics), 1)
+                    self.assertEqual(actual_diagnostics[0][0], expected_code)
+                    start = len(source[:source.index(span_text)].encode("utf-8"))
+                    end = start + len(span_text.encode("utf-8"))
+                    self.assertEqual(actual_diagnostics[0][1:], (start, end))
+                reference_holes = {item["name"]: item["expectedType"] for item in opened.get("holes", [])}
+                actual_holes = {
+                    scalar(fields(item)["name"]): scalar(fields(item)["expectedType"])
+                    for item in report["holes"]["value"]
+                }
+                self.assertEqual(reference_holes, expected_holes)
+                self.assertEqual(actual_holes, expected_holes, report)
+                if name == "mutable-valid":
+                    binding = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == "x")
+                    target_start = len(source[:source.index("x = 1")].encode("utf-8"))
+                    write = next(fields(item) for item in report["references"]["value"] if scalar(fields(item)["startByte"]) == target_start)
+                    self.assertEqual(scalar(write["bindingId"]), scalar(binding["semanticId"]))
 
     def test_named_record_construction_fields_and_holes_are_checked(self):
         source = "type Point { x: Int, label: Str }" + NL + "fn main() -> Int { let point = Point { x: 3, label: \"home\" }; return point.x }"

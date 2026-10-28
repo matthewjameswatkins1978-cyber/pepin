@@ -350,7 +350,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for function in functions {
     for node in nodes {
-      if node.kind == "name" && inside_function(node, function) {
+      if (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         var found = false
         var resolved = 0
@@ -362,8 +362,11 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           }
         }
+
         if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_BINDING", "No visible local binding has this name", node))
+          let code = if node.kind == "assignment" { "PEP_UNKNOWN_VARIABLE" } else { "PEP_UNKNOWN_BINDING" }
+          let message = if node.kind == "assignment" { "No visible variable has this name" } else { "No visible local binding has this name" }
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, message, node))
         }
       } else {}
     }
@@ -610,6 +613,15 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
     let record = lookup_node(nodes, parent.node.parentId)
     if record.found && record.node.kind == "record" { return record_field_type(nodes, record.node.text, parent.node.text) } else { return "" }
   } else {}
+  if parent.node.kind == "assignment" && node.role == "value" {
+    let target = find_reference(references, parent.node.id)
+    if target.found {
+      let binding = find_binding(bindings, target.reference.bindingId)
+      if binding.found {
+        if binding.binding.typeName != "" { return binding.binding.typeName } else { return legacy_type_name(binding.binding.typeShape) }
+      } else { return "" }
+    } else { return "" }
+  } else {}
   if (parent.node.kind == "let" || parent.node.kind == "var") && node.role == "value" {
     let annotation = child_at(nodes, parent.node.id, "annotation", 0)
     if annotation.found { return type_name_at(nodes, annotation.node.id) } else { return "" }
@@ -756,6 +768,9 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if parent.node.kind == "return" && hole.role == "value" {
     let owner = owner_function(nodes, hole, functions)
     if owner.found { return owner.function.returnType } else { return "" }
+  } else {}
+  if parent.node.kind == "assignment" && hole.role == "value" {
+    return contextual_expected_type(nodes, hole, functions, bindings, references)
   } else {}
   if parent.node.kind == "if_expression" && (hole.role == "then" || hole.role == "else") {
     let expected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
@@ -959,8 +974,37 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         } else {}
       }
     } else {}
-    if node.kind == "assignment" || node.kind == "for_in" {
-      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Assignment and for-in semantics are outside the implemented checker subset", node))
+    if node.kind == "for_in" {
+      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "For-in semantics are outside the implemented checker subset", node))
+    } else {}
+    if node.kind == "assignment" {
+      let target = find_reference(references, node.id)
+      if target.found {
+        let binding = find_binding(bindings, target.reference.bindingId)
+        if binding.found {
+          if !binding.binding.mutable {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ASSIGN_IMMUTABLE", "Cannot assign to an immutable binding", node))
+          } else {
+            let value = child_at(nodes, node.id, "value", 0)
+            if value.found {
+              let expectedName = binding.binding.typeName
+              let expectedShape = if binding.binding.typeShape.kind != "" { binding.binding.typeShape } else { legacy_type_shape(nodes, expectedName) }
+              let actualName = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+              let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+              let nameMismatch = expectedName != "" && actualName != "" && expectedName != actualName
+              let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+              if expectedName == "" && expectedShape.kind == "" {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Assignment target has no supported concrete type", node))
+              } else {}
+              if nameMismatch || shapeMismatch {
+                let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Assigned value type does not match the target binding", mismatchNode))
+              } else {}
+            } else {}
+          }
+        } else {}
+      } else {}
     } else {}
     if is_expression_kind(node.kind) {
       let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
