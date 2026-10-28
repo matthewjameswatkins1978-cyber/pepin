@@ -106,6 +106,92 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["revision"]), opened["revision"])
         return opened, report
 
+    def test_record_field_match_hole_uses_staged_parser_checker_within_budget(self):
+        empty = self._open("")
+        empty_parsed = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        empty_checked = checker_report(empty["document"], "")
+        semantic_target = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        for tool, function, arguments, expected in [
+            ("pep-a13-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-a13-checker-staged", "analyze_parsed", [empty_parsed], empty_checked),
+        ]:
+            registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": self.tool_document, "revision": self.tool_revision,
+                                           "function": function})
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision,
+                                          "testVectors": [{"arguments": arguments, "expect": expected,
+                                                           "semanticTarget": semantic_target}]})
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision})
+            self.assertEqual(activated.get("status"), "Active", activated)
+
+        source = (
+            "type Maybe = None() | Some(Int)" + NL +
+            "type Box { value: Int }" + NL +
+            "fn box(maybe: Maybe) -> Box { return Box { value: match maybe { Some(value) => ?pending None() => 0 } } }"
+        )
+        opened = self._open(source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                   "semanticTarget": target})
+        self.assertEqual(parsed.get("outcome"), "ok", parsed)
+        self.assertEqual(parsed["result"]["fields"][0]["value"]["value"], opened["document"])
+        self.assertEqual(parsed["result"]["fields"][1]["value"]["value"], opened["revision"])
+        checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                    "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                    "arguments": [parsed["result"]], "semanticTarget": target})
+        self.assertEqual(checked.get("outcome"), "ok", checked)
+        self.assertEqual(checked["revision"], self.tool_revision)
+        report = fields(checked["result"])
+        reference = self._reference_check("record-match-hole-staged", source)
+        self.assertEqual(reference["status"], "incomplete", reference)
+        self.assertEqual(scalar(report["document"]), opened["document"])
+        self.assertEqual(scalar(report["revision"]), opened["revision"])
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        expected_diagnostics = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(actual_diagnostics, expected_diagnostics, report)
+        holes = [fields(item) for item in report["holes"]["value"]]
+        self.assertEqual([(scalar(item["name"]), scalar(item["expectedType"])) for item in holes], [("pending", "Int")])
+
+        one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                     "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
+                                     "semanticTarget": target})
+        if one_shot.get("outcome") == "error":
+            self.assertEqual(one_shot["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", one_shot)
+        else:
+            one_shot_report = fields(one_shot["result"])
+            self.assertEqual(scalar(one_shot_report["status"]), reference["status"], one_shot_report)
+            self.assertEqual(
+                [(scalar(fields(item)["name"]), scalar(fields(item)["expectedType"])) for item in one_shot_report["holes"]["value"]],
+                [("pending", "Int")],
+            )
+
     def test_empty_program_is_consumed_through_the_owned_parser_chain(self):
         _, report = self._analyze("")
         self.assertEqual(scalar(report["status"]), "valid", report)
