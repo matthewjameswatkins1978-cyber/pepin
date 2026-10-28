@@ -212,3 +212,16 @@ Verification on the implementation/test SHA:
 - No clean OCaml rebuild, historical MoonBit suite, full test discovery or new benchmark was run. Previous performance profiles are inherited evidence, not measurements of this recursive-pattern change.
 
 No runtime budget, protocol, A14, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 1/3.
+
+## Continuation 03 — unreachable-statement diagnostics across control-flow bodies (2026-10-28; cycle 2/3)
+
+**Implementation/test SHA:** `b9c7507470a606ca8e6982db4579fa1f808b21e2`, pushed to `campaign/pep-v01-sustained-build-20261027`. The checker now matches OCaml's `PEP_UNREACHABLE` diagnostic and exact statement span after direct returns, nested returning blocks, two-branch returning `if` statements, and inside `while`/`for-in` bodies. A loop body return does not make the loop itself a guaranteed return. Four new source fixtures compare ordered diagnostic codes and byte spans against the OCaml CLI, including a malformed unreachable statement whose later type error must not replace the earlier unreachable diagnostic.
+
+Verification on the implementation/test SHA:
+
+- Focused unreachable and nested-pattern budget regressions: **2/2 passed**.
+- Combined A13, nested-record/list, A14 C23 and C23 CLI suites: **75/75 passed** in 264.974 seconds. This includes the existing deep-pattern budget stress case that exposed an over-broad first implementation.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- The fixed 100,000-step ceiling is unchanged. An over-broad scan implementation exceeded it and was discarded; the committed checker checks only return-capable statements and their following sibling. No isolated timing or memory benchmark was run.
+
+No clean OCaml rebuild, MoonBit suite, full repository discovery, protocol, A14 implementation, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 2/3.
