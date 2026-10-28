@@ -240,6 +240,50 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(actual_duplicate_diagnostics, expected_duplicate_diagnostics, duplicate_report)
         self.assertEqual([item[0] for item in actual_duplicate_diagnostics], ["PEP_DUPLICATE_MATCH_ARM"])
 
+        later_payload_cases = [
+            ("three-payload-late-duplicate",
+             "type Inner = I() | J()" + NL +
+             "type Outer = O(Int, Int, Inner) | N()" + NL +
+             "fn f(x: Outer) -> Int { return match x { O(_, _, I()) => 0 O(_, _, I()) => 1 O(_, _, J()) => 2 N() => 3 } }",
+             "PEP_DUPLICATE_MATCH_ARM"),
+            ("three-payload-distinct-partials",
+             "type Inner = I() | J()" + NL +
+             "type Outer = O(Int, Int, Inner) | N()" + NL +
+             "fn f(x: Outer) -> Int { return match x { O(_, _, I()) => 0 O(_, _, J()) => 1 N() => 2 } }",
+             "PEP_NON_EXHAUSTIVE_MATCH"),
+            ("binding-and-wildcard-equivalent",
+             "type Inner = I() | J()" + NL +
+             "type Outer = O(Int, Int, Inner) | N()" + NL +
+             "fn f(x: Outer) -> Int { return match x { O(value, _, I()) => 0 O(_, _, I()) => 1 O(_, _, J()) => 2 N() => 3 } }",
+             "PEP_DUPLICATE_MATCH_ARM"),
+        ]
+        for case_name, case_source, expected_code in later_payload_cases:
+            with self.subTest(case=case_name):
+                case_opened = self._open(case_source)
+                case_target = {"document": case_opened["document"], "revision": case_opened["revision"], "entryFunctions": []}
+                case_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                                "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                                "semanticTarget": case_target})
+                self.assertEqual(case_parsed.get("outcome"), "ok", case_parsed)
+                case_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                                 "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                                 "arguments": [case_parsed["result"]], "semanticTarget": case_target})
+                self.assertEqual(case_checked.get("outcome"), "ok", case_checked)
+                case_report = fields(case_checked["result"])
+                case_reference = self._reference_check("nested-pattern-" + case_name, case_source)
+                self.assertEqual(case_reference["status"], "invalid", case_reference)
+                self.assertEqual(scalar(case_report["status"]), case_reference["status"], case_report)
+                expected_case_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in case_reference["diagnostics"]
+                ]
+                actual_case_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in case_report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_case_diagnostics, expected_case_diagnostics, case_report)
+                self.assertEqual([item[0] for item in actual_case_diagnostics], [expected_code])
+
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
                                      "semanticTarget": target})
