@@ -1694,16 +1694,22 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           } else {}
           if expectedResult != "" {
             var mismatchReported = false
-            if thenType != "" && thenType != expectedResult {
-              let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
-              let mismatchNode = if mismatch.found { mismatch.node } else { thenValue.node }
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", mismatchNode))
+            let thenMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            if thenMismatch.found {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenMismatch.node))
+              mismatchReported = true
+            } else {}
+            if !mismatchReported && thenType != "" && thenType != expectedResult {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenValue.node))
+              mismatchReported = true
+            } else {}
+            let elseMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            if !mismatchReported && elseMismatch.found {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseMismatch.node))
               mismatchReported = true
             } else {}
             if !mismatchReported && elseType != "" && elseType != expectedResult {
-              let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
-              let mismatchNode = if mismatch.found { mismatch.node } else { elseValue.node }
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", mismatchNode))
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseValue.node))
             } else {}
           } else {
             if thenType != "" && elseType != "" && thenType != elseType {

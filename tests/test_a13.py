@@ -611,6 +611,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unit-result", "fn wrong() -> Unit { return 1 }"),
             ("conditional-branch", "fn wrong(flag: Bool) -> Int { return if flag { true } else { 0 } }"),
             ("conditional-list-leaf", "fn f(flag: Bool) -> List[Int] { return if flag { [1] } else { [true] } }"),
+            ("conditional-nested-list-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { [[1]] } else { [[true]] } }"),
+            ("conditional-nested-list-leaf-then", "fn f(flag: Bool) -> List[List[Int]] { return if flag { [[true]] } else { [[1]] } }"),
             ("list-leaf", "fn bad() -> List[Int] { return [\"text\"] }"),
         ]
         for name, source in cases:
