@@ -1348,6 +1348,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("type-before-call", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = true; return g() }"),
             ("unknown-call-before-type", "fn f() -> Int { let x: Int = missing(); return true }"),
             ("unknown-constructor-call", "type M=A(Int)|B() fn f()->M{return C(1)}"),
+            ("unknown-constructor-call-multiple-functions", "type M=A(Int)|B() fn helper()->Int{return 0} fn f()->M{return C(1)}"),
             ("unknown-constructor-before-type", "type M=A(Int)|B() fn f()->Int{let x:Int=true; return C(1)}"),
             ("constructor-nested-list-payload", "type M=A(List[Int])|B() fn f()->M{return A([1,true])}"),
             ("mixed-unlisted-missing-field", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; let bad: Int = true; return missing }"),
