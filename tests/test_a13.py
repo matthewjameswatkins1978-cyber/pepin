@@ -1351,6 +1351,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("missing-field-before-unknown-name", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; return missing }"),
             ("unknown-name-before-missing-field", "type P { x: Int } fn f() -> Int { let x = missing; let p = P { other: 2 }; return 0 }"),
             ("missing-field-before-unknown-call", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; return missing() }"),
+            ("unknown-top-level-constructor-before-type", "type M=A()|B() fn f(x:M)->Int{return match x{C()=>0 A()=>true _=>1}}"),
+            ("known-wrong-union-pattern-no-false-arity", "type M=A()|B() type N=C(Int) fn f(x:M)->Int{return match x{C(1)=>0 A()=>1 _=>2}}"),
             ("unknown-type-declaration-priority", "fn f() -> Int { let bad: Int = true; return 0 } type R { x: Missing }"),
             ("unknown-type-before-duplicate-function", "fn f() -> Int { return 0 } fn f() -> Int { return 0 } type R { x: Missing } fn g() -> Int { let bad: Int = true; return 0 }"),
         ]
