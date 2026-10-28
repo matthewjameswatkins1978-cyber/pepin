@@ -104,13 +104,16 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default):
     expect = fx.get("expect", {}) or {}
     timeout = fx.get("timeoutSeconds") or timeout_default
     base = {"id": fid, "file": rel, "kind": kind}
+    pep_file = manifest_dir / rel if rel else None
     if fx.get("skip"):
-        base.update(status="skip", detail=str(fx["skip"]))
+        skipped = {"status": "skip", "detail": str(fx["skip"])}
+        if pep_file is not None and pep_file.is_file():
+            skipped["source_sha256"] = sha256_file(pep_file)
+        base.update(skipped)
         return base
     if not rel:
         base.update(status="infra_error", detail="fixture has no file")
         return base
-    pep_file = manifest_dir / rel
     if not pep_file.is_file():
         base.update(status="infra_error",
                     detail="fixture file missing: %s" % rel)
@@ -218,6 +221,8 @@ def main(argv=None):
                     help="run only fixtures whose id contains this substring")
     ap.add_argument("--json", action="store_true",
                     help="emit machine-readable JSON document")
+    ap.add_argument("--list", action="store_true",
+                    help="list declared fixtures without executing them")
     ap.add_argument("--timeout", type=float, default=None,
                     help="per-phase seconds override")
     ap.add_argument("--pep", default=None,
@@ -255,6 +260,21 @@ def main(argv=None):
 
     if args.filter:
         fixtures = [f for f in fixtures if args.filter in str(f.get("id", ""))]
+
+    if args.list:
+        listing = [{"id": str(f.get("id", "")), "file": f.get("file", ""),
+                    "kind": f.get("kind", "run"),
+                    "skip": f.get("skip")} for f in fixtures]
+        if args.json:
+            print(json.dumps({"schemaVersion": SCHEMA_VERSION,
+                              "runner": "pep test v1", "manifest": str(manifest_path),
+                              "tests": listing}, indent=2))
+        else:
+            for entry in listing:
+                flag = " (skip: %s)" % entry["skip"] if entry.get("skip") else ""
+                print("%-28s %-12s %s%s" % (entry["id"], entry["kind"],
+                                            entry["file"], flag))
+        return EXIT_OK
 
     results = [run_fixture(cli_base, repo_root, fx, manifest_dir, timeout_default)
                for fx in fixtures]

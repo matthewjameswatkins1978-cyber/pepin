@@ -40,7 +40,8 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         doc = json.loads(proc.stdout)
         self.assertEqual(doc["schemaVersion"], 1)
-        self.assertEqual(doc["counts"]["pass"], 5)
+        self.assertEqual(doc["counts"]["pass"], 6)
+        self.assertEqual(doc["counts"]["skip"], 1)
         self.assertEqual(doc["counts"]["fail"], 0)
         for t in doc["tests"]:
             self.assertIn("source_sha256", t)
@@ -131,6 +132,35 @@ class RunnerHonestyTests(unittest.TestCase):
         doc = json.loads(proc.stdout)
         self.assertEqual(doc["counts"]["pass"], 2)
         self.assertTrue(all(t["id"].startswith("reject/") for t in doc["tests"]))
+
+    def test_list_lists_without_executing(self):
+        proc = run_runner("--json", "--list")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        doc = json.loads(proc.stdout)
+        ids = [t["id"] for t in doc["tests"]]
+        self.assertIn("pass/add", ids)
+        self.assertIn("skip/native-differential", ids)
+        for t in doc["tests"]:
+            self.assertNotIn("status", t)  # listed, never executed
+        proc2 = run_runner("--list", "--filter", "reject/")
+        self.assertEqual(proc2.returncode, 0)
+        self.assertIn("reject/type-mismatch", proc2.stdout)
+        self.assertNotIn("pass/add", proc2.stdout)
+
+    def test_skip_recorded_with_reason_never_executed(self):
+        proc = run_runner("--json", "--filter", "skip/")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 0)  # skips do not fail the run
+        self.assertEqual(doc["counts"]["skip"], 1)
+        self.assertEqual(doc["tests"][0]["status"], "skip")
+        self.assertIn("native", doc["tests"][0]["detail"])
+
+    def test_check_kind_fixture_passes(self):
+        proc = run_runner("--json", "--filter", "check/")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(doc["counts"]["pass"], 1)
+        self.assertEqual(doc["tests"][0]["id"], "check/record-shape")
 
 
 if __name__ == "__main__":

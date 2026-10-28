@@ -37,6 +37,19 @@
       "file": "fixtures/runtime_div_zero.pep",
       "kind": "run",
       "expect": { "exit": 1, "stdout": "3\n", "diagnosticCode": "PEP_RUNTIME_DIVISION_BY_ZERO" }
+    },
+    {
+      "id": "check/record-shape",
+      "file": "fixtures/check_shapes.pep",
+      "kind": "check",
+      "expect": {}
+    },
+    {
+      "id": "skip/native-differential",
+      "file": "fixtures/pass_add.pep",
+      "kind": "run",
+      "skip": "native (C23) differential deferred to a later slice; interpreter-only in slice 1",
+      "expect": { "exit": 0, "stdout": "42\n" }
     }
   ],
   "limits": { "timeoutSeconds": 120 }

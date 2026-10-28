@@ -18,6 +18,9 @@ Exit code: `0` when every executed test passes or skips, `1` when any
 test fails/errors/times out, `2` for runner infrastructure problems
 (missing or malformed manifest).
 
+`--list` prints the declared fixtures (id, kind, file, skip reason)
+without executing them — the discovery query other tools can rely on.
+
 ## Fixture manifest
 
 See [MANIFEST-SCHEMA.md](MANIFEST-SCHEMA.md). Fixtures are explicit:
