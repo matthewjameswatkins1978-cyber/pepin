@@ -90,4 +90,21 @@ Verification at implementation/test SHA `e336970cb3f1e734b5d26283c2a31c06f5fbeef
 
 Limitations: this adds for-in element typing and list validation only. It does not establish complete loop/control-flow semantics, count a loop as proving function return completeness, or add A14 for-in lowering. A13 remains experimental and unaccepted. The main checkout's unrelated uncommitted A14 test remains preserved; this worktree is isolated.
 
-Next: reconcile the existing A13 unknown-variable diagnostic name with the OCaml reference, starting from the observed for-in unknown iterable discrepancy and checking all current unknown-reference tests.
+The diagnostic-name follow-up is recorded below; no A13 acceptance or milestone pointer change.
+
+## Continuation 03 — unknown expression diagnostics (2026-10-28)
+
+**Implementation and test SHA:** `f73130b50c56730e38b2824931d88f81f6061000` (pushed to the campaign branch). Unresolved expression names now report OCaml's `PEP_UNKNOWN_VARIABLE` code/message, matching the existing unresolved assignment-target diagnostic. This also makes names referenced outside for-in and match-arm scopes report the reference diagnostic. No name-resolution behavior changed for successfully resolved bindings; their semantic IDs remain unchanged.
+
+The differential regression compares status, diagnostic code and original byte span against OCaml for three cases: a missing ordinary local, a for-in binding used after the loop, and a match-arm binding used after the match. Tests assert exactly one `PEP_UNKNOWN_VARIABLE` each.
+
+Verification at implementation/test SHA `f73130b50c56730e38b2824931d88f81f6061000`:
+
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -v`: **45/45 passed** in 121.296 seconds.
+- `python -m unittest tests.test_a14_c23.A14C23EmissionTests.test_checker_invalid_program_is_not_emitted -v`: **1/1 passed**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check` passed.
+- Full repository discovery, full A14 suite and clean OCaml rebuild were not repeated for this diagnostic-only change. Runtime budget, protocol, `CURRENT.md`, manifest, master and release remain unchanged.
+
+Limitations: A13 remains a partial experimental checker. Existing expression-type and fail-closed gaps are unchanged; this repair only aligns unresolved variable diagnostics. The full worktree is isolated and main checkout changes remain preserved.
+
+Next: reread the coordination board/outboxes and inspect the currently partial nested-pattern rules; choose a minimal OCaml-differential checker rule with bounded runtime and fail-closed behavior.
