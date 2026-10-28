@@ -782,10 +782,14 @@ fn named_type_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
   for node in nodes { if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name { count = count + 1 } else {} }
   return count
 }
-fn record_field_declaration_count(nodes: List[FlatAstNode], parentId: Int, name: Str) -> Int {
-  var count = 0
-  for node in nodes { if node.parentId == parentId && node.kind == "field_declaration" && node.text == name { count = count + 1 } else {} }
-  return count
+fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
+  var earlierMatches = 0
+  for node in nodes {
+    if node.parentId == parentId && node.kind == kind && node.text == name && node.id + 1 <= nodeId {
+      earlierMatches = earlierMatches + 1
+    } else {}
+  }
+  return earlierMatches == 1
 }
 fn constructor_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
   var count = 0
@@ -1003,7 +1007,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for field in nodes {
         if field.parentId == node.id && field.kind == "field_declaration" {
-          if record_field_declaration_count(nodes, node.id, field.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
+          if is_first_duplicate_occurrence(nodes, node.id, "field_declaration", field.text, field.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
           let fieldType = child_at(nodes, field.id, "type", 0)
           if fieldType.found && !supported_type_at(nodes, fieldType.node.id, type_name_at(nodes, fieldType.node.id)) {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, fieldType.node.id, type_name_at(nodes, fieldType.node.id)), "Record field type is outside the implemented checker subset", field))
@@ -1104,9 +1108,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", mismatchNode))
               } else {}
-              var repeated = false
-              for prior in nodes { if prior.parentId == node.id && prior.kind == "record_field" && prior.text == field.text && prior.id != field.id { repeated = true } else {} }
-              if repeated { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record literal supplies a field more than once", field)) } else {}
+              if is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record literal supplies a field more than once", field))
+              } else {}
             } else {}
           }
           for declared in nodes {

@@ -840,6 +840,35 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", report)
             self.assertIn(expected_code, codes)
 
+    def test_record_field_duplicates_report_only_the_first_repetition(self):
+        cases = [
+            ("record-literal", "type Point { x: Int }" + NL +
+             "fn main() -> Int { let p = Point { x: 1, x: 2, x: 3 }; return p.x }",
+             "x: 2"),
+            ("record-declaration", "type Point { x: Int, x: Bool, x: Str }" + NL +
+             "fn main() -> Int { return 0 }",
+             "x: Bool"),
+        ]
+        for name, source, repeated_field in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("duplicate-field-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, expected_diagnostics, report)
+                self.assertEqual(len(actual_diagnostics), 1)
+                expected_start = len(source[:source.index(repeated_field)].encode("utf-8"))
+                expected_end = expected_start + len(repeated_field.encode("utf-8"))
+                self.assertEqual(actual_diagnostics, [("PEP_DUPLICATE_FIELD", expected_start, expected_end)])
+
     def test_union_constructors_and_duplicate_names_match_reference_errors(self):
         source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
         reference = self._reference_check("constructor-valid", source)
