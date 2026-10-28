@@ -1581,6 +1581,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unknown-name", "fn f() -> Int { return match missing { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
             ("unknown-function", "fn f() -> Int { return match missing_fn() { _ => 0 } }", "PEP_UNKNOWN_FUNCTION"),
             ("unknown-constructor", "fn f() -> Int { return match Missing() { _ => 0 } }", "PEP_UNKNOWN_CONSTRUCTOR"),
+            ("unknown-field", "type Point { x: Int }" + NL + "fn f(p: Point) -> Int { return match p.missing { _ => 0 } }", "PEP_UNKNOWN_FIELD"),
+            ("wrong-call-arity", "fn value() -> Int { return 1 }" + NL + "fn f() -> Int { return match value(2) { _ => 0 } }", "PEP_ARGUMENT_COUNT"),
             ("hole", "fn f() -> Int { return match ?subject { _ => 0 } }", "PEP_MATCH_UNTYPED"),
         ]
         for name, source, expected_code in cases:

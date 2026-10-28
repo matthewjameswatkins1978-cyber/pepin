@@ -1499,10 +1499,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if subject.found && subject.node.kind == "call" {
           let target = find_function(functions, subject.node.text)
           if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
+          if target.found && count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind == "field_access" {
+          let value = child_at(nodes, subject.node.id, "value", 0)
+          let valueType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+          let record = record_declaration(nodes, valueType)
+          if record.found && record_field_type(nodes, valueType, subject.node.text) == "" { subjectHasPrimaryError = true } else {}
         } else {}
         if !union.found && matchArmCount != 0 {
           let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
-          if code == "PEP_MATCH_UNTYPED" && subjectHasPrimaryError {
+          if subjectHasPrimaryError {
           } else {
             let diagnosticNode = if subject.found { subject.node } else { node }
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", diagnosticNode))
