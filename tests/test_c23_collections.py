@@ -734,6 +734,35 @@ class PepC23CollectionLoopTests(unittest.TestCase):
 
 
 
+    def test_pep_list_product_overflow_matches_interpreter_runtime_code(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        functions = {
+            definition.split("(", 1)[0].removeprefix("fn "): definition
+            for definition in library.strip().split("\n\n")
+        }
+        source_text = (
+            functions["list_int_product"] + "\n"
+            "fn main() -> Int { return list_int_product([9223372036854775807, 2]) }\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "product_overflow.pep"
+            reference_source = pathlib.Path(temp) / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertNotEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertIn("PEP_RUNTIME_OVERFLOW", reference.stderr)
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    native = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertNotEqual(native.returncode, 0, native.stdout + native.stderr)
+                    self.assertEqual(native.returncode, reference.returncode)
+                    self.assertEqual(native.stderr.strip().splitlines()[-1],
+                                     "PEP_RUNTIME_OVERFLOW")
+
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
