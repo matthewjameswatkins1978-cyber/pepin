@@ -8,6 +8,12 @@
 **Product direction:** implement the accepted Pep language final draft incrementally, with a real native compiler, native testing, a useful standard library and a credible path to self-hosting.
 **Not authorised:** automatic merge to master, modifying an accepted release/tag, force-pushing, enabling network/secret access, or changing docs/packets/CURRENT.md plus manifest.json without separately verified integration acceptance.
 
+## PRODUCT END-STATE OVERRIDE: FULL PEP, NOT BOOTSTRAP ONLY
+
+**Read and follow [FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md](FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md) at every mission start, next slice/review checkpoint and handoff.** Matthew has explicitly clarified: the **complete accepted Pep language** is the final product. Self-hosting and the supported C23 subset are milestones **on the way**, not a substitute or new finish line. Continue after A→B→C bootstrap into every accepted type, language safety, memory, effects, concurrency, stdlib, native testing and AI-first compiler feature. Maintain a full-language completion/gap ledger showing all gaps and exact supported/tested states; do not silently declare a final-draft feature out of scope because the compiler doesn't need it to self-host.
+
+**Two workers, complementary paths:** require each current agent to declare actual branch/worktree/SHA/current slice/files and ownership on [coordination issue #16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16). Suggested division: one owns checker/semantics and machine-query interfaces, the other owns native runtime/C23/stdlib/testing, adjusted to real expertise and current ownership. One writer per overlapping path per slice, separate worktrees and explicit integration receipts. Check Lantern's Pepin Agent Coordination Board. Do not infer the second agent's identity; no automatic notification is implied.
+
 ## OBJECTIVE: AN END-TO-END PRODUCT, NOT THREE MORE PATCHES
 
 This is an extended implementation campaign. **Do not stop because you finished three slices, one phase, a review or one pull request.** The user explicitly said that three coherent slices took ten minutes and wants a **far larger goal so they can leave you working**. Continue across multiple coherent slices and review cycles without routine approval prompts.
