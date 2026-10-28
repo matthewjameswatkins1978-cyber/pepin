@@ -442,8 +442,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
         if initialValue.node.kind == "list" && statement.kind == "let" {
           for item in nodes {
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" {
-              return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer list literals")
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" {
+              return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
             } else {}
           }
         } else {
