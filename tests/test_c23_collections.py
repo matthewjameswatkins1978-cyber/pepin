@@ -938,6 +938,43 @@ class PepC23CollectionLoopTests(unittest.TestCase):
 
 
 
+    def test_integer_runtime_failures_match_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        cases = (
+            ("subtraction_overflow",
+             "fn main() -> Int { return 0 - 9223372036854775807 - 2 }\n",
+             "PEP_RUNTIME_OVERFLOW"),
+            ("division_by_zero",
+             "fn main() -> Int { return 1 / 0 }\n",
+             "PEP_RUNTIME_DIVISION_BY_ZERO"),
+            ("negation_overflow",
+             "fn main() -> Int { var value = 0 - 9223372036854775807 - 1; return -value }\n",
+             "PEP_RUNTIME_OVERFLOW"),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            for name, source_text, runtime_code in cases:
+                with self.subTest(case=name):
+                    source = folder / f"{name}.pep"
+                    reference_source = folder / f"{name}-reference.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertNotEqual(reference.returncode, 0,
+                                        reference.stdout + reference.stderr)
+                    self.assertIn(runtime_code, reference.stderr)
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            native = self.invoke("run-c23", source, "--compiler", compiler)
+                            self.assertNotEqual(native.returncode, 0,
+                                                native.stdout + native.stderr)
+                            self.assertEqual(native.returncode, reference.returncode)
+                            self.assertEqual(native.stderr.strip().splitlines()[-1],
+                                             runtime_code)
+
     def test_pep_list_sum_overflow_matches_interpreter_runtime_code(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
