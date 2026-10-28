@@ -1977,23 +1977,36 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
     if length(collectedDiagnostics) <= 1 {
     } else {
       var firstFound = false
+      var unknownTypeFound = false
       var candidateCount = 0
       var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+      var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       for candidate in collectedDiagnostics {
         if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
             candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
-            candidate.code == "PEP_ARGUMENT_COUNT" {
+            candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_TYPE" {
           candidateCount = candidateCount + 1
-          if !firstFound || candidate.startByte + 1 <= first.startByte ||
-              (candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
-               candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
-            firstFound = true
-            first = candidate
-          } else {}
         } else {}
+        if candidate.code == "PEP_UNKNOWN_TYPE" {
+          if !unknownTypeFound || candidate.startByte + 1 <= unknownType.startByte {
+            unknownTypeFound = true
+            unknownType = candidate
+          } else {}
+        } else {
+          if candidate.code != "PEP_A13_TYPE_UNSUPPORTED" {
+            if !firstFound || candidate.startByte + 1 <= first.startByte ||
+                (candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
+                 candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
+              firstFound = true
+              first = candidate
+            } else {}
+          } else {}
+        }
       }
       if candidateCount == 0 || candidateCount == 1 {
-      } else { diagnostics = [first] }
+      } else {
+        if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
+      }
     }
   }
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
