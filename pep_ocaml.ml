@@ -1,4 +1,4 @@
-type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | List of ty
+type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | TypeVar of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int; file:string option }
 let current_source_file = ref None
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
@@ -14,7 +14,7 @@ and pattern = PWildcard of span | PBind of string*span | PConstructor of string*
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
-type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span; public:bool }
+type func = { fname:string; type_params:string list; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span; public:bool }
 type import_decl = { module_name:string; alias:string; import_span:span }
 type top = TopFun of func | TopStmt of stmt | TopType of type_decl | TopPublicType of type_decl | TopImport of import_decl
 type program = top list
@@ -31,7 +31,7 @@ let internal_name_display marker name =
   in find 0
 let internal_type_display_name name = internal_name_display "$type$" name
 let internal_constructor_display_name name = internal_name_display "$ctor$" name
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->internal_type_display_name n | List t->"List["^type_name t^"]"
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->internal_type_display_name n | TypeVar name->name | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan ?(file = !current_source_file) lo hi line column = {lo;hi;line;column;file}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -159,7 +159,7 @@ let lex source =
     else fail "PEP_UNEXPECTED_CHARACTER" (Printf.sprintf "Unexpected character %C" c) (mkspan lo (lo+1) ln cl) ()
   in loop(); Array.of_list(List.rev !tokens)
 
-type parser = { ts:token array; mutable p:int; mutable record_literals_allowed:bool }
+type parser = { ts:token array; mutable p:int; mutable record_literals_allowed:bool; mutable type_variables:string list }
 let peek p = p.ts.(p.p)
 let take p = let t=peek p in p.p<-min (p.p+1) (Array.length p.ts-1);t
 let at p = (peek p).at
@@ -171,7 +171,7 @@ let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "E
 let rec parse_type p = match take p with
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
-  |{kind=Id name;_}->if accept_sym p "." then Named(name^"."^expect_id p) else Named name
+  |{kind=Id name;_}->if List.mem name p.type_variables then TypeVar name else if accept_sym p "." then Named(name^"."^expect_id p) else Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
 let combine a b = mkspan ~file:a.file a.lo b.hi a.line a.column
 let rec parse_pattern p =
@@ -317,14 +317,29 @@ let rec parse_stmt p =
         ignore(accept_sym p ";");SAssign(name,value,sp)
     |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
 let parse_func p public =
-  let start=(take p).at in let name=expect_id p in expect_sym p "(";
+  let start=(take p).at in let name=expect_id p in
+  let type_params=ref [] in
+  if accept_sym p "[" then (
+    let seen=Hashtbl.create 4 in
+    let add_type_param () =
+      let type_name=expect_id p in
+      let type_span=p.ts.(p.p-1).at in
+      if Hashtbl.mem seen type_name then fail "PEP_DUPLICATE_TYPE_PARAMETER" ("Duplicate type parameter '"^type_name^"'") type_span ();
+      Hashtbl.add seen type_name ();
+      type_params:= !type_params@[type_name]
+    in
+    add_type_param();while accept_sym p "," do add_type_param() done;expect_sym p "]");
+  let previous_type_variables=p.type_variables in
+  p.type_variables<- !type_params@previous_type_variables;
+  expect_sym p "(";
   let params=ref [] in
   if not(symbol p ")") then (
     let param () = let n=expect_id p in let ns=p.ts.(p.p-1).at in expect_sym p ":";let t=parse_type p in params:= !params@[(n,t,ns)] in
     param();while accept_sym p "," do param() done);
   expect_sym p ")"; expect_sym p "->"; let result=parse_type p in
   let body=match parse_stmt p with SBlock(xs,_)->xs|s->fail "PEP_FUNCTION_BODY" "Expected a braced function body" (stmt_span s) () in
-  let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending;public}
+  p.type_variables<-previous_type_variables;
+  let ending=p.ts.(p.p-1).at in {fname=name;type_params= !type_params;params= !params;result;body;fspan=combine start ending;public}
 let parse_import p =
   let start=(take p).at in
   let module_name=expect_id p in
@@ -334,7 +349,7 @@ let parse ?file source =
   let previous_source_file = !current_source_file in
   current_source_file := file;
   Fun.protect ~finally:(fun()->current_source_file:=previous_source_file) (fun () ->
-    let p={ts=lex source;p=0;record_literals_allowed=true} and tops=ref [] in
+    let p={ts=lex source;p=0;record_literals_allowed=true;type_variables=[]} and tops=ref [] in
     while (peek p).kind<>Eof do
       if keyword p "import" then tops:=TopImport(parse_import p)::!tops
       else if keyword p "pub" then (
@@ -349,14 +364,14 @@ let parse ?file source =
     List.rev !tops)
 
 let parse_single_expression source =
-  let p={ts=lex source;p=0;record_literals_allowed=true} in
+  let p={ts=lex source;p=0;record_literals_allowed=true;type_variables=[]} in
   let expression=parse_expr p 0 in
   match (peek p).kind with
   | Eof -> expression
   | _ -> fail "PEP_REPLACEMENT_TRAILING_INPUT" "Replacement must contain exactly one expression" (peek p).at ()
 
 type binding = { bid:int; bname:string; bty:ty option; bspan:span; mutable_:bool }
-type signature = { fid:int; name:string; params:(string*ty) list; result:ty; decl:func }
+type signature = { fid:int; name:string; type_params:string list; params:(string*ty) list; result:ty; decl:func }
 type texpr = { node:texpr_node; ety:ty option; espan:span }
 and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XUnary of string*texpr|XList of texpr list|XIf of texpr*texpr*texpr
   | XRecord of int*(int*texpr) list | XField of int*texpr | XConstructor of int*int*string*texpr list | XMatch of texpr*tmatch_arm list
@@ -418,7 +433,7 @@ let rec ast_stmt_json s=match s with
  |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
 let ast_json tops = "["^String.concat ","(List.map(function
- |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"visibility\":"^json_string(if f.public then "public" else "private")^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
+ |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"typeParameters\":["^String.concat ","(List.map json_string f.type_params)^"],\"visibility\":"^json_string(if f.public then "public" else "private")^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
  |TopStmt s->ast_stmt_json s
  |TopImport i->"{\"kind\":\"import\",\"module\":"^json_string i.module_name^",\"alias\":"^json_string i.alias^",\"span\":"^span_json i.import_span^"}"
  |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
@@ -454,21 +469,28 @@ let check tops =
         let info={union_id=fresh_type();union_name=name;union_variants=resolved;union_span=sp} in
         Hashtbl.add type_table name (`Union info); unions:=info::!unions
     |_->()) tops;
-  let rec valid_type ty sp = match ty with
+  let rec valid_type ?(type_params=[]) ty sp = match ty with
     |Named name when not (Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
-    |List element -> valid_type element sp
+    |TypeVar name when not(List.mem name type_params) -> fail "PEP_UNKNOWN_TYPE_PARAMETER" ("Unknown type parameter '"^name^"'") sp ()
+    |List element -> valid_type ~type_params element sp
     |_ -> () in
   List.iter (function
     |TopType (RecordDecl(_,fields,_))|TopPublicType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
     |TopType (UnionDecl(_,variants,_))|TopPublicType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
-    |TopFun f->List.iter(fun(_,ty,sp)->valid_type ty sp)f.params;valid_type f.result f.fspan
+    |TopFun f->List.iter(fun(_,ty,sp)->valid_type ~type_params:f.type_params ty sp)f.params;valid_type ~type_params:f.type_params f.result f.fspan
     |TopStmt _|TopImport _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
   List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
-    let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
+    let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;type_params=f.type_params;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
+  let rec type_contains_parameter ty = match ty with TypeVar _->true|List element->type_contains_parameter element|_->false in
+  let rec substitute_type substitutions = function
+    |TypeVar name as ty->Option.value(Hashtbl.find_opt substitutions name)~default:ty
+    |List element->List(substitute_type substitutions element)
+    |ty->ty
+  in
   let rec pattern_covers expected pat = match pat with
     |PWildcard _|PBind _->true
     |PConstructor(name,args,_) ->
@@ -637,13 +659,48 @@ let check tops =
          let value=check_expr env scope (Some element) (List.nth args 1) in
          {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
        ) else (
-         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+         let params,result,fid,generic_params = if name="semantic_snapshot" then [],Named "ProgramInfo",None,[] else if name="source_bytes" then [],SourceBytes,None,[] else if name="say" then [Str],Unit,None,[] else if name="int_text" then [Int],Str,None,[] else
            match Hashtbl.find_opt signatures name with None->
              let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
              let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
              fail code ((if constructor_like then "Unknown constructor '" else "Unknown function '")^name^"'") s ()
-            |Some f->List.map snd f.params,f.result,Some f.fid in
+            |Some f->List.map snd f.params,f.result,Some f.fid,f.type_params in
          if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Function '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
+         let substitutions=Hashtbl.create 4 in
+         let rec infer_type pattern actual span = match pattern,actual with
+           |TypeVar variable,actual when List.mem variable generic_params->
+             (match Hashtbl.find_opt substitutions variable with
+              |None->Hashtbl.add substitutions variable actual
+              |Some previous when previous=actual->()
+              |Some previous->fail "PEP_GENERIC_ARGUMENT_MISMATCH" (Printf.sprintf "Type parameter '%s' is inferred as both %s and %s" variable (type_name previous) (type_name actual)) span ())
+           |List pattern_element,List actual_element->infer_type pattern_element actual_element span
+           |List _,actual when type_contains_parameter pattern->
+             fail "PEP_TYPE_MISMATCH" ("Expected a list argument but found "^type_name actual) span ()
+           |_ -> ()
+         in
+         let rec infer_expression_type = function
+           |EList(items,_) when items<>[]->
+             let types=List.filter_map infer_expression_type items in
+             (match types with []->None|first::rest when List.for_all((=)first)rest->Some(List first)|_->None)
+           |expression->
+             let saved_holes= !holes in
+             let inferred=try (synth env scope expression).ety with Error _->None in
+             holes:=saved_holes;
+             inferred
+         in
+         List.iter2(fun argument parameter_type->
+           if type_contains_parameter parameter_type then
+             match parameter_type,argument with
+             |List element_type,EList(items,_)->List.iter(fun item->Option.iter(fun actual->infer_type element_type actual (expr_span item))(infer_expression_type item))items
+             |_->
+               Option.iter(fun actual->infer_type parameter_type actual (expr_span argument))(infer_expression_type argument)
+         )args params;
+         List.iter(fun parameter->
+           if not(Hashtbl.mem substitutions parameter) then
+             fail "PEP_GENERIC_INFERENCE" (Printf.sprintf "Cannot infer type parameter '%s' for function '%s' from its arguments" parameter name) s ()
+         )generic_params;
+         let params=List.map(substitute_type substitutions)params in
+         let result=substitute_type substitutions result in
          let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg)args params in
          {node=XCall(fid,name,checked);ety=Some result;espan=s}
        )
@@ -781,7 +838,7 @@ let rec typed_stmt_json = function
  |TWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^typed_expr_json c^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |TExpr e->"{\"kind\":\"expression\",\"value\":"^typed_expr_json e^"}"
 let typed_json_base c =
- "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
+ "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"typeParameters\":["^String.concat ","(List.map json_string f.sig_.type_params)^"],\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
 let typed_json c =
  let record_json r = "{\"kind\":\"record\",\"typeId\":"^string_of_int r.record_id^",\"name\":"^json_string r.record_name^",\"fields\":["^String.concat "," (List.map(fun(id,name,ty,sp)->"{\"fieldId\":"^string_of_int id^",\"name\":"^json_string name^",\"type\":"^json_string(type_name ty)^",\"span\":"^span_json sp^"}")r.record_fields)^"]}" in
  let union_json u = "{\"kind\":\"union\",\"typeId\":"^string_of_int u.union_id^",\"name\":"^json_string u.union_name^",\"variants\":["^String.concat "," (List.map(fun(id,name,args,sp)->"{\"constructorId\":"^string_of_int id^",\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun ty->json_string(type_name ty))args)^"],\"span\":"^span_json sp^"}")u.union_variants)^"]}" in
@@ -1364,7 +1421,7 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ | TypeVar _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
@@ -1410,7 +1467,7 @@ let session_record_by_name checked name =
 let session_tool_transport_supported checked ty =
   let rec supports seen = function
     |Int|Bool|Str|Unit->true
-    |SourceBytes->false
+    |SourceBytes|TypeVar _->false
     |List element->supports seen element
     |Named name->
         (match session_record_by_name checked name with
@@ -1473,6 +1530,7 @@ let session_tool_value_v2 checked expected payload =
        let actual=session_required_string fields "type" in
        if actual<>type_name ty then raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
        (match ty with
+        |TypeVar _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "Unresolved generic types cannot cross the v2 tool boundary"))
         |SourceBytes -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "SourceBytes cannot cross the v2 tool boundary"))
         |Int|Bool|Str|Unit ->
            session_exact_fields fields ["type";"value"] "PEP_TOOL_VALUE_FIELDS";
@@ -2327,7 +2385,8 @@ let project_declaration_json units checked =
     let internal=module_internal_name unit.unit_name function_.fname in
     let function_id=match List.find_opt(fun checked_function->checked_function.sig_.name=internal)checked.functions with Some checked_function->checked_function.sig_.fid|None-> -1 in
     let parameters=String.concat ","(List.map(fun(_,ty,_)->json_string(type_name ty))function_.params) in
-    "{\"module\":"^json_string unit.unit_name^",\"name\":"^json_string function_.fname^",\"visibility\":"^json_string(if function_.public then "public" else "private")^",\"functionId\":"^string_of_int function_id^",\"parameters\":["^parameters^"],\"returnType\":"^json_string(type_name function_.result)^",\"source\":"^json_string unit.unit_source_path^",\"span\":"^span_json function_.fspan^"}")declarations)^"]"
+    let type_parameters=String.concat ","(List.map json_string function_.type_params) in
+    "{\"module\":"^json_string unit.unit_name^",\"name\":"^json_string function_.fname^",\"visibility\":"^json_string(if function_.public then "public" else "private")^",\"functionId\":"^string_of_int function_id^",\"typeParameters\":["^type_parameters^"],\"parameters\":["^parameters^"],\"returnType\":"^json_string(type_name function_.result)^",\"source\":"^json_string unit.unit_source_path^",\"span\":"^span_json function_.fspan^"}")declarations)^"]"
 let project_check_json project =
   let checked=project.project_checked in
   "{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"entryModule\":"^json_string project.project_entry.unit_name^",\"modules\":"^project_modules_json project.project_units^",\"resolvedDeclarations\":"^project_declaration_json project.project_units checked^",\"holes\":["^String.concat ","(List.map hole_json checked.holes)^"],\"diagnostics\":[]}"
@@ -2336,7 +2395,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"project_function_imports\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"project_function_imports\",\"generic_functions\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     if List.mem "--project" flags then (

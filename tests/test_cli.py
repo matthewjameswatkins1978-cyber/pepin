@@ -870,6 +870,104 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(json.loads(malformed.stdout)["status"], "invalid")
         self.assertEqual(json.loads(reserved.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
 
+class PepGenericFunctionTests(unittest.TestCase):
+    def test_generic_identity_and_nested_list_helper_infer_and_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn identity[T](value: T) -> T { return value }\n"
+                "fn keep[T](values: List[T]) -> List[T] { return values }\n"
+                "let matrix: List[List[Int]] = identity(keep([[1], [2]]))\n"
+                "say(int_text(length(matrix)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            ast = json.loads(checked.stdout)["ast"]
+            identity = next(item for item in ast if item.get("name") == "identity")
+            self.assertEqual(identity["typeParameters"], ["T"])
+            executed = invoke("run", path)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "2\n")
+
+    def test_generic_parameter_consistency_reports_conflicting_argument(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn same[T](left: T, right: T) -> T { return left }\n"
+                "let value: Int = same(1, \"text\")\n"
+            )
+            path = pathlib.Path(temporary) / "mismatch.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_GENERIC_ARGUMENT_MISMATCH")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], source.index("\"text\""))
+
+    def test_generic_inference_without_argument_evidence_fails_explicitly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn empty[T]() -> List[T] { return [] }\n"
+                "let values: List[Int] = empty()\n"
+            )
+            path = pathlib.Path(temporary) / "ambiguous.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_GENERIC_INFERENCE")
+
+    def test_generic_body_does_not_gain_unconstrained_operations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = "fn add[T](left: T, right: T) -> T { return left + right }\n"
+            path = pathlib.Path(temporary) / "unsupported.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
+
+    def test_duplicate_type_parameters_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = "fn identity[T, T](value: T) -> T { return value }\n"
+            path = pathlib.Path(temporary) / "duplicate.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_DUPLICATE_TYPE_PARAMETER")
+
+    def test_type_parameters_do_not_leak_between_function_declarations(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn identity[T](value: T) -> T { return value }\n"
+                "fn invalid(value: T) -> Int { return 0 }\n"
+            )
+            path = pathlib.Path(temporary) / "scope.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_UNKNOWN_TYPE")
+
+    def test_imported_public_generic_function_executes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            (project / "main.pep").write_text(
+                "import library as l\nsay(int_text(l.identity(42)))\n", encoding="utf-8", newline=""
+            )
+            (project / "library.pep").write_text(
+                "pub fn identity[T](value: T) -> T { return value }\n", encoding="utf-8", newline=""
+            )
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            declaration = json.loads(checked.stdout)["resolvedDeclarations"][0]
+            self.assertEqual(declaration["typeParameters"], ["T"])
+            result = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
+
+
 class PepModuleCliTests(unittest.TestCase):
     @staticmethod
     def _write_project(directory, files):
