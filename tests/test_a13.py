@@ -1607,6 +1607,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             "fn negate(flag: Bool) -> Bool { return !flag }\n"
             "fn main() -> Int { return if identity(negate(false)) { 42 } else { 0 } }\n"
         )
+        reference = self._reference_check("nested-boolean-helpers", source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(reference["diagnostics"], [], reference)
         _, report = self._analyze(source)
         self.assertEqual(scalar(report["status"]), "valid", report)
 

@@ -11,6 +11,9 @@ type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDia
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic] }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
+type ChildRoleCount { role: Str, count: Int }
+type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
+type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
 type FunctionLookup { found: Bool, function: CheckedFunction }
 type BindingLookup { found: Bool, binding: BindingFact }
 type ReferenceLookup { found: Bool, reference: ResolvedName }
@@ -183,6 +186,10 @@ fn record_field_shape(nodes: List[FlatAstNode], recordName: Str, fieldName: Str)
   }
   return empty_type_shape()
 }
+fn find_function_by_syntax(functions: List[CheckedFunction], syntaxId: Int) -> FunctionLookup {
+  for function in functions { if function.syntaxId == syntaxId { return FunctionLookup { found: true, function: function } } else {} }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
+}
 fn find_function(functions: List[CheckedFunction], name: Str) -> FunctionLookup {
   for function in functions { if function.name == name { return FunctionLookup { found: true, function: function } } else {} }
   return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
@@ -217,26 +224,74 @@ fn fixed_child_index(parentKind: Str, role: Str) -> Int {
   if parentKind == "while" && role == "condition" { return 0 } else {}
   return -1
 }
+fn role_child_count(counts: List[ChildRoleCount], role: Str) -> Int {
+  for item in counts { if item.role == role { return item.count } else {} }
+  return 0
+}
+fn increment_role_count(counts: List[ChildRoleCount], role: Str) -> List[ChildRoleCount] {
+  var reversed: List[ChildRoleCount] = []
+  var found = false
+  for item in counts {
+    if item.role == role {
+      reversed = prepend(reversed, ChildRoleCount { role: role, count: item.count + 1 })
+      found = true
+    } else { reversed = prepend(reversed, item) }
+  }
+  if !found { reversed = prepend(reversed, ChildRoleCount { role: role, count: 1 }) } else {}
+  return reverse(reversed)
+}
+fn validation_parent(stack: List[ValidationFrame], parentId: Int) -> ValidationParent {
+  var reversed: List[ValidationFrame] = []
+  var found = false
+  var parent = ValidationFrame { nodeId: -1, node: empty_node(), roleCounts: [] }
+  for frame in stack {
+    if !found {
+      if frame.nodeId == parentId {
+        found = true
+        parent = frame
+        reversed = prepend(reversed, frame)
+      } else {}
+    } else { reversed = prepend(reversed, frame) }
+  }
+  return ValidationParent { found: found, frames: reverse(reversed), parent: parent }
+}
+fn replace_validation_top(stack: List[ValidationFrame], replacement: ValidationFrame) -> List[ValidationFrame] {
+  var reversed: List[ValidationFrame] = []
+  var replaced = false
+  for frame in stack {
+    if !replaced { reversed = prepend(reversed, replacement); replaced = true } else { reversed = prepend(reversed, frame) }
+  }
+  return reverse(reversed)
+}
 fn tree_is_valid(nodes: List[FlatAstNode], sourceLength: Int) -> Bool {
   var expectedId = 0
   var nextRoot = 0
   var valid = true
+  var validationStack: List[ValidationFrame] = []
   for node in nodes {
     if node.id != expectedId || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || sourceLength <= node.endByte && node.endByte != sourceLength || node.line <= 0 || node.column <= 0 { valid = false } else {}
+    let frame = ValidationFrame { nodeId: node.id, node: node, roleCounts: [] }
     if node.parentId == -1 {
+      validationStack = []
       if node.role != "top_level" || node.childIndex != nextRoot { valid = false } else {}
       nextRoot = nextRoot + 1
+      validationStack = prepend(validationStack, frame)
     } else {
-      let parent = lookup_node(nodes, node.parentId)
+      let parent = validation_parent(validationStack, node.parentId)
       if !parent.found || node.id <= node.parentId || node.childIndex <= -1 { valid = false } else {}
-      let fixedIndex = if parent.found { fixed_child_index(parent.node.kind, node.role) } else { -1 }
-      if fixedIndex != -1 {
-        if node.childIndex != fixedIndex { valid = false } else {}
-      } else {
-        var expectedChild = 0
-        for earlier in nodes { if earlier.id + 1 <= node.id && earlier.parentId == node.parentId && earlier.role == node.role { expectedChild = expectedChild + 1 } else {} }
-        if node.childIndex != expectedChild { valid = false } else {}
-      }
+      if parent.found {
+        let fixedIndex = fixed_child_index(parent.parent.node.kind, node.role)
+        if fixedIndex != -1 {
+          if node.childIndex != fixedIndex { valid = false } else {}
+          validationStack = prepend(parent.frames, frame)
+        } else {
+          let expectedChild = role_child_count(parent.parent.roleCounts, node.role)
+          if node.childIndex != expectedChild { valid = false } else {}
+          let updatedParent = ValidationFrame { nodeId: parent.parent.nodeId, node: parent.parent.node, roleCounts: increment_role_count(parent.parent.roleCounts, node.role) }
+          validationStack = replace_validation_top(parent.frames, updatedParent)
+          validationStack = prepend(validationStack, frame)
+        }
+      } else { validationStack = [] }
     }
     expectedId = expectedId + 1
   }
@@ -330,6 +385,36 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
   var reversed: List[BindingFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var ordinal = 0
+  if length(functions) != 1 {
+    var activeFunctionId = -1
+    var activeFunctionSyntaxId = -1
+    var activeFunctionStart = 0
+    var activeFunctionEnd = 0
+    var nextFunctionOrdinal = 0
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        activeFunctionId = 100000 + nextFunctionOrdinal
+        activeFunctionSyntaxId = node.id
+        activeFunctionStart = node.startByte
+        activeFunctionEnd = node.endByte
+        nextFunctionOrdinal = nextFunctionOrdinal + 1
+      } else {}
+      let parameter = node.kind == "parameter" && node.parentId == activeFunctionSyntaxId
+      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd
+      if activeFunctionId != -1 && (parameter || local) {
+        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
+        let scope = if parameter { activeFunctionId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, activeFunctionId) } }
+        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
+        var duplicate = false
+        for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
+        reversed = prepend(reversed, binding)
+        ordinal = ordinal + 1
+      } else {}
+    }
+    return BindingCollection { bindings: reverse(reversed), diagnostics: reverse(reversedDiagnostics) }
+  } else {}
   for function in functions {
     for node in nodes {
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
@@ -352,6 +437,39 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
 fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
   var reversedReferences: List[ResolvedName] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
+  if length(functions) != 1 {
+    var activeFunctionId = -1
+    var activeFunctionSyntaxId = -1
+    var activeFunctionStart = 0
+    var activeFunctionEnd = 0
+    var nextFunctionOrdinal = 0
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        activeFunctionId = 100000 + nextFunctionOrdinal
+        activeFunctionSyntaxId = node.id
+        activeFunctionStart = node.startByte
+        activeFunctionEnd = node.endByte
+        nextFunctionOrdinal = nextFunctionOrdinal + 1
+      } else {}
+      if (node.kind == "name" || node.kind == "assignment") && activeFunctionId != -1 && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd {
+        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
+        var found = false
+        var resolved = 0
+        for scope in scopes {
+          for binding in bindings {
+            if !found && binding.ownerFunctionId == activeFunctionId && binding.scopeId == scope && binding.name == node.text && binding.visibleFrom <= node.startByte {
+              found = true
+              resolved = binding.semanticId
+            } else {}
+          }
+        }
+        if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", "No visible variable has this name", node))
+        }
+      } else {}
+    }
+    return NameResolution { references: reverse(reversedReferences), diagnostics: reverse(reversedDiagnostics) }
+  } else {}
   for function in functions {
     for node in nodes {
       if (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
@@ -1007,8 +1125,16 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
 
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
+  let sequentialFunctionOwner = length(functions) != 1
+  var activeFunctionFound = false
+  var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for node in nodes {
+    if sequentialFunctionOwner && node.parentId == -1 && node.kind == "function" {
+      let activeLookup = find_function_by_syntax(functions, node.id)
+      activeFunction = activeLookup.function
+      activeFunctionFound = activeLookup.found
+    } else {}
     if node.kind == "function" {
       let returnType = child_at(nodes, node.id, "return_type", 0)
       if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
@@ -1560,7 +1686,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "return" {
-      let owner = owner_function(nodes, node, functions)
+      let owner = if sequentialFunctionOwner {
+        FunctionLookup { found: activeFunctionFound && activeFunction.startByte <= node.startByte && node.endByte <= activeFunction.endByte, function: activeFunction }
+      } else { owner_function(nodes, node, functions) }
       let returned = child_at(nodes, node.id, "value", 0)
       if owner.found && returned.found {
         let actualReturn = infer_expression_type(nodes, returned.node.id, functions, bindings, references)
