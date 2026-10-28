@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "runner": "pep test v1 (Road 2 V8 slice 1)",
+  "fixtures": [
+    {
+      "id": "pass/add",
+      "file": "fixtures/pass_add.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "42\n" }
+    },
+    {
+      "id": "pass/bool-branches",
+      "file": "fixtures/pass_bool.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "1\n0\n" }
+    },
+    {
+      "id": "reject/type-mismatch",
+      "file": "fixtures/reject_type_mismatch.pep",
+      "kind": "reject",
+      "expect": {
+        "code": "PEP_TYPE_MISMATCH",
+        "span": { "start": { "offset": 26, "line": 1, "column": 27 }, "endOffset": 32 }
+      }
+    },
+    {
+      "id": "reject/unknown-function",
+      "file": "fixtures/reject_unknown_fn.pep",
+      "kind": "reject",
+      "expect": {
+        "code": "PEP_UNKNOWN_FUNCTION",
+        "span": { "start": { "offset": 26, "line": 1, "column": 27 }, "endOffset": 33 }
+      }
+    },
+    {
+      "id": "runtime/division-by-zero",
+      "file": "fixtures/runtime_div_zero.pep",
+      "kind": "run",
+      "expect": { "exit": 1, "stdout": "3\n", "diagnosticCode": "PEP_RUNTIME_DIVISION_BY_ZERO" }
+    }
+  ],
+  "limits": { "timeoutSeconds": 120 }
+}

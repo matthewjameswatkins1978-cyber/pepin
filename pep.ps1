@@ -15,6 +15,7 @@ if ($Arguments -and $Arguments.Count -gt 0 -and $Arguments[0] -in @('help', '-h'
   Write-Output '  .\pep.ps1 build-c23 FILE --output EXE [--compiler PATH] [--emit-c FILE]'
   Write-Output '  .\pep.ps1 run-c23 FILE [--compiler PATH] [--emit-c FILE]'
   Write-Output '  .\pep.ps1 session --jsonl'
+  Write-Output '  .\pep.ps1 test [--manifest FILE] [--filter SUBSTR] [--json] [--timeout SECS]'
   Write-Output ''
   Write-Output 'Use query to inspect typed holes and compatible in-scope bindings.'
   Write-Output 'C23 commands support the documented Pep subset and require Clang on PATH or --compiler PATH.'
@@ -29,6 +30,12 @@ if ($Command -in @('build-c23', 'run-c23')) {
   $Python = Get-Command python -ErrorAction SilentlyContinue
   if (-not $Python) { Write-Error 'python was not found'; exit 2 }
   & $Python.Source (Join-Path $PSScriptRoot 'pep_c23.py') @($Arguments)
+  exit $LASTEXITCODE
+}
+if ($Command -eq 'test') {
+  $Python = Get-Command python -ErrorAction SilentlyContinue
+  if (-not $Python) { Write-Error 'python was not found'; exit 2 }
+  & $Python.Source (Join-Path $PSScriptRoot 'test-runner/pep_test.py') @($Arguments | Select-Object -Skip 1)
   exit $LASTEXITCODE
 }
 if ($Command -notin @('describe', 'inspect', 'check', 'query', 'run', 'session')) {
