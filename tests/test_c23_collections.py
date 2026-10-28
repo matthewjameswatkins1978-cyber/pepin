@@ -666,6 +666,9 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             ("list_int_contains",
              "fn main() -> Int { var values = [2, 4, 6]; "
              "return if list_int_contains(values, 4) { 42 } else { 0 } }\n"),
+            ("list_bool_contains",
+             "fn main() -> Int { var flags = [false, true, false]; "
+             "return if list_bool_contains(flags, true) { 42 } else { 0 } }\n"),
             ("list_bool_count_true",
              "fn main() -> Int { return if list_bool_count_true([false, true, true]) == 2 "
              "{ 42 } else { 0 } }\n"),

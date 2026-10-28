@@ -31,3 +31,7 @@ fn list_bool_all(values: List[Bool]) -> Bool {
 fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }
+
+fn list_bool_contains(values: List[Bool], needle: Bool) -> Bool {
+  return contains(values, needle)
+}
