@@ -1882,6 +1882,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
 }
+fn unknown_call_diagnostic(node: FlatAstNode) -> CheckDiagnostic {
+  let initialByte = byte_at(source_bytes(), node.startByte)
+  if contains([65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90], initialByte) {
+    return diagnostic("PEP_UNKNOWN_CONSTRUCTOR", "No declared constructor has this name", node)
+  } else {
+    return diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node)
+  }
+}
 fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: FlatAstNode) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [diagnostic(code, message, node)] }
 }
@@ -1966,7 +1974,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
               reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
             } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
           } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
+            reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
           } }
         } else {}
       }
@@ -1992,7 +2000,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
             reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
           } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
         } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
+          reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
         } }
       } else {}
     }
