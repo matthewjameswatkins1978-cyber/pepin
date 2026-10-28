@@ -688,7 +688,12 @@ let check tops =
              (match types with []->None|first::rest when List.for_all((=)first)rest->Some(List first)|_->None)
            |expression->
              let saved_holes= !holes in
-             let inferred=try (synth env scope expression).ety with Error _->None in
+             let inferred=
+               try (synth env scope expression).ety with
+               |Error diagnostic->
+                  holes:=saved_holes;
+                  if List.mem diagnostic.code ["PEP_EMPTY_LIST_NEEDS_TYPE";"PEP_GENERIC_INFERENCE"] then None else raise(Error diagnostic)
+             in
              holes:=saved_holes;
              inferred
          in

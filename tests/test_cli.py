@@ -949,6 +949,38 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(diagnostic["code"], "PEP_GENERIC_ARGUMENT_MISMATCH")
             self.assertEqual(diagnostic["span"]["start"]["offset"], source.index("\"text\""))
 
+    def test_generic_inference_preserves_real_argument_diagnostics(self):
+        cases = [
+            (
+                "fn identity[T](value: T) -> T { return value }\n"
+                "let bad: Int = identity(missing)\n",
+                "PEP_UNKNOWN_VARIABLE",
+                "missing",
+            ),
+            (
+                "fn keep[T](values: List[T]) -> List[T] { return values }\n"
+                "let bad: List[Int] = keep([missing])\n",
+                "PEP_UNKNOWN_VARIABLE",
+                "missing",
+            ),
+            (
+                "fn identity[T](value: T) -> T { return value }\n"
+                "let bad: Int = identity(1 + \"text\")\n",
+                "PEP_TYPE_MISMATCH",
+                "\"text\"",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (source, expected_code, offending_text) in enumerate(cases):
+                with self.subTest(expected_code=expected_code, offending_text=offending_text):
+                    path = pathlib.Path(temporary) / f"argument-{index}.pep"
+                    path.write_text(source, encoding="utf-8", newline="")
+                    result = invoke("check", path, "--json")
+                    self.assertEqual(result.returncode, 1)
+                    diagnostic = json.loads(result.stdout)["diagnostics"][0]
+                    self.assertEqual(diagnostic["code"], expected_code)
+                    self.assertEqual(diagnostic["span"]["start"]["offset"], source.index(offending_text))
+
     def test_generic_body_does_not_gain_unconstrained_operations(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = "fn add[T](left: T, right: T) -> T { return left + right }\n"
