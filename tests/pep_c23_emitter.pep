@@ -149,7 +149,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 contains lowering requires a direct integer list literal or immutable list binding") } else {}
-      if secondArgument.node.kind != "integer" && secondArgument.node.kind != "name" {
+      if secondArgument.node.kind != "integer" && secondArgument.node.kind != "boolean" && secondArgument.node.kind != "name" {
         return pep_c23_unsupported("Pep C23 contains lowering requires an integer literal or local value")
       } else {}
       let value = pep_c23_expression(nodes, function, secondArgument.node)
@@ -158,12 +158,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       var count = 0
       for element in nodes {
         if element.parentId == list.node.id && element.role == "element" {
-          if element.kind != "integer" { return pep_c23_unsupported("Pep C23 contains list literals currently require integer elements") } else {}
+          if element.kind != "integer" && element.kind != "boolean" { return pep_c23_unsupported("Pep C23 contains list literals currently require integer or Bool elements") } else {}
           if count != 0 { parts = append(parts, " || ") } else {}
           parts = append(parts, "(")
           for part in value.sourceParts { parts = append(parts, part) }
           parts = append(parts, " == ")
-          parts = append(parts, int_text(element.integerValue))
+          let elementText = if element.kind == "boolean" { if element.booleanValue { "1" } else { "0" } } else { int_text(element.integerValue) }
+          parts = append(parts, elementText)
           parts = append(parts, ")")
           count = count + 1
         } else {}
