@@ -15,7 +15,7 @@ fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: 
   var matches = 0
   var list = PepC23NodeLookup { found: false, node: empty_node() }
   for binding in nodes {
-    if binding.parentId == function.id && binding.role == "statement" && binding.kind == "let" && binding.text == value.text {
+    if binding.parentId == function.id && binding.role == "statement" && (binding.kind == "let" || binding.kind == "var") && binding.text == value.text {
       matches = matches + 1
       let initial = pep_c23_child(nodes, binding.id, "value", 0)
       if initial.found && initial.node.kind == "list" { list = initial } else { return PepC23NodeLookup { found: false, node: empty_node() } }
@@ -342,6 +342,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       if boolListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(boolListParameter.node.id), ".length"], diagnostic: "" }
       } else {}
+      for binding in nodes {
+        if binding.parentId == function.id && binding.role == "statement" && binding.kind == "var" && binding.text == argument.node.text {
+          let initial = pep_c23_child(nodes, binding.id, "value", 0)
+          if initial.found && initial.node.kind == "list" {
+            return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.id), ".length"], diagnostic: "" }
+          } else {}
+        } else {}
+      }
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
       return PepC23Emission { status: "emitted", sourceParts: [int_text(count_children(nodes, list.node.id, "element"))], diagnostic: "" }
@@ -619,12 +627,19 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
       if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
-        if initialValue.node.kind == "list" && statement.kind == "let" {
+        if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           for item in nodes {
             if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" {
               return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
             } else {}
           }
+          if statement.kind == "var" {
+            for assignment in nodes {
+              if assignment.kind == "assignment" && assignment.text == statement.text {
+                return pep_c23_unsupported("Pep C23 mutable collection binding reassignment is not supported yet")
+              } else {}
+            }
+          } else {}
         } else {
           let initial = pep_c23_expression(nodes, function, initialValue.node)
           if initial.status != "emitted" { return initial } else {}
@@ -787,10 +802,29 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           if initialValue.node.kind == "list" && statement.kind == "let" {
             // Immutable list literals are lowered at their direct length/for-in use sites.
           } else {
-            let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
-            for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
-            for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
-            bodyParts = append(bodyParts, ";\n")
+            if initialValue.node.kind == "list" && statement.kind == "var" {
+              let elementCount = count_children(parsed.nodes, initialValue.node.id, "element")
+              var elementKind = ""
+              for element in parsed.nodes {
+                if element.parentId == initialValue.node.id && element.role == "element" { elementKind = element.kind } else {}
+              }
+              if elementCount == 0 {
+                return pep_c23_unsupported("Pep C23 mutable collection bindings require a non-empty list literal")
+              } else {}
+              let initial = if elementKind == "boolean" {
+                pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
+              } else { pep_c23_int_list_argument(parsed.nodes, node, initialValue.node) }
+              if initial.status != "emitted" { return initial } else {}
+              let cType = if elementKind == "boolean" { "pep_list_bool" } else { "pep_list_int" }
+              for part in ["  ", cType, " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+              for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+              bodyParts = append(bodyParts, ";\n")
+            } else {
+              let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+              for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+              for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+              bodyParts = append(bodyParts, ";\n")
+            }
           }
         } else {
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {

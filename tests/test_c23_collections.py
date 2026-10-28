@@ -63,6 +63,85 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
 
 
+    def test_mutable_list_binding_keeps_value_semantics_in_native_loops(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var values = [1, 2, 3]\n"
+            "  var total = 0\n"
+            "  for item in values { total = total + item }\n"
+            "  return total + length(values)\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "mutable_list.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "9\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
+    def test_mutable_list_reassignment_fails_closed(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var values = [1]\n"
+            "  var replacement = [2, 3]\n"
+            "  var count = 0\n"
+            "  while count <= 0 { values = replacement; count = count + 1 }\n"
+            "  return length(values)\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "reassigned_list.pep"
+            reference_source = pathlib.Path(temp) / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "2\n")
+            result = self.invoke("run-c23", source, "--compiler", CLANG)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("mutable collection binding reassignment is not supported yet",
+                          result.stderr)
+            self.assertFalse(source.with_suffix(".exe").exists())
+
+    def test_mutable_boolean_list_binding_matches_interpreter(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var values = [true, false, true]\n"
+            "  return if contains(values, true) { length(values) } else { 0 }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "mutable_bool_list.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "3\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
     def test_integer_while_assignment_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
