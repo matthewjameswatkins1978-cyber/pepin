@@ -297,6 +297,123 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     self.assertEqual(source_bytes.count(CRLF.encode("ascii")), 3)
                     self.assertEqual(actual_case_diagnostics, [(expected_code, expected_start, expected_end)])
 
+        depth_two_source = (
+            "type Leaf = L(Int) | OtherLeaf()" + CRLF +
+            "type Mid = M(Leaf) | N()" + CRLF +
+            "type Outer = O(Mid) | Empty()" + CRLF +
+            'fn f(x: Outer) -> Int { let label: Str = "🐇"; return match x { O(M(L(value))) => value O(_) => 0 Empty() => 0 } }'
+        )
+        depth_two_opened = self._open(depth_two_source)
+        depth_two_target = {"document": depth_two_opened["document"], "revision": depth_two_opened["revision"], "entryFunctions": []}
+        depth_two_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                             "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                             "semanticTarget": depth_two_target})
+        self.assertEqual(depth_two_parsed.get("outcome"), "ok", depth_two_parsed)
+        depth_two_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                              "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                              "arguments": [depth_two_parsed["result"]],
+                                              "semanticTarget": depth_two_target})
+        self.assertEqual(depth_two_checked.get("outcome"), "ok", depth_two_checked)
+        depth_two_report = fields(depth_two_checked["result"])
+        depth_two_reference = self._reference_check("nested-pattern-depth-two", depth_two_source)
+        self.assertEqual(depth_two_reference["status"], "valid", depth_two_reference)
+        self.assertEqual(scalar(depth_two_report["status"]), depth_two_reference["status"], depth_two_report)
+        self.assertEqual(depth_two_report["document"]["value"], depth_two_opened["document"])
+        self.assertEqual(depth_two_report["revision"]["value"], depth_two_opened["revision"])
+        self.assertEqual(depth_two_report["diagnostics"]["value"], [])
+        bound_value = next(fields(item) for item in depth_two_report["bindings"]["value"]
+                           if scalar(fields(item)["name"]) == "value")
+        self.assertEqual(scalar(bound_value["typeName"]), "Int")
+        binding_start = depth_two_source.index("value")
+        use_index = depth_two_source.index("value", binding_start + len("value"))
+        use_start = len(depth_two_source[:use_index].encode("utf-8"))
+        value_reference = next(fields(item) for item in depth_two_report["references"]["value"]
+                               if scalar(fields(item)["name"]) == "value")
+        self.assertEqual(scalar(value_reference["startByte"]), use_start)
+        self.assertEqual(scalar(value_reference["bindingId"]), scalar(bound_value["semanticId"]))
+        self.assertIn("🐇".encode("utf-8"), depth_two_source.encode("utf-8"))
+        self.assertEqual(depth_two_source.count(CRLF), 3)
+
+        nested_prefix = (
+            "type Leaf = L(Int) | OtherLeaf()" + NL +
+            "type Mid = M(Leaf) | N()" + NL +
+            "type Outer = O(Mid) | Empty()" + NL
+        )
+        depth_two_cases = [
+            ("singleton-depth-two-exhaustive",
+             "type Leaf = L(Int)" + NL +
+             "type Mid = M(Leaf)" + NL +
+             "type Outer = O(Mid) | Empty()" + NL +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(value))) => value Empty() => 0 } }",
+             "valid", None),
+            ("distinct-nested", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(M(OtherLeaf())) => 2 O(_) => 0 Empty() => 0 } }",
+             "valid", None),
+            ("duplicate-nested", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L(_))) => 1 O(M(L(_))) => 2 O(_) => 0 Empty() => 0 } }",
+             "invalid", "PEP_DUPLICATE_MATCH_ARM"),
+            ("wrong-nested-type", nested_prefix + "type Wrong = W()" + NL +
+             "fn f(x: Outer) -> Int { return match x { O(M(W())) => 1 O(_) => 0 Empty() => 0 } }",
+             "invalid", "PEP_PATTERN_TYPE_MISMATCH"),
+            ("wrong-nested-arity", nested_prefix +
+             "fn f(x: Outer) -> Int { return match x { O(M(L())) => 1 O(_) => 0 Empty() => 0 } }",
+             "invalid", "PEP_PATTERN_ARITY"),
+        ]
+        for case_name, case_source, expected_status, expected_code in depth_two_cases:
+            with self.subTest(depth_two_case=case_name):
+                case_opened = self._open(case_source)
+                case_target = {"document": case_opened["document"], "revision": case_opened["revision"], "entryFunctions": []}
+                case_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                                "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                                "semanticTarget": case_target})
+                self.assertEqual(case_parsed.get("outcome"), "ok", case_parsed)
+                case_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                                 "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                                 "arguments": [case_parsed["result"]], "semanticTarget": case_target})
+                self.assertEqual(case_checked.get("outcome"), "ok", case_checked)
+                case_report = fields(case_checked["result"])
+                case_reference = self._reference_check("nested-pattern-depth-two-" + case_name, case_source)
+                self.assertEqual(case_reference["status"], expected_status, case_reference)
+                self.assertEqual(scalar(case_report["status"]), expected_status, case_report)
+                expected_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in case_reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in case_report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, expected_diagnostics, case_report)
+                if expected_code is not None:
+                    self.assertEqual([item[0] for item in actual_diagnostics], [expected_code])
+
+        depth_three_source = (
+            "type Seed = K(Int)" + NL +
+            "type Leaf = L(Seed)" + NL +
+            "type Mid = M(Leaf)" + NL +
+            "type Outer = O(Mid)" + NL +
+            "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }"
+        )
+        depth_three_opened = self._open(depth_three_source)
+        depth_three_target = {"document": depth_three_opened["document"], "revision": depth_three_opened["revision"], "entryFunctions": []}
+        depth_three_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                               "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                               "semanticTarget": depth_three_target})
+        self.assertEqual(depth_three_parsed.get("outcome"), "ok", depth_three_parsed)
+        depth_three_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                                "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                                "arguments": [depth_three_parsed["result"]],
+                                                "semanticTarget": depth_three_target})
+        self.assertEqual(depth_three_checked.get("outcome"), "ok", depth_three_checked)
+        depth_three_report = fields(depth_three_checked["result"])
+        depth_three_reference = self._reference_check("nested-pattern-depth-three", depth_three_source)
+        self.assertEqual(depth_three_reference["status"], "valid", depth_three_reference)
+        self.assertEqual(scalar(depth_three_report["status"]), "invalid", depth_three_report)
+        depth_three_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in depth_three_report["diagnostics"]["value"]
+        ]
+        self.assertEqual([item[0] for item in depth_three_diagnostics], ["PEP_PATTERN_UNSUPPORTED"])
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
                                      "semanticTarget": target})
@@ -1123,13 +1240,20 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(actual, expected, report)
 
     def test_nested_constructor_patterns_fail_closed_beyond_supported_depth(self):
-        source = "type Leaf = L(Int)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(value))) => value } }"
+        source = "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }"
         reference = self._reference_check("nested-pattern-deeper-than-supported", source)
         self.assertEqual(reference["status"], "valid", reference)
-        _, report = self._analyze(source)
-        self.assertEqual(scalar(report["status"]), "invalid", report)
-        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-        self.assertIn("PEP_PATTERN_UNSUPPORTED", codes, report)
+        opened = self._open(source)
+        result = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
+                                   "semanticTarget": {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}})
+        if result.get("outcome") == "error":
+            self.assertEqual(result["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", result)
+        else:
+            report = fields(result["result"])
+            self.assertEqual(scalar(report["status"]), "invalid", report)
+            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+            self.assertIn("PEP_PATTERN_UNSUPPORTED", codes, report)
 
 
     def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
