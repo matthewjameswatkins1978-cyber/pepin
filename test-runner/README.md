@@ -39,6 +39,12 @@ Manifest spans are byte offsets into those exact bytes, so a CRLF copy
 would shift them; the runner refuses such a fixture as `infra_error`
 instead of reporting a misleading span mismatch.
 
+## Standard-library conformance
+
+`stdlib-conformance/` drives this runner to check the standard library against a
+public-behaviour contract, composing the real library source with one caller per
+case. See [../stdlib-conformance/README.md](../stdlib-conformance/README.md).
+
 ## Fixture manifest
 
 See [MANIFEST-SCHEMA.md](MANIFEST-SCHEMA.md). Fixtures are explicit:

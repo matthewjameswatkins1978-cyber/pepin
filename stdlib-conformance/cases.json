@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "about": [
+    "Public-behaviour contract for the standard library. Each case names a",
+    "helper, an expression and the observable result; nothing here depends on",
+    "how a helper is implemented, so a behaviour-preserving refactor passes.",
+    "Empty-collection identities are canonical (sum 0, product 1, all true,",
+    "any false, none true) so a failure is a real library or compiler defect,",
+    "not a preference."
+  ],
+  "cases": [
+    { "id": "list_int_sum/basic", "expr": "list_int_sum([1, 2, 3])", "result": "Int", "expect": "6" },
+    { "id": "list_int_sum/empty", "expr": "list_int_sum([])", "result": "Int", "expect": "0" },
+    { "id": "list_int_sum/mixed-sign", "expr": "list_int_sum([-2, 5])", "result": "Int", "expect": "3" },
+    { "id": "list_int_sum/positive-only", "expr": "list_int_sum_positive([-1, 4, 5])", "result": "Int", "expect": "9" },
+    { "id": "list_int_sum/negative-only", "expr": "list_int_sum_negative([-1, 4, -5])", "result": "Int", "expect": "-6" },
+
+    { "id": "list_int_product/basic", "expr": "list_int_product([2, 3, 4])", "result": "Int", "expect": "24" },
+    { "id": "list_int_product/empty", "expr": "list_int_product([])", "result": "Int", "expect": "1" },
+    { "id": "list_int_product/with-zero", "expr": "list_int_product([3, 0, 4])", "result": "Int", "expect": "0" },
+
+    { "id": "list_int_count_nonzero/basic", "expr": "list_int_count_nonzero([0, 4, 0, 5])", "result": "Int", "expect": "2" },
+    { "id": "list_int_count_zero/basic", "expr": "list_int_count_zero([0, 4, 0, 5])", "result": "Int", "expect": "2" },
+    { "id": "list_int_count_negative/basic", "expr": "list_int_count_negative([-2, 0, 3])", "result": "Int", "expect": "1" },
+    { "id": "list_int_count_positive/basic", "expr": "list_int_count_positive([-2, 0, 3])", "result": "Int", "expect": "1" },
+
+    { "id": "list_int_contains/present", "expr": "list_int_contains([1, 2], 2)", "result": "Bool", "expect": "true" },
+    { "id": "list_int_contains/absent", "expr": "list_int_contains([1, 2], 9)", "result": "Bool", "expect": "false" },
+
+    { "id": "list_bool_count_true/basic", "expr": "list_bool_count_true([true, false, true])", "result": "Int", "expect": "2" },
+    { "id": "list_bool_count_false/basic", "expr": "list_bool_count_false([true, false, true])", "result": "Int", "expect": "1" },
+
+    { "id": "list_bool_any/basic", "expr": "list_bool_any([false, true])", "result": "Bool", "expect": "true" },
+    { "id": "list_bool_any/empty", "expr": "list_bool_any([])", "result": "Bool", "expect": "false" },
+    { "id": "list_bool_any_false/basic", "expr": "list_bool_any_false([true, false])", "result": "Bool", "expect": "true" },
+
+    { "id": "list_bool_all/basic", "expr": "list_bool_all([true, true])", "result": "Bool", "expect": "true" },
+    { "id": "list_bool_all/empty", "expr": "list_bool_all([])", "result": "Bool", "expect": "true" },
+
+    { "id": "list_bool_none/empty", "expr": "list_bool_none([])", "result": "Bool", "expect": "true" },
+    { "id": "list_bool_none/all-false", "expr": "list_bool_none([false, false])", "result": "Bool", "expect": "true" },
+    { "id": "list_bool_none/has-true", "expr": "list_bool_none([false, true])", "result": "Bool", "expect": "false" },
+
+    { "id": "list_bool_contains/present", "expr": "list_bool_contains([true, false], false)", "result": "Bool", "expect": "true" }
+  ]
+}
