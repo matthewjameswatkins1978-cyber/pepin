@@ -682,6 +682,19 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if thenShape.kind != "" && same_type_shape(thenShape, elseShape) { return thenShape } else {}
     return empty_type_shape()
   } else {}
+  if found.node.kind == "match" {
+    let parent = lookup_node(nodes, found.node.parentId)
+    if !parent.found || parent.node.kind != "binary" || (parent.node.text != "==" && parent.node.text != "!=") || found.node.role != "left" { return empty_type_shape() } else {}
+    if count_children(nodes, found.node.id, "arm") == 1 {
+      for arm in nodes {
+        if arm.parentId == found.node.id && arm.kind == "match_arm" {
+          let result = child_at(nodes, arm.id, "result", 1)
+          if result.found { return expression_type_shape(nodes, result.node.id, functions, bindings, references) } else { return empty_type_shape() }
+        } else {}
+      }
+    } else {}
+    return empty_type_shape()
+  } else {}
   if found.node.kind == "record" { return PepTypeShape { kind: "nominal", name: found.node.text, listDepth: 0 } } else {}
   if found.node.kind == "name" {
     let reference = find_reference(references, found.node.id)
@@ -1984,7 +1997,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       let returned = child_at(nodes, node.id, "value", 0)
       if owner.found && returned.found {
         let actualReturn = infer_expression_type(nodes, returned.node.id, functions, bindings, references)
-        let actualShape = expression_type_shape(nodes, returned.node.id, functions, bindings, references)
+        let actualShape = if actualReturn == "" { expression_type_shape(nodes, returned.node.id, functions, bindings, references) } else { empty_type_shape() }
         let expectedShape = if owner.function.returnShape.kind != "" { owner.function.returnShape } else { legacy_type_shape(nodes, owner.function.returnType) }
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
         let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
