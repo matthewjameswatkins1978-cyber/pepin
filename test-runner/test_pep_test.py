@@ -160,6 +160,15 @@ class RunnerHonestyTests(unittest.TestCase):
             self.assertIn(key, doc["counts"], key)
         self.assertEqual(doc["counts"]["policy_denied"], 0)
 
+    def test_empty_selection_fails_loudly(self):
+        proc = run_runner("--json", "--filter", "no-such-fixture-xyz")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("no fixtures match", proc.stdout + proc.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            m = write_manifest(tmp, [])
+            proc2 = run_runner("--json", manifest=m)
+            self.assertEqual(proc2.returncode, 2)
+
     def test_list_lists_without_executing(self):
         proc = run_runner("--json", "--list")
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

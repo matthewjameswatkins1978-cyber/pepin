@@ -16,7 +16,9 @@ The runner never interprets Pep itself: every verdict comes from
 
 Exit code: `0` when every executed test passes or skips, `1` when any
 test fails/errors/times out, `2` for runner infrastructure problems
-(missing or malformed manifest).
+(missing or malformed manifest, empty fixture selection). A `--filter`
+that matches nothing, or a manifest with no fixtures, fails loudly
+instead of reporting a vacuous all-green run.
 
 Each executed test writes per-test evidence artifacts (`check.json`,
 `stdout.txt`, `stderr.txt` under `--evidence-dir`, default

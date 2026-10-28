@@ -335,6 +335,14 @@ def main(argv=None):
 
     if args.filter:
         fixtures = [f for f in fixtures if args.filter in str(f.get("id", ""))]
+        if not fixtures:
+            return finish(None, {"status": "infra_error",
+                                 "detail": "no fixtures match filter: %s" % args.filter},
+                          args)
+    if not fixtures:
+        return finish(None, {"status": "infra_error",
+                             "detail": "manifest defines no fixtures to run"},
+                      args)
 
     if args.list:
         listing = [{"id": str(f.get("id", "")), "file": f.get("file", ""),
