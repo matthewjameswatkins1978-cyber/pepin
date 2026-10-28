@@ -1176,13 +1176,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && count_children(nodes, node.id, "argument") == requiredArity {
               let collection = child_at(nodes, node.id, "argument", 0)
               let collectionShape = if collection.found { expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { empty_type_shape() }
-              var collectionType = ""
-              if collection.found {
-                if collectionShape.listDepth != 0 { collectionType = legacy_type_name(collectionShape) } else {
-                  collectionType = infer_expression_type(nodes, collection.node.id, functions, bindings, references)
-                }
-              } else {}
-              let elementType = list_element_type(collectionType)
+              let elementShape = without_one_list(collectionShape)
+              let collectionType = if collection.found && collectionShape.listDepth == 0 { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
+              let elementType = if collectionShape.listDepth != 0 { legacy_type_name(elementShape) } else { "" }
               if elementType == "" && collectionShape.listDepth == 0 {
                 let emptyCollection = collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0
                 if !emptyCollection {
@@ -1196,7 +1192,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 if value.found && value.node.kind != "hole" {
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
-                  let expectedElementShape = without_one_list(collectionShape)
+                  let expectedElementShape = elementShape
                   let structuralMismatch = (elementType == "" || actualValue == "") && expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
