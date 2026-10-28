@@ -432,14 +432,13 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       (parent.found && parent.node.kind == "list" && node.role == "element") ||
       (parent.found && parent.node.kind == "call" && (parent.node.text == "append" || parent.node.text == "prepend") && node.role == "argument" && node.childIndex == 1)
     if expectedElement != "" && (nestedListContext || count_children(nodes, node.id, "element") == 0) { return expected } else {}
-    var elementType = ""
     for element in nodes {
       if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
         let actual = infer_expression_type(nodes, element.id, functions, bindings, references)
-        if elementType == "" && actual != "" { elementType = actual } else {}
+        if actual != "" { return list_type_name(actual) } else {}
       } else {}
     }
-    if elementType != "" { return list_type_name(elementType) } else { return "" }
+    return ""
   } else {}
   if node.kind == "if_expression" {
     let expected = contextual_expected_type(nodes, node, functions, bindings, references)
