@@ -235,6 +235,14 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], parameterName: Str, se
     return argument.found && !extraArgument.found && argument.node.kind == "name" &&
       (argument.node.text == parameterName || argument.node.text == secondParameterName)
   } else {}
+  if node.kind == "call" && node.text == "contains" {
+    let argument = pep_c23_child(nodes, node.id, "argument", 0)
+    let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
+    let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
+    return argument.found && secondArgument.found && !extraArgument.found &&
+      argument.node.kind == "name" && argument.node.text == parameterName &&
+      secondArgument.node.kind == "name" && secondArgument.node.text == secondParameterName
+  } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
     let right = pep_c23_child(nodes, node.id, "right", 1)

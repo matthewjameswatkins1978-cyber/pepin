@@ -27,3 +27,7 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   for item in values { all = all && item }
   return all
 }
+
+fn list_int_contains(values: List[Int], needle: Int) -> Bool {
+  return contains(values, needle)
+}

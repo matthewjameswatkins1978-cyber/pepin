@@ -663,6 +663,9 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             ("list_int_sum",
              "fn main() -> Int { return if list_int_sum([1, 2, 3]) == 6 && "
              "list_int_sum([]) == 0 { 42 } else { 0 } }\n"),
+            ("list_int_contains",
+             "fn main() -> Int { var values = [2, 4, 6]; "
+             "return if list_int_contains(values, 4) { 42 } else { 0 } }\n"),
             ("list_bool_count_true",
              "fn main() -> Int { return if list_bool_count_true([false, true, true]) == 2 "
              "{ 42 } else { 0 } }\n"),
