@@ -277,3 +277,11 @@ A temporary, stderr-only `execute` tick profile was used and then removed; `pep_
 A sorted-node early-stop and builtin constructor-scan fast path were tried locally. The constructor helper's grouped ticks fell from 2,187 to 215 in the same cap probe, but the source still hit the fixed limit and the trial introduced four new step-limit failures in the A13 suite. Both implementation edits were discarded. The final checker implementation remains unchanged; the useful result is staged parity coverage and a clearer profile of the unresolved one-shot cost.
 
 The 100,000-step ceiling, master, `CURRENT.md`, manifest, A14/C23 ownership and release state remain unchanged. No large-file, CPU or memory guarantee is claimed. A13 remains partial, experimental and unaccepted; cycle 1/3.
+
+## Continuation 03 — unknown for-in iterable diagnostic parity (2026-10-28; cycle 2/3)
+
+**Test SHA:** `a89701988005ce316f86182f06dc1e378ea72883`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added an unknown iterable case to the existing for-in differential. For `fn main() -> Int { for item in missing {} return 0 }`, the current Pep checker and OCaml both report invalid status with `PEP_UNKNOWN_VARIABLE` over bytes 31–38. This supersedes the older SHA-bound note above that recorded a `PEP_UNKNOWN_BINDING` discrepancy; current checker source already emits the matching code, so this slice changes tests only.
+
+Verification: `python -m unittest tests.test_a13.A13FunctionResolutionTests.test_for_in_item_types_scope_and_list_requirement_match_ocaml -v` passed **1/1 test method**, covering eight iterable, scope, type, and diagnostic fixtures. `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The prior full A13/nested-record suite remains evidence for the unchanged checker at test SHA `6f0718e`; full discovery was not repeated for this one-case test-only change.
+
+No checker implementation, budget, protocol, master, `CURRENT.md`, manifest, A14 or release change. A13 remains partial, experimental and unaccepted; cycle 2/3.
