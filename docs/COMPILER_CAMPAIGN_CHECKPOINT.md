@@ -137,3 +137,15 @@ Verification on this implementation/test SHA: `python -m unittest tests.test_a13
 **Implementation and test SHA:** `1952c5ebd67bb49846bee5ed9f56557eb53d001e` (pushed to the sustained campaign branch). A13 return-expression type mismatches now use OCaml's `PEP_TYPE_MISMATCH` diagnostic code, including scalar mismatches and a value returned from a `Unit` function. The existing mismatch-node selection remains: direct scalar expressions and conditional branches point at their mismatching expression, while list returns point at the offending list element. Four OCaml differential cases compare exact status, diagnostic code and original byte span for scalar, Unit-result, conditional-branch and list-leaf mismatches.
 
 Verification on this implementation/test SHA: focused return/hole/list tests passed **4/4** in 9.111 seconds; `python -m unittest tests.test_a13 tests.test_a13_nested_records -v` passed **49/49** in 141.140 seconds; `python -m unittest tests.test_a14_c23 -v` passed **11/11** in 63.289 seconds; Python compilation and `git diff --check` passed. Full discovery and a fresh clean OCaml rebuild were not repeated. No runtime, protocol, `CURRENT.md`, manifest, `master` or release change. A13 remains experimental.
+
+## Continuation 03 — constructor-pattern reachability parity (2026-10-28)
+
+**Implementation/test SHA:** `4132c5e96b85e02d61bdff1c1ecb6a3812fd32b1`, pushed to `campaign/pep-v01-sustained-build-20261027`. During the existing payload validation traversal, the checker now tracks whether a constructor arm fully covers its variant and a compact constructor-pattern key. A repeated equivalent pattern reports `PEP_DUPLICATE_MATCH_ARM` over the complete arm span; a different pattern after the variant is fully covered reports `PEP_UNREACHABLE_MATCH_ARM` over the complete arm span, matching OCaml. This does not broaden supported nested-pattern depth or change the fixed 100,000-step budget.
+
+Verification on the implementation/test SHA:
+
+- Focused OCaml differential: **1/1 test passed**, covering four cases (nested then broad, broad then nested, duplicate nested and duplicate top-level constructor).
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **50/50 passed** in 142.052 seconds.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- `python -m unittest tests.test_a14_c23 -q`: **9/11 passed; 2 failed**. The failures are the existing C23/reference runtime expectation cases for signed overflow (reference returned `23`) and division by zero (reference returned `42`); this checker-only slice did not alter A14. Do not count these as A13 regressions or claim A14 green.
+- No full repository discovery or clean OCaml rebuild was run for this slice. `CURRENT.md`, manifest, runtime budget, master and release remain unchanged. A13 remains partial and unaccepted.
