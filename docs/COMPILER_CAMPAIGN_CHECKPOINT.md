@@ -149,3 +149,16 @@ Verification on the implementation/test SHA:
 - `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
 - `python -m unittest tests.test_a14_c23 -q`: **9/11 passed; 2 failed**. The failures are the existing C23/reference runtime expectation cases for signed overflow (reference returned `23`) and division by zero (reference returned `42`); this checker-only slice did not alter A14. Do not count these as A13 regressions or claim A14 green.
 - No full repository discovery or clean OCaml rebuild was run for this slice. `CURRENT.md`, manifest, runtime budget, master and release remain unchanged. A13 remains partial and unaccepted.
+
+## Continuation 03 — partial nested constructor diagnostics (2026-10-28; cycle review 3/3)
+
+**Implementation/test SHA:** `96734f8b05bb2c9ea941653cc34fc1c65915a59`, pushed to `campaign/pep-v01-sustained-build-20261027`. Well-formed bounded constructor patterns are now retained for exact duplicate detection even when they cover only one variant of a nested union; such partial patterns do not count as full outer-variant coverage. When an earlier pattern fully covers an outer variant, a later well-formed partial nested pattern is reported unreachable. Malformed type/arity/pattern forms remain ineligible for this tracking. The slice does not extend supported nesting depth or attempt general pattern-matrix exhaustiveness.
+
+Verification on the implementation/test SHA:
+
+- The focused OCaml reachability differential passed **1/1 test**, now covering six cases: nested then broad, broad then nested, duplicate full nested, duplicate partial nested, covered outer then partial nested, and duplicate top-level.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **50/50 passed** in 140.864 seconds.
+- A14 emission-boundary regressions `test_unsupported_valid_program_is_reported_without_c_output` and `test_checker_invalid_program_is_not_emitted`: **2/2 passed**.
+- Python compilation and `git diff --check`: passed. No clean OCaml rebuild or full repository discovery was run.
+
+**Nonblocking 3/3 review:** the diff is confined to A13 pattern checking and its OCaml differential. The added eligibility guard avoids registering malformed or unsupported shapes; partial patterns are recorded without claiming outer coverage, and full coverage still drives unreachable-arm detection. No runtime-budget, protocol, A14, master, `CURRENT.md`, manifest, or release changes. A13 remains experimental and partial. Continue the campaign after refreshing peer coordination notes.
