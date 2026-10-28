@@ -1258,6 +1258,24 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
   return false
 }
+fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let expression = lookup_node(nodes, id)
+  if !expression.found || expression.node.kind != "if_expression" { return false } else {}
+  let condition = child_at(nodes, id, "condition", 0)
+  if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" { return true } else {}
+  let thenValue = child_at(nodes, id, "then", 1)
+  let elseValue = child_at(nodes, id, "else", 2)
+  if !thenValue.found || !elseValue.found { return false } else {}
+  let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
+  let elseType = infer_expression_type(nodes, elseValue.node.id, functions, bindings, references)
+  if thenType != "" && elseType != "" && thenType != elseType { return true } else {}
+  let thenShape = expression_type_shape(nodes, thenValue.node.id, functions, bindings, references)
+  let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
+  if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
+  if thenValue.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, thenValue.node.id, functions, bindings, references) { return true } else {}
+  if elseValue.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, elseValue.node.id, functions, bindings, references) { return true } else {}
+  return false
+}
 
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
@@ -1509,13 +1527,16 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
         let receiverRecord = record_declaration(nodes, receiverType)
         let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
+        let receiverUnknownField = value.found && receiverRecord.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
+        let receiverMayHaveFieldError = receiverType != "" && !receiverRecord.found || receiverUnknownField
+        let receiverIfMismatch = value.found && value.node.kind == "if_expression" && receiverMayHaveFieldError && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
         if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
         } else {
-          if value.found && receiverType != "" && !receiverRecord.found {
+          if value.found && receiverType != "" && !receiverRecord.found && !receiverIfMismatch {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_NON_RECORD", "Field selection requires a record value", node))
           } else {
-            if value.found && receiverRecord.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == "" {
+            if receiverUnknownField && !receiverIfMismatch {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
             } else {}
           }

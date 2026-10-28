@@ -1207,6 +1207,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if flag { ?b } else { ?c } }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { if flag { ?b } else { ?c } }).x"),
             ("if-hole-unknown", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { missing }).x }", "PEP_UNKNOWN_VARIABLE", "missing"),
             ("if-hole-scalar", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { 1 }).x }", "PEP_FIELD_ON_NON_RECORD", "(if flag { ?a } else { 1 }).x"),
+            ("if-branch-record-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { 1 } else { Point { x: 1 } }).x }", "PEP_TYPE_MISMATCH", "Point { x: 1 }"),
+            ("if-branch-scalar-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { Point { x: 5 } } else { 2 }).x }", "PEP_TYPE_MISMATCH", "2"),
+            ("nested-if-branch-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { 1 } else { if flag { Point { x: 1 } } else { 2 } }).x }", "PEP_TYPE_MISMATCH", "Point { x: 1 }"),
             ("nested-if-bad-condition", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if 1 { ?b } else { ?c } }).x }", "PEP_TYPE_MISMATCH", "1"),
             ("unknown-variable-receiver", "fn f() -> Int { return missing.x }", "PEP_UNKNOWN_VARIABLE", "missing"),
         ]
