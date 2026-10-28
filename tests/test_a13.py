@@ -765,6 +765,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-then-payload-wildcard", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value O(_) => 0 } }", "PEP_UNREACHABLE_MATCH_ARM"),
             ("payload-wildcard-then-nested", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(_) => 0 O(I(value)) => value } }", "PEP_UNREACHABLE_MATCH_ARM"),
             ("duplicate-nested-pattern", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value O(I(other)) => other } }", "PEP_DUPLICATE_MATCH_ARM"),
+            ("duplicate-partial-nested-pattern", "type Inner = I(Int) | J()" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(_)) => 0 O(I(_)) => 1 } }", "PEP_DUPLICATE_MATCH_ARM"),
+            ("covered-outer-then-partial-nested", "type Inner = I(Int) | J()" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(_) => 0 O(I(_)) => 1 } }", "PEP_UNREACHABLE_MATCH_ARM"),
             ("duplicate-top-level-pattern", "type Maybe = None() | Some(Int)" + NL + "fn f(x: Maybe) -> Int { return match x { None() => 0 None() => 1 Some(value) => value } }", "PEP_DUPLICATE_MATCH_ARM"),
         ]
         for name, source, expected_code in cases:
