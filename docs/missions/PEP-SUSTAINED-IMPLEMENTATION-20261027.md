@@ -1,5 +1,8 @@
 # PEPIN — Sustained Implementation Campaign: Working Pep Toolchain
 
+> **Priority reconciliation (28 October 2026):** Read [Pepin priorities](../PEPIN-PRIORITIES-2026-10-28.md). Matthew's latest focus is (1) useful compiler-derived knowledge plus (5) read-only compiler checkpoints as **one** semantic system, and (2) a bottom-up Pep-written standard library as the most important practical library work. Rabbit/learning UI, tool migration and multiparadigm exploration are deferred. These priorities do not interrupt verified compiler correctness, resource or C23 implementation; they do not alter acceptance/merge authority. The old annotation-led Semantic Notes proposal is superseded, not part of the adopted G6 route.
+
+
 **Mission ID:** PEP-CAMPAIGN-V01-20261027
 **Role:** Luna (High thinking), acting as implementation lead
 **State:** AUTHORISED BY MATTHEW for prolonged work on **development/workshop branches**.
@@ -89,17 +92,17 @@ Advance the accepted final draft through coherent, independently runnable thin s
 
 - Deliver pep test for source-discovered native test declarations once their grammar is accepted; typed test assertions, selected tests, structured JSON results and source spans. Tests excluded from ordinary production execution.
 - Emit replayable versioned test receipts with source/compiler identity, runner/target, input or random seed, execution status, deterministic assertion/oracle findings, effects/capabilities **actually enforced**, evidence and limitations. Never promote a pass or NOT OBSERVED into universal proof.
-- Build a useful Pep-written foundation library by actual dogfooding, first collection helpers, Unicode/bytes, parsing/serialization and JSON, paths/fs where host-authorised, and typed test utilities. APIs must expose effects/errors/availability.
+- Build a useful **bottom-up Pep-written foundation library** by actual dogfooding. Use minimal well-tested byte/text/memory primitives, safe buffers/builders and typed errors to compose collections, algorithms, Unicode/bytes, parsing/serialization and JSON, authorised paths/fs and typed test utilities as dependencies permit. Prefer Pep implementation of higher layers once it is safe and practical, and justify any native primitive. APIs must expose effects/errors/availability; measure composition costs and avoid repeated O(n) appends as builders.
 - Add bounded property cases and differential comparisons. Reuse the separate Terror Bats framework as an **external adapter**, not a second embedded YAML runner. Test scripts, spawned processes and Git worktrees must not claim sandbox enforcement without evidence.
 - Demonstrate at least one multi-file Pep sample that reads/writes appropriate authorised data, processes it with reusable stdlib functions, produces deterministic structured output, and has repeatable Pep tests.
 
-### Gate G6: Effects, refinements and Semantic Notes
+### Gate G6: Effects, refinements and compiler-derived program knowledge
 
 - Compiler-inferred effects for functions and function values; public effect ceilings with checked transitive calls. Distinguish type-level ability from host security authority.
 - Negative tests where a declared fs.read effect is present but host denies filesystem permission. Explicitly capture declared/granted/enforced differences.
 - Lightweight flow-based refinements for simple integers, bounds and boolean conditions with mutation/alias invalidation. Explicit Result-based dynamic checks where static proof unavailable; no trusted generic assume.
-- Three source information layers; if adopting #@ Semantic Notes, reconcile against design PR #13. Start with trivia preservation and revision-bound metadata queries, then typed verification requests, then bounded proof/checker. A note NEVER proves what it asserts or permits dangerous operations, and may not silently change runtime behaviour.
-- Compiler query separates proved/refuted/unresolved/runtime checked/observed, source facts vs author statements, and AI suggestions vs deterministic decisions.
+- **Compiler-derived knowledge and checkpoints, one semantic model:** begin with revision-bound, read-only stage receipts and focused compiler queries (including established effects/refinements only where implemented). Retain selected compiler facts across builds only with exact source/dependency/target/checker identities, sound invalidation, clean-build equivalence and measured practical benefit. Link test/build observations without treating them as proof. The older annotation-led `#@` Semantic Notes direction and PR #13 are superseded; do not create a separate annotation/proof language or semantic authority. Ordinary comments and explicit checked contracts remain possible where justified.
+- Compiler query separates proved/refuted/unresolved/runtime checked/observed, source facts vs author statements, and AI suggestions vs deterministic decisions. Checkpoints must not require an online AI, unsolicited JSONL messages or hidden AST rewriting.
 
 ### Gate G7: Memory-control prototype and hardened safe boundary
 
