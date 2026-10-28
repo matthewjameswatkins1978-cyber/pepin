@@ -1110,6 +1110,9 @@ fn unsupported_type_code(nodes: List[FlatAstNode], id: Int, knownName: Str) -> S
 fn equality_supported_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit"
 }
+fn equality_supported_shape(shape: PepTypeShape) -> Bool {
+  return shape.kind == "builtin" && shape.listDepth == 0 && equality_supported_type(shape.name)
+}
 fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
   if !parent.found { return "" } else {}
@@ -1794,7 +1797,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let leftType = if left.found { infer_expression_type(nodes, left.node.id, functions, bindings, references) } else { "" }
         let rightType = if right.found { infer_expression_type(nodes, right.node.id, functions, bindings, references) } else { "" }
         let expected = if node.text == "&&" || node.text == "||" { "Bool" } else { if node.text == "==" || node.text == "!=" { leftType } else { "Int" } }
-        if (node.text == "==" || node.text == "!=") && leftType != "" && !equality_supported_type(leftType) && left.found {
+        let leftShape = if (node.text == "==" || node.text == "!=") && left.found && leftType == "" && left.node.kind != "hole" { expression_type_shape(nodes, left.node.id, functions, bindings, references) } else { empty_type_shape() }
+        let unsupportedEqualityType = leftType != "" && !equality_supported_type(leftType) ||
+          leftShape.kind != "" && !equality_supported_shape(leftShape)
+        if (node.text == "==" || node.text == "!=") && unsupportedEqualityType && left.found {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNSUPPORTED", "Equality is not defined for this value type", left.node))
         } else {}
         let untypedEqualityLeft = left.found && leftType == "" && (left.node.kind == "hole" || left.node.kind == "if_expression" && is_all_hole_if_expression(nodes, left.node.id, functions, bindings, references))
