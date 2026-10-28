@@ -314,12 +314,11 @@ fn flat_node(value: AstValue, parentId: Int, childIndex: Int, role: Str,
 }
 fn token_at(tokens: List[LexToken], index: Int) -> LexToken {
   var currentIndex = 0
-  var found = make_token("eof", "", 0, [], 0, 0, 1, 1)
   for token in tokens {
-    if currentIndex == index { found = token } else { }
+    if currentIndex == index { return token } else { }
     currentIndex = currentIndex + 1
   }
-  return found
+  return make_token("eof", "", 0, [], 0, 0, 1, 1)
 }
 
 fn tokens_drop(tokens: List[LexToken], count: Int) -> List[LexToken] {

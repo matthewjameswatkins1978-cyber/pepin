@@ -814,6 +814,15 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(function["startByte"]), len(prefix.encode("utf-8")))
         self.assertEqual(scalar(function["endByte"]), len(source.encode("utf-8")) - 2)
 
+    def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
+        source = (
+            "fn identity(flag: Bool) -> Bool { return flag }\n"
+            "fn negate(flag: Bool) -> Bool { return !flag }\n"
+            "fn main() -> Int { return if identity(negate(false)) { 42 } else { 0 } }\n"
+        )
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+
 
 if __name__ == "__main__":
     unittest.main()
