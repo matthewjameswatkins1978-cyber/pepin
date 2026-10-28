@@ -1628,6 +1628,104 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(function["startByte"]), len(prefix.encode("utf-8")))
         self.assertEqual(scalar(function["endByte"]), len(source.encode("utf-8")) - 2)
 
+    def test_four_independent_call_errors_preserve_fixed_budget_boundary(self):
+        bad_lines = ["fn accepts(x: Bool) -> Bool { return x }"]
+        bad_lines.extend(f"fn bad{i}() -> Bool {{ return accepts({i}) }}" for i in range(4))
+        bad_source = NL.join(bad_lines)
+        self.assertEqual(len(bad_source.encode("utf-8")), 200)
+        reference = self._reference_check("four-independent-call-errors", bad_source)
+        self.assertEqual(reference["status"], "invalid", reference)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+
+        empty = self._open("")
+        empty_parsed = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        empty_target = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        for tool, function, arguments, expected_result in [
+            ("pep-a13-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-a13-checker-staged", "analyze_parsed", [empty_parsed], checker_report(empty["document"], "")),
+        ]:
+            registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": self.tool_document, "revision": self.tool_revision,
+                                           "function": function})
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision,
+                                          "testVectors": [{"arguments": arguments, "expect": expected_result,
+                                                           "semanticTarget": empty_target}]})
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision})
+            self.assertEqual(activated.get("status"), "Active", activated)
+
+        def check_staged(source):
+            opened = self._open(source)
+            target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+            parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                       "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                       "semanticTarget": target})
+            self.assertEqual(parsed.get("outcome"), "ok", parsed)
+            staged = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                       "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                       "arguments": [parsed["result"]], "semanticTarget": target})
+            self.assertEqual(staged.get("outcome"), "ok", staged)
+            return opened, fields(staged["result"])
+
+        opened, staged_report = check_staged(bad_source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        staged_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in staged_report["diagnostics"]["value"]
+        ]
+        self.assertEqual(scalar(staged_report["status"]), reference["status"], staged_report)
+        self.assertEqual(staged_diagnostics, expected, (expected, staged_diagnostics, staged_report))
+
+        one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                     "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
+                                     "semanticTarget": target})
+        self.assertEqual(one_shot.get("outcome"), "error", one_shot)
+        self.assertEqual(one_shot["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", one_shot)
+
+        control_lines = ["fn accepts(x: Bool) -> Bool { return x }"]
+        control_lines.extend(f"fn good{i}() -> Bool {{ return accepts(true) }}" for i in range(4))
+        control_source = NL.join(control_lines)
+        control_reference = self._reference_check("four-independent-call-control", control_source)
+        _, control = check_staged(control_source)
+        self.assertEqual(control_reference["status"], "valid", control_reference)
+        self.assertEqual(scalar(control["status"]), control_reference["status"], control)
+        self.assertEqual(control["diagnostics"]["value"], [], control)
+        control_opened = self._open(control_source)
+        control_target = {"document": control_opened["document"], "revision": control_opened["revision"], "entryFunctions": []}
+        one_shot_control = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                             "op": "tool_invoke", "tool": "pep-a13-checker",
+                                             "arguments": [], "semanticTarget": control_target})
+        self.assertEqual(one_shot_control.get("outcome"), "error", one_shot_control)
+        self.assertEqual(one_shot_control["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", one_shot_control)
+        hole_source = "fn accepts(x: Bool) -> Bool { return x }" + NL + "fn probe() -> Bool { return accepts(?arg) }"
+        hole_reference = self._reference_check("independent-call-typed-hole", hole_source)
+        _, hole_report = check_staged(hole_source)
+        self.assertEqual(hole_reference["status"], "incomplete", hole_reference)
+        self.assertEqual(scalar(hole_report["status"]), hole_reference["status"], hole_report)
+        self.assertEqual([(scalar(fields(item)["name"]), scalar(fields(item)["expectedType"]))
+                          for item in hole_report["holes"]["value"]], [("arg", "Bool")])
+
     def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
         source = (
             "fn identity(flag: Bool) -> Bool { return flag }\n"
