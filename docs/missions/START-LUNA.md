@@ -2,6 +2,10 @@
 
 **Main mission:** docs/missions/PEP-SUSTAINED-IMPLEMENTATION-20261027.md on this branch.
 
+## Standing two-road product roadmap (28 October 2026)
+
+**Before selecting the next substantial implementation slice, read [Pepin Roadmap Index](../roadmaps/ROADMAP-INDEX.md).** Its two linked roads define the real reproducible native A->B->C bootstrap and, **after bootstrap**, the complete accepted Pepin 1.0 language/runtime/standard-library and AI-first developer environment. The [full-language acceptance ledger](../roadmaps/FULL-LANGUAGE-LEDGER.md) keeps missing obligations visible. Follow latest Matthew decisions and accepted semantics, preserve current branch/file ownership, and treat the roadmap as a **continuation dependency map, not a job reassignment or auto-merge approval**.
+
 ## Matthew's product goal (28 October 2026)
 
 **Read [FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md](FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md).** Build and verify **ALL of the accepted small Pep language**. The self-hosting compiler is an important early milestone, **not completion**; implement remaining final-draft semantics, runtime, standard library, testing and AI-first facilities afterwards. Maintain an all-feature completion/gap ledger. Use [GitHub #16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16) and the Basic Memory coordination hub to declare and respect two-agent file/branch ownership. Do not collide with the other worker or stop at a three-slice review.
