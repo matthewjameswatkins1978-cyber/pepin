@@ -210,6 +210,33 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
                     self.assertEqual(result.stdout, "2\n")
 
+    def test_typed_empty_boolean_list_reassignment_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var values: List[Bool] = []\n"
+            "  var replacement = [true, false]\n"
+            "  var count = 0\n"
+            "  while count <= 0 { values = replacement; count = count + 1 }\n"
+            "  return if contains(values, true) && length(values) == 2 { 42 } else { 0 }\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            source = pathlib.Path(temp) / "reassigned_empty_bool_list.pep"
+            reference_source = pathlib.Path(temp) / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "42\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
     def test_mutable_boolean_list_binding_matches_interpreter(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
