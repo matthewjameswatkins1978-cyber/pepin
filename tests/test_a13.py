@@ -1549,6 +1549,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(len(actual), 1)
         self.assertEqual(actual[0][0], "PEP_UNKNOWN_VARIABLE")
 
+    def test_duplicate_pattern_binding_diagnostic_matches_ocaml(self):
+        cases = [
+            ("pattern", "type Pair = P(Int, Int) | N()" + NL + "fn f(x: Pair) -> Int { return match x { P(a, a) => a N() => 0 } }", "PEP_DUPLICATE_PATTERN_BINDING"),
+            ("local-binding", "fn f() -> Int { let a = 1; let a = 2; return a }", "PEP_DUPLICATE_BINDING"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("duplicate-binding-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
     def test_nested_single_variant_constructor_patterns_match_ocaml(self):
         cases = [
             ("singleton-valid", "type Inner = I(Int)" + NL + "type Outer = O(Inner) | N()" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value N() => 0 } }", "valid"),
