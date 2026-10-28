@@ -84,7 +84,10 @@ def check_fixture(cli, pep_file, timeout):
 
 
 def slugify(value):
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "test"
+    import hashlib as _hashlib
+    text = str(value)
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_") or "test"
+    return "%s-%s" % (stem[:48], _hashlib.sha1(text.encode("utf-8")).hexdigest()[:8])
 
 
 def write_evidence(evidence_dir, fixture_id, name, text):
@@ -200,6 +203,15 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
     base["run_elapsed_s"] = round(elapsed, 3)
     base["command"] = "pep run %s" % rel
     if timed_out:
+        if evidence_dir is not None:
+            artifacts = base.get("evidence", {})
+            for name, content in (("stdout.txt", out), ("stderr.txt", err_text)):
+                path = write_evidence(evidence_dir, fid, name, content)
+                if path:
+                    artifacts[name] = path
+            if artifacts:
+                base["evidence"] = artifacts
+            base["evidence_note"] = "partial output; process killed at timeout"
         base.update(status="timeout",
                     detail="run exceeded %ss" % timeout)
         return base
@@ -219,8 +231,14 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
             base["evidence"] = artifacts
     want_exit = expect.get("exit", 0)
     want_code = expect.get("diagnosticCode")
-    if rc == want_exit and out == expect.get("stdout", out) and (
-            want_code is None or want_code in (out + err_text)):
+    if want_code is None:
+        code_ok = True
+    else:
+        # Observed CLI contract: runtime diagnostics print as `line:col: CODE: message`.
+        # A bare code word in program output must NOT satisfy an expected diagnostic.
+        code_ok = re.search(r"(?m)^\d+:\d+:\s*" + re.escape(want_code) + r"\b",
+                            out + err_text) is not None
+    if rc == want_exit and out == expect.get("stdout", out) and code_ok:
         if rc == 0:
             base.update(status="pass", detail="exit 0 and stdout matched")
         else:
@@ -360,6 +378,8 @@ def finish(doc, infra, args, failed=0):
             c.get("pass", 0), c.get("fail", 0), c.get("compile_error", 0),
             c.get("runtime_error", 0), c.get("timeout", 0),
             c.get("infra_error", 0), c.get("skip", 0)))
+        if doc.get("evidence_root"):
+            print("evidence: %s" % doc["evidence_root"])
     if infra is not None:
         return EXIT_INFRA
     return EXIT_OK if failed == 0 else EXIT_TESTS_FAILED

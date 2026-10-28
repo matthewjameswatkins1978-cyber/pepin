@@ -105,6 +105,22 @@ class RunnerHonestyTests(unittest.TestCase):
             self.assertEqual(proc2.returncode, 2)
             self.assertIn("infra_error", proc2.stdout)
 
+    def test_printed_code_is_not_a_diagnostic(self):
+        # A program that merely prints the expected code word must NOT pass
+        # as demonstrating the runtime diagnostic (line:col: CODE: shape required).
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = pathlib.Path(tmp) / "fake.pep"
+            fake.write_text('say("PEP_RUNTIME_DIVISION_BY_ZERO")\n',
+                            encoding="utf-8")
+            m = write_manifest(tmp, [{"id": "f1", "file": "fake.pep", "kind": "run",
+                                      "expect": {"exit": 0, "stdout": "PEP_RUNTIME_DIVISION_BY_ZERO\n",
+                                                 "diagnosticCode": "PEP_RUNTIME_DIVISION_BY_ZERO"}}])
+            proc = run_runner("--json", manifest=m)
+            doc = json.loads(proc.stdout)
+            # exit/stdout match but no diagnostic line exists: must fail, not pass.
+            self.assertEqual(doc["tests"][0]["status"], "fail")
+            self.assertNotEqual(proc.returncode, 0)
+
     def test_timeout_and_garbage_output_never_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             sleeper = pathlib.Path(tmp) / "hang.py"
