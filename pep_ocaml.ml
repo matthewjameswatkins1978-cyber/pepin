@@ -325,6 +325,8 @@ let parse_func p public =
       let type_name=expect_id p in
       let type_span=p.ts.(p.p-1).at in
       if Hashtbl.mem seen type_name then fail "PEP_DUPLICATE_TYPE_PARAMETER" ("Duplicate type parameter '"^type_name^"'") type_span ();
+      if List.mem type_name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] then
+        fail "PEP_RESERVED_TYPE_PARAMETER" ("Type parameter '"^type_name^"' conflicts with a built-in type") type_span ();
       Hashtbl.add seen type_name ();
       type_params:= !type_params@[type_name]
     in

@@ -991,6 +991,19 @@ class PepGenericFunctionTests(unittest.TestCase):
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
 
+    def test_builtin_type_names_are_rejected_as_generic_parameters(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, name in enumerate(("Int", "Bool", "Str", "SourceBytes", "Unit", "List")):
+                with self.subTest(name=name):
+                    source = f"fn identity[{name}](value: {name}) -> {name} {{ return value }}\n"
+                    path = pathlib.Path(temporary) / f"reserved-{index}.pep"
+                    path.write_text(source, encoding="utf-8", newline="")
+                    result = invoke("check", path, "--json")
+                    self.assertEqual(result.returncode, 1)
+                    diagnostic = json.loads(result.stdout)["diagnostics"][0]
+                    self.assertEqual(diagnostic["code"], "PEP_RESERVED_TYPE_PARAMETER")
+                    self.assertEqual(diagnostic["span"]["start"]["offset"], source.index(f"[{name}]") + 1)
+
     def test_duplicate_type_parameters_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = "fn identity[T, T](value: T) -> T { return value }\n"
