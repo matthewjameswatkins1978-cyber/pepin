@@ -4,6 +4,12 @@ fn list_int_sum(values: List[Int]) -> Int {
   return total
 }
 
+fn list_int_product(values: List[Int]) -> Int {
+  var product = 1
+  for item in values { product = product * item }
+  return product
+}
+
 fn list_bool_count_true(values: List[Bool]) -> Int {
   var total = 0
   for item in values { total = if item { total + 1 } else { total } }
