@@ -969,6 +969,27 @@ class PepGenericFunctionTests(unittest.TestCase):
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_DUPLICATE_TYPE_PARAMETER")
 
+    def test_imported_public_generic_result_uses_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            (project / "main.pep").write_text(
+                "import library as l\n"
+                "let values: List[Int] = l.empty()\n"
+                "say(int_text(length(values)))\n",
+                encoding="utf-8",
+                newline="",
+            )
+            (project / "library.pep").write_text(
+                "pub fn empty[T]() -> List[T] { return [] }\n",
+                encoding="utf-8",
+                newline="",
+            )
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "0\n")
+
     def test_type_parameters_do_not_leak_between_function_declarations(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = (
