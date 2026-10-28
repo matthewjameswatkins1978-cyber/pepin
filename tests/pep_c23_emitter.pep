@@ -974,8 +974,13 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                   arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
                   for element in parsed.nodes {
                     if element.parentId == iterableList.node.id && element.role == "element" {
-                      let elementText = if element.kind == "boolean" { if element.booleanValue { "1" } else { "0" } } else { int_text(element.integerValue) }
-                      arrayDeclaration = append(arrayDeclaration, elementText)
+                      if element.kind == "boolean" {
+                        arrayDeclaration = append(arrayDeclaration, if element.booleanValue { "1" } else { "0" })
+                      } else {
+                        let lowered = pep_c23_expression(parsed.nodes, node, element)
+                        if lowered.status != "emitted" { return lowered } else {}
+                        for part in lowered.sourceParts { arrayDeclaration = append(arrayDeclaration, part) }
+                      }
                       arrayDeclaration = append(arrayDeclaration, ", ")
                     } else {}
                   }
