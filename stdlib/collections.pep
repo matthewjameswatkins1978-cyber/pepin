@@ -62,6 +62,12 @@ fn list_int_count_zero(values: List[Int]) -> Int {
   return total
 }
 
+fn list_int_count_equal(values: List[Int], expected: Int) -> Int {
+  var total = 0
+  for item in values { total = if item == expected { total + 1 } else { total } }
+  return total
+}
+
 fn list_int_any_zero(values: List[Int]) -> Bool {
   var found = false
   for item in values { found = found || (item == 0) }
