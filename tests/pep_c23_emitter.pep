@@ -317,6 +317,8 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
         return pep_c23_record_list_declaration(nodes, iterable.node)
       } else {}
       if iterable.found && iterable.node.kind == "name" {
+        let literal = pep_c23_list_literal(nodes, function, iterable.node)
+        if literal.found { return pep_c23_record_list_declaration(nodes, literal.node) } else {}
         let parameter = pep_c23_record_list_parameter(nodes, function, iterable.node.text)
         if parameter.found {
           let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
@@ -1231,7 +1233,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             if iterableList.found {
               for element in parsed.nodes {
                 if element.parentId == iterableList.node.id && element.role == "element" {
-                  if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements") } else {}
+                  if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) && (!iterableRecordLiteral.found || element.kind != "record") { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer, Bool, or supported record elements") } else {}
                   elementCount = elementCount + 1
                 } else {}
               }
