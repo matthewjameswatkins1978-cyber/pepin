@@ -256,6 +256,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
              "type Outer = O(Int, Int, Inner) | N()" + NL +
              "fn f(x: Outer) -> Int { return match x { O(value, _, I()) => 0 O(_, _, I()) => 1 O(_, _, J()) => 2 N() => 3 } }",
              "PEP_DUPLICATE_MATCH_ARM"),
+            ("utf8-crlf-duplicate-span",
+             "type Inner = I() | J()" + CRLF +
+             "type Outer = O(Int, Inner) | N()" + CRLF +
+             'fn f(x: Outer) -> Int { let label: Str = "🐇"; return match x { O(_, I()) => 0 O(_, I()) => 1 O(_, J()) => 2 N() => 3 } }' + CRLF,
+             "PEP_DUPLICATE_MATCH_ARM"),
         ]
         for case_name, case_source, expected_code in later_payload_cases:
             with self.subTest(case=case_name):
@@ -283,6 +288,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 ]
                 self.assertEqual(actual_case_diagnostics, expected_case_diagnostics, case_report)
                 self.assertEqual([item[0] for item in actual_case_diagnostics], [expected_code])
+                if case_name == "utf8-crlf-duplicate-span":
+                    source_bytes = case_source.encode("utf-8")
+                    repeated_arm = "O(_, I()) => 1"
+                    expected_start = len(case_source[:case_source.index(repeated_arm)].encode("utf-8"))
+                    expected_end = expected_start + len(repeated_arm.encode("utf-8"))
+                    self.assertIn("🐇".encode("utf-8"), source_bytes)
+                    self.assertEqual(source_bytes.count(CRLF.encode("ascii")), 3)
+                    self.assertEqual(actual_case_diagnostics, [(expected_code, expected_start, expected_end)])
 
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
