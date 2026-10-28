@@ -29,7 +29,9 @@ JSON object:
   `"diagnosticCode": "PEP_RUNTIME_..."`; the test passes only when the
   exit, stdout, and code all occur exactly as specified.
   `"match"` selects stdout comparison: `"exact"` (default, byte equality),
-  `"contains"` (substring), or `"regex"` (Python `re.search`). Use
+  `"contains"` (substring), or `"regex"` (Python `re.search`). `contains`
+  and `regex` require an explicit `stdout`; omitting it is `infra_error`,
+  never a vacuous pass. Use
   `contains`/`regex` for nondeterministic fragments (timings, paths);
   keep `exact` whenever output is deterministic. Unknown modes and bad
   regexes are `infra_error`, never passes.

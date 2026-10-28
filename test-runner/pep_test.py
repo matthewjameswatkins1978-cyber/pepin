@@ -241,6 +241,10 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
     match_mode = expect.get("match", "exact")
     if match_mode == "exact":
         output_ok = out == expect.get("stdout", out)
+    elif match_mode in ("contains", "regex") and "stdout" not in expect:
+        base.update(status="infra_error",
+                    detail="match mode %r requires an explicit expect.stdout" % match_mode)
+        return base
     elif match_mode == "contains":
         output_ok = expect.get("stdout", "") in out
     elif match_mode == "regex":

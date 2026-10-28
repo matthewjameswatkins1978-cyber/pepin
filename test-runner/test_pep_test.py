@@ -229,6 +229,12 @@ class RunnerHonestyTests(unittest.TestCase):
             self.assertEqual(by_id["b1"]["status"], "infra_error")
             self.assertEqual(by_id["u1"]["status"], "infra_error")
             self.assertNotEqual(proc.returncode, 0)
+            # contains/regex without an explicit expected string must not pass vacuously.
+            m2 = write_manifest(tmp, [{"id": "v1", "file": "f.pep", "kind": "run",
+                                       "expect": {"exit": 0, "match": "contains"}}])
+            proc2 = run_runner("--json", manifest=m2)
+            doc2 = json.loads(proc2.stdout)
+            self.assertEqual(doc2["tests"][0]["status"], "infra_error")
 
 
     def check_schema(self, schema, doc, path="root"):
