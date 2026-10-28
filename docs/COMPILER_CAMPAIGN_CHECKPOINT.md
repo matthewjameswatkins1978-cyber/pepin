@@ -197,3 +197,18 @@ No `CURRENT.md`, manifest, master, release, protocol or budget changes. A13 rema
 Verification on the test SHA: the focused staged JSONL test passed **1/1** (the method exercises six source fixtures plus the known one-shot cap case); `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The full A13/nested-record suite **51/51** and A14 boundary tests **2/2** were run on implementation SHA `f314513`; those source files and compiler implementation are unchanged by this test-only commit, but the newly added three fixtures were not included in that full suite run. Profile evidence is inherited from `f314513` and remains valid because only the test file changed.
 
 **Nonblocking 3/3 review:** the implementation key covers each top-level payload position with constructor identity, payload arity and normalized irrefutable shape; eligibility still excludes malformed/deeper unsupported patterns. Full constructor coverage remains separate from duplicate identity. The expanded tests challenge both false-duplicate and missed-duplicate directions against OCaml. No budget/protocol/C23/milestone changes. A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — recursive nested constructor patterns (2026-10-28; cycle 1/3)
+
+**Implementation/test SHA:** `7224423b3f7d3367bf7a236c01eade474a25dda3`, pushed to `campaign/pep-v01-sustained-build-20261027`. The checker now recursively validates nested constructor payloads for constructor identity, expected payload type and arity. It computes full-coverage eligibility recursively, so partial nested-union patterns remain partial. Duplicate detection keeps the compact existing key for ordinary shallow shapes and falls back to recursive AST structure comparison when constructors exceed that key's depth; binding and wildcard remain equivalent. Staged JSONL checks match OCaml on valid depth-three patterns, distinct partials, exact duplicates and diagnostics. The one-shot analyzer can still hit the unchanged 100,000-step cap on the deep fixture; the staged parser/checker path completes. This extends the checker slice's demonstrated nesting depth, not pattern-matrix exhaustiveness or a general runtime guarantee.
+
+Verification on the implementation/test SHA:
+
+- Focused OCaml differential and budget-boundary regressions: **3/3 passed**.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **58/58 passed**.
+- `python -m unittest tests.test_a14_c23 -q`: **11/11 passed**.
+- `python -m unittest tests.test_c23_cli -q`: **5/5 passed**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- No clean OCaml rebuild, historical MoonBit suite, full test discovery or new benchmark was run. Previous performance profiles are inherited evidence, not measurements of this recursive-pattern change.
+
+No runtime budget, protocol, A14, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 1/3.
