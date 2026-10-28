@@ -143,6 +143,35 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
     let target = pep_c23_function(nodes, node.text)
+    if node.text == "contains" {
+      if !argument.found || !secondArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 contains lowering requires a list and an Int value")
+      } else {}
+      let list = pep_c23_list_literal(nodes, function, argument.node)
+      if !list.found { return pep_c23_unsupported("Pep C23 contains lowering requires a direct integer list literal or immutable list binding") } else {}
+      if secondArgument.node.kind != "integer" && secondArgument.node.kind != "name" {
+        return pep_c23_unsupported("Pep C23 contains lowering requires an integer literal or local value")
+      } else {}
+      let value = pep_c23_expression(nodes, function, secondArgument.node)
+      if value.status != "emitted" { return value } else {}
+      var parts: List[Str] = ["("]
+      var count = 0
+      for element in nodes {
+        if element.parentId == list.node.id && element.role == "element" {
+          if element.kind != "integer" { return pep_c23_unsupported("Pep C23 contains list literals currently require integer elements") } else {}
+          if count != 0 { parts = append(parts, " || ") } else {}
+          parts = append(parts, "(")
+          for part in value.sourceParts { parts = append(parts, part) }
+          parts = append(parts, " == ")
+          parts = append(parts, int_text(element.integerValue))
+          parts = append(parts, ")")
+          count = count + 1
+        } else {}
+      }
+      if count == 0 { parts = append(parts, "0") } else {}
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
     if node.text == "length" {
       if !argument.found || secondArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 length lowering requires one supported list value")
