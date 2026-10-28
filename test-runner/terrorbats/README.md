@@ -54,7 +54,33 @@ foreach ($f in 'composed_int_gcd', 'composed_int_is_even',
 | Bat | Claim attacked | Red baseline (this revision) |
 | --- | --- | --- |
 | `00-control-wrong-expectation-detected` | "the conformance runner passes a deliberately wrong expectation" | `PROVEN` — required control: the harness *does* detect it |
-| `01-parser-composition-ceiling` | "a valid multi-function program reaches the C23 checker instead of aborting on the step budget" | `PROVEN` — the claim is currently false; this is the #20 blocker |
+| `01-parser-composition-ceiling` | "a valid multi-function program reaches the C23 checker instead of aborting on the step budget" | `PROVEN` for gcd, is_even and clamp-negative; `NOT OBSERVED` for the minimal forwarding wrapper (it reaches the emitter) |
+| `02-session-continuation-invariants` | "the JSONL session breaks continuation/revision invariants under hostile traffic" | `NOT OBSERVED` — all six probes hold on this revision |
+| `03-session-stateful-handshake` | "a supervised session answers a piped request with an error instead of a successful open" | `NOT OBSERVED` — it answers normally |
+
+`02` and `03` use the session protocol directly. `02` drives it through
+`drivers/session_continuation_attack.py`, which speaks JSONL to the real CLI and
+prints one `ATTACK … | HOLD|VIOLATED` line per probe plus a `SUMMARY`, so a
+verdict is always traceable to a named attack. `03` uses the framework's stateful
+**process** adapter (`start` / `write_stdin` / `wait_ready` / `observe` / `kill`)
+to supervise a real session with generation-relative readiness.
+
+Session invariants currently confirmed to hold:
+
+| Probe | Observed refusal |
+| --- | --- |
+| unknown operation | `PEP_SESSION_UNKNOWN_OPERATION` |
+| malformed JSON line | `PEP_SESSION_MALFORMED_JSON` |
+| missing required field | `PEP_SESSION_FIELD_REQUIRED` |
+| unregistered tool invocation | `PEP_TOOL_NOT_ACTIVE` |
+| revision identity | same bytes → same `sha256:` revision; different bytes → different revision |
+| liveness after refusals | session still answers correctly |
+
+One nuance worth carrying into any continuation repair: `document` is a per-open
+session **handle** and legitimately changes between opens, while `revision` is the
+content identity. A repair must key staleness on `revision`. My first version of
+the driver asserted both and produced a false `VIOLATED` — retained here because
+a wrong oracle is indistinguishable from a real bug until it is checked.
 
 `00-*` is the deliberately failing control. Its claim is false by construction,
 so a working oracle must falsify it. If it ever returns `NOT OBSERVED`, the

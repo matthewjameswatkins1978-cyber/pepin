@@ -1,0 +1,79 @@
+version: terrorbat/v1
+
+id: pep-session-stateful-handshake
+
+claim:
+  text: >
+    A supervised `pep.ps1 session --jsonl` process serves one JSONL request and
+    returns a structured `open` response carrying a content revision, without
+    the supervisor having to guess readiness or leave an owned process behind.
+
+requires:
+  - process.start
+  - process.readiness
+  - process.stdin
+  - process.observe
+  - process.kill
+
+attack:
+  run:
+    - adapter: process
+      action: start
+      handle: session
+      program: pwsh
+      args:
+        - -NoProfile
+        - -File
+        - pep.ps1
+        - session
+        - --jsonl
+      cwd: .
+      stdin: piped
+    - adapter: process
+      action: write_stdin
+      handle: session
+      text: >-
+        {"schemaVersion":3,"op":"open","name":"bat","source":"fn alpha(x: Int) -> Int { return x + 1 }\n"}
+      newline: true
+    - adapter: process
+      action: wait_ready
+      handle: session
+      stdout_contains: '"outcome":"ok"'
+      timeout_ms: 180000
+    - adapter: process
+      action: observe
+      handle: session
+    - adapter: process
+      action: kill
+      handle: session
+      timeout_ms: 5000
+
+oracle:
+  # Oracles encode FALSIFYING evidence, so this asks for the failure shape:
+  # a supervised session that answered with an error object instead of a
+  # successful open. A healthy handshake leaves this condition unsatisfied and
+  # the Bat reports NOT OBSERVED — the attack did not falsify the claim.
+  all:
+    - type: text_contains
+      step: run:3
+      stream: stdout
+      substring: '"outcome":"error"'
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 600s
+  total: 900s
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, session, stateful-process, readiness]
+  description: >
+    Exercises the framework's stateful process adapter against the real session:
+    explicit readiness on a real stdout marker (generation-relative cursor), one
+    piped request, bounded observe, owned kill. PROVEN means the supervised
+    session answered with an error object rather than a successful open;
+    NOT OBSERVED means it answered normally.

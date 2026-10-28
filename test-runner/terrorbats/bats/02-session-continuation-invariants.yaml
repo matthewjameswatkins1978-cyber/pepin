@@ -1,0 +1,56 @@
+version: terrorbat/v1
+
+id: pep-session-continuation-invariants
+
+claim:
+  text: >
+    The Pep JSONL session keeps its continuation and revision invariants under
+    hostile continuation traffic: unknown operations, malformed JSON, missing
+    required fields, an unregistered tool, a reopened document and a stale
+    document handle all produce structured refusals, content revisions stay
+    stable for identical bytes and distinct for different bytes, and the session
+    still answers correctly afterwards.
+
+requires:
+  - process.spawn
+
+attack:
+  run:
+    # pwsh explicitly: Terror Bats never wraps steps in an implicit shell, and
+    # `python` on Windows is a .cmd shim that cannot be spawned directly.
+    - adapter: command
+      action: run
+      program: pwsh
+      args:
+        - -NoProfile
+        - -Command
+        - >-
+          python test-runner/terrorbats/drivers/session_continuation_attack.py
+          pep.ps1;
+          exit $LASTEXITCODE
+
+oracle:
+  # Falsifying evidence: any invariant broken by the session.
+  all:
+    - type: text_contains
+      step: run:0
+      stream: stdout
+      substring: VIOLATED
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 600s
+  total: 900s
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, session, continuation, revision, stale-cursor]
+  description: >
+    PROVEN means the session really did break a continuation/revision invariant
+    (claim falsified). NOT OBSERVED means these attacks did not break it on this
+    revision, which is not a certificate. The driver prints one ATTACK line per
+    probe plus a SUMMARY, so a verdict is always traceable to a named attack.
