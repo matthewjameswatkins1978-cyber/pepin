@@ -227,6 +227,14 @@ class A14C23EmissionTests(unittest.TestCase):
             "fn main() -> Int { if (1 / 1 == 1) || (1 / 0 == 0) { return 42 } else { return 0 } }",
             42,
         )
+        self._compile_and_run(
+            "fn main() -> Int { if !false { return 42 } else { return 0 } }",
+            42,
+        )
+        self._compile_and_run(
+            "fn main() -> Int { if !true { return 0 } else { return 42 } }",
+            42,
+        )
 
     def test_generated_c23_executes_checked_arithmetic(self):
         cases = (

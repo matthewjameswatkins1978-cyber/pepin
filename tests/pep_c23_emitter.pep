@@ -35,6 +35,10 @@ fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" { return false } else {}
   if node.kind == "call" { return true } else {}
+  if node.kind == "unary" && node.text == "!" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    return !operand.found || pep_c23_expression_may_fail(nodes, operand.node)
+  } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
     let right = pep_c23_child(nodes, node.id, "right", 1)
@@ -236,6 +240,16 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     } else {}
     return pep_c23_unsupported("Pep C23 binary operator is unsupported")
+  } else {}
+  if node.kind == "unary" && node.text == "!" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    if !operand.found { return pep_c23_unsupported("Pep C23 unary expression has no operand") } else {}
+    let lowered = pep_c23_expression(nodes, function, operand.node)
+    if lowered.status != "emitted" { return lowered } else {}
+    var parts: List[Str] = ["(!"]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
   } else {}
   if node.kind == "unary" && node.text == "-" {
     let operand = pep_c23_child(nodes, node.id, "operand", 0)
