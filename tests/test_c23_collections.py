@@ -243,5 +243,78 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(result.stdout, reference.stdout)
 
+    def test_integer_list_parameter_and_length_call_matches_interpreter(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn size(values: List[Int]) -> Int { return length(values) }\n"
+            "fn main() -> Int { return size([4, 8, 15]) }\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "list-parameter.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "3\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
+    def test_integer_list_parameter_contains_matches_interpreter(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn has_two(values: List[Int]) -> Int {\n"
+            "  return if contains(values, 2) { 1 } else { 0 }\n"
+            "}\n"
+            "fn main() -> Int { return has_two([1, 2, 3]) }\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "list-parameter-contains.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "1\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
+    def test_empty_integer_list_parameter_is_safe(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn has_two(values: List[Int]) -> Int {\n"
+            "  return if contains(values, 2) { 1 } else { 0 }\n"
+            "}\n"
+            "fn main() -> Int { return has_two([]) }\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "empty-list-parameter.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "0\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
 if __name__ == "__main__":
     unittest.main()
