@@ -133,23 +133,55 @@ class NativeDifferentialTests(unittest.TestCase):
 
     # -- divergence ------------------------------------------------------
     def test_compiler_disagreement_is_divergence(self):
+        # Exact mode, one compiler matches the oracle: the split must still be
+        # reported as divergence, not swallowed as an ordinary failure.
         manifest, stub = self.build(gcc={"stdout": "43\n", "exit": 0},
                                     expect={"exit": 0, "stdout": "42\n"})
         proc = self.run_native(manifest, stub, "--json")
         status, test, doc = self.status_of(proc)
-        self.assertIn(status, ("divergence", "fail"), test.get("detail"))
+        self.assertEqual(status, "divergence", test.get("detail"))
         self.assertNotEqual(proc.returncode, 0)
-        self.assertNotEqual(doc["counts"]["pass"], 1)
+        self.assertEqual(doc["counts"]["divergence"], 1)
+        self.assertEqual(doc["counts"]["pass"], 0)
+        self.assertEqual(doc["counts"]["fail"], 0)
 
-    def test_exit_code_disagreement_is_not_a_pass(self):
+    def test_exit_code_disagreement_is_divergence(self):
         manifest, stub = self.build(
             clang={"stdout": "42\n", "exit": 0},
             gcc={"stdout": "42\n", "exit": 3},
             expect={"exit": 0, "stdout": "42\n"})
         proc = self.run_native(manifest, stub, "--json")
-        status, test, _ = self.status_of(proc)
-        self.assertNotEqual(status, "pass", test.get("detail"))
+        status, test, doc = self.status_of(proc)
+        self.assertEqual(status, "divergence", test.get("detail"))
+        self.assertIn("exit", test.get("detail", ""))
+        self.assertEqual(doc["counts"]["fail"], 0)
         self.assertNotEqual(proc.returncode, 0)
+
+    def test_natives_agreeing_on_a_wrong_answer_is_a_failure(self):
+        # Agreement between clang and gcc is not a pass: the oracle still rules.
+        manifest, stub = self.build(
+            clang={"stdout": "43\n", "exit": 0},
+            gcc={"stdout": "43\n", "exit": 0},
+            expect={"exit": 0, "stdout": "42\n"})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, doc = self.status_of(proc)
+        self.assertEqual(status, "fail", test.get("detail"))
+        self.assertEqual(doc["counts"]["divergence"], 0)
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_diagnostic_code_disagreement_is_divergence(self):
+        manifest, stub = self.build(
+            run={"stderr": "2:14: PEP_RUNTIME_DIVISION_BY_ZERO: Division by zero\n",
+                 "exit": 1},
+            clang={"stderr": "PEP_RUNTIME_DIVISION_BY_ZERO\n", "exit": 1},
+            gcc={"stderr": "PEP_RUNTIME_OVERFLOW\n", "exit": 1},
+            expect={"match": "diagnostic", "exit": 1,
+                    "diagnosticCode": "PEP_RUNTIME_DIVISION_BY_ZERO"})
+        proc = self.run_native(manifest, stub, "--json")
+        status, test, doc = self.status_of(proc)
+        self.assertEqual(status, "divergence", test.get("detail"))
+        self.assertIn("diagnostic code", test.get("detail", ""))
+        self.assertEqual(doc["counts"]["fail"], 0)
 
     def test_interpreter_mismatch_fails_even_when_natives_agree(self):
         manifest, stub = self.build(run={"stdout": "41\n", "exit": 0})

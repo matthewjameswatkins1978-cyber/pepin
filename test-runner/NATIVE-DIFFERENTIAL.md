@@ -105,8 +105,12 @@ that agreement rather than assuming it.
   fails and the manifest must be updated deliberately.
 * `Pep C23 error:` (toolchain) is `infra_error`; a compiler refusing the emitted
   C, or a bare exit 2 with no Pep prefix, is `compile_error`.
-* clang and gcc disagreeing on stdout or exit is `divergence` — counted and
-  reported apart from `pass`, and it fails the run.
+* clang and gcc disagreeing on stdout, exit or (in `diagnostic` mode) the
+  `PEP_*` code is `divergence` — checked *before* the oracle comparison, because
+  otherwise the one expected answer a compiler matches would turn the split into
+  an ordinary failure and hide it. It is counted and reported apart from `pass`
+  and fails the run. Agreement between the compilers is never a pass on its own:
+  the declared expectation still rules.
 * Only the two leading `C23:`/`Executable:` lines are stripped, so a program
   that itself prints `C23: ...` is compared verbatim.
 * Declared-unsupported fixtures are counted as `unsupported`, never as `pass`.
@@ -132,29 +136,40 @@ its `--version`, so a "clang agreed with gcc" receipt names the compilers that
 produced it. A compiler that cannot report itself is recorded as `unknown: ...`
 rather than guessed, and never aborts the run.
 
-## When Agent 2's native backend lands
+## Working with Agent 2's native backend
 
-The fixtures pin the boundary measured on this branch's base (`52a75d6`) with the
-campaign emitter. Agent 2's `codex/native-collections-loop` branch already adds
-`List[Int]`/`List[Bool]` descriptors, `contains`, `length`, for-in and mutable
-lists. When that work merges:
+The manifest pins the boundary measured on **this branch's base (`52a75d6`)**
+with the campaign emitter. Agent 2's `codex/native-collections-loop` branch is a
+later, more capable revision: at `872a997` it supports tested `for`-in list forms
+(Int/Bool literal, mutable and parameter shapes) and mutable-state `while`.
 
-* `native/unsupported-record` and any future declared-unsupported fixture will
-  **fail** rather than quietly pass, because a declaration that a backend has
-  outgrown is a failure by design. The fix is a deliberate manifest edit —
-  move the fixture to `exact`/`diagnostic` mode with the newly measured
-  expectation — and that one-line change is the whole migration.
-* Newly supported shapes should be added as `exact`/`diagnostic` fixtures rather
-  than widening the existing ones, so each capability keeps its own evidence.
-* Re-measure before encoding: this suite exists precisely so a boundary is
-  claimed from a real run instead of from another agent's receipt.
+Checked against that revision rather than assumed:
+
+* both `native/unsupported-*` declarations stay **truthful** there — record field
+  access still reports `Pep C23 expression lowering does not support this
+  expression`, and a valid `Unit`/`Bool` main still reports `Pep C23 main
+  function must return Int`, which is what these fixtures declare;
+* what the later revision changes is the *documented limits* below (`for`-in and
+  mutable `while`), which describe this base and not that branch — they are not
+  manifest declarations, so nothing lies until someone edits a fixture.
+
+Rules that keep this honest:
+
+* Compare two real revisions before editing a declaration. A declaration a
+  backend has outgrown fails loudly by design; the migration is a deliberate
+  one-line manifest edit per fixture, made only after re-measuring both sides.
+* Never copy another agent's claim into a manifest. Add a new `exact` or
+  `diagnostic` fixture for a newly supported shape instead of widening an
+  existing one, so each capability keeps its own evidence.
 
 ## Current limits
 
-* The C23 subset is what the Pep-written emitter supports today: `fn main() ->
-  Int` with integer arithmetic, function calls and `if`/`else`, plus the
-  div-zero and overflow guards. Records, variants, lists, `for`-in, `var`/`while`
-  and non-`Int` mains are unsupported and asserted as such.
+* The C23 subset is what the Pep-written emitter supports **at this branch's
+  base (`52a75d6`)**: `fn main() -> Int` with integer arithmetic, function calls
+  and `if`/`else`, plus the div-zero and overflow guards. Records, variants,
+  lists, `for`-in, `var`/`while` and non-`Int` mains are unsupported *there* and
+  asserted as such; Agent 2's later branch widens some of these, so re-measure
+  before inheriting these limits.
 * Diagnostic *text* is not compared across backends — only the `PEP_*` code and
   the exit code, because the interpreter and native paths format differently by
   design.

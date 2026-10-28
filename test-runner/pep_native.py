@@ -254,6 +254,29 @@ def validate_expect(expect):
     return None
 
 
+def _native_divergence(native_items, mode):
+    """Return a detail when the native compilers disagree with each other."""
+    if len(native_items) < 2:
+        return None
+    first, *rest = native_items
+    for other in rest:
+        if (other.get("stdout") or "") != (first.get("stdout") or ""):
+            return "%s and %s disagree on stdout: %r vs %r" % (
+                first["backend"], other["backend"],
+                first.get("stdout"), other.get("stdout"))
+        if other.get("exit") != first.get("exit"):
+            return "%s and %s disagree on exit: %s vs %s" % (
+                first["backend"], other["backend"],
+                first.get("exit"), other.get("exit"))
+        if mode == "diagnostic":
+            a = diagnostic_code((first.get("stdout") or "") + (first.get("stderr") or ""))[0]
+            b = diagnostic_code((other.get("stdout") or "") + (other.get("stderr") or ""))[0]
+            if a != b:
+                return "%s and %s disagree on diagnostic code: %r vs %r" % (
+                    first["backend"], other["backend"], a, b)
+    return None
+
+
 def _check_interpreter(expect, observations):
     """Verify the interpreter's own declared observable, if one is declared."""
     for item in observations:
@@ -349,8 +372,14 @@ def verdict(expect, observations, backends):
         return "fail", ("native backend reported the fixture unsupported "
                         "without a declaration: %s" % _format(native_items))
 
-    # Supported: every selected backend must reproduce the shared expectation,
-    # and the two native compilers must agree with each other exactly.
+    # Native-vs-native disagreement is decided before any oracle comparison.
+    # Otherwise the single expected answer that one compiler matches would
+    # classify the split as an ordinary failure and hide the divergence.
+    drift = _native_divergence(native_items, mode)
+    if drift:
+        return "divergence", drift
+
+    # Supported: every selected backend must reproduce the shared expectation.
     want_exit = expect.get("exit", 0)
     if mode == "exact":
         want_stdout = expect.get("stdout", "")
@@ -376,16 +405,5 @@ def verdict(expect, observations, backends):
     else:
         return "infra_error", "unknown match mode %r for native fixture (want exact|diagnostic)" % mode
 
-    if len(native_items) > 1:
-        first, *rest = native_items
-        for other in rest:
-            if (other.get("stdout") or "") != (first.get("stdout") or ""):
-                return "divergence", "%s and %s disagree on stdout: %r vs %r" % (
-                    first["backend"], other["backend"],
-                    first.get("stdout"), other.get("stdout"))
-            if other.get("exit") != first.get("exit"):
-                return "divergence", "%s and %s disagree on exit: %s vs %s" % (
-                    first["backend"], other["backend"],
-                    first.get("exit"), other.get("exit"))
     return "pass", "agreed across %s: %s" % (
         "+".join(o["backend"] for o in observations), _format(observations))
