@@ -966,8 +966,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           var hasRecordElement = false
           for item in nodes {
             if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && item.kind != "record" {
-              return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
+              return pep_c23_unsupported("Pep C23 immutable collection bindings require Int, Bool, or supported record list literals")
             } else {}
           }
           if hasRecordElement && !recordList.found {

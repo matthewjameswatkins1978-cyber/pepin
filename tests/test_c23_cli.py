@@ -259,6 +259,12 @@ class PepC23CliTests(unittest.TestCase):
              "fn main() -> Int { return count([]) }\n",
              "Pep C23 unsupported: Pep C23 emission requires a valid Pep checker report",
              "valid"),
+            ("mutable-record-list-binding",
+             "type Point { x: Int }\n"
+             "fn count(points: List[Point]) -> Int { return length(points) }\n"
+             "fn main() -> Int { var points: List[Point] = [Point { x: 42 }]; return count(points) }\n",
+             "Pep C23 unsupported: Pep C23 immutable collection bindings require Int, Bool, or supported record list literals",
+             "valid"),
             ("bool-main",
              "fn main() -> Bool { return true }\n",
              "Pep C23 unsupported: Pep C23 main function must return Int",
