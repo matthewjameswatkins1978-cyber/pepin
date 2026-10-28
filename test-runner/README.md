@@ -12,6 +12,8 @@ The runner never interprets Pep itself: every verdict comes from
 .\pep.ps1 test --filter reject                   # only fixtures whose id contains SUBSTR
 .\pep.ps1 test --timeout 30                      # per-phase seconds override
 .\pep.ps1 test --manifest path/to/manifest.json  # alternate manifest
+.\pep.ps1 test --backend interpreter,clang,gcc   # native differential (NATIVE-DIFFERENTIAL.md)
+.\pep.ps1 test --backend clang --compiler-clang C:\path\to\clang.exe
 ```
 
 Exit code: `0` when every executed test passes or skips, `1` when any
@@ -28,6 +30,12 @@ JSON result alongside the inlined values.
 `--list` prints the declared fixtures (id, kind, file, skip reason)
 without executing them — the discovery query other tools can rely on.
 
+Fixtures are LF-canonical: `test-runner/fixtures/.gitattributes` marks
+`*.pep` as `-text` so `core.autocrlf` cannot rewrite them on checkout.
+Manifest spans are byte offsets into those exact bytes, so a CRLF copy
+would shift them; the runner refuses such a fixture as `infra_error`
+instead of reporting a misleading span mismatch.
+
 ## Fixture manifest
 
 See [MANIFEST-SCHEMA.md](MANIFEST-SCHEMA.md). Fixtures are explicit:
@@ -35,7 +43,9 @@ no `test {}` grammar or `std.test` APIs until their contracts are accepted.
 
 ## Outcome taxonomy
 
-`pass` · `fail` (assertion or expected-rejection mismatch) · `compile_error`
+`pass` · `fail` (assertion or expected-rejection mismatch) · `divergence`
+(native backends disagreed with each other) · `unsupported` (declared C23
+unsupported subset, confirmed on every native backend) · `compile_error`
 · `runtime_error` · `timeout` · `infra_error` · `skip` · `policy_denied`
 (reserved: no current `run` surface triggers a host-grant refusal, but the
 Road 2 V8 gate requires the category distinct so a future enforcing backend
@@ -50,7 +60,7 @@ with exactly the expected diagnostic `code` (and `span`, when given).
 
 Per test: source SHA-256, executed command, elapsed seconds, exit code,
 captured stdout/stderr, parsed diagnostics. Per run: repo revision,
-backend (`interpreter`), toolchain (compiler source SHA-256), manifest
+selected `backends`, toolchain (compiler source SHA-256), manifest
 path, and pass/fail/error/skip counts. JSON output carries the full
 document; it is the integration surface for the external Terror Bats
 adapter (see PEP-DEC-008T: execution status and verdict stay separate;
@@ -58,7 +68,11 @@ a passed test is evidence for that case, never universal proof).
 
 ## Current limitations (slice 1)
 
-- Single interpreter backend only; no native (C23) differential yet.
+- Native differential covers the C23 subset documented in
+  [NATIVE-DIFFERENTIAL.md](NATIVE-DIFFERENTIAL.md): `fn main() -> Int`
+  arithmetic, calls and `if`/`else`, plus runtime guards. Records,
+  variants, `for`-in, `var`/`while` and `Unit` main are declared
+  unsupported and asserted as such — never silently skipped.
 - No property testing, shrinking, or concurrency adversaries.
 - Manifest lists files explicitly; no compiler-discovered test blocks.
 - Timeouts bound each CLI phase; runaway compiler builds are bounded

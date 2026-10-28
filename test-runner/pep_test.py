@@ -17,6 +17,11 @@ Outcome taxonomy (mirrors Terror Bats execution splits, unit-test scale):
   policy_denied   host-capability refusal (reserved: no current CLI surface
                   triggers it; recorded distinctly per the Road 2 V8 gate the
                   moment a backend enforces host grants)
+  divergence      native backends (clang/gcc) disagreed with each other; a
+                  differential mismatch is never a pass
+  unsupported     the fixture declares the C23 subset unsupported and every
+                  native backend confirmed it; counted apart from pass, and a
+                  backend that starts supporting it fails the declaration
 
 A crash, timeout or transport failure NEVER counts as a successful negative
 test: kind=reject passes only when `check --json` parses AND reports
@@ -32,9 +37,11 @@ import subprocess
 import sys
 import time
 
+import pep_native
+
 SCHEMA_VERSION = 1
-STATUSES = ("pass", "fail", "compile_error", "runtime_error", "timeout",
-            "infra_error", "skip", "policy_denied")
+STATUSES = ("pass", "fail", "divergence", "unsupported", "compile_error",
+            "runtime_error", "timeout", "infra_error", "skip", "policy_denied")
 EXIT_OK = 0
 EXIT_TESTS_FAILED = 1
 EXIT_INFRA = 2
@@ -46,6 +53,15 @@ def sha256_file(path):
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return "sha256:" + h.hexdigest()
+
+
+def has_crlf(path):
+    """True when a fixture carries CRLF, so pinned byte spans would shift."""
+    try:
+        with open(path, "rb") as fh:
+            return b"\r\n" in fh.read()
+    except OSError:
+        return False
 
 
 def invoke(cli, args, timeout):
@@ -153,6 +169,12 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
                     detail="fixture file missing: %s" % rel)
         return base
     base["source_sha256"] = sha256_file(pep_file)
+    if "span" in expect and has_crlf(pep_file):
+        base.update(
+            status="infra_error",
+            detail=("fixture has CRLF line endings but pins byte spans; "
+                    "fixtures are LF-canonical (see test-runner/fixtures/.gitattributes)"))
+        return base
     if kind not in ("run", "reject", "check"):
         base.update(status="infra_error",
                     detail="unknown kind %r (want run|reject|check)" % kind)
@@ -287,6 +309,51 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
     return base
 
 
+def run_native_fixture(cli, fx, manifest_dir, timeout_default, evidence_dir,
+                       backends, compilers):
+    """Execute one native differential fixture. Returns a result dict."""
+    fid = fx.get("id", "<missing-id>")
+    rel = fx.get("file", "")
+    expect = fx.get("expect", {}) or {}
+    base = {"id": fid, "file": rel, "kind": "native",
+            "backends": list(backends)}
+    fx_timeout = fx.get("timeoutSeconds")
+    if fx_timeout is None:
+        timeout = timeout_default
+    elif isinstance(fx_timeout, bool) or not isinstance(fx_timeout, (int, float)) or fx_timeout <= 0:
+        base.update(status="infra_error",
+                    detail="fixture timeoutSeconds must be a positive number of seconds")
+        return base
+    else:
+        timeout = fx_timeout
+    if not rel:
+        base.update(status="infra_error", detail="fixture has no file")
+        return base
+    pep_file = manifest_dir / rel
+    if not pep_file.is_file():
+        base.update(status="infra_error", detail="fixture file missing: %s" % rel)
+        return base
+    base["source_sha256"] = sha256_file(pep_file)
+    observations = [pep_native.observe(cli, backend, pep_file, timeout, invoke,
+                                       compilers.get(backend))
+                    for backend in backends]
+    base["observed"] = observations
+    status, detail = pep_native.verdict(expect, observations, backends)
+    base.update(status=status, detail=detail)
+    if observations:
+        base["exit"] = observations[-1].get("exit")
+    if evidence_dir is not None:
+        artifacts = {}
+        for item in observations:
+            name = "native-%s.json" % item["backend"]
+            path = write_evidence(evidence_dir, fid, name, item)
+            if path:
+                artifacts[name] = path
+        if artifacts:
+            base["evidence"] = artifacts
+    return base
+
+
 def summarize(results):
     counts = {s: 0 for s in STATUSES}
     for r in results:
@@ -310,6 +377,12 @@ def main(argv=None):
                     help="Pep CLI entry (default: pep.ps1 next to this script's repo root)")
     ap.add_argument("--repo", default=None,
                     help="repository root (default: parent of test-runner/)")
+    ap.add_argument("--backend", default="interpreter",
+                    help="comma list of backends: interpreter,clang,gcc (default: interpreter)")
+    ap.add_argument("--compiler-clang", default=None,
+                    help="Clang executable for the clang backend (default: PATH)")
+    ap.add_argument("--compiler-gcc", default=None,
+                    help="GCC executable for the gcc backend (default: PATH)")
     ap.add_argument("--evidence-dir", default=None,
                     help="artifact directory (default: _build/pep-test-evidence/<UTC timestamp> under repo root)")
     args = ap.parse_args(argv)
@@ -357,6 +430,23 @@ def main(argv=None):
                       args)
     timeout_default = args.timeout or manifest_timeout
 
+    try:
+        backends = pep_native.parse_backends(args.backend)
+    except pep_native.ConfigError as exc:
+        return finish(None, {"status": "infra_error", "detail": str(exc)}, args)
+    compilers = {"clang": args.compiler_clang, "gcc": args.compiler_gcc}
+    if pep_native.wants_native(backends):
+        try:
+            compilers.update(pep_native.check_toolchains(backends, compilers))
+        except pep_native.Unavailable as exc:
+            return finish(None, {"status": "infra_error",
+                                 "detail": "backend unavailable: %s" % exc}, args)
+    elif any(f.get("kind") == "native" for f in fixtures):
+        # --list stays pure discovery; only execution narrows by backend.
+        print("note: native differential fixtures are listed but not run without "
+              "a native backend; use --backend interpreter,clang,gcc",
+              file=sys.stderr)
+
     if args.filter:
         fixtures = [f for f in fixtures if args.filter in str(f.get("id", ""))]
         if not fixtures:
@@ -389,9 +479,22 @@ def main(argv=None):
         evidence_root = repo_root / "_build" / "pep-test-evidence" / \
             datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence_root.mkdir(parents=True, exist_ok=True)
-    results = [run_fixture(cli_base, repo_root, fx, manifest_dir, timeout_default,
-                           evidence_root)
-               for fx in fixtures]
+    if not pep_native.wants_native(backends):
+        fixtures = [f for f in fixtures if f.get("kind") != "native"]
+        if not fixtures:
+            return finish(None, {"status": "infra_error",
+                                 "detail": "manifest defines no interpreter fixtures "
+                                           "to run without a native backend"}, args)
+    results = []
+    for fx in fixtures:
+        if fx.get("kind") == "native":
+            results.append(run_native_fixture(
+                cli_base, fx, manifest_dir, timeout_default, evidence_root,
+                backends, compilers))
+        else:
+            results.append(run_fixture(
+                cli_base, repo_root, fx, manifest_dir, timeout_default,
+                evidence_root))
     counts = summarize(results)
     try:
         repo_rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo_root),
@@ -406,12 +509,13 @@ def main(argv=None):
     except OSError:
         toolchain = {"pepCli": str(pep_entry), "compilerSource": "unreadable"}
     doc = {"schemaVersion": SCHEMA_VERSION, "runner": "pep test v1",
-           "repoRevision": repo_rev, "backend": "interpreter",
+           "repoRevision": repo_rev, "backends": list(backends),
+           "backend": "+".join(backends),
            "toolchain": toolchain, "manifest": str(manifest_path),
            "evidence_root": str(evidence_root),
            "counts": counts, "tests": results}
-    failed = counts["fail"] + counts["compile_error"] + counts["runtime_error"] + \
-        counts["timeout"] + counts["infra_error"]
+    failed = counts["fail"] + counts["divergence"] + counts["compile_error"] + \
+        counts["runtime_error"] + counts["timeout"] + counts["infra_error"]
     return finish(doc, None, args, failed=failed)
 
 
@@ -429,8 +533,9 @@ def finish(doc, infra, args, failed=0):
             print("%-12s %-28s %s" % (t.get("status", "?").upper(),
                                       t.get("id", "?"), t.get("detail", "")))
         c = doc["counts"]
-        print("pass=%d fail=%d compile_error=%d runtime_error=%d timeout=%d infra_error=%d skip=%d policy_denied=%d" % (
-            c.get("pass", 0), c.get("fail", 0), c.get("compile_error", 0),
+        print("pass=%d fail=%d divergence=%d unsupported=%d compile_error=%d runtime_error=%d timeout=%d infra_error=%d skip=%d policy_denied=%d" % (
+            c.get("pass", 0), c.get("fail", 0), c.get("divergence", 0),
+            c.get("unsupported", 0), c.get("compile_error", 0),
             c.get("runtime_error", 0), c.get("timeout", 0),
             c.get("infra_error", 0), c.get("skip", 0),
             c.get("policy_denied", 0)))

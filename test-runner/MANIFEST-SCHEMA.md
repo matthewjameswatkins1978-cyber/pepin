@@ -17,10 +17,15 @@ JSON object:
 |---|---|---|
 | `id` | yes | Stable unique name, e.g. `pass/add`. `--filter` matches substrings of it. |
 | `file` | yes | `.pep` path relative to the manifest directory. |
-| `kind` | yes | `run` \| `reject` \| `check`. |
+| `kind` | yes | `run` \| `reject` \| `check` \| `native`. |
 | `expect` | for run/reject | See below. |
 | `timeoutSeconds` | no | Per-phase override. Falls back to `--timeout`, then `limits.timeoutSeconds` (default 120). Must be a positive number; duplicates ids, non-positive/non-numeric timeouts and unknown `match` modes are `infra_error`, never silent. |
 | `skip` | no | String reason. The fixture is recorded `skip` and never executed. |
+
+Fixtures are LF-canonical (`fixtures/.gitattributes` marks `*.pep` as
+`-text`). `span` offsets are byte positions into those exact bytes, so a
+CRLF copy is refused as `infra_error` rather than reported as a span
+mismatch.
 
 ## `expect` by kind
 
@@ -41,6 +46,16 @@ JSON object:
   when present, only the listed keys are compared
   (`start.offset/line/column`, `endOffset`).
 - `check`: `{}`. Passes when `check --json` reports `valid`.
+- `native`: differential across the selected backends
+  (`--backend interpreter,clang,gcc`). `"match"` may be `"exact"` (default:
+  every backend reproduces `stdout`/`exit` byte-for-byte), `"diagnostic"`
+  (every backend exits with `exit` and reports `diagnosticCode`), or
+  `"reject"` (invalid program: the interpreter rejects with `diagnosticCode`
+  and no native backend may execute it). `"nativeUnsupported": "<substring>"`
+  declares the C23 subset unsupported, so every native backend must report
+  `Pep C23 unsupported:` containing it; such fixtures are counted
+  `unsupported`, never `pass`. See
+  [NATIVE-DIFFERENTIAL.md](NATIVE-DIFFERENTIAL.md).
 
 Anything else — valid program in a `reject` fixture, wrong code,
 stdout mismatch, crash, timeout, missing file, non-JSON compiler

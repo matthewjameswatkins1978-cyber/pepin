@@ -51,11 +51,62 @@
       "expect": {}
     },
     {
-      "id": "skip/native-differential",
-      "file": "fixtures/pass_add.pep",
-      "kind": "run",
-      "skip": "native (C23) differential deferred to a later slice; interpreter-only in slice 1",
+      "id": "native/arith-return",
+      "file": "fixtures/native_arith_return.pep",
+      "kind": "native",
       "expect": { "exit": 0, "stdout": "42\n" }
+    },
+    {
+      "id": "native/call-return",
+      "file": "fixtures/native_call_return.pep",
+      "kind": "native",
+      "expect": { "exit": 0, "stdout": "42\n" }
+    },
+    {
+      "id": "native/if-else",
+      "file": "fixtures/native_if_else.pep",
+      "kind": "native",
+      "expect": { "exit": 0, "stdout": "1\n" }
+    },
+    {
+      "id": "native/negative-subtraction",
+      "file": "fixtures/native_negative_sub.pep",
+      "kind": "native",
+      "expect": { "exit": 0, "stdout": "-14\n" }
+    },
+    {
+      "id": "native/runtime-division-by-zero",
+      "file": "fixtures/native_runtime_div_zero.pep",
+      "kind": "native",
+      "expect": { "match": "diagnostic", "exit": 1,
+                  "diagnosticCode": "PEP_RUNTIME_DIVISION_BY_ZERO" }
+    },
+    {
+      "id": "native/runtime-int-overflow",
+      "file": "fixtures/native_runtime_overflow.pep",
+      "kind": "native",
+      "expect": { "match": "diagnostic", "exit": 1,
+                  "diagnosticCode": "PEP_RUNTIME_OVERFLOW" }
+    },
+    {
+      "id": "native/reject-type-mismatch",
+      "file": "fixtures/native_reject_type_mismatch.pep",
+      "kind": "native",
+      "expect": { "match": "reject", "diagnosticCode": "PEP_TYPE_MISMATCH" }
+    },
+    {
+      "id": "native/unsupported-unit-main",
+      "file": "fixtures/native_unsupported_unit_main.pep",
+      "kind": "native",
+      "expect": { "exit": 0, "stdout": "hi\n",
+                  "nativeUnsupported": "main function must return Int" }
+    },
+    {
+      "id": "native/unsupported-record",
+      "file": "fixtures/native_unsupported_record.pep",
+      "kind": "native",
+      "expect": { "exit": 0, "stdout": "",
+                  "nativeUnsupported": "expression lowering does not support this expression" }
     },
     {
       "id": "pass/union-match",

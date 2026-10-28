@@ -4,12 +4,16 @@
   "title": "pep test v1 machine-readable result document",
   "description": "Contract for `pep test --json` output and the external Terror Bats adapter surface. Execution status and verdict stay separate: `status` reports what happened; a `pass` is evidence for that case, never universal proof.",
   "type": "object",
-  "required": ["schemaVersion", "runner", "repoRevision", "backend", "toolchain", "manifest", "counts", "tests"],
+  "required": ["schemaVersion", "runner", "repoRevision", "backend", "backends", "toolchain", "manifest", "counts", "tests"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "runner": { "const": "pep test v1" },
     "repoRevision": { "type": "string" },
     "backend": { "type": "string" },
+    "backends": {
+      "type": "array",
+      "items": { "enum": ["interpreter", "clang", "gcc"] }
+    },
     "toolchain": {
       "type": "object",
       "required": ["pepCli", "compilerSource"],
@@ -23,10 +27,12 @@
     "note": { "type": ["string", "null"] },
     "counts": {
       "type": "object",
-      "required": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"],
+      "required": ["pass", "fail", "divergence", "unsupported", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"],
       "properties": {
         "pass": { "type": "integer", "minimum": 0 },
         "fail": { "type": "integer", "minimum": 0 },
+        "divergence": { "type": "integer", "minimum": 0 },
+        "unsupported": { "type": "integer", "minimum": 0 },
         "compile_error": { "type": "integer", "minimum": 0 },
         "runtime_error": { "type": "integer", "minimum": 0 },
         "timeout": { "type": "integer", "minimum": 0 },
@@ -48,8 +54,30 @@
       "properties": {
         "id": { "type": "string" },
         "file": { "type": "string" },
-        "kind": { "enum": ["run", "reject", "check"] },
-        "status": { "enum": ["pass", "fail", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"] },
+        "kind": { "enum": ["run", "reject", "check", "native"] },
+        "status": { "enum": ["pass", "fail", "divergence", "unsupported", "compile_error", "runtime_error", "timeout", "infra_error", "skip", "policy_denied"] },
+        "backends": {
+          "type": "array",
+          "items": { "enum": ["interpreter", "clang", "gcc"] }
+        },
+        "observed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["backend"],
+            "properties": {
+              "backend": { "enum": ["interpreter", "clang", "gcc"] },
+              "command": { "type": "string" },
+              "exit": { "type": ["integer", "null"] },
+              "stdout": { "type": "string" },
+              "stderr": { "type": "string" },
+              "elapsed_s": { "type": "number" },
+              "timed_out": { "type": "boolean" },
+              "metadata": { "type": "array", "items": { "type": "string" } },
+              "compiler": { "type": ["string", "null"] }
+            }
+          }
+        },
         "detail": { "type": "string" },
         "source_sha256": { "type": "string", "pattern": "^sha256:[0-9a-f]+$" },
         "check_elapsed_s": { "type": "number" },

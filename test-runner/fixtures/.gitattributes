@@ -1,0 +1,11 @@
+# Fixtures are LF-canonical.
+#
+# Manifest expectations pin byte offsets (diagnostic spans), so the exact bytes
+# matter. With core.autocrlf=true — the Windows default — a plain `*.pep` file is
+# rewritten to CRLF on checkout, which shifts every offset by one byte per line
+# and turns an exact span assertion into a misleading "span did not match".
+#
+# `-text` disables all end-of-line conversion for this directory only, so every
+# checkout sees the committed LF bytes. The runner still refuses a CRLF fixture
+# that pins spans (infra_error) rather than blaming the compiler.
+*.pep -text

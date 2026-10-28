@@ -41,12 +41,15 @@ class RunnerHonestyTests(unittest.TestCase):
         doc = json.loads(proc.stdout)
         self.assertEqual(doc["schemaVersion"], 1)
         self.assertEqual(doc["counts"]["pass"], 12)
-        self.assertEqual(doc["counts"]["skip"], 1)
+        self.assertEqual(doc["counts"]["skip"], 0)
         self.assertEqual(doc["counts"]["fail"], 0)
         for t in doc["tests"]:
             self.assertIn("source_sha256", t)
         self.assertTrue(doc["repoRevision"])
         self.assertEqual(doc["backend"], "interpreter")
+        # Native fixtures are declared but stay out of an interpreter-only run.
+        self.assertEqual(doc["backends"], ["interpreter"])
+        self.assertFalse([t for t in doc["tests"] if t["kind"] == "native"])
 
     def test_stdout_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -175,7 +178,7 @@ class RunnerHonestyTests(unittest.TestCase):
         doc = json.loads(proc.stdout)
         ids = [t["id"] for t in doc["tests"]]
         self.assertIn("pass/add", ids)
-        self.assertIn("skip/native-differential", ids)
+        self.assertIn("native/arith-return", ids)
         for t in doc["tests"]:
             self.assertNotIn("status", t)  # listed, never executed
         proc2 = run_runner("--list", "--filter", "reject/")
@@ -184,12 +187,21 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertNotIn("pass/add", proc2.stdout)
 
     def test_skip_recorded_with_reason_never_executed(self):
-        proc = run_runner("--json", "--filter", "skip/")
-        doc = json.loads(proc.stdout)
-        self.assertEqual(proc.returncode, 0)  # skips do not fail the run
-        self.assertEqual(doc["counts"]["skip"], 1)
-        self.assertEqual(doc["tests"][0]["status"], "skip")
-        self.assertIn("native", doc["tests"][0]["detail"])
+        with tempfile.TemporaryDirectory() as tmp:
+            (pathlib.Path(tmp) / "s.pep").write_text("say(int_text(1))\n",
+                                                     encoding="utf-8")
+            m = write_manifest(tmp, [{"id": "skip/known-gap", "file": "s.pep",
+                                      "kind": "run",
+                                      "skip": "declared gap, not executed",
+                                      "expect": {"exit": 0, "stdout": "1\n"}}])
+            proc = run_runner("--json", manifest=m)
+            doc = json.loads(proc.stdout)
+            self.assertEqual(proc.returncode, 0)  # skips do not fail the run
+            self.assertEqual(doc["counts"]["skip"], 1)
+            self.assertEqual(doc["tests"][0]["status"], "skip")
+            self.assertIn("declared gap", doc["tests"][0]["detail"])
+            self.assertNotIn("exit", doc["tests"][0])  # never executed
+            self.assertNotIn("stdout", doc["tests"][0])
 
     def test_check_kind_fixture_passes(self):
         proc = run_runner("--json", "--filter", "check/")
