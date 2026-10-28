@@ -654,6 +654,19 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   } else {}
   return ""
 }
+fn is_all_hole_if_expression(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let found = lookup_node(nodes, id)
+  if !found.found { return false } else {}
+  if found.node.kind == "hole" { return true } else {}
+  if found.node.kind != "if_expression" { return false } else {}
+  let condition = child_at(nodes, found.node.id, "condition", 0)
+  let thenValue = child_at(nodes, found.node.id, "then", 1)
+  let elseValue = child_at(nodes, found.node.id, "else", 2)
+  if !condition.found || !thenValue.found || !elseValue.found { return false } else {}
+  if infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" { return false } else {}
+  return is_all_hole_if_expression(nodes, thenValue.node.id, functions, bindings, references) &&
+    is_all_hole_if_expression(nodes, elseValue.node.id, functions, bindings, references)
+}
 fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let found = lookup_node(nodes, id)
   if !found.found { return empty_type_shape() } else {}
@@ -1495,9 +1508,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let value = child_at(nodes, node.id, "value", 0)
         let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
         let receiverRecord = record_declaration(nodes, receiverType)
-        let receiverThen = if value.found { child_at(nodes, value.node.id, "then", 1) } else { NodeLookup { found: false, node: empty_node() } }
-        let receiverElse = if value.found { child_at(nodes, value.node.id, "else", 2) } else { NodeLookup { found: false, node: empty_node() } }
-        let receiverIfUntyped = value.found && value.node.kind == "if_expression" && receiverThen.found && receiverElse.found && receiverThen.node.kind == "hole" && receiverElse.node.kind == "hole"
+        let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
         if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
         } else {

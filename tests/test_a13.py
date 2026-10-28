@@ -1204,6 +1204,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unknown-record-field", "type Point { x: Int }" + NL + "fn f(point: Point) -> Int { return point.missing }", "PEP_UNKNOWN_FIELD", "point.missing"),
             ("untyped-hole-receiver", "fn f() -> Int { return ?.x }", "PEP_FIELD_ON_UNTYPED_VALUE", "?.x"),
             ("untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { ?b }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { ?b }).x"),
+            ("nested-untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if flag { ?b } else { ?c } }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { if flag { ?b } else { ?c } }).x"),
+            ("if-hole-unknown", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { missing }).x }", "PEP_UNKNOWN_VARIABLE", "missing"),
+            ("if-hole-scalar", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { 1 }).x }", "PEP_FIELD_ON_NON_RECORD", "(if flag { ?a } else { 1 }).x"),
+            ("nested-if-bad-condition", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if 1 { ?b } else { ?c } }).x }", "PEP_TYPE_MISMATCH", "1"),
             ("unknown-variable-receiver", "fn f() -> Int { return missing.x }", "PEP_UNKNOWN_VARIABLE", "missing"),
         ]
         for name, source, expected_code, marker in cases:
