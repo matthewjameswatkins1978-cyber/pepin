@@ -1291,6 +1291,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-later-leaf", "type Boxed = Box(List[List[Int]])\nfn f() -> Boxed { return Box([[1], [true]]) }", "invalid"),
             ("nested-valid", "type Boxed = Box(List[List[Int]])\nfn f() -> Boxed { return Box([[1], [2]]) }", "valid"),
             ("nominal-list-leaf", "type P { x: Int }\ntype Q { x: Int }\ntype Container = Wrap(List[P])\nfn f() -> Container { return Wrap([Q { x: 1 }]) }", "invalid"),
+            ("nominal-list-variable-mismatch", "type P { x: Int }\ntype Q { x: Int }\ntype Container = Wrap(List[P])\nfn f(values: List[Q]) -> Container { return Wrap(values) }", "invalid"),
+            ("nominal-list-variable-valid", "type P { x: Int }\ntype Container = Wrap(List[P])\nfn f(values: List[P]) -> Container { return Wrap(values) }", "valid"),
         ]
         for name, source, expected_status in cases:
             with self.subTest(name=name):

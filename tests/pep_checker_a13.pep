@@ -1673,11 +1673,13 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             let expected = variant_payload_type(nodes, node.text, payloadIndex)
             let actual = infer_expression_type(nodes, argument.id, functions, bindings, references)
             let expectedShape = variant_payload_shape(nodes, node.text, payloadIndex)
+            let actualShape = expression_type_shape(nodes, argument.id, functions, bindings, references)
+            let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
             let nestedMismatch = if argument.kind == "list" && expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
             if nestedMismatch.found {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", nestedMismatch.node))
             } else {
-              if expected != "" && actual != "" && expected != actual {
+              if shapeMismatch || expected != "" && actual != "" && expected != actual {
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", argument))
               } else {}
             }
