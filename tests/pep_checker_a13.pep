@@ -14,7 +14,8 @@ type NodeLookup { found: Bool, node: FlatAstNode }
 type FunctionLookup { found: Bool, function: CheckedFunction }
 type BindingLookup { found: Bool, binding: BindingFact }
 type ReferenceLookup { found: Bool, reference: ResolvedName }
-type ConstructorPatternKey { name: Str, argumentCount: Int, firstArgumentKind: Str, firstArgumentConstructor: Str }
+type PatternKeyPart { position: Int, kind: Str, constructor: Str, payloadArity: Int }
+type ConstructorPatternKey { name: Str, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
 
 
 fn empty_type_shape() -> PepTypeShape {
@@ -724,7 +725,15 @@ fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expect
 }
 
 fn same_constructor_pattern_key(left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
-  return left.name == right.name && left.argumentCount == right.argumentCount && left.firstArgumentKind == right.firstArgumentKind && left.firstArgumentConstructor == right.firstArgumentConstructor
+  if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
+  for leftPart in left.argumentPatterns {
+    var found = false
+    for rightPart in right.argumentPatterns {
+      if leftPart.position == rightPart.position && leftPart.kind == rightPart.kind && leftPart.constructor == rightPart.constructor && leftPart.payloadArity == rightPart.payloadArity { found = true } else {}
+    }
+    if !found { return false } else {}
+  }
+  return true
 }
 
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
@@ -1175,8 +1184,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 } else {}
                 var coversVariant = true
                 var patternArgumentCount = 0
-                var firstArgumentKind = ""
-                var firstArgumentConstructor = ""
+                var reversedArgumentPatterns: List[PatternKeyPart] = []
                 let variant = variant_declaration(nodes, pattern.node.text)
                 let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
                 if expectedArity != count_children(nodes, pattern.node.id, "argument") {
@@ -1188,12 +1196,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 for payload in nodes {
                   if payload.parentId == pattern.node.id && payload.role == "argument" {
                     patternArgumentCount = patternArgumentCount + 1
-                    if payload.childIndex == 0 {
-                      if payload.kind == "constructor_pattern" {
-                        firstArgumentKind = "constructor"
-                        firstArgumentConstructor = payload.text
-                      } else { firstArgumentKind = "irrefutable" }
-                    } else {}
+                    let partKind = if payload.kind == "constructor_pattern" { "constructor" } else { if payload.kind == "binding_pattern" || payload.kind == "wildcard_pattern" { "irrefutable" } else { "unsupported" } }
+                    let partConstructor = if payload.kind == "constructor_pattern" { payload.text } else { "" }
+                    let partArity = if payload.kind == "constructor_pattern" { count_children(nodes, payload.id, "argument") } else { 0 }
+                    reversedArgumentPatterns = prepend(reversedArgumentPatterns, PatternKeyPart { position: payload.childIndex, kind: partKind, constructor: partConstructor, payloadArity: partArity })
                     if payload.kind == "constructor_pattern" {
                       var nestedCoversVariant = false
                       let expectedType = variant_payload_type(nodes, pattern.node.text, payload.childIndex)
@@ -1235,9 +1241,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     }
                   } else {}
                 }
-                if 2 <= patternArgumentCount { firstArgumentKind = "multiple"; firstArgumentConstructor = "" } else {}
-                if 2 <= patternArgumentCount && !coversVariant { duplicatePatternEligible = false } else {}
-                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, argumentCount: patternArgumentCount, firstArgumentKind: firstArgumentKind, firstArgumentConstructor: firstArgumentConstructor }
+                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
                 if union.found && patternUnion == subjectType && duplicatePatternEligible {
                   var samePattern = false
                   for previousPatternKey in seenConstructorPatterns {

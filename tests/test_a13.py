@@ -106,7 +106,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["revision"]), opened["revision"])
         return opened, report
 
-    def test_record_field_match_hole_uses_staged_parser_checker_within_budget(self):
+    def test_staged_parser_checker_preserves_diagnostics_within_budget(self):
         empty = self._open("")
         empty_parsed = typed_record("ParserProgress", [
             ("document", typed("Str", empty["document"])),
@@ -178,6 +178,67 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(actual_diagnostics, expected_diagnostics, report)
         holes = [fields(item) for item in report["holes"]["value"]]
         self.assertEqual([(scalar(item["name"]), scalar(item["expectedType"])) for item in holes], [("pending", "Int")])
+
+        # Distinct nested constructors in a later payload remain partial coverage.
+        later_payload_source = (
+            "type Inner = I() | J()" + NL +
+            "type Outer = O(Int, Inner) | N()" + NL +
+            "fn f(x: Outer) -> Int { return match x { O(_, I()) => 0 O(_, J()) => 1 N() => 2 } }"
+        )
+        later_payload = self._open(later_payload_source)
+        later_target = {"document": later_payload["document"], "revision": later_payload["revision"], "entryFunctions": []}
+        later_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                         "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                         "semanticTarget": later_target})
+        self.assertEqual(later_parsed.get("outcome"), "ok", later_parsed)
+        later_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                          "arguments": [later_parsed["result"]], "semanticTarget": later_target})
+        self.assertEqual(later_checked.get("outcome"), "ok", later_checked)
+        later_report = fields(later_checked["result"])
+        later_reference = self._reference_check("nested-pattern-later-payload", later_payload_source)
+        self.assertEqual(later_reference["status"], "invalid", later_reference)
+        self.assertEqual(scalar(later_report["status"]), later_reference["status"], later_report)
+        expected_later_diagnostics = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in later_reference["diagnostics"]
+        ]
+        actual_later_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in later_report["diagnostics"]["value"]
+        ]
+        self.assertEqual(actual_later_diagnostics, expected_later_diagnostics, later_report)
+        self.assertEqual([item[0] for item in actual_later_diagnostics], ["PEP_NON_EXHAUSTIVE_MATCH"])
+
+        duplicate_later_source = (
+            "type Inner = I() | J()" + NL +
+            "type Outer = O(Int, Inner) | N()" + NL +
+            "fn f(x: Outer) -> Int { return match x { O(_, I()) => 0 O(_, I()) => 1 O(_, J()) => 2 N() => 3 } }"
+        )
+        duplicate_later = self._open(duplicate_later_source)
+        duplicate_target = {"document": duplicate_later["document"], "revision": duplicate_later["revision"], "entryFunctions": []}
+        duplicate_parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                             "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                             "semanticTarget": duplicate_target})
+        self.assertEqual(duplicate_parsed.get("outcome"), "ok", duplicate_parsed)
+        duplicate_checked = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                              "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                              "arguments": [duplicate_parsed["result"]], "semanticTarget": duplicate_target})
+        self.assertEqual(duplicate_checked.get("outcome"), "ok", duplicate_checked)
+        duplicate_report = fields(duplicate_checked["result"])
+        duplicate_reference = self._reference_check("nested-pattern-later-payload-duplicate", duplicate_later_source)
+        self.assertEqual(duplicate_reference["status"], "invalid", duplicate_reference)
+        self.assertEqual(scalar(duplicate_report["status"]), duplicate_reference["status"], duplicate_report)
+        expected_duplicate_diagnostics = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in duplicate_reference["diagnostics"]
+        ]
+        actual_duplicate_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in duplicate_report["diagnostics"]["value"]
+        ]
+        self.assertEqual(actual_duplicate_diagnostics, expected_duplicate_diagnostics, duplicate_report)
+        self.assertEqual([item[0] for item in actual_duplicate_diagnostics], ["PEP_DUPLICATE_MATCH_ARM"])
 
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
