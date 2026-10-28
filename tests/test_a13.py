@@ -1358,6 +1358,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unknown-type-before-unknown-field", "type P{x:Int} fn f()->Int{let p=P{bogus:1,x:2};return 0} type R{x:Missing}"),
             ("unknown-type-before-duplicate-field", "type P{x:Int} fn f()->Int{let p=P{x:1,x:2};return 0} type R{x:Missing}"),
             ("unknown-type-before-duplicate-function", "fn f() -> Int { return 0 } fn f() -> Int { return 0 } type R { x: Missing } fn g() -> Int { let bad: Int = true; return 0 }"),
+            ("duplicate-type-before-unknown-type", "type P{x:Int} type P{y:Bool} type R{x:Missing}"),
+            ("duplicate-type-after-unknown-type", "type R{x:Missing} type P{x:Int} type P{y:Bool}"),
+            ("reserved-type-before-unknown-type", "type Int{x:Int} type R{x:Missing}"),
+            ("duplicate-declared-field-before-unknown-type", "type P{x:Int,x:Bool} type R{x:Missing}"),
+            ("duplicate-constructor-before-unknown-type", "type M=A()|B() type N=A()|C() type R{x:Missing}"),
         ]
         for name, source in cases:
             with self.subTest(name=name):

@@ -2,6 +2,7 @@ type PepTypeShape { kind: Str, name: Str, listDepth: Int }
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
+type DiagnosticLookup { found: Bool, diagnostic: CheckDiagnostic }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape, startByte: Int, endByte: Int }
@@ -69,6 +70,27 @@ fn empty_node() -> FlatAstNode {
 fn lookup_node(nodes: List[FlatAstNode], id: Int) -> NodeLookup {
   for node in nodes { if node.id == id { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
+}
+fn is_type_table_diagnostic(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -> Bool {
+  if candidate.code == "PEP_DUPLICATE_TYPE" || candidate.code == "PEP_DUPLICATE_CONSTRUCTOR" || candidate.code == "PEP_RESERVED_CONSTRUCTOR" {
+    return true
+  } else {}
+  if candidate.code == "PEP_DUPLICATE_FIELD" {
+    let field = lookup_node(nodes, candidate.syntaxId)
+    return field.found && field.node.kind == "field_declaration"
+  } else {}
+  return false
+}
+fn first_type_table_diagnostic(nodes: List[FlatAstNode], diagnostics: List[CheckDiagnostic]) -> DiagnosticLookup {
+  var found = false
+  var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+  for candidate in diagnostics {
+    if is_type_table_diagnostic(nodes, candidate) && (!found || candidate.startByte + 1 <= first.startByte) {
+      found = true
+      first = candidate
+    } else {}
+  }
+  return DiagnosticLookup { found: found, diagnostic: first }
 }
 fn count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
   var count = 0
@@ -1984,6 +2006,10 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let calls = reverse(reversedCalls)
   let collectedDiagnostics = reverse(reversedDiagnostics)
   var diagnostics = collectedDiagnostics
+  let typeTableDiagnostic = first_type_table_diagnostic(nodes, collectedDiagnostics)
+  if typeTableDiagnostic.found {
+    diagnostics = [typeTableDiagnostic.diagnostic]
+  } else {
   if typeResult.unreachable.found {
     var earlierFound = false
     var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
@@ -2036,6 +2062,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
         if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
       }
     }
+  }
   }
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
   return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
