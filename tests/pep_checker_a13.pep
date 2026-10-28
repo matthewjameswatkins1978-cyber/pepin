@@ -1414,7 +1414,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
         let conditionalMismatchHandled = if returned.node.kind == "if_expression" { if_expression_branch_mismatch(nodes, returned.node.id, owner.function.returnType, expectedShape, functions, bindings, references) } else { false }
         if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch || listMismatch.found) && !conditionalMismatchHandled {
-          let code = if listMismatch.found || owner.function.returnType == "" || actualReturn == "" { "PEP_TYPE_MISMATCH" } else { "PEP_RETURN_TYPE" }
+          let code = "PEP_TYPE_MISMATCH"
           let mismatchNode = if listMismatch.found { listMismatch.node } else { returned.node }
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Return expression type does not match the function result type", mismatchNode))
         } else {}

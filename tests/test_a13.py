@@ -216,7 +216,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         _, report = self._analyze(source)
         self.assertEqual(scalar(report["status"]), "invalid", report)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-        self.assertIn("PEP_RETURN_TYPE", codes)
+        self.assertIn("PEP_TYPE_MISMATCH", codes)
 
         source = "fn id(x: Int) -> Int { return x }" + NL + "fn main() -> Int { return id(true) }"
         _, report = self._analyze(source)
@@ -227,6 +227,29 @@ class A13FunctionResolutionTests(unittest.TestCase):
         _, report = self._analyze(source)
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertIn("PEP_TYPE_MISMATCH", codes)
+
+    def test_return_mismatch_diagnostics_match_ocaml(self):
+        cases = [
+            ("scalar", "fn wrong(x: Bool) -> Int { return x }"),
+            ("unit-result", "fn wrong() -> Unit { return 1 }"),
+            ("conditional-branch", "fn wrong(flag: Bool) -> Int { return if flag { true } else { 0 } }"),
+            ("list-leaf", "fn bad() -> List[Int] { return [\"text\"] }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("return-mismatch-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
 
     def test_primitive_builtin_signatures_are_checked(self):
         source = "fn main() -> Unit { say(int_text(7)); return say(\"done\") }"
@@ -960,7 +983,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         _, report = self._analyze(source)
         self.assertEqual(scalar(report["status"]), "invalid", report)
         self.assertTrue(report["holes"]["value"], report)
-        self.assertIn("PEP_RETURN_TYPE", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
+        self.assertIn("PEP_TYPE_MISMATCH", [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]])
 
     def test_if_expression_propagates_context_and_reports_branch_spans(self):
         cases = [
