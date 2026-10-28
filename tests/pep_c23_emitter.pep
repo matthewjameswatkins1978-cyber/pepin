@@ -102,12 +102,17 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     var localFound = false
     var localId = -1
     for candidate in nodes {
-      if candidate.parentId == function.id && candidate.role == "statement" && candidate.kind == "let" && candidate.text == node.text {
+      if candidate.parentId == function.id && candidate.role == "statement" && (candidate.kind == "let" || candidate.kind == "var") && candidate.text == node.text {
         localFound = true
         localId = candidate.id
       } else {}
     }
     if localFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(localId)], diagnostic: "" } } else {}
+    for candidate in nodes {
+      if candidate.parentId == function.id && candidate.role == "statement" && candidate.kind == "for_in" && candidate.text == node.text {
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(candidate.id)], diagnostic: "" }
+      } else {}
+    }
     let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
     let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
     if parameter.found && parameter.node.text == node.text {
@@ -345,17 +350,52 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   for statement in nodes {
     if statement.parentId == function.id && statement.role == "statement" {
       statementCount = statementCount + 1
-      if statement.kind == "let" && !returned {
+      if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
-        if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+        if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
         let initial = pep_c23_expression(nodes, function, initialValue.node)
         if initial.status != "emitted" { return initial } else {}
       } else {
-        if statement.kind == "return" && !returned {
-          returned = true
-          returnStatement = PepC23NodeLookup { found: true, node: statement }
+        if statement.kind == "for_in" && !returned {
+          for local in nodes {
+            if local.parentId == function.id && local.role == "statement" && local.id != statement.id && (local.kind == "let" || local.kind == "var" || local.kind == "for_in") && local.text == statement.text {
+              return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function locals or other loop bindings")
+            } else {}
+          }
+          let firstParameter = pep_c23_child(nodes, function.id, "parameter", 0)
+          let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
+          if (firstParameter.found && firstParameter.node.text == statement.text) || (secondParameter.found && secondParameter.node.text == statement.text) {
+            return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function parameters")
+          } else {}
+          let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
+          if !iterable.found || iterable.node.kind != "list" || count_children(nodes, iterable.node.id, "element") == 0 || count_children(nodes, statement.id, "body") == 0 {
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty integer list literal")
+          } else {}
+          for item in nodes {
+            if item.parentId == iterable.node.id && item.role == "element" && item.kind != "integer" {
+              return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements")
+            } else {}
+          }
+          for bodyStatement in nodes {
+            if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
+              if bodyStatement.kind != "assignment" { return pep_c23_unsupported("Pep C23 for-in bodies currently require assignments to mutable integer locals") } else {}
+              var mutableTargetFound = false
+              for local in nodes {
+                if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == bodyStatement.text { mutableTargetFound = true } else {}
+              }
+              let assignedValue = pep_c23_child(nodes, bodyStatement.id, "value", 0)
+              if !mutableTargetFound || !assignedValue.found { return pep_c23_unsupported("Pep C23 for-in assignments must target a direct mutable local") } else {}
+              let assigned = pep_c23_expression(nodes, function, assignedValue.node)
+              if assigned.status != "emitted" { return assigned } else {}
+            } else {}
+          }
         } else {
-          return pep_c23_unsupported("Pep C23 functions require direct local lets followed by one return")
+          if statement.kind == "return" && !returned {
+            returned = true
+            returnStatement = PepC23NodeLookup { found: true, node: statement }
+          } else {
+            return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+          }
         }
       }
     } else {}
@@ -400,6 +440,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
     return pep_c23_unsupported("Pep C23 main function must return Int")
   } else {}
   var reversed: List[Str] = []
+  reversed = prepend(reversed, "#include <stddef.h>\n")
   reversed = prepend(reversed, "#include <stdio.h>\n")
   reversed = prepend(reversed, "#include <stdint.h>\n")
   reversed = prepend(reversed, "#include <stdlib.h>\n")
@@ -449,15 +490,74 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
         bodyParts = append(bodyParts, ";\n")
       } else {}
       for statement in parsed.nodes {
-        if statement.parentId == node.id && statement.role == "statement" && statement.kind == "let" {
+        if statement.parentId == node.id && statement.role == "statement" && (statement.kind == "let" || statement.kind == "var") {
           let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
-          if !initialValue.found { return pep_c23_unsupported("Pep C23 local let has no value") } else {}
+          if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
           let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
           for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
           for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
           bodyParts = append(bodyParts, ";\n")
-        } else {}
+        } else {
+          if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
+            let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
+            if !iterable.found || iterable.node.kind != "list" { return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal") } else {}
+            var elementCount = 0
+            for element in parsed.nodes {
+              if element.parentId == iterable.node.id && element.role == "element" {
+                if element.kind != "integer" { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements") } else {}
+                elementCount = elementCount + 1
+              } else {}
+            }
+            if elementCount == 0 { return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty list literal") } else {}
+            var arrayDeclaration: List[Str] = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+            for element in parsed.nodes {
+              if element.parentId == iterable.node.id && element.role == "element" {
+                arrayDeclaration = append(arrayDeclaration, int_text(element.integerValue))
+                arrayDeclaration = append(arrayDeclaration, ", ")
+              } else {}
+            }
+            arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, " < ")
+            arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
+            arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, "[pep_index_")
+            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+            arrayDeclaration = append(arrayDeclaration, "];\n")
+            for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
+            for loopStatement in parsed.nodes {
+              if loopStatement.parentId == statement.id && loopStatement.role == "body" {
+                if loopStatement.kind != "assignment" { return pep_c23_unsupported("Pep C23 for-in bodies currently require mutable local assignments") } else {}
+                let assignedValue = pep_c23_child(parsed.nodes, loopStatement.id, "value", 0)
+                if !assignedValue.found { return pep_c23_unsupported("Pep C23 assignment has no value") } else {}
+                let assigned = pep_c23_expression(parsed.nodes, node, assignedValue.node)
+                if assigned.status != "emitted" { return assigned } else {}
+                var targetId = -1
+                var targetFound = false
+                for local in parsed.nodes {
+                  if local.parentId == node.id && local.role == "statement" && local.kind == "var" && local.text == loopStatement.text {
+                    targetId = local.id
+                    targetFound = true
+                  } else {}
+                }
+                if !targetFound { return pep_c23_unsupported("Pep C23 assignment target must be a direct mutable local") } else {}
+                for part in ["    pep_local_", int_text(targetId), " = "] { bodyParts = append(bodyParts, part) }
+                for part in assigned.sourceParts { bodyParts = append(bodyParts, part) }
+                bodyParts = append(bodyParts, ";\n")
+              } else {}
+            }
+            bodyParts = append(bodyParts, "  }\n")
+          } else {}
+        }
       }
+
       if hasConditionalBody {
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
       } else {
