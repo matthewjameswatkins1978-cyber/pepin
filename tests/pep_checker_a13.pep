@@ -2045,7 +2045,8 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
         let orderByte = diagnostic_order_byte(nodes, candidate)
         if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
             candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
-            candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_TYPE" {
+            candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_CONSTRUCTOR" ||
+            candidate.code == "PEP_UNKNOWN_TYPE" {
           candidateCount = candidateCount + 1
         } else {}
         if candidate.code == "PEP_UNKNOWN_TYPE" {
