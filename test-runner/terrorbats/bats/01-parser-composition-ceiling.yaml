@@ -1,0 +1,58 @@
+version: terrorbat/v1
+
+id: pep-parser-composition-ceiling
+
+claim:
+  text: >
+    A valid multi-function Pep program reaches the C23 checker stage instead of
+    aborting inside the staged Pep-written parser on the 100,000-step
+    per-invocation budget.
+
+requires:
+  - process.spawn
+  - git.inspect
+
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args:
+        - -NoProfile
+        - -File
+        - pep.ps1
+        - build-c23
+        - $param: fixture
+        - -o
+        - tb-composition-out.exe
+
+oracle:
+  all:
+    - type: text_contains
+      step: run:0
+      stream: stderr
+      substring: PEP_RUNTIME_STEP_LIMIT
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+    - git_status
+
+timeout:
+  run: 900s
+  total: 1200s
+
+params:
+  fixture:
+    type: string
+    default: test-runner/terrorbats/fixtures/composed_int_gcd.pep
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, parser, step-limit, red-baseline, composition]
+  description: >
+    Red-baseline reproduction of the #20 blocker. PROVEN means the composition
+    really does abort on the step budget (claim falsified). NOT OBSERVED means
+    the program reached checker/emitter instead — re-run after any parser
+    continuation repair and compare the receipt pair.

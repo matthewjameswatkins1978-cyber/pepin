@@ -1,0 +1,58 @@
+version: terrorbat/v1
+
+id: pep-control-wrong-expectation-detected
+
+claim:
+  text: >
+    The standard-library conformance runner reports a deliberately wrong
+    expectation as a pass.
+
+requires:
+  - process.spawn
+
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: python
+      args:
+        - stdlib-conformance/conformance.py
+        - --library
+        - stdlib/intmath.pep
+        - --cases
+        - $param: cases
+        - --out
+        - _build/tb-doctored
+
+oracle:
+  all:
+    - type: exit_code
+      step: run:0
+      equals: 1
+    - type: text_contains
+      step: run:0
+      stream: stdout
+      substring: FAIL
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 600s
+  total: 900s
+
+params:
+  cases:
+    type: string
+    default: test-runner/terrorbats/fixtures/doctored-cases.json
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, control, deliberate-failure, test-honesty]
+  description: >
+    Deliberately failing control. The claim is false by construction (the runner
+    does NOT pass a wrong expectation), so a working oracle must FALSIFY it and
+    report PROVEN. If this ever returns NOT OBSERVED, the harness has stopped
+    detecting incorrect behaviour and every other passing Bat is suspect.
