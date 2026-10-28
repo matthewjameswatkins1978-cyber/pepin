@@ -1143,11 +1143,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           for argument in nodes {
             if argument.parentId == node.id && argument.role == "argument" {
               let expected = function_parameter_type(nodes, target.function.syntaxId, index)
-              let expectedShape = function_parameter_shape(nodes, target.function.syntaxId, index)
               let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
-              let actualShape = expression_type_shape(nodes, argument.id, functions, bindings, references)
-              let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-              let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+              let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
+              let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, index) } else { empty_type_shape() }
+              let needsStructuralCheck = expected == "" || actualArgument == ""
+              let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
+              let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+              let needsNestedListCheck = expectedShape.listDepth != 0 && (expected == "" || actualArgument == "" || expected != actualArgument || argument.kind == "list")
+              let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
               if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch || listMismatch.found {
                 let code = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found || expected == "" || actualArgument == "" { "PEP_TYPE_MISMATCH" } else { "PEP_ARGUMENT_TYPE" }
                 let mismatchNode = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found { listMismatch.node } else { argument }
