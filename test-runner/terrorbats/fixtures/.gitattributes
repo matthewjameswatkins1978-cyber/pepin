@@ -1,0 +1,6 @@
+# Fixtures here are LF-canonical for the same reason as ../fixtures: their bytes
+# are hashed and compared across repositories. Without this, a clone with
+# core.autocrlf=true checks them out as CRLF and the "byte-identical fixture"
+# claim in a receipt becomes false.
+*.pep -text
+*.json -text
