@@ -64,4 +64,12 @@ The native CLI now passes the exact typed `ParserProgress` result into `analyze_
 
 A13 remains experimental and unaccepted. The exact A13 combined nested case is close to the budget, larger variants such as a nested relay and two-argument helpers still reach the runtime step limit, and the monolithic A14 tool path can still fail where its individual stages pass. The practical improvement is limited to the staged native CLI route and the measured A13 case; no broad large-program guarantee is established. There are no new semantics, `CURRENT.md` or manifest changes, merges, or master updates. The main checkout's unrelated uncommitted A14 test remains untouched.
 
-Next: continue the campaign after checking the Parser outbox again. Prioritise a measured A13 cost reduction or the next bounded A13 semantic rule; retain the same budget and report unsupported cases as such.
+## Continuation 03 — mutable assignment typing (2026-10-28)
+
+**Implementation and test SHA:** `cc6a6d8916b35d66f892017e95b6c65a3f4d106e` (pushed to the campaign branch). The A13 checker now resolves assignment targets through the existing lexical binding and semantic identity tables. It accepts type-correct writes to `var`, rejects writes to `let` bindings and parameters as `PEP_ASSIGN_IMMUTABLE`, reports unresolved targets as `PEP_UNKNOWN_VARIABLE`, and checks RHS type names and structural shapes. Nested-list mismatches point at the offending leaf. Assignment context supplies expected types to empty lists and holes. `for-in` remains fail-closed as unsupported.
+
+Verification at the exact implementation/test SHA: `python -m unittest tests.test_a13 tests.test_a13_nested_records -v` passed **44/44** in 112.651 seconds; the assignment differential test compares 10 scenarios against OCaml, including byte spans and diagnostic precedence. `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The full repository suite was not rerun for this checker slice. The 100,000-step budget and `CURRENT.md`/manifest are unchanged.
+
+Limitations: assignment checking covers variable targets and the currently represented structural type subset; `for-in`, complete missing-return analysis and broad flow-sensitive semantics remain unsupported. A13 remains experimental and unaccepted. No master merge or release action occurred. The main checkout's unrelated A14 edit remains untouched.
+
+Next slice: after rereading the coordination outboxes, implement the smallest OCaml-matched `for-in` type-checking rule, preserving lexical loop-binding scope and fail-closed behavior for any unimplemented body or flow semantics.
