@@ -1012,7 +1012,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           }
         } else {}
       } else {}
-      if node.kind == "list" {
+      if node.kind == "list" && contextual_expected_type(nodes, node, functions, bindings, references) == "" {
         let expectedElement = list_element_type(infer_expression_type(nodes, node.id, functions, bindings, references))
         var mismatchReported = false
         for element in nodes {
@@ -1192,9 +1192,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
                   let expectedElementShape = elementShape
-                  let structuralMismatch = (elementType == "" || actualValue == "") && expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
+                  let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
-                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", value.node))
+                    let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                    let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", mismatchNode))
                   } else {}
                 } else {}
                 let elementShape = without_one_list(collectionShape)
@@ -1275,12 +1277,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let actualShape = expression_type_shape(nodes, returned.node.id, functions, bindings, references)
         let expectedShape = if owner.function.returnShape.kind != "" { owner.function.returnShape } else { legacy_type_shape(nodes, owner.function.returnType) }
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-        let nestedListMismatchHandled = returned.node.kind == "list" && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && actualReturn != "" && owner.function.returnType != ""
+        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
         let conditionalMismatchHandled = if returned.node.kind == "if_expression" { if_expression_branch_mismatch(nodes, returned.node.id, owner.function.returnType, expectedShape, functions, bindings, references) } else { false }
-        if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch) && !nestedListMismatchHandled && !conditionalMismatchHandled {
-          let code = if owner.function.returnType == "" || actualReturn == "" { "PEP_TYPE_MISMATCH" } else { "PEP_RETURN_TYPE" }
-          let mismatch = list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references)
-          let mismatchNode = if (owner.function.returnType == "" || actualReturn == "") && mismatch.found { mismatch.node } else { returned.node }
+        if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch || listMismatch.found) && !conditionalMismatchHandled {
+          let code = if (expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && (listMismatch.found || shapeMismatch)) || (listMismatch.found && !shapeMismatch) || owner.function.returnType == "" || actualReturn == "" { "PEP_TYPE_MISMATCH" } else { "PEP_RETURN_TYPE" }
+          let mismatchNode = if listMismatch.found { listMismatch.node } else { returned.node }
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Return expression type does not match the function result type", mismatchNode))
         } else {}
       } else {}
