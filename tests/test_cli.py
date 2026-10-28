@@ -953,6 +953,26 @@ class PepModuleCliTests(unittest.TestCase):
             self.assertEqual(diagnostic["span"]["source"], "main.pep")
             self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("import second"))
 
+    def test_import_syntax_rejects_absolute_and_parent_paths(self):
+        invalid_imports = (
+            'import "../outside.pep" as escape\n',
+            'import "C:/outside.pep" as escape\n',
+            "import /outside.pep as escape\n",
+        )
+        for entry in invalid_imports:
+            with self.subTest(entry=entry), tempfile.TemporaryDirectory() as temporary:
+                project = pathlib.Path(temporary)
+                self._write_project(project, {"main.pep": entry})
+
+                result = invoke("check", project / "main.pep", "--project", "--json")
+                self.assertEqual(result.returncode, 1)
+                diagnostic = json.loads(result.stdout)["diagnostics"][0]
+                self.assertTrue(
+                    diagnostic["code"].startswith("PEP_PARSE_")
+                    or diagnostic["code"] == "PEP_UNEXPECTED_CHARACTER",
+                    diagnostic,
+                )
+
     def test_module_symlink_cannot_escape_project_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
