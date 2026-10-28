@@ -1,0 +1,53 @@
+version: terrorbat/v1
+
+id: pep-parser-cursor-protocol
+
+claim:
+  text: >
+    The parser cursor protocol cannot lift the 100k-step-per-invocation ceiling
+    without corrupting the AST: it either aborts like the monolithic parse, or it
+    produces a well-formed but wrong tree — misordered nodes, duplicate or
+    non-contiguous ids, out-of-bounds extents, a stale cursor accepted as
+    progress, or a terminal step that emits nodes again.
+
+requires:
+  - process.spawn
+
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args:
+        - -NoProfile
+        - -Command
+        - >-
+          python test-runner/terrorbats/drivers/parser_cursor_attack.py;
+          exit $LASTEXITCODE
+
+oracle:
+  # Falsifying evidence: any cursor-protocol attack broke an invariant.
+  all:
+    - type: text_contains
+      step: run:0
+      stream: stdout
+      substring: VIOLATED
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+
+timeout:
+  run: 900s
+  total: 1200s
+
+meta:
+  origin: agent3-terrorbats
+  tags: [pep, parser, cursor, continuation, ast-integrity, step-budget]
+  description: >
+    Registers the repository's own parser_start / parser_step tools (A12 recipe,
+    reused read-only) and attacks them seven ways, including a direct comparison
+    against the monolithic parser on a source both can parse and a ceiling test on
+    a composition the monolithic parser cannot. PROVEN means the protocol broke
+    an invariant; NOT OBSERVED means it held, which is not a certificate.
