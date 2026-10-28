@@ -1491,9 +1491,22 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let subject = child_at(nodes, node.id, "value", 0)
         let subjectType = if subject.found { infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { "" }
         let union = union_declaration(nodes, subjectType)
+        var subjectHasPrimaryError = false
+        if subject.found && subject.node.kind == "name" {
+          let reference = find_reference(references, subject.node.id)
+          if !reference.found { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind == "call" {
+          let target = find_function(functions, subject.node.text)
+          if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
+        } else {}
         if !union.found && matchArmCount != 0 {
           let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", node))
+          if code == "PEP_MATCH_UNTYPED" && subjectHasPrimaryError {
+          } else {
+            let diagnosticNode = if subject.found { subject.node } else { node }
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", diagnosticNode))
+          }
         } else {}
         var catchAll = false
         var invalidPattern = false

@@ -1571,6 +1571,35 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(actual, expected, (name, expected, actual, report))
                 self.assertEqual([item[0] for item in actual], [expected_code])
 
+    def test_match_subject_diagnostics_match_ocaml(self):
+        cases = [
+            ("integer-literal", "fn f() -> Int { return match 1 { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("string-literal", "fn f() -> Int { return match \"x\" { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("list-literal", "fn f() -> Int { return match [1] { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("typed-name", "fn f(value: Int) -> Int { return match value { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("typed-call", "fn value() -> Int { return 1 }" + NL + "fn f() -> Int { return match value() { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("unknown-name", "fn f() -> Int { return match missing { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("unknown-function", "fn f() -> Int { return match missing_fn() { _ => 0 } }", "PEP_UNKNOWN_FUNCTION"),
+            ("unknown-constructor", "fn f() -> Int { return match Missing() { _ => 0 } }", "PEP_UNKNOWN_CONSTRUCTOR"),
+            ("hole", "fn f() -> Int { return match ?subject { _ => 0 } }", "PEP_MATCH_UNTYPED"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("match-subject-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
     def test_empty_match_diagnostics_match_ocaml(self):
         cases = [
             ("union-subject", "type Maybe = A(Int) | B()" + NL + "fn f(x: Maybe) -> Int { return match x {} }"),
