@@ -1555,10 +1555,45 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           let reference = find_reference(references, subject.node.id)
           if !reference.found { subjectHasPrimaryError = true } else {}
         } else {}
+        if subject.found && subject.node.kind == "binary" {
+          let left = child_at(nodes, subject.node.id, "left", 0)
+          let right = child_at(nodes, subject.node.id, "right", 1)
+          let leftType = if left.found { infer_expression_type(nodes, left.node.id, functions, bindings, references) } else { "" }
+          let rightType = if right.found { infer_expression_type(nodes, right.node.id, functions, bindings, references) } else { "" }
+          let expected = if subject.node.text == "&&" || subject.node.text == "||" { "Bool" } else { if subject.node.text == "==" || subject.node.text == "!=" { leftType } else { "Int" } }
+          let equalityUnsupported = (subject.node.text == "==" || subject.node.text == "!=") && leftType != "" && !equality_supported_type(leftType)
+          let untypedEqualityLeft = left.found && leftType == "" && (left.node.kind == "hole" || left.node.kind == "if_expression" && is_all_hole_if_expression(nodes, left.node.id, functions, bindings, references))
+          let operandMismatch = expected != "" && (leftType != "" && leftType != expected || rightType != "" && rightType != expected)
+          if equalityUnsupported || untypedEqualityLeft || operandMismatch { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind == "unary" {
+          let operand = child_at(nodes, subject.node.id, "operand", 0)
+          let expected = if subject.node.text == "!" { "Bool" } else { "Int" }
+          let operandType = if operand.found { infer_expression_type(nodes, operand.node.id, functions, bindings, references) } else { "" }
+          if operand.found && operand.node.kind != "hole" && operandType != expected { subjectHasPrimaryError = true } else {}
+        } else {}
         if subject.found && subject.node.kind == "call" {
           let target = find_function(functions, subject.node.text)
           if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
           if target.found && count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
+          if target.found {
+            var argumentIndex = 0
+            for argument in nodes {
+              if argument.parentId == subject.node.id && argument.role == "argument" {
+                let expectedArgument = function_parameter_type(nodes, target.function.syntaxId, argumentIndex)
+                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                let needsExpectedShape = expectedArgument == "" || actualArgument == "" || argument.kind == "list"
+                let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, argumentIndex) } else { empty_type_shape() }
+                let needsStructuralCheck = expectedArgument == "" || actualArgument == ""
+                let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
+                let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+                let needsNestedListCheck = expectedShape.listDepth != 0 && (expectedArgument == "" || actualArgument == "" || expectedArgument != actualArgument || argument.kind == "list")
+                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                if expectedArgument != "" && actualArgument != "" && expectedArgument != actualArgument || shapeMismatch || listMismatch.found { subjectHasPrimaryError = true } else {}
+                argumentIndex = argumentIndex + 1
+              } else {}
+            }
+          } else {}
         } else {}
         if subject.found && subject.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, subject.node.id, functions, bindings, references) { subjectHasPrimaryError = true } else {}
         if subject.found && subject.node.kind == "field_access" {
