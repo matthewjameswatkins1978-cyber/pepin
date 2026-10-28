@@ -1687,6 +1687,30 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(actual, expected, (name, expected, actual, report))
                 self.assertEqual([item[0] for item in actual], [expected_code])
 
+    def test_builtin_match_subject_holes_preserve_reference_status(self):
+        cases = [
+            ("length-hole", "length(?items)"),
+            ("reverse-hole", "reverse(?items)"),
+            ("append-hole", "append(?items, 1)"),
+            ("prepend-hole", "prepend(?items, 1)"),
+            ("contains-hole", "contains(?items, 1)"),
+        ]
+        for name, call in cases:
+            with self.subTest(name=name):
+                source = "fn f() -> Int { return match " + call + " { _ => 0 } }"
+                reference = self._reference_check("match-builtin-hole-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(scalar(report["status"]), reference["status"], (reference, report))
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, (reference, report))
+
     def test_empty_match_diagnostics_match_ocaml(self):
         cases = [
             ("union-subject", "type Maybe = A(Int) | B()" + NL + "fn f(x: Maybe) -> Int { return match x {} }"),
