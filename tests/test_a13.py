@@ -1642,6 +1642,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("list-literal", "fn f() -> Int { return match [1] { _ => 0 } }", "PEP_MATCH_NON_UNION"),
             ("binary-expression", "fn f() -> Int { return match (1 + 2) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
             ("if-expression", "fn f(flag: Bool) -> Int { return match (if flag { 1 } else { 2 }) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("if-branch-error", "fn f(flag: Bool) -> Int { return match (if flag { 1 } else { true }) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("if-condition-error", "fn f() -> Int { return match (if missing { 1 } else { 2 }) { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
             ("builtin-result", "fn f() -> Int { return match length([1]) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
             ("field-result", "type Point { x: Int }" + NL + "fn f(p: Point) -> Int { return match p.x { _ => 0 } }", "PEP_MATCH_NON_UNION"),
             ("typed-name", "fn f(value: Int) -> Int { return match value { _ => 0 } }", "PEP_MATCH_NON_UNION"),
@@ -1650,6 +1652,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unknown-function", "fn f() -> Int { return match missing_fn() { _ => 0 } }", "PEP_UNKNOWN_FUNCTION"),
             ("unknown-constructor", "fn f() -> Int { return match Missing() { _ => 0 } }", "PEP_UNKNOWN_CONSTRUCTOR"),
             ("unknown-field", "type Point { x: Int }" + NL + "fn f(p: Point) -> Int { return match p.missing { _ => 0 } }", "PEP_UNKNOWN_FIELD"),
+            ("untyped-field-receiver", "fn f() -> Int { return match ?.x { _ => 0 } }", "PEP_FIELD_ON_UNTYPED_VALUE"),
+            ("non-record-field-receiver", "fn f() -> Int { return match 1.x { _ => 0 } }", "PEP_FIELD_ON_NON_RECORD"),
             ("wrong-call-arity", "fn value() -> Int { return 1 }" + NL + "fn f() -> Int { return match value(2) { _ => 0 } }", "PEP_ARGUMENT_COUNT"),
             ("hole", "fn f() -> Int { return match ?subject { _ => 0 } }", "PEP_MATCH_UNTYPED"),
         ]

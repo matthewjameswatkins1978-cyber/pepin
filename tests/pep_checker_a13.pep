@@ -1560,11 +1560,18 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
           if target.found && count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
         } else {}
+        if subject.found && subject.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, subject.node.id, functions, bindings, references) { subjectHasPrimaryError = true } else {}
         if subject.found && subject.node.kind == "field_access" {
           let value = child_at(nodes, subject.node.id, "value", 0)
           let valueType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
           let record = record_declaration(nodes, valueType)
-          if record.found && record_field_type(nodes, valueType, subject.node.text) == "" { subjectHasPrimaryError = true } else {}
+          let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
+          let receiverIfFailure = value.found && value.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
+          let receiverUntyped = value.found && (value.node.kind == "hole" || receiverIfUntyped)
+          let receiverNonRecord = valueType != "" && !record.found
+          let receiverHasPrimaryFailure = receiverIfFailure || receiverUntyped || receiverNonRecord
+          let fieldUnknown = record.found && record_field_type(nodes, valueType, subject.node.text) == ""
+          if receiverHasPrimaryFailure || fieldUnknown { subjectHasPrimaryError = true } else {}
         } else {}
         if !union.found && matchArmCount != 0 {
           let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
