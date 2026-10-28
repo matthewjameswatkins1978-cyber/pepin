@@ -121,3 +121,9 @@ Verification:
 The runtime ceiling, OCaml seed, protocols, `CURRENT.md`, manifest, `master` and release state are unchanged. Full repository discovery and a clean OCaml rebuild were not repeated. A13 remains experimental and unaccepted.
 
 Next: reread the coordination outboxes before selecting another bounded A13 checker slice; continue against OCaml differential cases and the unchanged runtime ceiling.
+
+## Continuation 03 — missing-return diagnostic parity (2026-10-28)
+
+**Implementation and test SHA:** `f10d5db3fe6eeac19565e4d8db0be19720878a29` (pushed to the sustained campaign branch). For non-Unit functions whose current bounded return-flow analysis cannot establish that every path returns, the A13 checker now emits OCaml's `PEP_MISSING_RETURN` diagnostic code. Existing flow recognition and invalid status are unchanged. Four differential fixtures compare exact status, code and original function byte span for empty-body, local-fallthrough, conditional-fallthrough and nested-block-fallthrough inputs. The Pep explanatory message remains static and is not claimed to match OCaml text exactly.
+
+Verification on this implementation/test SHA: `python -m unittest tests.test_a13 tests.test_a13_nested_records -v` passed **48/48** in 134.407 seconds; `python -m unittest tests.test_a14_c23 -v` passed **11/11** in 62.832 seconds; Python compilation and `git diff --check` passed. Full discovery and a fresh clean OCaml rebuild were not repeated. The 100,000-step ceiling, protocols, `CURRENT.md`, manifest, `master` and release state are unchanged. A13 remains experimental; complete return-flow semantics are still unfinished.
