@@ -549,6 +549,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("list-leaf", "fn g(a: List[Int]) -> Int { return 0 }" + NL + "fn f() -> Int { return g([\"text\"]) }"),
             ("nested-list-leaf", "fn g(a: List[List[Int]]) -> Int { return 0 }" + NL + "fn f() -> Int { return g([[\"text\"]]) }"),
             ("record", "type Point { x: Int }" + NL + "fn g(a: Point) -> Int { return 0 }" + NL + "fn f() -> Int { return g(true) }"),
+            ("nested-call-error", "fn g(a: Bool) -> Bool { return a }" + NL + "fn h(x: Int) -> Int { return x }" + NL + "fn f() -> Bool { return g(h(true)) }"),
+            ("two-nested-call-errors", "fn g(a: Bool, b: Bool) -> Bool { return a }" + NL + "fn h(x: Int) -> Int { return x }" + NL + "fn f() -> Bool { return g(h(true), h(false)) }"),
+            ("separate-call-errors", "fn g(a: Bool) -> Bool { return a }" + NL + "fn f() -> Int { let first = g(1); let second = g(2); return 0 }"),
         ]
         for name, source in cases:
             with self.subTest(name=name):

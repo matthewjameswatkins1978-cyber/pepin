@@ -1613,7 +1613,26 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
   }
-  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(reversedDiagnostics) }
+  let orderedDiagnostics = reverse(reversedDiagnostics)
+  var selectedDiagnosticsReversed: List[CheckDiagnostic] = []
+  var firstTypeMismatchSelected = false
+  for candidate in orderedDiagnostics {
+    if candidate.code == "PEP_TYPE_MISMATCH" {
+      var hasMoreSpecificMismatch = false
+      for other in orderedDiagnostics {
+        if other.code == "PEP_TYPE_MISMATCH" && other.syntaxId != candidate.syntaxId && candidate.startByte <= other.startByte && other.endByte <= candidate.endByte && (candidate.startByte != other.startByte || other.endByte != candidate.endByte) {
+          hasMoreSpecificMismatch = true
+        } else {}
+      }
+      if !hasMoreSpecificMismatch && !firstTypeMismatchSelected {
+        selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
+        firstTypeMismatchSelected = true
+      } else {}
+    } else {
+      selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
+    }
+  }
+  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed) }
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
