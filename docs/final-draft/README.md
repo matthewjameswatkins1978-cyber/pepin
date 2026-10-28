@@ -10,6 +10,12 @@
 2. **[IMPLEMENTATION-MISSION.md](IMPLEMENTATION-MISSION.md)** — compact, actionable agent mission contract, authority limits, dependencies, milestone waves, review cadence and receipt shape.
 3. **[ACCEPTANCE-MATRIX.md](ACCEPTANCE-MATRIX.md)** — positive/negative test cases, adversarial safety gates, byte-preservation requirements, compiler/backend differential tests and evidence classification.
 
+## Completion objective: the entire accepted language
+
+Matthew has explicitly confirmed that **the product is the full Pep language described in this final draft, not just the subset sufficient to self-host**. Native C23 compilation and self-hosting should be achieved as early as dependencies permit, then development continues until the accepted complete grammar, type rules, memory and ownership safety, effects, structured concurrency, standard library, built-in testing, and AI-first semantic compiler interfaces are implemented and verified. A compact syntax is a design strength, not grounds to silently remove a difficult implementation obligation.
+
+Active agents must maintain an evidence-linked full-language completion/gap ledger and coordinate ownership on [GitHub issue #16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16). See the active campaign's [full-language and two-agent contract](https://github.com/matthewjameswatkins1978-cyber/pepin/blob/campaign/pep-v01-sustained-build-20261027/docs/missions/FULL-LANGUAGE-ENDSTATE-AND-TWO-AGENT-PLAN.md). The design is the **target**, not proof that any implementation or release gate has passed.
+
 ## Authoritative boundaries
 
 The accepted design **does not mean the current OCaml seed implements the described language**. Check the real implementation at [../DESIGN.md](../DESIGN.md), the current authoritative development phase at [../packets/CURRENT.md](../packets/CURRENT.md), and binding earlier technical resolutions [TR001](../TECHNICAL_RESOLUTION_001.md) and [TR002](../TECHNICAL_RESOLUTION_002.md).
