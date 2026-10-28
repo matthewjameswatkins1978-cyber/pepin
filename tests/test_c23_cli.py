@@ -35,7 +35,7 @@ class PepC23CliTests(unittest.TestCase):
             self.assertIn("int64_t pep_fn_", c_source)
             self.assertIn(" ? ", c_source)
 
-    def test_run_c23_executes_native_output_and_rejects_unsupported_valid_program(self):
+    def test_run_c23_executes_native_output_for_typed_empty_mutable_list(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             folder = pathlib.Path(temp)
             source = folder / "answer.pep"
@@ -62,12 +62,24 @@ class PepC23CliTests(unittest.TestCase):
             too_deep = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertNotEqual(too_deep.returncode, 0)
             self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
-            source.write_text("fn main() -> Int { var values: List[Int] = []; return length(values) }\n",
+            source.write_text("type Point { x: Int }\n"
+                              "fn main() -> Int {\n"
+                              "  let point = Point { x: 42 }\n"
+                              "  return point.x\n"
+                              "}\n",
                               encoding="utf-8", newline="\n")
-            rejected = self.invoke("run-c23", source, "--compiler", CLANG)
+            generated = folder / "unsupported.c"
+            rejected = self.invoke("run-c23", source, "--compiler", CLANG, "--emit-c", generated)
             self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)
             self.assertIn("Pep C23 unsupported:", rejected.stderr)
-            self.assertFalse((folder / "answer.exe").exists())
+            self.assertFalse(generated.exists())
+            source.write_text("fn main() -> Int { var values: List[Int] = []; return length(values) }\n",
+                              encoding="utf-8", newline="\n")
+            generated = folder / "empty-list.c"
+            native = self.invoke("run-c23", source, "--compiler", CLANG, "--emit-c", generated)
+            self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+            self.assertEqual(native.stdout, "0\n")
+            self.assertIn(".length = 0", generated.read_text(encoding="utf-8"))
 
 
     @unittest.skipUnless(GCC.is_file(), f"GCC not installed at {GCC}")

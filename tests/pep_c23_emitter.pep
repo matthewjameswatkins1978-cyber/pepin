@@ -35,6 +35,18 @@ fn pep_c23_mutable_list_binding(nodes: List[FlatAstNode], function: FlatAstNode,
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstNode) -> Str {
+  let declared = pep_c23_child(nodes, binding.id, "annotation", 0)
+  if declared.found && declared.node.kind == "type_list" {
+    let elementType = pep_c23_child(nodes, declared.node.id, "element_type", 0)
+    if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Int" { return "integer" } else {}
+    if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" { return "boolean" } else {}
+  } else {}
+  let initial = pep_c23_child(nodes, binding.id, "value", 0)
+  let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if first.found && (first.node.kind == "integer" || first.node.kind == "boolean") { return first.node.kind } else {}
+  return ""
+}
 fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_int_list_parameter(nodes, function, node.text)
@@ -43,10 +55,8 @@ fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, no
     } else {}
     let binding = pep_c23_mutable_list_binding(nodes, function, node.text)
     if binding.found {
-      let initial = pep_c23_child(nodes, binding.node.id, "value", 0)
-      let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-      if !first.found || first.node.kind != "integer" {
-        return pep_c23_unsupported("Pep C23 List[Int] forwarding requires a non-empty Int list binding")
+      if pep_c23_mutable_list_element_kind(nodes, binding.node) != "integer" {
+        return pep_c23_unsupported("Pep C23 List[Int] forwarding requires an Int list binding")
       } else {}
       return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.node.id)], diagnostic: "" }
     } else {}
@@ -111,10 +121,8 @@ fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, n
     if parameter.found { return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" } } else {}
     let binding = pep_c23_mutable_list_binding(nodes, function, node.text)
     if binding.found {
-      let initial = pep_c23_child(nodes, binding.node.id, "value", 0)
-      let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-      if !first.found || first.node.kind != "boolean" {
-        return pep_c23_unsupported("Pep C23 List[Bool] forwarding requires a non-empty Bool list binding")
+      if pep_c23_mutable_list_element_kind(nodes, binding.node) != "boolean" {
+        return pep_c23_unsupported("Pep C23 List[Bool] forwarding requires a Bool list binding")
       } else {}
       return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.node.id)], diagnostic: "" }
     } else {}
@@ -339,17 +347,16 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         pep_c23_mutable_list_binding(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if mutableList.found {
-        let initial = pep_c23_child(nodes, mutableList.node.id, "value", 0)
-        let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-        if !first.found || (first.node.kind != "integer" && first.node.kind != "boolean") {
-          return pep_c23_unsupported("Pep C23 mutable contains requires a non-empty Int or Bool list binding")
+        let elementKind = pep_c23_mutable_list_element_kind(nodes, mutableList.node)
+        if elementKind != "integer" && elementKind != "boolean" {
+          return pep_c23_unsupported("Pep C23 mutable contains requires a typed Int or Bool list binding")
         } else {}
         if secondArgument.node.kind != "integer" && secondArgument.node.kind != "boolean" && secondArgument.node.kind != "name" {
           return pep_c23_unsupported("Pep C23 mutable contains requires a scalar literal or local value")
         } else {}
         let value = pep_c23_expression(nodes, function, secondArgument.node)
         if value.status != "emitted" { return value } else {}
-        var parts: List[Str] = [if first.node.kind == "boolean" { "pep_contains_bool(" } else { "pep_contains_int(" }, "pep_local_", int_text(mutableList.node.id), ", "]
+        var parts: List[Str] = [if elementKind == "boolean" { "pep_contains_bool(" } else { "pep_contains_int(" }, "pep_local_", int_text(mutableList.node.id), ", "]
         for part in value.sourceParts { parts = append(parts, part) }
         parts = append(parts, ")")
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
@@ -864,7 +871,10 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 if element.parentId == initialValue.node.id && element.role == "element" { elementKind = element.kind } else {}
               }
               if elementCount == 0 {
-                return pep_c23_unsupported("Pep C23 mutable collection bindings require a non-empty list literal")
+                elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
+              } else {}
+              if elementKind != "boolean" && elementKind != "integer" {
+                return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int or Bool list")
               } else {}
               let initial = if elementKind == "boolean" {
                 pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
@@ -913,8 +923,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             } else {
               if iterableLocal.found {
                 let localList = pep_c23_child(parsed.nodes, iterableLocal.node.id, "value", 0)
-                if !localList.found || localList.node.kind != "list" || elementCount == 0 {
-                  return pep_c23_unsupported("Pep C23 runtime list iteration requires a non-empty mutable list literal binding")
+                if !localList.found || localList.node.kind != "list" {
+                  return pep_c23_unsupported("Pep C23 runtime list iteration requires a mutable list literal binding")
                 } else {}
                 for part in ["  if (pep_local_", int_text(iterableLocal.node.id), ".length != 0 && pep_local_", int_text(iterableLocal.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_local_", int_text(iterableLocal.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = (int64_t)pep_local_", int_text(iterableLocal.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
                   arrayDeclaration = append(arrayDeclaration, part)
