@@ -210,6 +210,38 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
                     self.assertEqual(result.stdout, "2\n")
 
+    def test_same_named_list_bindings_in_different_functions_do_not_block_emission(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn mutating() -> Int {\n"
+            "  var values = [1]\n"
+            "  var replacement = [2, 3]\n"
+            "  var count = 0\n"
+            "  while count <= 0 { values = replacement; count = count + 1 }\n"
+            "  return length(values)\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let values = [7, 8]\n"
+            "  return length(values)\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "same_name_bindings.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "2\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
     def test_typed_empty_boolean_list_reassignment_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
