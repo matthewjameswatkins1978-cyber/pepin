@@ -962,9 +962,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Assignment and for-in semantics are outside the implemented checker subset", node))
     } else {}
     if is_expression_kind(node.kind) {
-      let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
+      let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
+      let actual = if shape.kind != "" { legacy_type_name(shape) } else { infer_expression_type(nodes, node.id, functions, bindings, references) }
       if actual == "" {
-        let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
         if shape.kind != "" { reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: "", typeShape: shape, startByte: node.startByte, endByte: node.endByte }) } else {}
         if node.kind == "hole" { } else {
         if node.kind == "call" {
@@ -979,7 +979,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         }
         }
       } else {
-        reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: legacy_type_shape(nodes, actual), startByte: node.startByte, endByte: node.endByte })
+        let actualShape = if shape.kind != "" { shape } else { legacy_type_shape(nodes, actual) }
+        reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: actualShape, startByte: node.startByte, endByte: node.endByte })
       }
       if node.kind == "record" {
         let declaration = record_declaration(nodes, node.text)
