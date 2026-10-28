@@ -285,3 +285,11 @@ The 100,000-step ceiling, master, `CURRENT.md`, manifest, A14/C23 ownership and 
 Verification: `python -m unittest tests.test_a13.A13FunctionResolutionTests.test_for_in_item_types_scope_and_list_requirement_match_ocaml -v` passed **1/1 test method**, covering eight iterable, scope, type, and diagnostic fixtures. `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The prior full A13/nested-record suite remains evidence for the unchanged checker at test SHA `6f0718e`; full discovery was not repeated for this one-case test-only change.
 
 No checker implementation, budget, protocol, master, `CURRENT.md`, manifest, A14 or release change. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — for-in scope and shadowing parity (2026-10-28; cycle 3/3)
+
+**Test SHA:** `e611fdef6f4795f0e186badc844bbc22e3382cd9`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added dedicated OCaml differential cases proving a loop binding is unavailable while resolving its own iterable and does not escape the loop, with exact `PEP_UNKNOWN_VARIABLE` byte spans. A valid shadowing case confirms the iterable reference resolves to the outer list binding while the loop-body reference resolves to the loop binding. No checker implementation changes.
+
+Verification on the test SHA: the new scope method passed **1/1**; the existing for-in type/diagnostic method passed **1/1** (eight fixtures). `python -m py_compile tests/test_a13.py` and `git diff --check` passed. Full A13/nested-record suite was not rerun for this test-only slice; its last **66/66** result remains tied to test SHA `6f0718e`, with unchanged checker source.
+
+**Nonblocking 3/3 review:** this closes the reported loop name-resolution boundary with status, spans and binding identity evidence. It does not indicate a checker defect, change the runtime ceiling, or advance A13 acceptance. Next work should target a distinct semantic parity gap or a measured checker bottleneck, keeping full-suite evidence tied to its exact source SHA. Master, `CURRENT.md`, manifest, A14 ownership, budgets and release state remain unchanged.
