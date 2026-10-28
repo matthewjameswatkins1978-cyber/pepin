@@ -280,14 +280,19 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if parameter.found {
       let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
       if secondParameter.found {
+        let secondParameterType = pep_c23_child(nodes, secondParameter.node.id, "type", 0)
         if !argument.found || !secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, parameter.node.text, secondParameter.node.text, targetValue.node)) {
           return pep_c23_unsupported("Pep C23 two-parameter calls require two arguments and a call-free result expression")
         } else {}
         if pep_c23_expression_may_fail(nodes, argument.node) && pep_c23_expression_may_fail(nodes, secondArgument.node) {
           return pep_c23_unsupported("Pep C23 rejects two fallible call arguments because C argument evaluation order is unspecified")
         } else {}
-        let loweredArgument = pep_c23_expression(nodes, function, argument.node)
-        let loweredSecondArgument = pep_c23_expression(nodes, function, secondArgument.node)
+        let loweredArgument = if parameterType.found && pep_c23_c_parameter_type(nodes, parameterType.node) == "pep_list_int" {
+          pep_c23_int_list_argument(nodes, argument.node)
+        } else { pep_c23_expression(nodes, function, argument.node) }
+        let loweredSecondArgument = if secondParameterType.found && pep_c23_c_parameter_type(nodes, secondParameterType.node) == "pep_list_int" {
+          pep_c23_int_list_argument(nodes, secondArgument.node)
+        } else { pep_c23_expression(nodes, function, secondArgument.node) }
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
         if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
         var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
