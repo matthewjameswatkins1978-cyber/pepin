@@ -47,6 +47,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -129,31 +130,75 @@ def read_library_source(repo, library_path, revision=None):
     return path.read_text(encoding="utf-8"), str(path)
 
 
-def compose(library_text, case):
-    """Concatenate the real library with one caller — the only composition Pep allows."""
+FN_START = re.compile(r"(?m)^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+CALL_SITE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+
+def library_functions(text):
+    """Split a library into its top-level `fn` blocks, keyed by name, in order."""
+    starts = [(m.start(), m.group(1)) for m in FN_START.finditer(text)]
+    blocks, order = {}, []
+    for index, (position, name) in enumerate(starts):
+        end = starts[index + 1][0] if index + 1 < len(starts) else len(text)
+        blocks[name] = text[position:end]
+        order.append(name)
+    return blocks, order
+
+
+def reachable_functions(text, expression):
+    """Library functions the expression needs, including transitive calls.
+
+    Pep has no imports and a composed file pays for everything it contains — the
+    staged parser hits its step budget on a whole library plus a caller — so each
+    case carries only its own closure.
+    """
+    blocks, order = library_functions(text)
+    needed, pending = set(), [name for name in CALL_SITE.findall(expression)
+                              if name in blocks]
+    while pending:
+        name = pending.pop()
+        if name in needed:
+            continue
+        needed.add(name)
+        pending.extend(called for called in CALL_SITE.findall(blocks[name])
+                       if called in blocks)
+    return [name for name in order if name in needed]
+
+
+def compose(library_text, case, prune=True):
+    """Concatenate the library (or just the case's closure) with one caller."""
+    if prune:
+        names = reachable_functions(library_text, case["expr"])
+        blocks, _order = library_functions(library_text)
+        library_text = "".join(blocks[name] for name in names)
     body = library_text if library_text.endswith("\n") else library_text + "\n"
     return body + CALL_FORMS[case["result"]] % case["expr"] + "\n"
 
 
-def write_workspace(out_dir, cases, library_text, provenance):
+def write_workspace(out_dir, cases, library_text, provenance, prune=True):
     """Materialise composed fixtures plus a manifest for the existing runner."""
     out_dir = pathlib.Path(out_dir)
     fixtures = out_dir / "fixtures"
     fixtures.mkdir(parents=True, exist_ok=True)
     entries = []
     slug_seen = set()
+    pruned = {}
     for case in cases:
         slug = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in case["id"])
         if slug in slug_seen:  # ids are unique, but keep the filename safe anyway
             slug = "%s-%s" % (slug, hashlib.sha1(case["id"].encode()).hexdigest()[:6])
         slug_seen.add(slug)
-        source = compose(library_text, case)
+        names = (reachable_functions(library_text, case["expr"]) if prune
+                 else [n for n in library_functions(library_text)[1]])
+        pruned[case["id"]] = names
+        source = compose(library_text, case, prune=prune)
         (fixtures / (slug + ".pep")).write_text(source, encoding="utf-8", newline="\n")
         entries.append({
             "id": case["id"],
             "file": "fixtures/%s.pep" % slug,
             "kind": "run",
             "expect": {"exit": 0, "stdout": case["expect"] + "\n"},
+            "functions": names,
         })
     manifest = {
         "schemaVersion": 1,
@@ -186,6 +231,8 @@ def main(argv=None):
     ap.add_argument("--filter", default=None, help="passed through to `pep test --filter`")
     ap.add_argument("--evidence-dir", default=None,
                     help="passed through to `pep test --evidence-dir`")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="compose the whole library instead of each case's closure")
     ap.add_argument("--json", action="store_true",
                     help="emit the runner's JSON document")
     args = ap.parse_args(argv)
@@ -203,12 +250,14 @@ def main(argv=None):
         "source": spec,
         "sha256": "sha256:" + hashlib.sha256(library_text.encode("utf-8")).hexdigest(),
         "cases": len(cases),
+        "pruned": not args.no_prune,
     }
     out_dir = pathlib.Path(args.out) if args.out else (
         pathlib.Path(args.repo) / "_build" / "stdlib-conformance"
         / (args.library_rev or "worktree"))
     try:
-        manifest_path = write_workspace(out_dir, cases, library_text, provenance)
+        manifest_path = write_workspace(out_dir, cases, library_text, provenance,
+                                        prune=not args.no_prune)
     except OSError as exc:
         print("CONFORMANCE-INFRA-ERROR cannot write workspace: %s" % exc, file=sys.stderr)
         return 2

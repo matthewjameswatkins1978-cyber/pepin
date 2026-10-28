@@ -81,10 +81,24 @@ instead — see "Missing primitives" below.
 - **No imports.** Composition is string concatenation of the real source, so a
   case sees the whole library. When Pep gains modules, this harness should be
   the thing that changes, not the case table.
-- **No native column on this base.** The base emitter rejects `for`-in,
-  `var`/`while` and record shapes, so `--backend clang,gcc` reports them as
-  declared-unsupported until the emitter widens. The interpreter column is real
-  and is what the contract is measured against today.
+- **No native column in the generated manifest (yet).** Generated fixtures are
+  `kind: "run"`, which only ever executes the interpreter. Passing
+  `--backend interpreter,clang,gcc` therefore **fails loudly** — the runner now
+  refuses to label interpreter-only fixtures with compilers they never touched.
+  A real native column needs hybrid fixtures (`fn main() -> Int` returning the
+  same value the top-level statement prints) and is the next slice here.
+
+  Measured by hand on this base so the gap is stated, not guessed:
+
+  | helper shape | clang / gcc |
+  | --- | --- |
+  | single `if`/`else` returning a value (`int_abs`, `int_min`, `int_max`) | runs, matches the interpreter |
+  | nested `if`/`else` returns (`int_sign`, `int_clamp`) | `Pep C23 unsupported: ... require direct local/supported scalar ...` |
+  | `var` + `while` bodies (`int_mod`, `int_gcd`, `int_lcm`, `int_pow`, parity) | `Pep C23 unsupported: ... require direct local ...` |
+  | the whole 11-helper module plus a caller | `PEP_RUNTIME_STEP_LIMIT` in the staged parser, before the emitter |
+
+  That is why each case composes only its own closure: a whole-library
+  composition does not even reach the emitter on this base.
 - **No ownership of the library.** `stdlib/collections.pep`, the C23 emitter and
   their regression files belong to Agent 2. This harness only reads library
   revisions and asserts public behaviour.
@@ -94,7 +108,13 @@ instead — see "Missing primitives" below.
 | Module | Owner | Contract | Status |
 | --- | --- | --- | --- |
 | `stdlib/collections.pep` | Agent 2 | `cases.json` (25 cases) | measured against `872a997`; runs in-tree once the library merges |
-| `stdlib/intmath.pep` | Agent 3 | `cases-intmath.json` (40 cases) | in this branch; 40/40 pass |
+| `stdlib/intmath.pep` | Agent 3 | `cases-intmath.json` (40 cases) | in this branch; 40/40 pass on the interpreter |
+
+Each case composes only the library functions it actually reaches (transitive
+closure of calls), so a case pays for its own dependency graph instead of the
+whole module. `--no-prune` composes everything, which is useful for measuring
+whole-module parse cost — and on this base that is exactly where the staged
+parser hits `PEP_RUNTIME_STEP_LIMIT`.
 
 `stdlib/intmath.pep` provides `int_abs`, `int_sign`, `int_min`, `int_max`,
 `int_clamp`, `int_mod`, `int_gcd`, `int_lcm`, `int_is_even`, `int_is_odd` and

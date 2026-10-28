@@ -48,6 +48,10 @@ def emit(block):
 
 def main(argv):
     command = argv[0]
+    if command == "check":
+        sys.stdout.write(json.dumps({{"schemaVersion": 2, "status": "valid",
+                                     "diagnostics": []}}) + "\\n")
+        return 0
     if command == "run":
         return emit(SPEC.get("run", {{}}))
     if command == "run-c23":
@@ -381,6 +385,28 @@ class NativeDifferentialTests(unittest.TestCase):
             self.assertTrue(entry["path"])
             self.assertTrue(entry["version"])
             self.assertIn("unknown", entry["version"])
+
+    def test_interpreter_fixture_records_only_the_interpreter(self):
+        # A run-kind fixture must never look like it exercised clang or gcc.
+        manifest, stub = self.build(expect={"exit": 0, "stdout": "42\n"},
+                                    kind="run")
+        proc = self.run_native(manifest, stub, "--json")
+        doc = json.loads(proc.stdout)
+        self.assertEqual(proc.returncode, 2, doc)
+        self.assertIn("no native fixtures are selected", proc.stdout + proc.stderr)
+
+    def test_mixed_manifest_marks_each_test_with_the_backends_it_ran(self):
+        manifest, stub = self.build()
+        native = json.loads(manifest.read_text(encoding="utf-8"))
+        native["fixtures"].append({"id": "i/plain", "file": "p.pep", "kind": "run",
+                                   "expect": {"exit": 0, "stdout": "42\n"}})
+        manifest.write_text(json.dumps(native), encoding="utf-8")
+        proc = self.run_native(manifest, stub, "--json")
+        doc = json.loads(proc.stdout)
+        by_id = {t["id"]: t for t in doc["tests"]}
+        self.assertEqual(by_id["n/one"]["backends"], ["interpreter", "clang", "gcc"])
+        self.assertEqual(by_id["i/plain"]["backends"], ["interpreter"])
+        self.assertEqual(doc["counts"]["pass"], 2)
 
     # -- declaration validation ------------------------------------------
     def test_native_fixture_skip_never_executes(self):

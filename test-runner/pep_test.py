@@ -144,7 +144,10 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
     rel = fx.get("file", "")
     kind = fx.get("kind", "run")
     expect = fx.get("expect", {}) or {}
-    base = {"id": fid, "file": rel, "kind": kind}
+    # A run/reject/check fixture only ever executes the interpreter. Recording
+    # that here keeps a receipt from implying native coverage it never had.
+    base = {"id": fid, "file": rel, "kind": kind,
+            "backends": [pep_native.INTERPRETER]}
     fx_timeout = fx.get("timeoutSeconds")
     if fx_timeout is None:
         timeout = timeout_default
@@ -498,6 +501,16 @@ def main(argv=None):
             return finish(None, {"status": "infra_error",
                                  "detail": "manifest defines no interpreter fixtures "
                                            "to run without a native backend"}, args)
+    elif not any(f.get("kind") == "native" for f in fixtures):
+        # Asking for clang/gcc and silently getting interpreter-only results
+        # would let a receipt claim a differential that never ran.
+        return finish(None, {"status": "infra_error",
+                             "detail": "native backend(s) %s selected but no native "
+                                       "fixtures are selected; interpreter-only "
+                                       "fixtures cannot exercise a compiler"
+                                       % ", ".join(b for b in backends
+                                                   if b in pep_native.NATIVE_BACKENDS)},
+                      args)
     results = []
     for fx in fixtures:
         if fx.get("kind") == "native":
