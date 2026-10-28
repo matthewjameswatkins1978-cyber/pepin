@@ -53,6 +53,13 @@ switch ($Command) {
       $open = Get-Content $shiftsPath -Encoding utf8 | Where-Object { $_ -ne '' } | ForEach-Object { $_ | ConvertFrom-Json } |
         Where-Object { $_.agent -eq $Agent -and $_.status -eq 'OPEN' }
     }
+    $same = @($open | Where-Object { $_.session -eq $Session })
+    if ($same.Count -gt 0) {
+      $dup = $same | Select-Object -Last 1
+      $dup | Add-Member -NotePropertyName 'duplicate' -NotePropertyValue $true -Force
+      Out-Json $dup
+      return
+    }
     $flagged = @()
     foreach ($s in $open) {
       if ($s.session -ne $Session) {
@@ -117,9 +124,10 @@ switch ($Command) {
     if ($ExpectCursor -and ($storedCursor -ne $ExpectCursor)) {
       Fail 'CONFLICT' "Cursor for $Peer moved (stored='$storedCursor', expected='$ExpectCursor'). Reread and retry; a concurrent writer may have advanced it." 2
     }
-    $new = @()
+    $new = @(); $malformed = 0
     foreach ($m in $fed) {
       $mid = "$($m.id)"
+      if ([string]::IsNullOrEmpty($mid)) { $malformed++; continue }  # id-less input is malformed data, never a message
       if ($seen -contains $mid) { continue }  # duplicate redelivery: drop, cursor unchanged by it
       $seen += $mid
       $new += [ordered]@{ id = $mid; untrusted = $true; content = $m }
@@ -127,13 +135,14 @@ switch ($Command) {
     if ($new.Count -gt 0) { $storedCursor = $new[-1].id }
     $cursors[$Peer] = @{ cursor = $storedCursor; seen = $seen }
     Write-StateFile $cursorPath $cursors
-    Out-Json ([ordered]@{ peer = $Peer; new_messages = $new; cursor = $storedCursor; total_seen = $seen.Count })
+    Out-Json ([ordered]@{ peer = $Peer; new_messages = $new; cursor = $storedCursor; total_seen = $seen.Count; malformed = $malformed })
   }
   'work-orders' {
     if (-not $Ledger) { Fail 'MISSING_FIELDS' 'work-orders needs --ledger <git-common-dir>.' }
     $jobs = @()
     foreach ($f in Get-ChildItem (Join-Path $Ledger 'active-job.*.json') -ErrorAction SilentlyContinue) {
-      $j = Get-Content $f.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+      try { $j = Get-Content $f.FullName -Raw -Encoding utf8 | ConvertFrom-Json }
+      catch { Fail 'LEDGER_CORRUPT' "Studio ledger file unreadable: $($f.Name). Do not invent ownership; escalate." }
       $jobs += [ordered]@{
         job_id   = $j.job_id
         status   = $j.status
