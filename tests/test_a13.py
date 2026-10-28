@@ -1340,6 +1340,31 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(len(expected), 1, reference)
                 self.assertEqual(actual, expected, (name, expected, actual, report))
 
+    def test_first_diagnostic_matches_ocaml_across_checker_categories(self):
+        cases = [
+            ("unknown-before-type", "fn f() -> Int { let x: Int = missing; return true }"),
+            ("type-before-unknown", "fn f() -> Int { let x: Int = true; return missing }"),
+            ("call-before-type", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = g(); return true }"),
+            ("type-before-call", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = true; return g() }"),
+            ("unknown-call-before-type", "fn f() -> Int { let x: Int = missing(); return true }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("first-diagnostic-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(len(expected), 1, reference)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+
     def test_match_list_mismatch_reports_first_leaf_like_ocaml(self):
         cases = [
             ("leaf-mismatch", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[true]}}", "invalid"),
