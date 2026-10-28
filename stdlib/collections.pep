@@ -68,6 +68,12 @@ fn list_int_any_positive(values: List[Int]) -> Bool {
   return found
 }
 
+fn list_int_sum_positive(values: List[Int]) -> Int {
+  var total = 0
+  for item in values { total = if item <= -1 { total } else { total + item } }
+  return total
+}
+
 fn list_int_count_positive(values: List[Int]) -> Int {
   var total = 0
   for item in values { total = if item != 0 && !(item <= -1) { total + 1 } else { total } }
