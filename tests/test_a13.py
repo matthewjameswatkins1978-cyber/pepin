@@ -1203,6 +1203,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("primitive-receiver", "fn f(x: Int) -> Int { return x.y }", "PEP_FIELD_ON_NON_RECORD", "x.y"),
             ("unknown-record-field", "type Point { x: Int }" + NL + "fn f(point: Point) -> Int { return point.missing }", "PEP_UNKNOWN_FIELD", "point.missing"),
             ("untyped-hole-receiver", "fn f() -> Int { return ?.x }", "PEP_FIELD_ON_UNTYPED_VALUE", "?.x"),
+            ("untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { ?b }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { ?b }).x"),
             ("unknown-variable-receiver", "fn f() -> Int { return missing.x }", "PEP_UNKNOWN_VARIABLE", "missing"),
         ]
         for name, source, expected_code, marker in cases:

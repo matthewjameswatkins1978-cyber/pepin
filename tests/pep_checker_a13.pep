@@ -1375,7 +1375,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if node.kind == "list" && count_children(nodes, node.id, "element") == 0 {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node))
           } else {
-            if node.kind != "name" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
+            if node.kind != "name" && node.kind != "if_expression" && node.kind != "field_access" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
           }
         }
         }
@@ -1495,7 +1495,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let value = child_at(nodes, node.id, "value", 0)
         let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
         let receiverRecord = record_declaration(nodes, receiverType)
-        if value.found && value.node.kind == "hole" {
+        let receiverThen = if value.found { child_at(nodes, value.node.id, "then", 1) } else { NodeLookup { found: false, node: empty_node() } }
+        let receiverElse = if value.found { child_at(nodes, value.node.id, "else", 2) } else { NodeLookup { found: false, node: empty_node() } }
+        let receiverIfUntyped = value.found && value.node.kind == "if_expression" && receiverThen.found && receiverElse.found && receiverThen.node.kind == "hole" && receiverElse.node.kind == "hole"
+        if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
         } else {
           if value.found && receiverType != "" && !receiverRecord.found {
