@@ -20,7 +20,8 @@ class PepC23CollectionLoopTests(unittest.TestCase):
         source_text = (
             "fn main() -> Int {\n"
             "  var total = 0\n"
-            "  for item in [1, 2, 3, 4] { total = total + item }\n"
+            "  let values = [1, 2, 3, 4]\n"
+            "  for item in values { total = total + item }\n"
             "  return total\n"
             "}\n"
         )
@@ -44,7 +45,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
     def test_integer_list_length_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
-        source_text = "fn main() -> Int { return length([10, 20, 30]) }\n"
+        source_text = "fn main() -> Int { let values = [10, 20, 30]; return length(values) }\n"
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             folder = pathlib.Path(temp)
             source = folder / "length.pep"

@@ -9,6 +9,21 @@ fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind == "list" { return PepC23NodeLookup { found: true, node: value } } else {}
+  if value.kind != "name" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  var matches = 0
+  var list = PepC23NodeLookup { found: false, node: empty_node() }
+  for binding in nodes {
+    if binding.parentId == function.id && binding.role == "statement" && binding.kind == "let" && binding.text == value.text {
+      matches = matches + 1
+      let initial = pep_c23_child(nodes, binding.id, "value", 0)
+      if initial.found && initial.node.kind == "list" { list = initial } else { return PepC23NodeLookup { found: false, node: empty_node() } }
+    } else {}
+  }
+  if matches != 1 { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  return list
+}
 fn pep_c23_unsupported(message: Str) -> PepC23Emission {
   return PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: message }
 }
@@ -129,10 +144,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
     let target = pep_c23_function(nodes, node.text)
     if node.text == "length" {
-      if !argument.found || secondArgument.found || extraArgument.found || argument.node.kind != "list" {
-        return pep_c23_unsupported("Pep C23 length lowering currently requires one explicit list literal")
+      if !argument.found || secondArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 length lowering requires one supported list value")
       } else {}
-      return PepC23Emission { status: "emitted", sourceParts: [int_text(count_children(nodes, argument.node.id, "element"))], diagnostic: "" }
+      let list = pep_c23_list_literal(nodes, function, argument.node)
+      if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
+      return PepC23Emission { status: "emitted", sourceParts: [int_text(count_children(nodes, list.node.id, "element"))], diagnostic: "" }
     } else {}
     if !target.found || extraArgument.found {
       return pep_c23_unsupported("Pep C23 calls require a known target and at most two arguments")
@@ -359,8 +376,16 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
       if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
-        let initial = pep_c23_expression(nodes, function, initialValue.node)
-        if initial.status != "emitted" { return initial } else {}
+        if initialValue.node.kind == "list" && statement.kind == "let" {
+          for item in nodes {
+            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" {
+              return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer list literals")
+            } else {}
+          }
+        } else {
+          let initial = pep_c23_expression(nodes, function, initialValue.node)
+          if initial.status != "emitted" { return initial } else {}
+        }
       } else {
         if statement.kind == "for_in" && !returned {
           for local in nodes {
@@ -374,11 +399,12 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function parameters")
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
-          if !iterable.found || iterable.node.kind != "list" || count_children(nodes, iterable.node.id, "element") == 0 || count_children(nodes, statement.id, "body") == 0 {
-            return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty integer list literal")
+          let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          if !iterable.found || !iterableList.found || count_children(nodes, iterableList.node.id, "element") == 0 || count_children(nodes, statement.id, "body") == 0 {
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty integer list literal or immutable list binding")
           } else {}
           for item in nodes {
-            if item.parentId == iterable.node.id && item.role == "element" && item.kind != "integer" {
+            if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" {
               return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements")
             } else {}
           }
@@ -499,17 +525,22 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
         if statement.parentId == node.id && statement.role == "statement" && (statement.kind == "let" || statement.kind == "var") {
           let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
           if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
-          let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
-          for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
-          for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
-          bodyParts = append(bodyParts, ";\n")
+          if initialValue.node.kind == "list" && statement.kind == "let" {
+            // Immutable list literals are lowered at their direct length/for-in use sites.
+          } else {
+            let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+            for part in ["  int64_t pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+            for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+            bodyParts = append(bodyParts, ";\n")
+          }
         } else {
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
-            if !iterable.found || iterable.node.kind != "list" { return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal") } else {}
+            let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            if !iterable.found || !iterableList.found { return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal or immutable list binding") } else {}
             var elementCount = 0
             for element in parsed.nodes {
-              if element.parentId == iterable.node.id && element.role == "element" {
+              if element.parentId == iterableList.node.id && element.role == "element" {
                 if element.kind != "integer" { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer elements") } else {}
                 elementCount = elementCount + 1
               } else {}
@@ -517,7 +548,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             if elementCount == 0 { return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty list literal") } else {}
             var arrayDeclaration: List[Str] = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
             for element in parsed.nodes {
-              if element.parentId == iterable.node.id && element.role == "element" {
+              if element.parentId == iterableList.node.id && element.role == "element" {
                 arrayDeclaration = append(arrayDeclaration, int_text(element.integerValue))
                 arrayDeclaration = append(arrayDeclaration, ", ")
               } else {}
