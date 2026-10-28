@@ -449,7 +449,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("builtin-arity", "fn main() -> Int { return length() }", "PEP_ARGUMENT_COUNT", "PEP_ARGUMENT_COUNT"),
             ("builtin-type", "fn main() -> Int { return length(1) }", "PEP_LIST_EXPECTED", "PEP_LIST_EXPECTED"),
             ("for-in-source", "fn main() -> Int { for item in 1 {} return 0 }", "PEP_FOR_REQUIRES_LIST", "PEP_FOR_REQUIRES_LIST"),
-            ("missing-return", "fn main() -> Int { let x: Int = 1 }", "PEP_MISSING_RETURN", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
+            ("missing-return", "fn main() -> Int { let x: Int = 1 }", "PEP_MISSING_RETURN", "PEP_MISSING_RETURN"),
         ]
         for name, source, reference_code, checker_code in cases:
             reference = self._reference_check(name, source)
@@ -459,7 +459,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", (name, report))
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(checker_code, codes, (name, codes))
-            if name in {"record-field", "constructor-payload", "if-condition", "while-condition", "builtin-arity", "builtin-type"}:
+            if name in {"record-field", "constructor-payload", "if-condition", "while-condition", "missing-return", "builtin-arity", "builtin-type"}:
                 expected = [(item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"]) for item in reference["diagnostics"]]
                 actual = [(scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"])) for item in report["diagnostics"]["value"]]
                 self.assertEqual(actual, expected, (name, expected, actual))
@@ -849,6 +849,29 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertIn("PEP_UNKNOWN_TYPE", [item["code"] for item in reference["diagnostics"]])
         self.assertIn("PEP_UNKNOWN_TYPE", codes)
 
+    def test_missing_return_diagnostic_matches_ocaml(self):
+        cases = [
+            ("empty-body", "fn main() -> Int {}"),
+            ("fallthrough-local", "fn main() -> Int { let x: Int = 1 }"),
+            ("conditional-fallthrough", "fn main(flag: Bool) -> Int { if flag { return 1 } else { let x: Int = 2 } }"),
+            ("nested-block-fallthrough", "fn main() -> Int { { let x: Int = 1 } }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("missing-return-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+
     def test_non_unit_return_completeness_follows_nested_blocks_and_if_branches(self):
         valid_sources = [
             "fn main() -> Int { return 1 }",
@@ -869,7 +892,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             _, report = self._analyze(source)
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertEqual(scalar(report["status"]), "invalid", (source, report))
-            self.assertIn("PEP_A13_CONTROL_FLOW_UNSUPPORTED", codes)
+            self.assertIn("PEP_MISSING_RETURN", codes)
 
     def test_typed_holes_keep_context_scope_candidates_and_original_spans(self):
         source = ("fn id(value: Int) -> Int { return value }" + NL +

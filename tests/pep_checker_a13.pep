@@ -983,7 +983,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if statement.parentId == node.id && statement.role == "statement" && statement_always_returns(nodes, statement) { returnsOnAllPaths = true } else {}
         }
         if !returnsOnAllPaths {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "Non-Unit function return completeness is not established", node))
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_RETURN", "Non-Unit function does not return a value on every path", node))
         } else {}
       } else {}
     } else {}
