@@ -470,6 +470,23 @@ class A13FunctionResolutionTests(unittest.TestCase):
         visit(opened["typedTree"])
         self.assertEqual(typed_calls, [("later", 1), ("first", 0)])
 
+    def test_call_owner_collection_matches_reference(self):
+        lines = ["fn accepts(x: Bool) -> Bool { return x }"]
+        lines.extend(f"fn bad{i}() -> Bool {{ return accepts({i}) }}" for i in range(3))
+        source = NL.join(lines)
+        reference = self._reference_check("multiple-call-owners", source)
+        _, report = self._analyze(source)
+        expected = [(item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]]
+        actual = [(scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                  for item in report["diagnostics"]["value"]]
+        self.assertEqual(expected[0][0], "PEP_TYPE_MISMATCH", (expected, reference))
+        self.assertEqual(actual, expected, (expected, actual, report))
+        calls = [fields(item) for item in report["calls"]["value"]]
+        self.assertEqual(len(calls), 3, report)
+        self.assertEqual([scalar(item["callerId"]) for item in calls], [100001, 100002, 100003])
+        self.assertEqual([scalar(item["calleeId"]) for item in calls], [100000] * 3)
+
     def test_unknown_function_and_wrong_arity_keep_call_byte_spans(self):
         source = "fn main() -> Int { return absent(1) }"
         _, report = self._analyze(source)

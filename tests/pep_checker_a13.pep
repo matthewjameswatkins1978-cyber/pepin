@@ -1559,7 +1559,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Control-flow condition must have type Bool", condition.node))
       } else {}
     } else {}
-    if node.kind == "return" && inside_any_function(nodes, node, functions) {
+    if node.kind == "return" {
       let owner = owner_function(nodes, node, functions)
       let returned = child_at(nodes, node.id, "value", 0)
       if owner.found && returned.found {
@@ -1716,13 +1716,40 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
   for item in nameResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
   for item in typeResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
-  for function in functions {
+  if length(functions) <= 1 {
+    for function in functions {
+      for node in nodes {
+        if node.kind == "call" && inside_function(node, function) {
+          let target = find_function(functions, node.text)
+          if target.found {
+            if count_children(nodes, node.id, "argument") == target.function.arity {
+              reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
+            } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
+          } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
+          } }
+        } else {}
+      }
+    }
+  } else {
+    var currentCallerId = -1
+    var currentCallerSyntaxId = -1
+    var currentCallerStartByte = -1
+    var currentCallerEndByte = -1
+    var nextCallerId = 100000
     for node in nodes {
-      if node.kind == "call" && inside_function(node, function) {
+      if node.parentId == -1 && node.kind == "function" {
+        currentCallerId = nextCallerId
+        currentCallerSyntaxId = node.id
+        currentCallerStartByte = node.startByte
+        currentCallerEndByte = node.endByte
+        nextCallerId = nextCallerId + 1
+      } else {}
+      if node.kind == "call" && currentCallerId != -1 && node.id != currentCallerSyntaxId && currentCallerStartByte <= node.startByte && node.endByte <= currentCallerEndByte {
         let target = find_function(functions, node.text)
         if target.found {
           if count_children(nodes, node.id, "argument") == target.function.arity {
-            reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
+            reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
           } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
         } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
