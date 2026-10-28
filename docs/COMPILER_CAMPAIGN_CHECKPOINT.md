@@ -225,3 +225,25 @@ Verification on the implementation/test SHA:
 - The fixed 100,000-step ceiling is unchanged. An over-broad scan implementation exceeded it and was discarded; the committed checker checks only return-capable statements and their following sibling. No isolated timing or memory benchmark was run.
 
 No clean OCaml rebuild, MoonBit suite, full repository discovery, protocol, A14 implementation, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — fixed-budget multi-call boundary probe (2026-10-28; cycle 3/3)
+
+**Test SHA:** `0706ef06b914340388a9937deaca7f52f88f8634`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added an exact 200-byte four-caller A13 fixture and staged comparison. OCaml and the staged Pep checker agree on invalid status, ordered diagnostic identities and original byte spans. The one-shot analyzer reproducibly returns `PEP_RUNTIME_STEP_LIMIT`; a four-caller correctly typed one-shot control reaches the same ceiling, while its staged checker result is valid and a staged typed-hole control remains incomplete with expected type `Bool`. No checker implementation or budget change was made because the measurements do not isolate a safe optimization target.
+
+Measurements on the same persistent JSONL session, with the A13 tools registered and five consecutive invocations per case (no discarded warmup), using end-to-end `JsonLineClient.send` wall time:
+
+- 160-byte, three-mismatch one-shot: **5/5 succeeded**, median **3.565 ms**.
+- 200-byte, four-mismatch one-shot: **5/5 hit `PEP_RUNTIME_STEP_LIMIT`**, median **3.077 ms**; error position `2879:238`.
+- 200-byte four-mismatch staged parser: median **3.833 ms**; staged checker: median **2.344 ms**. All five parser/checker calls succeeded and the checker matched OCaml diagnostics.
+- The four-call typed one-shot control also hit the fixed limit (observed position `4092:31`).
+
+These host-visible timings include request/response and JSONL work; they are not interpreter-only CPU, step-distribution or memory measurements. The one-shot error position identifies where the counter expired, not the root cause. Parser-plus-checker composition exceeds the one-shot budget for this source while each staged operation succeeds; no claim is made about a single dominant internal traversal.
+
+Verification:
+
+- Focused four-call differential/budget test: **1/1 passed** on test SHA `0706ef0`.
+- A13 plus nested-record/list: **60/60 passed** in 190.743 seconds immediately before final test-only cleanup (dead fallback removal and the 200-byte fixture-size assertion); final test method passed again **1/1** after those edits.
+- A14 C23 **11/11** and C23 CLI **5/5** were previously verified on unchanged checker/compiler sources at `b9c7507`.
+- Final `py_compile` and `git diff --check` passed. No clean standalone OCaml rebuild, historical MoonBit run or full repository discovery.
+
+**Nonblocking 3/3 review:** the cross-stage result and capacity edge are now reproducible, the typed control rules out mismatch-diagnostic complexity as the sole explanation, and the staged hole case preserves semantic facts. Runtime output gives no phase step counts; internal attribution remains unresolved, so this test-only slice makes no speculative checker optimization. The 100,000-step ceiling is unchanged. Agent 2's native/runtime work remains separate. A13 remains partial, experimental and unaccepted; continue the campaign.
