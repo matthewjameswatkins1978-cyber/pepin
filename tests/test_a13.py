@@ -364,6 +364,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("wrong-nested-type", nested_prefix + "type Wrong = W()" + NL +
              "fn f(x: Outer) -> Int { return match x { O(M(W())) => 1 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_PATTERN_TYPE_MISMATCH"),
+            ("depth-three-valid", "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }", "valid", None),
+            ("depth-three-distinct-partials", "type Seed = K(Int) | R(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(_)))) => 1 O(M(L(R(_)))) => 2 _ => 0 } }", "valid", None),
+            ("depth-three-duplicate", "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(_)))) => 1 O(M(L(K(_)))) => 2 _ => 0 } }", "invalid", "PEP_DUPLICATE_MATCH_ARM"),
             ("wrong-nested-arity", nested_prefix +
              "fn f(x: Outer) -> Int { return match x { O(M(L())) => 1 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_PATTERN_ARITY"),
@@ -417,12 +420,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
         depth_three_report = fields(depth_three_checked["result"])
         depth_three_reference = self._reference_check("nested-pattern-depth-three", depth_three_source)
         self.assertEqual(depth_three_reference["status"], "valid", depth_three_reference)
-        self.assertEqual(scalar(depth_three_report["status"]), "invalid", depth_three_report)
+        self.assertEqual(scalar(depth_three_report["status"]), "valid", depth_three_report)
         depth_three_diagnostics = [
             (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
             for item in depth_three_report["diagnostics"]["value"]
         ]
-        self.assertEqual([item[0] for item in depth_three_diagnostics], ["PEP_PATTERN_UNSUPPORTED"])
+        self.assertEqual(depth_three_diagnostics, [])
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
                                      "semanticTarget": target})
@@ -607,6 +610,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("scalar", "fn wrong(x: Bool) -> Int { return x }"),
             ("unit-result", "fn wrong() -> Unit { return 1 }"),
             ("conditional-branch", "fn wrong(flag: Bool) -> Int { return if flag { true } else { 0 } }"),
+            ("conditional-list-leaf", "fn f(flag: Bool) -> List[Int] { return if flag { [1] } else { [true] } }"),
+            ("conditional-nested-list-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { [[1]] } else { [[true]] } }"),
+            ("conditional-nested-list-leaf-then", "fn f(flag: Bool) -> List[List[Int]] { return if flag { [[true]] } else { [[1]] } }"),
             ("list-leaf", "fn bad() -> List[Int] { return [\"text\"] }"),
         ]
         for name, source in cases:
@@ -615,6 +621,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 _, report = self._analyze(source)
                 self.assertEqual(reference["status"], "invalid", reference)
                 self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+
+    def test_nested_append_return_context_matches_ocaml(self):
+        cases = [
+            ("integer", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[1]]) }", "valid"),
+            ("contextual-inner-bool", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[true]]) }", "valid"),
+            ("exact-depth-mismatch", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [true]) }", "invalid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("nested-append-return-context-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
                 expected = [
                     (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
                     for item in reference["diagnostics"]
@@ -878,6 +906,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-list", "fn main() -> Int { let values: List[List[Int]] = [[1]]; for item in values { let copy: List[Int] = item } return 0 }", "valid", None, ""),
             ("scalar-iterable", "fn main() -> Int { for item in 1 {} return 0 }", "invalid", "PEP_FOR_REQUIRES_LIST", "1"),
             ("empty-iterable", "fn main() -> Int { for item in [] {} return 0 }", "invalid", "PEP_EMPTY_LIST_NEEDS_TYPE", "[]"),
+            ("unknown-iterable", "fn main() -> Int { for item in missing {} return 0 }", "invalid", "PEP_UNKNOWN_VARIABLE", "missing"),
             ("immutable-item", "fn main() -> Int { for item in [1] { item = 2 } return 0 }", "invalid", "PEP_ASSIGN_IMMUTABLE", "item = 2"),
         ]
         for name, source, expected_status, expected_code, span_text in cases:
@@ -919,6 +948,83 @@ class A13FunctionResolutionTests(unittest.TestCase):
                         field_start = len(source[:source.index("point.x")].encode("utf-8"))
                         field_type = next(fields(item) for item in report["expressionTypes"]["value"] if scalar(fields(item)["startByte"]) == field_start)
                         self.assertEqual(scalar(field_type["typeName"]), "Int")
+
+    def test_for_in_iterable_and_body_scopes_match_ocaml(self):
+        cases = [
+            (
+                "loop-binding-not-visible-in-iterable",
+                "fn main() -> Int { for item in item {} return 0 }",
+                "PEP_UNKNOWN_VARIABLE",
+                "item",
+                lambda source: source.index("in item") + len("in "),
+            ),
+            (
+                "loop-binding-does-not-escape",
+                "fn main() -> Int { for item in [1] {} return item }",
+                "PEP_UNKNOWN_VARIABLE",
+                "item",
+                lambda source: source.rindex("item"),
+            ),
+        ]
+        for name, source, expected_code, span_text, offset_of in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("for-in-scope-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                self.assertEqual(len(actual), 1)
+                self.assertEqual(actual[0][0], expected_code)
+                start = len(source[:offset_of(source)].encode("utf-8"))
+                end = start + len(span_text.encode("utf-8"))
+                self.assertEqual(actual[0][1:], (start, end))
+
+        source = (
+            "fn main() -> Int { let item: List[Int] = [1]; "
+            "for item in item { let value: Int = item } return 0 }"
+        )
+        reference = self._reference_check("for-in-shadowed-name-scopes", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(report["diagnostics"]["value"], [])
+
+        item_bindings = [
+            fields(item) for item in report["bindings"]["value"]
+            if scalar(fields(item)["name"]) == "item"
+        ]
+        self.assertEqual(len(item_bindings), 2, report)
+        function_id = scalar(fields(report["functions"]["value"][0])["semanticId"])
+        outer_binding = next(
+            item for item in item_bindings if scalar(item["scopeId"]) == function_id
+        )
+        loop_binding = next(
+            item for item in item_bindings if scalar(item["scopeId"]) != function_id
+        )
+
+        iterable_start_index = source.index("in item") + len("in ")
+        body_start_index = source.index("item", source.index("let value: Int ="))
+        reference_by_start = {
+            scalar(fields(item)["startByte"]): fields(item)
+            for item in report["references"]["value"]
+            if scalar(fields(item)["name"]) == "item"
+        }
+        iterable_reference = reference_by_start[len(source[:iterable_start_index].encode("utf-8"))]
+        body_reference = reference_by_start[len(source[:body_start_index].encode("utf-8"))]
+        self.assertEqual(
+            scalar(iterable_reference["bindingId"]), scalar(outer_binding["semanticId"]), report
+        )
+        self.assertEqual(
+            scalar(body_reference["bindingId"]), scalar(loop_binding["semanticId"]), report
+        )
 
     def test_assignment_typing_mutability_and_spans_match_ocaml(self):
         cases = [
@@ -1328,9 +1434,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertIn(expected_code, [item[0] for item in expected], reference)
                 self.assertEqual(actual, expected, report)
 
-    def test_nested_constructor_patterns_fail_closed_beyond_supported_depth(self):
+    def test_deep_constructor_patterns_match_ocaml_or_report_one_shot_budget(self):
         source = "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }"
-        reference = self._reference_check("nested-pattern-deeper-than-supported", source)
+        reference = self._reference_check("nested-pattern-one-shot-depth-three", source)
         self.assertEqual(reference["status"], "valid", reference)
         opened = self._open(source)
         result = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -1340,10 +1446,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(result["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", result)
         else:
             report = fields(result["result"])
-            self.assertEqual(scalar(report["status"]), "invalid", report)
-            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-            self.assertIn("PEP_PATTERN_UNSUPPORTED", codes, report)
-
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            self.assertEqual(report["diagnostics"]["value"], [])
 
     def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
         source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v B() => 0 } }"
@@ -1469,6 +1573,32 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     for item in report["diagnostics"]["value"]
                 ]
                 self.assertEqual(actual, expected, report)
+
+    def test_unreachable_statements_match_ocaml_across_blocks(self):
+        cases = [
+            ("after-return", "fn main() -> Int { return 1; let x: Int = 2 }"),
+            ("after-both-if-branches-return", "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 2 }" + NL + "let x: Int = 3 }"),
+            ("after-returning-nested-block", "fn main() -> Int { { return 1 }" + NL + "let x: Int = 2 }"),
+            ("unreachable-invalid-statement", "fn main() -> Int { return 1; let x: Bool = 2 }"),
+            ("unreachable-while-body", "fn main() -> Int { while false { return 1; let x: Int = 2 } return 3 }"),
+            ("unreachable-for-body", "fn main() -> Int { for item in [1] { return item; let x: Int = 2 } return 3 }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("unreachable-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(expected[0][0], "PEP_UNREACHABLE", (name, expected))
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual))
 
     def test_non_unit_return_completeness_follows_nested_blocks_and_if_branches(self):
         valid_sources = [
@@ -1601,12 +1731,241 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(function["startByte"]), len(prefix.encode("utf-8")))
         self.assertEqual(scalar(function["endByte"]), len(source.encode("utf-8")) - 2)
 
+    def test_four_independent_call_errors_preserve_fixed_budget_boundary(self):
+        bad_lines = ["fn accepts(x: Bool) -> Bool { return x }"]
+        bad_lines.extend(f"fn bad{i}() -> Bool {{ return accepts({i}) }}" for i in range(4))
+        bad_source = NL.join(bad_lines)
+        self.assertEqual(len(bad_source.encode("utf-8")), 200)
+        reference = self._reference_check("four-independent-call-errors", bad_source)
+        self.assertEqual(reference["status"], "invalid", reference)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+
+        empty = self._open("")
+        empty_parsed = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        empty_target = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        for tool, function, arguments, expected_result in [
+            ("pep-a13-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-a13-checker-staged", "analyze_parsed", [empty_parsed], checker_report(empty["document"], "")),
+        ]:
+            registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": self.tool_document, "revision": self.tool_revision,
+                                           "function": function})
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision,
+                                          "testVectors": [{"arguments": arguments, "expect": expected_result,
+                                                           "semanticTarget": empty_target}]})
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision})
+            self.assertEqual(activated.get("status"), "Active", activated)
+
+        def check_staged(source):
+            opened = self._open(source)
+            target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+            parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                       "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                       "semanticTarget": target})
+            self.assertEqual(parsed.get("outcome"), "ok", parsed)
+            staged = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                       "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                       "arguments": [parsed["result"]], "semanticTarget": target})
+            self.assertEqual(staged.get("outcome"), "ok", staged)
+            return opened, fields(staged["result"])
+
+        opened, staged_report = check_staged(bad_source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        staged_diagnostics = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in staged_report["diagnostics"]["value"]
+        ]
+        self.assertEqual(scalar(staged_report["status"]), reference["status"], staged_report)
+        self.assertEqual(staged_diagnostics, expected, (expected, staged_diagnostics, staged_report))
+
+        one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                     "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
+                                     "semanticTarget": target})
+        self.assertEqual(one_shot.get("outcome"), "error", one_shot)
+        self.assertEqual(one_shot["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", one_shot)
+
+        control_lines = ["fn accepts(x: Bool) -> Bool { return x }"]
+        control_lines.extend(f"fn good{i}() -> Bool {{ return accepts(true) }}" for i in range(4))
+        control_source = NL.join(control_lines)
+        control_reference = self._reference_check("four-independent-call-control", control_source)
+        _, control = check_staged(control_source)
+        self.assertEqual(control_reference["status"], "valid", control_reference)
+        self.assertEqual(scalar(control["status"]), control_reference["status"], control)
+        self.assertEqual(control["diagnostics"]["value"], [], control)
+        control_opened = self._open(control_source)
+        control_target = {"document": control_opened["document"], "revision": control_opened["revision"], "entryFunctions": []}
+        one_shot_control = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                             "op": "tool_invoke", "tool": "pep-a13-checker",
+                                             "arguments": [], "semanticTarget": control_target})
+        self.assertEqual(one_shot_control.get("outcome"), "error", one_shot_control)
+        self.assertEqual(one_shot_control["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", one_shot_control)
+        hole_source = "fn accepts(x: Bool) -> Bool { return x }" + NL + "fn probe() -> Bool { return accepts(?arg) }"
+        hole_reference = self._reference_check("independent-call-typed-hole", hole_source)
+        _, hole_report = check_staged(hole_source)
+        self.assertEqual(hole_reference["status"], "incomplete", hole_reference)
+        self.assertEqual(scalar(hole_report["status"]), hole_reference["status"], hole_report)
+        self.assertEqual([(scalar(fields(item)["name"]), scalar(fields(item)["expectedType"]))
+                          for item in hole_report["holes"]["value"]], [("arg", "Bool")])
+
+    def _assert_nested_list_cases_match_ocaml(self, cases):
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("deep-nested-list-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                self.assertEqual(actual, expected, (expected, actual, report))
+
+    def test_deep_nested_list_signatures_and_returns_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("signature", "fn identity(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return value }", "valid"),
+            ("four-level-signature", "fn identity(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return value }", "valid"),
+            ("literal-under-return-context", "fn make() -> List[List[List[Int]]] { return [[[1]]] }", "valid"),
+            ("four-level-literal-under-return-context", "fn make() -> List[List[List[List[Int]]]] { return [[[[1]]]] }", "valid"),
+        ])
+
+    def test_deep_nested_list_calls_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("four-level-reverse-result", "fn flip(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return reverse(value) }", "valid"),
+            ("three-level-append-element", "fn add(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return append(value, [[1]]) }", "valid"),
+            ("four-level-append-parameter", "fn add(value: List[List[List[List[Int]]]], item: List[List[List[Int]]]) -> List[List[List[List[Int]]]] { return append(value, item) }", "valid"),
+            ("literal-under-call-context", "fn take(value: List[List[List[Int]]]) -> Int { return 0 } fn main() -> Int { return take([[[1]]]) }", "valid"),
+        ])
+
+    def _assert_valid_ocaml_source_hits_checker_budget(self, name, source):
+        reference = self._reference_check(name, source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(reference["diagnostics"], [], reference)
+
+        empty = self._open("")
+        empty_target = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        empty_parsed = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        for tool, function, arguments, expected in [
+            ("pep-a13-parser", "parser_parse_program", [], empty_parsed),
+            ("pep-a13-checker-staged", "analyze_parsed", [empty_parsed], checker_report(empty["document"], "")),
+        ]:
+            registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": self.tool_document, "revision": self.tool_revision,
+                                           "function": function})
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision,
+                                          "testVectors": [{"arguments": arguments, "expect": expected,
+                                                           "semanticTarget": empty_target}]})
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": self.tool_document, "revision": self.tool_revision})
+            self.assertEqual(activated.get("status"), "Active", activated)
+
+        opened = self._open(source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        parsed = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-parser", "arguments": [],
+                                   "semanticTarget": target})
+        self.assertEqual(parsed.get("outcome"), "ok", parsed)
+        staged = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-a13-checker-staged",
+                                   "arguments": [parsed["result"]], "semanticTarget": target})
+        self.assertEqual(staged.get("outcome"), "ok", staged)
+        report = fields(staged["result"])
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (expected, actual, report))
+
+        result = self.client.send({
+            "schemaVersion": 3,
+            "toolProtocolVersion": 2,
+            "op": "tool_invoke",
+            "tool": "pep-a13-checker",
+            "arguments": [],
+            "semanticTarget": target,
+        })
+        self.assertEqual(result.get("outcome"), "error", result)
+        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT", result)
+
+    def test_four_level_append_single_list_matches_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("four-level-append-single-list", "fn add(value: List[List[List[List[Int]]]], item: List[List[Int]]) -> List[List[List[List[Int]]]] { return append(value, [item]) }", "valid"),
+        ])
+
+    def test_four_level_append_nested_typed_literal_hits_known_runtime_boundary(self):
+        source = "fn add(value: List[List[List[List[Int]]]], item: List[Int]) -> List[List[List[List[Int]]]] { return append(value, [[item]]) }"
+        self._assert_valid_ocaml_source_hits_checker_budget("four-level-append-nested-typed-literal", source)
+
+    def test_four_level_append_nested_literal_hits_known_runtime_boundary(self):
+        source = "fn add(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return append(value, [[[1]]]) }"
+        self._assert_valid_ocaml_source_hits_checker_budget("four-level-append-nested-literal", source)
+
+    def test_deep_nested_list_mismatches_match_ocaml(self):
+        self._assert_nested_list_cases_match_ocaml([
+            ("literal-leaf-mismatch", "fn bad(value: List[List[List[Int]]]) -> List[List[List[Int]]] { return [[['text']]] }", "invalid"),
+            ("nested-call-argument", "fn take(value: List[List[List[Int]]]) -> Int { return 0 } fn main() -> Int { return take([[['text']]]) }", "invalid"),
+            ("nested-return-leaf-mismatch", "fn bad() -> List[List[List[Int]]] { return [[['text']]] }", "invalid"),
+            ("four-level-return-leaf-mismatch", "fn bad() -> List[List[List[List[Int]]]] { return [[[['text']]]] }", "invalid"),
+            ("four-level-append-leaf-mismatch", "fn bad(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return append(value, [[['text']]]) }", "invalid"),
+        ])
+
     def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
         source = (
             "fn identity(flag: Bool) -> Bool { return flag }\n"
             "fn negate(flag: Bool) -> Bool { return !flag }\n"
             "fn main() -> Int { return if identity(negate(false)) { 42 } else { 0 } }\n"
         )
+        reference = self._reference_check("nested-boolean-helpers", source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(reference["diagnostics"], [], reference)
         _, report = self._analyze(source)
         self.assertEqual(scalar(report["status"]), "valid", report)
 

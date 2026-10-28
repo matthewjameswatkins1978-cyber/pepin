@@ -197,3 +197,137 @@ No `CURRENT.md`, manifest, master, release, protocol or budget changes. A13 rema
 Verification on the test SHA: the focused staged JSONL test passed **1/1** (the method exercises six source fixtures plus the known one-shot cap case); `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The full A13/nested-record suite **51/51** and A14 boundary tests **2/2** were run on implementation SHA `f314513`; those source files and compiler implementation are unchanged by this test-only commit, but the newly added three fixtures were not included in that full suite run. Profile evidence is inherited from `f314513` and remains valid because only the test file changed.
 
 **Nonblocking 3/3 review:** the implementation key covers each top-level payload position with constructor identity, payload arity and normalized irrefutable shape; eligibility still excludes malformed/deeper unsupported patterns. Full constructor coverage remains separate from duplicate identity. The expanded tests challenge both false-duplicate and missed-duplicate directions against OCaml. No budget/protocol/C23/milestone changes. A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — recursive nested constructor patterns (2026-10-28; cycle 1/3)
+
+**Implementation/test SHA:** `7224423b3f7d3367bf7a236c01eade474a25dda3`, pushed to `campaign/pep-v01-sustained-build-20261027`. The checker now recursively validates nested constructor payloads for constructor identity, expected payload type and arity. It computes full-coverage eligibility recursively, so partial nested-union patterns remain partial. Duplicate detection keeps the compact existing key for ordinary shallow shapes and falls back to recursive AST structure comparison when constructors exceed that key's depth; binding and wildcard remain equivalent. Staged JSONL checks match OCaml on valid depth-three patterns, distinct partials, exact duplicates and diagnostics. The one-shot analyzer can still hit the unchanged 100,000-step cap on the deep fixture; the staged parser/checker path completes. This extends the checker slice's demonstrated nesting depth, not pattern-matrix exhaustiveness or a general runtime guarantee.
+
+Verification on the implementation/test SHA:
+
+- Focused OCaml differential and budget-boundary regressions: **3/3 passed**.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **58/58 passed**.
+- `python -m unittest tests.test_a14_c23 -q`: **11/11 passed**.
+- `python -m unittest tests.test_c23_cli -q`: **5/5 passed**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- No clean OCaml rebuild, historical MoonBit suite, full test discovery or new benchmark was run. Previous performance profiles are inherited evidence, not measurements of this recursive-pattern change.
+
+No runtime budget, protocol, A14, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 1/3.
+
+## Continuation 03 — unreachable-statement diagnostics across control-flow bodies (2026-10-28; cycle 2/3)
+
+**Implementation/test SHA:** `b9c7507470a606ca8e6982db4579fa1f808b21e2`, pushed to `campaign/pep-v01-sustained-build-20261027`. The checker now matches OCaml's `PEP_UNREACHABLE` diagnostic and exact statement span after direct returns, nested returning blocks, two-branch returning `if` statements, and inside `while`/`for-in` bodies. A loop body return does not make the loop itself a guaranteed return. Four new source fixtures compare ordered diagnostic codes and byte spans against the OCaml CLI, including a malformed unreachable statement whose later type error must not replace the earlier unreachable diagnostic.
+
+Verification on the implementation/test SHA:
+
+- Focused unreachable and nested-pattern budget regressions: **2/2 passed**.
+- Combined A13, nested-record/list, A14 C23 and C23 CLI suites: **75/75 passed** in 264.974 seconds. This includes the existing deep-pattern budget stress case that exposed an over-broad first implementation.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- The fixed 100,000-step ceiling is unchanged. An over-broad scan implementation exceeded it and was discarded; the committed checker checks only return-capable statements and their following sibling. No isolated timing or memory benchmark was run.
+
+No clean OCaml rebuild, MoonBit suite, full repository discovery, protocol, A14 implementation, master, `CURRENT.md`, manifest or release changes. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — fixed-budget multi-call boundary probe (2026-10-28; cycle 3/3)
+
+**Test SHA:** `0706ef06b914340388a9937deaca7f52f88f8634`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added an exact 200-byte four-caller A13 fixture and staged comparison. OCaml and the staged Pep checker agree on invalid status, ordered diagnostic identities and original byte spans. The one-shot analyzer reproducibly returns `PEP_RUNTIME_STEP_LIMIT`; a four-caller correctly typed one-shot control reaches the same ceiling, while its staged checker result is valid and a staged typed-hole control remains incomplete with expected type `Bool`. No checker implementation or budget change was made because the measurements do not isolate a safe optimization target.
+
+Measurements on the same persistent JSONL session, with the A13 tools registered and five consecutive invocations per case (no discarded warmup), using end-to-end `JsonLineClient.send` wall time:
+
+- 160-byte, three-mismatch one-shot: **5/5 succeeded**, median **3.565 ms**.
+- 200-byte, four-mismatch one-shot: **5/5 hit `PEP_RUNTIME_STEP_LIMIT`**, median **3.077 ms**; error position `2879:238`.
+- 200-byte four-mismatch staged parser: median **3.833 ms**; staged checker: median **2.344 ms**. All five parser/checker calls succeeded and the checker matched OCaml diagnostics.
+- The four-call typed one-shot control also hit the fixed limit (observed position `4092:31`).
+
+These host-visible timings include request/response and JSONL work; they are not interpreter-only CPU, step-distribution or memory measurements. The one-shot error position identifies where the counter expired, not the root cause. Parser-plus-checker composition exceeds the one-shot budget for this source while each staged operation succeeds; no claim is made about a single dominant internal traversal.
+
+Verification:
+
+- Focused four-call differential/budget test: **1/1 passed** on test SHA `0706ef0`.
+- A13 plus nested-record/list: **60/60 passed** in 190.743 seconds immediately before final test-only cleanup (dead fallback removal and the 200-byte fixture-size assertion); final test method passed again **1/1** after those edits.
+- A14 C23 **11/11** and C23 CLI **5/5** were previously verified on unchanged checker/compiler sources at `b9c7507`.
+- Final `py_compile` and `git diff --check` passed. No clean standalone OCaml rebuild, historical MoonBit run or full repository discovery.
+
+**Nonblocking 3/3 review:** the cross-stage result and capacity edge are now reproducible, the typed control rules out mismatch-diagnostic complexity as the sole explanation, and the staged hole case preserves semantic facts. Runtime output gives no phase step counts; internal attribution remains unresolved, so this test-only slice makes no speculative checker optimization. The 100,000-step ceiling is unchanged. Agent 2's native/runtime work remains separate. A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — deep structural list parity and literal-append budget edge (2026-10-28; cycle 1/3)
+
+**Test SHA:** `76562097dd5b1b020e893fcca9eb003e35e2c1de`; checker source remains unchanged from `b9c7507470a606ca8e6982db4579fa1f808b21e2`. Added differential coverage for three- and four-level list signatures, return-context literals, reverse, append, nested call arguments, and exact leaf mismatch spans. The direct four-level append(value, item) control passes when the element is a typed name; append(value, [item]) also passes when item has depth two and the resulting list element has depth three.
+
+Two OCaml-valid sources that pass a depth-three list literal as the depth-four collection's append element—append(value, [[[1]]]) and append(value, [[item]]) with item: List[Int]—hit the unchanged PEP_RUNTIME_STEP_LIMIT in the Pep checker. Tests record this fixed-budget boundary explicitly; they do not increase the budget or claim Pep/OCaml parity for those capped invocations. This narrows the observed boundary to list-literal elements of that nested depth, not all depth-four signatures or list operations. Runtime failure positions vary and are not treated as root-cause attribution; no isolated CPU/step-distribution or memory measurements were collected.
+
+Verification on this slice before its commit:
+
+- Deep structural-list differential and fixed-budget characterization: 6/6 tests passed; valid controls, exact mismatch diagnostics and the two explicit step-limit cases are separated.
+- python -m py_compile tests/test_a13.py and git diff --check: passed.
+- No checker implementation, budget, protocol, A14, master, CURRENT.md, manifest or release changes.
+
+A13 remains partial, experimental and unaccepted; continue the campaign.
+
+## Continuation 03 — staged deep-append parity and profile-guided budget investigation (2026-10-28; cycle 1/3)
+
+**Test SHA:** `6f0718e75d2f5607bcfb4cadce13bd39488c9466`, pushed to `campaign/pep-v01-sustained-build-20261027`. Extended the two four-level append budget-boundary regressions to run the Pep-written parser and staged checker on the same authorised revision before asserting the one-shot limit. Both staged reports are valid and match OCaml status and exact diagnostics/spans; the one-shot `analyze` calls still return `PEP_RUNTIME_STEP_LIMIT`. No checker source or protocol change is in the committed slice.
+
+Verification on the test SHA:
+
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **66/66 passed** in 209.544 seconds.
+- The five directly affected reachability, nested-list, helper-budget and staged append cases passed **5/5** in 13.627 seconds after restoring the published checker source.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+
+A temporary, stderr-only `execute` tick profile was used and then removed; `pep_ocaml.ml` was restored byte-for-byte to the checkpoint source. For the 107-byte nested-literal append source, one-shot execution stopped at **100,001 ticks**. The successful 133-byte typed-name control used **88,546 ticks**. In the literal failure profile, the largest grouped Pep-function tick counts were `lexer_step` 21,725; `lookup_node` 10,606; `infer_expression_type` 4,609; `contextual_expected_type` 3,706; `child_at` 3,676; and `expression_type_shape` 2,444. These are interpreter tick counts grouped by active Pep function, not isolated CPU time or memory measurements.
+
+A sorted-node early-stop and builtin constructor-scan fast path were tried locally. The constructor helper's grouped ticks fell from 2,187 to 215 in the same cap probe, but the source still hit the fixed limit and the trial introduced four new step-limit failures in the A13 suite. Both implementation edits were discarded. The final checker implementation remains unchanged; the useful result is staged parity coverage and a clearer profile of the unresolved one-shot cost.
+
+The 100,000-step ceiling, master, `CURRENT.md`, manifest, A14/C23 ownership and release state remain unchanged. No large-file, CPU or memory guarantee is claimed. A13 remains partial, experimental and unaccepted; cycle 1/3.
+
+## Continuation 03 — unknown for-in iterable diagnostic parity (2026-10-28; cycle 2/3)
+
+**Test SHA:** `a89701988005ce316f86182f06dc1e378ea72883`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added an unknown iterable case to the existing for-in differential. For `fn main() -> Int { for item in missing {} return 0 }`, the current Pep checker and OCaml both report invalid status with `PEP_UNKNOWN_VARIABLE` over bytes 31–38. This supersedes the older SHA-bound note above that recorded a `PEP_UNKNOWN_BINDING` discrepancy; current checker source already emits the matching code, so this slice changes tests only.
+
+Verification: `python -m unittest tests.test_a13.A13FunctionResolutionTests.test_for_in_item_types_scope_and_list_requirement_match_ocaml -v` passed **1/1 test method**, covering eight iterable, scope, type, and diagnostic fixtures. `python -m py_compile tests/test_a13.py` and `git diff --check` passed. The prior full A13/nested-record suite remains evidence for the unchanged checker at test SHA `6f0718e`; full discovery was not repeated for this one-case test-only change.
+
+No checker implementation, budget, protocol, master, `CURRENT.md`, manifest, A14 or release change. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — for-in scope and shadowing parity (2026-10-28; cycle 3/3)
+
+**Test SHA:** `e611fdef6f4795f0e186badc844bbc22e3382cd9`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added dedicated OCaml differential cases proving a loop binding is unavailable while resolving its own iterable and does not escape the loop, with exact `PEP_UNKNOWN_VARIABLE` byte spans. A valid shadowing case confirms the iterable reference resolves to the outer list binding while the loop-body reference resolves to the loop binding. No checker implementation changes.
+
+Verification on the test SHA: the new scope method passed **1/1**; the existing for-in type/diagnostic method passed **1/1** (eight fixtures). `python -m py_compile tests/test_a13.py` and `git diff --check` passed. Full A13/nested-record suite was not rerun for this test-only slice; its last **66/66** result remains tied to test SHA `6f0718e`, with unchanged checker source.
+
+**Nonblocking 3/3 review:** this closes the reported loop name-resolution boundary with status, spans and binding identity evidence. It does not indicate a checker defect, change the runtime ceiling, or advance A13 acceptance. Next work should target a distinct semantic parity gap or a measured checker bottleneck, keeping full-suite evidence tied to its exact source SHA. Master, `CURRENT.md`, manifest, A14 ownership, budgets and release state remain unchanged.
+
+## Continuation 03 — four-call runtime-step attribution (2026-10-28; cycle 1/3)
+
+**Profile source SHA:** `43c75945e3cf8097c3f26622f6a3fda7167622c9`; checker/test behavior unchanged from the published campaign head. Temporary OCaml `execute` instrumentation counted existing `tick` events by active Pep function; it did not add or remove runtime ticks and was restored byte-for-byte afterward (`pep_ocaml.ml` Git blob `c92f9cc4a36bcfe7597f7286d3b8da42f24ec0ef`). The exact `test_four_independent_call_errors_preserve_fixed_budget_boundary` passed **1/1** with profiling enabled and again **1/1** after restoration.
+
+For the four independent mismatches, separate staged execution used **74,132 parser ticks** and **39,085 checker ticks**; together that is **113,217**, above the unchanged 100,000 cap. One-shot `analyze` stopped at **100,001**. The typed control likewise used **76,626 parser + 38,513 checker ticks = 115,139** staged and its one-shot call hit the cap. The typed-hole staged control used **30,550 parser + 13,993 checker ticks** and passed; its one-shot path was not part of this fixture. Thus the failure is consistent with the combined parser/checker budget, not a mismatch-only diagnostic path. The largest measured checker functions on the bad staged case were `type_analysis` 8,345 ticks, `child_at` 4,644, `type_shape_at` 3,288 and `lookup_node` 2,448; parser `lexer_step` alone accounted for 36,721 of 74,132 parser ticks. These counts are specific to this 200-byte fixture and are not CPU or memory measurements.
+
+Uninstrumented warm-session JSONL observations from the same test: bad parser request/response **245/20,870 bytes, 3.786 ms**; staged checker **20,919/11,536 bytes, 3.285 ms**; failing one-shot **246/248 bytes, 3.626 ms**. Typed-control parser/checker round trips were **4.397/2.152 ms**; the one-shot limit response took **3.355 ms**. These are single warm-call observations, not medians or isolated execution times. Small requests and millisecond responses make transport an unlikely cause for this fixture; the interpreter-step ceiling is decisive. Full A13+nested suite was not repeated for this profile-only slice; no checker source, cap, protocol, `CURRENT.md`, manifest, master or A14 ownership changed. A13 remains partial and unaccepted; continue.
+
+## Continuation 03 — list return-span and nested append contextual parity (2026-10-28; cycle 2/3)
+
+**Implementation/test SHA:** `8896ea71be97e9857c2f05b7ec735b60a2ae476c`, pushed to `campaign/pep-v01-sustained-build-20261027`. The Pep checker now locates the offending list leaf when an `if` expression's contextual list return branch has the wrong element type. It also matches OCaml's contextual acceptance of an extra nested list literal in `append`, using a recursive list-depth predicate composed from existing shape helpers. The exception is explicitly limited to `append` and requires a list literal, inferred type text equal to the expected element type, and strictly greater actual list depth. Exact-depth mismatches remain rejected. Regression cases compare OCaml status, diagnostic codes and byte spans for the offending conditional leaf and append controls.
+
+The OCaml reference accepts `append(xs, [[true]])` for `xs: List[List[Int]]` in this return context, as well as the integer control; the Pep checker now does too. This records reference parity, not a new guarantee that the OCaml behavior is structurally sound. The exact-depth `append(xs, [true])` remains invalid and matches the reference diagnostic. No runtime execution safety or backend support is implied by static acceptance.
+
+Verification on this implementation/test SHA:
+
+- Focused return-span, contextual append, deep list mismatch and four-level append checks: **4/4 passed**.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **68/68 passed** in **214.006 seconds**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- No full repository discovery, clean standalone OCaml rebuild, MoonBit suite, A14/C23 suite or new performance measurement was run. The immediately preceding staged profiling remains valid for its recorded source SHA; this checker behavior change has not been separately profiled.
+
+No runtime budget, protocol, A14 implementation, master, `CURRENT.md`, manifest or release change. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — contextual nested-list branch mismatch diagnostics (2026-10-28; cycle 3/3)
+
+**Implementation/test SHA:** `c3adf5da8a9ce503d46367afe696a46194099480`, pushed to `campaign/pep-v01-sustained-build-20261027`. Found and fixed a contextual inference hole in `if` return checking: nested list literals could be assigned the expected outer type while a wrong leaf such as `true` remained unchecked. The checker now asks the existing structural list-leaf helper for direct list-literal branches before trusting their contextual type, reports the first offending branch/leaf in source order, and retains the whole-branch fallback for ordinary type mismatches. Tests cover wrong leaves in both then and else positions with exact OCaml code and byte spans (then: **57–61**, else: **72–76** on the two-level fixtures).
+
+**Nonblocking independent 3/3 review:** no semantic or diagnostic-order blocker. Review flagged unnecessary branch traversals under the fixed step ceiling. Follow-up narrows leaf scans to direct list-literal branches and skips the else scan after a then-side mismatch. The full suite was rerun after this guard. The structural helper's tick savings were not instrumented separately, so no performance improvement figure is claimed.
+
+Verification on the final implementation/test SHA:
+
+- Focused return mismatch differential: **1/1 test method passed** after the review guard.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **68/68 passed** in **222.601 seconds**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- No C23/A14 suite, historical MoonBit suite, clean OCaml build, full repository discovery or new benchmark was run.
+
+No runtime-budget, protocol, A14 implementation, master, `CURRENT.md`, manifest or release change. A13 remains partial, experimental and unaccepted; the review cycle is complete and work continues.

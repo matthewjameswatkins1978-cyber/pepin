@@ -8,15 +8,20 @@ type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape,
 type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
-type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic] }
+type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
+type UnreachableLookup { found: Bool, node: FlatAstNode }
+type ChildRoleCount { role: Str, count: Int }
+type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
+type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
 type FunctionLookup { found: Bool, function: CheckedFunction }
 type BindingLookup { found: Bool, binding: BindingFact }
 type ReferenceLookup { found: Bool, reference: ResolvedName }
 type PatternKeyNestedPart { position: Int, kind: Str, constructor: Str, payloadArity: Int }
 type PatternKeyPart { position: Int, kind: Str, constructor: Str, payloadArity: Int, nestedParts: List[PatternKeyNestedPart] }
-type ConstructorPatternKey { name: Str, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
+type ConstructorPatternKey { name: Str, syntaxId: Int, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
+type PatternValidation { valid: Bool, covers: Bool, code: Str, node: FlatAstNode }
 
 
 fn empty_type_shape() -> PepTypeShape {
@@ -183,6 +188,10 @@ fn record_field_shape(nodes: List[FlatAstNode], recordName: Str, fieldName: Str)
   }
   return empty_type_shape()
 }
+fn find_function_by_syntax(functions: List[CheckedFunction], syntaxId: Int) -> FunctionLookup {
+  for function in functions { if function.syntaxId == syntaxId { return FunctionLookup { found: true, function: function } } else {} }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
+}
 fn find_function(functions: List[CheckedFunction], name: Str) -> FunctionLookup {
   for function in functions { if function.name == name { return FunctionLookup { found: true, function: function } } else {} }
   return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
@@ -217,26 +226,74 @@ fn fixed_child_index(parentKind: Str, role: Str) -> Int {
   if parentKind == "while" && role == "condition" { return 0 } else {}
   return -1
 }
+fn role_child_count(counts: List[ChildRoleCount], role: Str) -> Int {
+  for item in counts { if item.role == role { return item.count } else {} }
+  return 0
+}
+fn increment_role_count(counts: List[ChildRoleCount], role: Str) -> List[ChildRoleCount] {
+  var reversed: List[ChildRoleCount] = []
+  var found = false
+  for item in counts {
+    if item.role == role {
+      reversed = prepend(reversed, ChildRoleCount { role: role, count: item.count + 1 })
+      found = true
+    } else { reversed = prepend(reversed, item) }
+  }
+  if !found { reversed = prepend(reversed, ChildRoleCount { role: role, count: 1 }) } else {}
+  return reverse(reversed)
+}
+fn validation_parent(stack: List[ValidationFrame], parentId: Int) -> ValidationParent {
+  var reversed: List[ValidationFrame] = []
+  var found = false
+  var parent = ValidationFrame { nodeId: -1, node: empty_node(), roleCounts: [] }
+  for frame in stack {
+    if !found {
+      if frame.nodeId == parentId {
+        found = true
+        parent = frame
+        reversed = prepend(reversed, frame)
+      } else {}
+    } else { reversed = prepend(reversed, frame) }
+  }
+  return ValidationParent { found: found, frames: reverse(reversed), parent: parent }
+}
+fn replace_validation_top(stack: List[ValidationFrame], replacement: ValidationFrame) -> List[ValidationFrame] {
+  var reversed: List[ValidationFrame] = []
+  var replaced = false
+  for frame in stack {
+    if !replaced { reversed = prepend(reversed, replacement); replaced = true } else { reversed = prepend(reversed, frame) }
+  }
+  return reverse(reversed)
+}
 fn tree_is_valid(nodes: List[FlatAstNode], sourceLength: Int) -> Bool {
   var expectedId = 0
   var nextRoot = 0
   var valid = true
+  var validationStack: List[ValidationFrame] = []
   for node in nodes {
     if node.id != expectedId || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || sourceLength <= node.endByte && node.endByte != sourceLength || node.line <= 0 || node.column <= 0 { valid = false } else {}
+    let frame = ValidationFrame { nodeId: node.id, node: node, roleCounts: [] }
     if node.parentId == -1 {
+      validationStack = []
       if node.role != "top_level" || node.childIndex != nextRoot { valid = false } else {}
       nextRoot = nextRoot + 1
+      validationStack = prepend(validationStack, frame)
     } else {
-      let parent = lookup_node(nodes, node.parentId)
+      let parent = validation_parent(validationStack, node.parentId)
       if !parent.found || node.id <= node.parentId || node.childIndex <= -1 { valid = false } else {}
-      let fixedIndex = if parent.found { fixed_child_index(parent.node.kind, node.role) } else { -1 }
-      if fixedIndex != -1 {
-        if node.childIndex != fixedIndex { valid = false } else {}
-      } else {
-        var expectedChild = 0
-        for earlier in nodes { if earlier.id + 1 <= node.id && earlier.parentId == node.parentId && earlier.role == node.role { expectedChild = expectedChild + 1 } else {} }
-        if node.childIndex != expectedChild { valid = false } else {}
-      }
+      if parent.found {
+        let fixedIndex = fixed_child_index(parent.parent.node.kind, node.role)
+        if fixedIndex != -1 {
+          if node.childIndex != fixedIndex { valid = false } else {}
+          validationStack = prepend(parent.frames, frame)
+        } else {
+          let expectedChild = role_child_count(parent.parent.roleCounts, node.role)
+          if node.childIndex != expectedChild { valid = false } else {}
+          let updatedParent = ValidationFrame { nodeId: parent.parent.nodeId, node: parent.parent.node, roleCounts: increment_role_count(parent.parent.roleCounts, node.role) }
+          validationStack = replace_validation_top(parent.frames, updatedParent)
+          validationStack = prepend(validationStack, frame)
+        }
+      } else { validationStack = [] }
     }
     expectedId = expectedId + 1
   }
@@ -330,6 +387,36 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
   var reversed: List[BindingFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var ordinal = 0
+  if length(functions) != 1 {
+    var activeFunctionId = -1
+    var activeFunctionSyntaxId = -1
+    var activeFunctionStart = 0
+    var activeFunctionEnd = 0
+    var nextFunctionOrdinal = 0
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        activeFunctionId = 100000 + nextFunctionOrdinal
+        activeFunctionSyntaxId = node.id
+        activeFunctionStart = node.startByte
+        activeFunctionEnd = node.endByte
+        nextFunctionOrdinal = nextFunctionOrdinal + 1
+      } else {}
+      let parameter = node.kind == "parameter" && node.parentId == activeFunctionSyntaxId
+      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd
+      if activeFunctionId != -1 && (parameter || local) {
+        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
+        let scope = if parameter { activeFunctionId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, activeFunctionId) } }
+        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
+        var duplicate = false
+        for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
+        reversed = prepend(reversed, binding)
+        ordinal = ordinal + 1
+      } else {}
+    }
+    return BindingCollection { bindings: reverse(reversed), diagnostics: reverse(reversedDiagnostics) }
+  } else {}
   for function in functions {
     for node in nodes {
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
@@ -352,6 +439,39 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
 fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
   var reversedReferences: List[ResolvedName] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
+  if length(functions) != 1 {
+    var activeFunctionId = -1
+    var activeFunctionSyntaxId = -1
+    var activeFunctionStart = 0
+    var activeFunctionEnd = 0
+    var nextFunctionOrdinal = 0
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        activeFunctionId = 100000 + nextFunctionOrdinal
+        activeFunctionSyntaxId = node.id
+        activeFunctionStart = node.startByte
+        activeFunctionEnd = node.endByte
+        nextFunctionOrdinal = nextFunctionOrdinal + 1
+      } else {}
+      if (node.kind == "name" || node.kind == "assignment") && activeFunctionId != -1 && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd {
+        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
+        var found = false
+        var resolved = 0
+        for scope in scopes {
+          for binding in bindings {
+            if !found && binding.ownerFunctionId == activeFunctionId && binding.scopeId == scope && binding.name == node.text && binding.visibleFrom <= node.startByte {
+              found = true
+              resolved = binding.semanticId
+            } else {}
+          }
+        }
+        if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", "No visible variable has this name", node))
+        }
+      } else {}
+    }
+    return NameResolution { references: reverse(reversedReferences), diagnostics: reverse(reversedDiagnostics) }
+  } else {}
   for function in functions {
     for node in nodes {
       if (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
@@ -553,6 +673,11 @@ fn without_one_list(shape: PepTypeShape) -> PepTypeShape {
   if shape.listDepth == 0 { return empty_type_shape() } else {}
   return PepTypeShape { kind: shape.kind, name: shape.name, listDepth: shape.listDepth - 1 }
 }
+fn has_extra_list_depth(actual: PepTypeShape, expected: PepTypeShape) -> Bool {
+  if expected.listDepth == 0 { return actual.listDepth != 0 } else {}
+  if actual.listDepth == 0 { return false } else {}
+  return has_extra_list_depth(without_one_list(actual), without_one_list(expected))
+}
 fn list_mismatch_node(nodes: List[FlatAstNode], expressionId: Int, expected: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> NodeLookup {
   let expression = lookup_node(nodes, expressionId)
   if !expression.found { return NodeLookup { found: false, node: empty_node() } } else {}
@@ -713,18 +838,40 @@ fn union_variant_count(nodes: List[FlatAstNode], unionName: Str) -> Int {
   }
   return count
 }
-fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
-  if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" { return true } else {}
-  if pattern.kind != "constructor_pattern" || constructor_union_type(nodes, pattern.text) != expectedType { return false } else {}
-  if union_variant_count(nodes, expectedType) != 1 { return false } else {}
+fn validate_nested_pattern(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> PatternValidation {
+  if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" {
+    return PatternValidation { valid: true, covers: true, code: "", node: empty_node() }
+  } else {}
+  if pattern.kind != "constructor_pattern" {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_UNSUPPORTED", node: pattern }
+  } else {}
+  if !is_constructor(nodes, pattern.text) {
+    return PatternValidation { valid: false, covers: false, code: "PEP_UNKNOWN_CONSTRUCTOR", node: pattern }
+  } else {}
+  let actualUnion = constructor_union_type(nodes, pattern.text)
+  if expectedType == "" || actualUnion != expectedType {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_TYPE_MISMATCH", node: pattern }
+  } else {}
   let variant = variant_declaration(nodes, pattern.text)
-  if !variant.found || count_children(nodes, variant.node.id, "field_type") != count_children(nodes, pattern.id, "argument") { return false } else {}
+  let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
+  if expectedArity != count_children(nodes, pattern.id, "argument") {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_ARITY", node: pattern }
+  } else {}
+  var covers = union_variant_count(nodes, expectedType) == 1
   for payload in nodes {
-    if payload.parentId == pattern.id && payload.role == "argument" && payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" { return false } else {}
+    if payload.parentId == pattern.id && payload.role == "argument" {
+      let payloadType = variant_payload_type(nodes, pattern.text, payload.childIndex)
+      let nested = validate_nested_pattern(nodes, payload, payloadType)
+      if !nested.valid { return nested } else {}
+      if !nested.covers { covers = false } else {}
+    } else {}
   }
-  return true
+  return PatternValidation { valid: true, covers: covers, code: "", node: empty_node() }
 }
-
+fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
+  let checked = validate_nested_pattern(nodes, pattern, expectedType)
+  return checked.valid && checked.covers
+}
 fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> List[PatternKeyNestedPart] {
   var reversed: List[PatternKeyNestedPart] = []
   for payload in nodes {
@@ -737,6 +884,42 @@ fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> L
   }
   return reverse(reversed)
 }
+fn pattern_has_unkeyed_constructor(nodes: List[FlatAstNode], rootId: Int) -> Bool {
+  for top in nodes {
+    if top.parentId == rootId && top.role == "argument" && top.kind == "constructor_pattern" {
+      for nested in nodes {
+        if nested.parentId == top.id && nested.role == "argument" && nested.kind == "constructor_pattern" {
+          for deeper in nodes {
+            if deeper.parentId == nested.id && deeper.role == "argument" && deeper.kind == "constructor_pattern" { return true } else {}
+          }
+        } else {}
+      }
+    } else {}
+  }
+  return false
+}
+fn same_pattern_structure(nodes: List[FlatAstNode], leftId: Int, rightId: Int) -> Bool {
+  let left = lookup_node(nodes, leftId)
+  let right = lookup_node(nodes, rightId)
+  if !left.found || !right.found { return false } else {}
+  if left.node.kind == "binding_pattern" || left.node.kind == "wildcard_pattern" {
+    return right.node.kind == "binding_pattern" || right.node.kind == "wildcard_pattern"
+  } else {}
+  if left.node.kind != "constructor_pattern" || right.node.kind != "constructor_pattern" { return false } else {}
+  if left.node.text != right.node.text { return false } else {}
+  let leftCount = count_children(nodes, leftId, "argument")
+  let rightCount = count_children(nodes, rightId, "argument")
+  if leftCount != rightCount { return false } else {}
+  var index = 0
+  while index <= leftCount - 1 {
+    let leftArgument = child_at(nodes, leftId, "argument", index)
+    let rightArgument = child_at(nodes, rightId, "argument", index)
+    if !leftArgument.found || !rightArgument.found { return false } else {}
+    if !same_pattern_structure(nodes, leftArgument.node.id, rightArgument.node.id) { return false } else {}
+    index = index + 1
+  }
+  return true
+}
 fn same_nested_pattern_parts(left: List[PatternKeyNestedPart], right: List[PatternKeyNestedPart]) -> Bool {
   if length(left) != length(right) { return false } else {}
   for leftPart in left {
@@ -748,18 +931,24 @@ fn same_nested_pattern_parts(left: List[PatternKeyNestedPart], right: List[Patte
   }
   return true
 }
-fn same_constructor_pattern_key(left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
-  if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
-  for leftPart in left.argumentPatterns {
+fn same_pattern_key_parts(left: List[PatternKeyPart], right: List[PatternKeyPart]) -> Bool {
+  if length(left) != length(right) { return false } else {}
+  for leftPart in left {
     var found = false
-    for rightPart in right.argumentPatterns {
+    for rightPart in right {
       if leftPart.position == rightPart.position && leftPart.kind == rightPart.kind && leftPart.constructor == rightPart.constructor && leftPart.payloadArity == rightPart.payloadArity && same_nested_pattern_parts(leftPart.nestedParts, rightPart.nestedParts) { found = true } else {}
     }
     if !found { return false } else {}
   }
   return true
 }
-
+fn same_constructor_pattern_key(nodes: List[FlatAstNode], left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
+  if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
+  if pattern_has_unkeyed_constructor(nodes, left.syntaxId) || pattern_has_unkeyed_constructor(nodes, right.syntaxId) {
+    return same_pattern_structure(nodes, left.syntaxId, right.syntaxId)
+  } else {}
+  return same_pattern_key_parts(left.argumentPatterns, right.argumentPatterns)
+}
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   var typed: List[BindingFact] = []
   for binding in bindings {
@@ -1007,8 +1196,21 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
 
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
+  let sequentialFunctionOwner = length(functions) != 1
+  var activeFunctionFound = false
+  var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
+  var unreachable = UnreachableLookup { found: false, node: empty_node() }
   for node in nodes {
+    if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
+      let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
+      if nextStatement.found { unreachable = UnreachableLookup { found: true, node: nextStatement.node } } else {}
+    } else {}
+    if sequentialFunctionOwner && node.parentId == -1 && node.kind == "function" {
+      let activeLookup = find_function_by_syntax(functions, node.id)
+      activeFunction = activeLookup.function
+      activeFunctionFound = activeLookup.found
+    } else {}
     if node.kind == "function" {
       let returnType = child_at(nodes, node.id, "return_type", 0)
       if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
@@ -1282,65 +1484,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     let partArity = if payload.kind == "constructor_pattern" { count_children(nodes, payload.id, "argument") } else { 0 }
                     reversedArgumentPatterns = prepend(reversedArgumentPatterns, PatternKeyPart { position: payload.childIndex, kind: partKind, constructor: partConstructor, payloadArity: partArity, nestedParts: pattern_key_nested_parts(nodes, payload) })
                     if payload.kind == "constructor_pattern" {
-                      var nestedCoversVariant = false
                       let expectedType = variant_payload_type(nodes, pattern.node.text, payload.childIndex)
-                      let actualUnion = constructor_union_type(nodes, payload.text)
-                      if expectedType == "" || actualUnion != expectedType {
+                      let nested = validate_nested_pattern(nodes, payload, expectedType)
+                      if !nested.valid {
                         coversVariant = false
                         duplicatePatternEligible = false
                         invalidPattern = true
-                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Nested constructor pattern does not match its payload type", payload))
+                        let message = if nested.code == "PEP_PATTERN_ARITY" { "Nested constructor pattern payload count does not match its variant" } else { if nested.code == "PEP_PATTERN_TYPE_MISMATCH" { "Nested constructor pattern does not match its payload type" } else { if nested.code == "PEP_UNKNOWN_CONSTRUCTOR" { "Unknown constructor in nested pattern" } else { "Pattern form is outside the implemented checker subset" } } }
+                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(nested.code, message, nested.node))
                       } else {
-                        let nestedVariant = variant_declaration(nodes, payload.text)
-                        let nestedArity = if nestedVariant.found { count_children(nodes, nestedVariant.node.id, "field_type") } else { -1 }
-                        if nestedArity != count_children(nodes, payload.id, "argument") {
-                          coversVariant = false
-                          duplicatePatternEligible = false
-                          invalidPattern = true
-                          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Nested constructor pattern payload count does not match its variant", payload))
-                        } else {
-                          var nestedIrrefutable = true
-                          for nestedPayload in nodes {
-                            if nestedPayload.parentId == payload.id && nestedPayload.role == "argument" {
-                              if nestedPayload.kind == "constructor_pattern" {
-                                let deeperExpectedType = variant_payload_type(nodes, payload.text, nestedPayload.childIndex)
-                                let deeperActualType = constructor_union_type(nodes, nestedPayload.text)
-                                if deeperExpectedType == "" || deeperActualType != deeperExpectedType {
-                                  duplicatePatternEligible = false
-                                  invalidPattern = true
-                                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Nested constructor pattern does not match its payload type", nestedPayload))
-                                } else {
-                                  let deeperVariant = variant_declaration(nodes, nestedPayload.text)
-                                  let deeperArity = if deeperVariant.found { count_children(nodes, deeperVariant.node.id, "field_type") } else { -1 }
-                                  if deeperArity != count_children(nodes, nestedPayload.id, "argument") {
-                                    duplicatePatternEligible = false
-                                    invalidPattern = true
-                                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Nested constructor pattern payload count does not match its variant", nestedPayload))
-                                  } else {
-                                    if !pattern_covers_payload(nodes, nestedPayload, deeperExpectedType) { nestedIrrefutable = false } else {}
-                                    for deepestPayload in nodes {
-                                      if deepestPayload.parentId == nestedPayload.id && deepestPayload.role == "argument" && deepestPayload.kind != "binding_pattern" && deepestPayload.kind != "wildcard_pattern" {
-                                        duplicatePatternEligible = false
-                                        invalidPattern = true
-                                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Constructor patterns deeper than two nested payloads are outside this checker slice", deepestPayload))
-                                      } else {}
-                                    }
-                                  }
-                                }
-                              } else {
-                                if nestedPayload.kind != "binding_pattern" && nestedPayload.kind != "wildcard_pattern" {
-                                  nestedIrrefutable = false
-                                  duplicatePatternEligible = false
-                                  invalidPattern = true
-                                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Pattern form is outside the implemented checker subset", nestedPayload))
-                                } else {}
-                              }
-                            } else {}
-                          }
-                          if union_variant_count(nodes, expectedType) == 1 && nestedIrrefutable { nestedCoversVariant = true } else {}
-                        }
+                        if !nested.covers { coversVariant = false } else {}
                       }
-                      if !nestedCoversVariant { coversVariant = false } else {}
                     } else {
                       if payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" {
                         coversVariant = false
@@ -1351,11 +1505,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     }
                   } else {}
                 }
-                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
+                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, syntaxId: pattern.node.id, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
                 if union.found && patternUnion == subjectType && duplicatePatternEligible {
                   var samePattern = false
                   for previousPatternKey in seenConstructorPatterns {
-                    if same_constructor_pattern_key(previousPatternKey, currentPatternKey) { samePattern = true } else {}
+                    if same_constructor_pattern_key(nodes, previousPatternKey, currentPatternKey) { samePattern = true } else {}
                   }
                   if samePattern {
                     invalidPattern = true
@@ -1482,7 +1636,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
                   let expectedElementShape = elementShape
-                  let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape)
+                  let contextualExtraList = node.text == "append" && value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualValueShape, expectedElementShape)
+                  let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape) && !contextualExtraList
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
                     let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
                     let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
@@ -1523,6 +1678,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let thenValue = child_at(nodes, node.id, "then", 1)
         let elseValue = child_at(nodes, node.id, "else", 2)
         let expectedResult = contextual_expected_type(nodes, node, functions, bindings, references)
+        let expectedShape = if expectedResult != "" { legacy_type_shape(nodes, expectedResult) } else { empty_type_shape() }
         if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If condition must have type Bool", condition.node))
         } else {}
@@ -1538,8 +1694,18 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           } else {}
           if expectedResult != "" {
             var mismatchReported = false
-            if thenType != "" && thenType != expectedResult {
+            let thenMismatch = if expectedShape.listDepth != 0 && thenValue.node.kind == "list" { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            if thenMismatch.found {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenMismatch.node))
+              mismatchReported = true
+            } else {}
+            if !mismatchReported && thenType != "" && thenType != expectedResult {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenValue.node))
+              mismatchReported = true
+            } else {}
+            let elseMismatch = if !mismatchReported && expectedShape.listDepth != 0 && elseValue.node.kind == "list" { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            if !mismatchReported && elseMismatch.found {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseMismatch.node))
               mismatchReported = true
             } else {}
             if !mismatchReported && elseType != "" && elseType != expectedResult {
@@ -1560,7 +1726,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "return" {
-      let owner = owner_function(nodes, node, functions)
+      let owner = if sequentialFunctionOwner {
+        FunctionLookup { found: activeFunctionFound && activeFunction.startByte <= node.startByte && node.endByte <= activeFunction.endByte, function: activeFunction }
+      } else { owner_function(nodes, node, functions) }
       let returned = child_at(nodes, node.id, "value", 0)
       if owner.found && returned.found {
         let actualReturn = infer_expression_type(nodes, returned.node.id, functions, bindings, references)
@@ -1637,7 +1805,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
-  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed) }
+  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
@@ -1764,7 +1932,23 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
     } else {}
   }
   let calls = reverse(reversedCalls)
-  let diagnostics = reverse(reversedDiagnostics)
+  let collectedDiagnostics = reverse(reversedDiagnostics)
+  var diagnostics = collectedDiagnostics
+  if typeResult.unreachable.found {
+    var earlierFound = false
+    var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+    for candidate in collectedDiagnostics {
+      if candidate.code != "PEP_MISSING_RETURN" && candidate.startByte + 1 <= typeResult.unreachable.node.startByte && (!earlierFound || candidate.startByte + 1 <= earlier.startByte) {
+        earlierFound = true
+        earlier = candidate
+      } else {}
+    }
+    if earlierFound {
+      diagnostics = [earlier]
+    } else {
+      diagnostics = [diagnostic("PEP_UNREACHABLE", "Statement follows an unconditional return", typeResult.unreachable.node)]
+    }
+  } else {}
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
   return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
 }
