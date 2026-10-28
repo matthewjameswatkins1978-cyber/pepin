@@ -1614,8 +1614,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
   }
   let orderedDiagnostics = reverse(reversedDiagnostics)
-  var selectedDiagnosticsReversed: List[CheckDiagnostic] = []
-  var firstTypeMismatchSelected = false
+  var selectedMismatch: CheckDiagnostic = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+  var firstMismatchFound = false
   for candidate in orderedDiagnostics {
     if candidate.code == "PEP_TYPE_MISMATCH" {
       var hasMoreSpecificMismatch = false
@@ -1624,13 +1624,18 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           hasMoreSpecificMismatch = true
         } else {}
       }
-      if !hasMoreSpecificMismatch && !firstTypeMismatchSelected {
-        selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
-        firstTypeMismatchSelected = true
+      let earlierMismatch = candidate.startByte <= selectedMismatch.startByte && candidate.startByte != selectedMismatch.startByte || candidate.startByte == selectedMismatch.startByte && candidate.endByte <= selectedMismatch.endByte
+      if !hasMoreSpecificMismatch && (!firstMismatchFound || earlierMismatch) {
+        selectedMismatch = candidate
+        firstMismatchFound = true
       } else {}
-    } else {
+    } else {}
+  }
+  var selectedDiagnosticsReversed: List[CheckDiagnostic] = []
+  for candidate in orderedDiagnostics {
+    if candidate.code != "PEP_TYPE_MISMATCH" || firstMismatchFound && candidate.syntaxId == selectedMismatch.syntaxId && candidate.startByte == selectedMismatch.startByte && candidate.endByte == selectedMismatch.endByte {
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
-    }
+    } else {}
   }
   return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed) }
 }

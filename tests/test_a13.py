@@ -552,6 +552,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-call-error", "fn g(a: Bool) -> Bool { return a }" + NL + "fn h(x: Int) -> Int { return x }" + NL + "fn f() -> Bool { return g(h(true)) }"),
             ("two-nested-call-errors", "fn g(a: Bool, b: Bool) -> Bool { return a }" + NL + "fn h(x: Int) -> Int { return x }" + NL + "fn f() -> Bool { return g(h(true), h(false)) }"),
             ("separate-call-errors", "fn g(a: Bool) -> Bool { return a }" + NL + "fn f() -> Int { let first = g(1); let second = g(2); return 0 }"),
+            ("call-error-before-binary-sibling", "fn g(a: Int) -> Bool { return true }" + NL + "fn f() -> Int { return g(true) + true }"),
         ]
         for name, source in cases:
             with self.subTest(name=name):
