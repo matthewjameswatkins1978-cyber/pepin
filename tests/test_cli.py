@@ -991,6 +991,24 @@ class PepGenericFunctionTests(unittest.TestCase):
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
 
+    def test_generic_composition_and_recursive_calls_preserve_type_variables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn keep[T](value: T) -> List[T] { return [value] }\n"
+                "fn wrap[U](value: U) -> List[U] { return keep(value) }\n"
+                "fn descend[V](value: V, count: Int) -> V { "
+                "if count <= 0 { return value } else { return descend(value, count - 1) } }\n"
+                "let nested: List[List[Int]] = keep(wrap(descend(7, 3)))\n"
+                "say(int_text(length(nested)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-composition.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            executed = invoke("run", path)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "1\n")
+
     def test_builtin_type_names_are_rejected_as_generic_parameters(self):
         with tempfile.TemporaryDirectory() as temporary:
             for index, name in enumerate(("Int", "Bool", "Str", "SourceBytes", "Unit", "List")):
