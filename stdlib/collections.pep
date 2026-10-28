@@ -74,6 +74,12 @@ fn list_int_all_equal(values: List[Int], expected: Int) -> Bool {
   return all
 }
 
+fn list_int_count_at_most(values: List[Int], upper: Int) -> Int {
+  var total = 0
+  for item in values { total = if item <= upper { total + 1 } else { total } }
+  return total
+}
+
 fn list_int_any_zero(values: List[Int]) -> Bool {
   var found = false
   for item in values { found = found || (item == 0) }
