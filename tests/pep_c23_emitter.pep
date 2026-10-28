@@ -24,6 +24,17 @@ fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: 
   if matches != 1 { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
   return list
 }
+fn pep_c23_mutable_list_binding(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  for binding in nodes {
+    if binding.parentId == function.id && binding.role == "statement" && binding.kind == "var" && binding.text == name {
+      let initial = pep_c23_child(nodes, binding.id, "value", 0)
+      if initial.found && initial.node.kind == "list" {
+        return PepC23NodeLookup { found: true, node: binding }
+      } else {}
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_int_list_parameter(nodes, function, node.text)
@@ -658,6 +669,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
           let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(nodes, function, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
           let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_int_list_parameter(nodes, function, iterable.node.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
@@ -665,7 +677,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             pep_c23_bool_list_parameter(nodes, function, iterable.node.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
           let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
-          if !iterable.found || (!iterableList.found && !iterableParameter.found) || count_children(nodes, statement.id, "body") == 0 {
+          if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || count_children(nodes, statement.id, "body") == 0 {
             return pep_c23_unsupported("Pep C23 for-in lowering requires an integer or Bool list literal or immutable literal binding, or a List[Int] or List[Bool] parameter, and a non-empty assignment body")
           } else {}
           if iterableList.found {
@@ -830,6 +842,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
             let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
@@ -837,7 +850,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               pep_c23_bool_list_parameter(parsed.nodes, node, iterable.node.text)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
-            if !iterable.found || (!iterableList.found && !iterableParameter.found) {
+            if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) {
               return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or List[Int]/List[Bool] parameter")
             } else {}
             var elementCount = 0
@@ -855,34 +868,44 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 arrayDeclaration = append(arrayDeclaration, part)
               }
             } else {
-              if elementCount == 0 {
-                for part in ["  if (0) {\n    int64_t pep_local_", int_text(statement.id), " = 0;\n"] {
+              if iterableLocal.found {
+                let localList = pep_c23_child(parsed.nodes, iterableLocal.node.id, "value", 0)
+                if !localList.found || localList.node.kind != "list" || elementCount == 0 {
+                  return pep_c23_unsupported("Pep C23 runtime list iteration requires a non-empty mutable list literal binding")
+                } else {}
+                for part in ["  if (pep_local_", int_text(iterableLocal.node.id), ".length != 0 && pep_local_", int_text(iterableLocal.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_local_", int_text(iterableLocal.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = (int64_t)pep_local_", int_text(iterableLocal.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
                   arrayDeclaration = append(arrayDeclaration, part)
                 }
               } else {
-                arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
-                for element in parsed.nodes {
-                  if element.parentId == iterableList.node.id && element.role == "element" {
-                    let elementText = if element.kind == "boolean" { if element.booleanValue { "1" } else { "0" } } else { int_text(element.integerValue) }
-                    arrayDeclaration = append(arrayDeclaration, elementText)
-                    arrayDeclaration = append(arrayDeclaration, ", ")
-                  } else {}
+                if elementCount == 0 {
+                  for part in ["  if (0) {\n    int64_t pep_local_", int_text(statement.id), " = 0;\n"] {
+                    arrayDeclaration = append(arrayDeclaration, part)
+                  }
+                } else {
+                  arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                  for element in parsed.nodes {
+                    if element.parentId == iterableList.node.id && element.role == "element" {
+                      let elementText = if element.kind == "boolean" { if element.booleanValue { "1" } else { "0" } } else { int_text(element.integerValue) }
+                      arrayDeclaration = append(arrayDeclaration, elementText)
+                      arrayDeclaration = append(arrayDeclaration, ", ")
+                    } else {}
+                  }
+                  arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, " < ")
+                  arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
+                  arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, "[pep_index_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                  arrayDeclaration = append(arrayDeclaration, "];\n")
                 }
-                arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, " < ")
-                arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
-                arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, "[pep_index_")
-                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                arrayDeclaration = append(arrayDeclaration, "];\n")
               }
             }
             for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
