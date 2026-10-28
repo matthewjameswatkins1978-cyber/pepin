@@ -148,6 +148,40 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                         c_source = generated_c.read_text(encoding="utf-8")
                         self.assertRegex(c_source, rf"{helper}\(pep_local_\d+,")
 
+    def test_mutable_list_bindings_forward_to_native_helpers(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        cases = (
+            ("fn aggregate(values: List[Int]) -> Int {\n"
+             "  var total = 0\n  for item in values { total = total + item }\n"
+             "  return total\n}\n"
+             "fn main() -> Int { var values = [1, 2, 3]; return aggregate(values) }\n", "6"),
+            ("fn count_true(values: List[Bool]) -> Int {\n"
+             "  var total = 0\n  for item in values { total = if item { total + 1 } else { total } }\n"
+             "  return total\n}\n"
+             "fn main() -> Int { var values = [true, false, true]; return count_true(values) }\n", "2"),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            for index, (source_text, expected) in enumerate(cases):
+                source = folder / f"mutable-forward-{index}.pep"
+                reference_source = folder / f"reference-{index}.pep"
+                source.write_text(source_text, encoding="utf-8", newline="\n")
+                reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                            encoding="utf-8", newline="\n")
+                reference = self.invoke("run", reference_source)
+                self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+                self.assertEqual(reference.stdout, expected + "\n")
+                for compiler in (CLANG, GCC):
+                    with self.subTest(index=index, compiler=compiler.name):
+                        generated_c = folder / f"mutable-forward-{index}-{compiler.stem}.c"
+                        result = self.invoke("run-c23", source, "--compiler", compiler,
+                                             "--emit-c", generated_c)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(result.stdout, reference.stdout)
+                        c_source = generated_c.read_text(encoding="utf-8")
+                        self.assertRegex(c_source, r"pep_fn_\d+\(pep_local_\d+\)")
+
     def test_mutable_list_reassignment_fails_closed(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")

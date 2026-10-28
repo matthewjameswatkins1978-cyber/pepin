@@ -40,9 +40,17 @@ fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, no
     let parameter = pep_c23_int_list_parameter(nodes, function, node.text)
     if parameter.found {
       return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
-    } else {
-      return pep_c23_unsupported("Pep C23 List[Int] forwarding currently requires a direct List[Int] parameter")
-    }
+    } else {}
+    let binding = pep_c23_mutable_list_binding(nodes, function, node.text)
+    if binding.found {
+      let initial = pep_c23_child(nodes, binding.node.id, "value", 0)
+      let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      if !first.found || first.node.kind != "integer" {
+        return pep_c23_unsupported("Pep C23 List[Int] forwarding requires a non-empty Int list binding")
+      } else {}
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.node.id)], diagnostic: "" }
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Int] forwarding currently requires a direct List[Int] parameter or mutable Int list binding")
   } else {}
   if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Int] parameters currently require a direct integer list literal argument or direct parameter forwarding") } else {}
   var parts: List[Str] = ["(pep_list_int){ .data = "]
@@ -100,9 +108,17 @@ fn pep_c23_bool_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, 
 fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_bool_list_parameter(nodes, function, node.text)
-    if parameter.found { return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" } } else {
-      return pep_c23_unsupported("Pep C23 List[Bool] forwarding requires a direct List[Bool] parameter")
-    }
+    if parameter.found { return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" } } else {}
+    let binding = pep_c23_mutable_list_binding(nodes, function, node.text)
+    if binding.found {
+      let initial = pep_c23_child(nodes, binding.node.id, "value", 0)
+      let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      if !first.found || first.node.kind != "boolean" {
+        return pep_c23_unsupported("Pep C23 List[Bool] forwarding requires a non-empty Bool list binding")
+      } else {}
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.node.id)], diagnostic: "" }
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Bool] forwarding requires a direct List[Bool] parameter or mutable Bool list binding")
   } else {}
   if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Bool] parameters require a Bool list literal or direct parameter forwarding") } else {}
   var parts: List[Str] = ["(pep_list_bool){ .data = "]
