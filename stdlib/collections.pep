@@ -28,6 +28,10 @@ fn list_bool_any(values: List[Bool]) -> Bool {
   return found
 }
 
+fn list_bool_none(values: List[Bool]) -> Bool {
+  return !contains(values, true)
+}
+
 fn list_bool_all(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && item }

@@ -234,7 +234,7 @@ fn pep_c23_call_free_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> 
   } else {}
   return false
 }
-fn pep_c23_parameter_expression(nodes: List[FlatAstNode], parameterName: Str, secondParameterName: Str, node: FlatAstNode) -> Bool {
+fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode, parameterName: Str, secondParameterName: Str, node: FlatAstNode) -> Bool {
   if node.kind == "integer" { return true } else {}
   if node.kind == "name" { return node.text == parameterName || node.text == secondParameterName } else {}
   if node.kind == "call" && node.text == "length" {
@@ -247,20 +247,26 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], parameterName: Str, se
     let argument = pep_c23_child(nodes, node.id, "argument", 0)
     let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
-    return argument.found && secondArgument.found && !extraArgument.found &&
-      argument.node.kind == "name" && argument.node.text == parameterName &&
-      secondArgument.node.kind == "name" && secondArgument.node.text == secondParameterName
+    let firstParameter = pep_c23_child(nodes, function.id, "parameter", 0)
+    let firstParameterType = if firstParameter.found { pep_c23_child(nodes, firstParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    let firstParameterIsBoolList = firstParameter.found && firstParameter.node.text == parameterName && firstParameterType.found &&
+      pep_c23_c_parameter_type(nodes, firstParameterType.node) == "pep_list_bool"
+    let secondArgumentMatches = (secondParameterName != "" && secondArgument.found &&
+      secondArgument.node.kind == "name" && secondArgument.node.text == secondParameterName) ||
+      (secondParameterName == "" && firstParameterIsBoolList && secondArgument.found && secondArgument.node.kind == "boolean")
+    return argument.found && secondArgumentMatches && !extraArgument.found &&
+      argument.node.kind == "name" && argument.node.text == parameterName
   } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
     let right = pep_c23_child(nodes, node.id, "right", 1)
     return left.found && right.found &&
-      pep_c23_parameter_expression(nodes, parameterName, secondParameterName, left.node) &&
-      pep_c23_parameter_expression(nodes, parameterName, secondParameterName, right.node)
+      pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, left.node) &&
+      pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, right.node)
   } else {}
   if node.kind == "unary" {
     let operand = pep_c23_child(nodes, node.id, "operand", 0)
-    return operand.found && pep_c23_parameter_expression(nodes, parameterName, secondParameterName, operand.node)
+    return operand.found && pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, operand.node)
   } else {}
   return false
 }
@@ -449,7 +455,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
       if secondParameter.found {
         let secondParameterType = pep_c23_child(nodes, secondParameter.node.id, "type", 0)
-        if !argument.found || !secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, parameter.node.text, secondParameter.node.text, targetValue.node)) {
+        if !argument.found || !secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, target.node, parameter.node.text, secondParameter.node.text, targetValue.node)) {
           return pep_c23_unsupported("Pep C23 two-parameter calls require two arguments and a call-free result expression")
         } else {}
         if pep_c23_expression_may_fail(nodes, argument.node) && pep_c23_expression_may_fail(nodes, secondArgument.node) {
@@ -466,7 +472,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         parts = append(parts, ")")
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       } else {
-        if !argument.found || secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, parameter.node.text, "", targetValue.node)) {
+        if !argument.found || secondArgument.found || (!conditionalTarget && !pep_c23_parameter_expression(nodes, target.node, parameter.node.text, "", targetValue.node)) {
           return pep_c23_unsupported("Pep C23 one-parameter calls require one argument and a call-free target expression")
         } else {}
         let loweredArgument = pep_c23_call_argument(nodes, function, argument.node, parameterType)
