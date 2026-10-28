@@ -32,18 +32,6 @@ function Read-StateFile([string]$path) {
   if (Test-Path $path) { return Get-Content $path -Raw -Encoding utf8 | ConvertFrom-Json }
   return $null
 }
-function Lock-Acquire([string]$path, [int]$timeoutMs = 8000) {
-  $lock = "$path.lockdir"
-  $sw = [Diagnostics.Stopwatch]::StartNew()
-  while ($true) {
-    try { New-Item -ItemType Directory $lock -ErrorAction Stop | Out-Null; return $lock }
-    catch {
-      if ($sw.ElapsedMilliseconds -gt $timeoutMs) { return $null }
-      Start-Sleep -Milliseconds 50
-    }
-  }
-}
-function Lock-Release([string]$lock) { Remove-Item $lock -Force -Recurse -ErrorAction SilentlyContinue }
 function Write-StateFile([string]$path, [object]$o) {
   $dir = Split-Path $path -Parent
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory $dir -Force | Out-Null }
@@ -167,67 +155,6 @@ switch ($Command) {
       }
     }
     Out-Json ([ordered]@{ work_orders = $jobs; note_claims = $claims; authority = 'Studio ledger only; note claims never override ownership.' })
-  }
-  'queue-view' {
-    if (-not $Ledger) { Fail 'MISSING_FIELDS' 'queue-view needs --ledger <queue-file>. (A queue file, not the Studio dir.)' }
-    $q = Read-StateFile $Ledger
-    if (-not $q) { Fail 'NO_QUEUE' "Queue file not found or empty: $Ledger." }
-    $held = @{}
-    foreach ($c in @($q.claims)) { if ($c.status -eq 'HELD') { $held[$c.job] = $c } }
-    $view = @()
-    foreach ($j in @($q.jobs)) {
-      $eff = $j.status
-      $by = $null
-      if ($held.ContainsKey($j.id)) { $eff = 'HELD'; $by = "$($held[$j.id].agent)/$($held[$j.id].session)" }
-      elseif ($j.status -eq 'READY' -and @($j.deps | Where-Object { $_ -notin @(@($q.jobs) | Where-Object { $_.status -eq 'DONE' } | ForEach-Object { $_.id }) }).Count -gt 0) { $eff = 'BLOCKED' }
-      $view += [ordered]@{ id = $j.id; effective = $eff; held_by = $by; risk = $j.risk; deps = @($j.deps); acceptance = $j.acceptance }
-    }
-    Out-Json ([ordered]@{ generation = $q.generation; jobs = $view; authority = 'Single-writer coordinator serialises claims; Studio records final ownership. BM notes never assign.' })
-  }
-  'claim' {
-    if (-not $Ledger -or -not $Job -or -not $Agent -or -not $Session -or -not $ExpectCursor) { Fail 'MISSING_FIELDS' 'claim needs --ledger <queue-file> --job --agent --session --expect-cursor <generation>.' }
-    $lock = Lock-Acquire $Ledger
-    if (-not $lock) { Fail 'LOCK_BUSY' 'Queue locked by another claimant. Retry; do not force.' 2 }
-    try {
-      $q = Read-StateFile $Ledger
-      if ([int]$q.generation -ne [int]$ExpectCursor) { Fail 'CONFLICT' "Queue moved (stored=$($q.generation), expected=$ExpectCursor). Reread queue-view and retry." 2 }
-      $j = @($q.jobs) | Where-Object { $_.id -eq $Job } | Select-Object -First 1
-      if (-not $j) { Fail 'NO_SUCH_JOB' "Job not in queue: $Job." }
-      if ($j.risk -ne 'GREEN') { Fail 'NEEDS_AUTH' "Job $Job is $($j.risk): AMBER needs owner agreement, RED needs Matthew. No auto-claim." 2 }
-      $doneIds = @(@($q.jobs) | Where-Object { $_.status -eq 'DONE' } | ForEach-Object { $_.id })
-      $unmet = @(@($j.deps) | Where-Object { $_ -notin $doneIds })
-      if ($unmet.Count -gt 0) { Fail 'BLOCKED' "Job $Job waits on: $($unmet -join ','). Negotiate or park." 2 }
-      $prior = @($q.claims) | Where-Object { $_.job -eq $Job -and $_.status -eq 'HELD' } | Select-Object -First 1
-      if ($prior) {
-        if ($prior.agent -eq $Agent -and $prior.session -eq $Session) {
-          Out-Json ([ordered]@{ job = $Job; holder = "$Agent/$Session"; generation = $q.generation; duplicate = $true })
-          return
-        }
-        Fail 'CONFLICT' "Job $Job already HELD by $($prior.agent)/$($prior.session). Yield; never seize." 2
-      }
-      $j.status = 'HELD'
-      if (-not $q.claims) { $q | Add-Member -NotePropertyName 'claims' -NotePropertyValue @() -Force }
-      $q.claims += [ordered]@{ job = $Job; agent = $Agent; session = $Session; status = 'HELD'; at_utc = (Get-Date).ToUniversalTime().ToString('o') }
-      $q.generation = [int]$q.generation + 1
-      Write-StateFile $Ledger $q
-      Out-Json ([ordered]@{ job = $Job; holder = "$Agent/$Session"; generation = $q.generation; duplicate = $false })
-    } finally { Lock-Release $lock }
-  }
-  'release' {
-    if (-not $Ledger -or -not $Job -or -not $Agent -or -not $Session) { Fail 'MISSING_FIELDS' 'release needs --ledger <queue-file> --job --agent --session.' }
-    $lock = Lock-Acquire $Ledger
-    if (-not $lock) { Fail 'LOCK_BUSY' 'Queue locked. Retry; do not force.' 2 }
-    try {
-      $q = Read-StateFile $Ledger
-      $prior = @($q.claims) | Where-Object { $_.job -eq $Job -and $_.status -eq 'HELD' } | Select-Object -First 1
-      if (-not $prior) { Fail 'NOT_HELD' "Job $Job is not held." 2 }
-      if ($prior.agent -ne $Agent -or $prior.session -ne $Session) { Fail 'NOT_OWNER' "Job $Job held by $($prior.agent)/$($prior.session). Only the holder releases; a silent peer is suspected, not taken over." 2 }
-      $prior.status = 'RELEASED'
-      (@($q.jobs) | Where-Object { $_.id -eq $Job } | Select-Object -First 1).status = 'READY'
-      $q.generation = [int]$q.generation + 1
-      Write-StateFile $Ledger $q
-      Out-Json ([ordered]@{ job = $Job; released_by = "$Agent/$Session"; generation = $q.generation })
-    } finally { Lock-Release $lock }
   }
   default { Fail 'UNKNOWN_COMMAND' "Unknown command: $Command." }
 }
