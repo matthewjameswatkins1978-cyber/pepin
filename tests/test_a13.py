@@ -1313,6 +1313,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
     def test_match_list_mismatch_reports_first_leaf_like_ocaml(self):
         cases = [
             ("leaf-mismatch", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[true]}}", "invalid"),
+            ("heterogeneous-leaf", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[1,true]}}", "invalid"),
             ("valid-control", "type M=A()|B()\nfn f(x:M)->List[Int]{return match x{A()=>[0] B()=>[1]}}", "valid"),
         ]
         for name, source, expected_status in cases:
