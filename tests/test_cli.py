@@ -991,6 +991,23 @@ class PepGenericFunctionTests(unittest.TestCase):
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
             self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
 
+    def test_generic_function_body_composes_with_polymorphic_list_builtins(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "fn extend[T](items: List[T], item: T) -> List[T] { return append(items, item) }\n"
+                "fn flipped[U](items: List[U]) -> List[U] { return reverse(items) }\n"
+                "let words: List[Str] = flipped(extend([\"a\"], \"b\"))\n"
+                "let numbers: List[Int] = flipped(extend([1], 2))\n"
+                "say(int_text(length(words) + length(numbers)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-builtins.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            executed = invoke("run", path)
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "4\n")
+
     def test_generic_composition_and_recursive_calls_preserve_type_variables(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = (
