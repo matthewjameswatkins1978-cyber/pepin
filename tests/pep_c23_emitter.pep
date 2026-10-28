@@ -24,8 +24,16 @@ fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: 
   if matches != 1 { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
   return list
 }
-fn pep_c23_int_list_argument(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emission {
-  if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Int] parameters currently require a direct integer list literal argument") } else {}
+fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
+  if node.kind == "name" {
+    let parameter = pep_c23_int_list_parameter(nodes, function, node.text)
+    if parameter.found {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
+    } else {
+      return pep_c23_unsupported("Pep C23 List[Int] forwarding currently requires a direct List[Int] parameter")
+    }
+  } else {}
+  if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Int] parameters currently require a direct integer list literal argument or direct parameter forwarding") } else {}
   var parts: List[Str] = ["(pep_list_int){ .data = "]
   let elementCount = count_children(nodes, node.id, "element")
   if elementCount == 0 {
@@ -284,9 +292,16 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let directLocalTarget = targetStatement.found && targetStatement.node.kind == "return" &&
       targetValue.found && targetValue.node.kind == "name" &&
       pep_c23_direct_local(nodes, target.node, targetValue.node.text)
+    let nestedReturnTarget = if targetValue.found && targetValue.node.kind == "call" {
+      pep_c23_function(nodes, targetValue.node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    let directCallTarget = targetStatement.found && targetStatement.node.kind == "return" &&
+      targetValue.found && targetValue.node.kind == "call" &&
+      nestedReturnTarget.found && nestedReturnTarget.node.id != target.node.id
     let conditionalTarget = (targetStatement.found && targetStatement.node.kind == "if_statement") ||
       (targetStatement.found && targetStatement.node.kind == "return" && targetValue.found && targetValue.node.kind == "if_expression") ||
-      directLocalTarget
+      directLocalTarget ||
+      directCallTarget
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
@@ -301,10 +316,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           return pep_c23_unsupported("Pep C23 rejects two fallible call arguments because C argument evaluation order is unspecified")
         } else {}
         let loweredArgument = if parameterType.found && pep_c23_c_parameter_type(nodes, parameterType.node) == "pep_list_int" {
-          pep_c23_int_list_argument(nodes, argument.node)
+          pep_c23_int_list_argument(nodes, function, argument.node)
         } else { pep_c23_expression(nodes, function, argument.node) }
         let loweredSecondArgument = if secondParameterType.found && pep_c23_c_parameter_type(nodes, secondParameterType.node) == "pep_list_int" {
-          pep_c23_int_list_argument(nodes, secondArgument.node)
+          pep_c23_int_list_argument(nodes, function, secondArgument.node)
         } else { pep_c23_expression(nodes, function, secondArgument.node) }
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
         if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
@@ -319,7 +334,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           return pep_c23_unsupported("Pep C23 one-parameter calls require one argument and a call-free target expression")
         } else {}
         let loweredArgument = if parameterType.found && pep_c23_c_parameter_type(nodes, parameterType.node) == "pep_list_int" {
-          pep_c23_int_list_argument(nodes, argument.node)
+          pep_c23_int_list_argument(nodes, function, argument.node)
         } else { pep_c23_expression(nodes, function, argument.node) }
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
         var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
