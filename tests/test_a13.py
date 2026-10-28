@@ -924,6 +924,83 @@ class A13FunctionResolutionTests(unittest.TestCase):
                         field_type = next(fields(item) for item in report["expressionTypes"]["value"] if scalar(fields(item)["startByte"]) == field_start)
                         self.assertEqual(scalar(field_type["typeName"]), "Int")
 
+    def test_for_in_iterable_and_body_scopes_match_ocaml(self):
+        cases = [
+            (
+                "loop-binding-not-visible-in-iterable",
+                "fn main() -> Int { for item in item {} return 0 }",
+                "PEP_UNKNOWN_VARIABLE",
+                "item",
+                lambda source: source.index("in item") + len("in "),
+            ),
+            (
+                "loop-binding-does-not-escape",
+                "fn main() -> Int { for item in [1] {} return item }",
+                "PEP_UNKNOWN_VARIABLE",
+                "item",
+                lambda source: source.rindex("item"),
+            ),
+        ]
+        for name, source, expected_code, span_text, offset_of in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("for-in-scope-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                self.assertEqual(len(actual), 1)
+                self.assertEqual(actual[0][0], expected_code)
+                start = len(source[:offset_of(source)].encode("utf-8"))
+                end = start + len(span_text.encode("utf-8"))
+                self.assertEqual(actual[0][1:], (start, end))
+
+        source = (
+            "fn main() -> Int { let item: List[Int] = [1]; "
+            "for item in item { let value: Int = item } return 0 }"
+        )
+        reference = self._reference_check("for-in-shadowed-name-scopes", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(report["diagnostics"]["value"], [])
+
+        item_bindings = [
+            fields(item) for item in report["bindings"]["value"]
+            if scalar(fields(item)["name"]) == "item"
+        ]
+        self.assertEqual(len(item_bindings), 2, report)
+        function_id = scalar(fields(report["functions"]["value"][0])["semanticId"])
+        outer_binding = next(
+            item for item in item_bindings if scalar(item["scopeId"]) == function_id
+        )
+        loop_binding = next(
+            item for item in item_bindings if scalar(item["scopeId"]) != function_id
+        )
+
+        iterable_start_index = source.index("in item") + len("in ")
+        body_start_index = source.index("item", source.index("let value: Int ="))
+        reference_by_start = {
+            scalar(fields(item)["startByte"]): fields(item)
+            for item in report["references"]["value"]
+            if scalar(fields(item)["name"]) == "item"
+        }
+        iterable_reference = reference_by_start[len(source[:iterable_start_index].encode("utf-8"))]
+        body_reference = reference_by_start[len(source[:body_start_index].encode("utf-8"))]
+        self.assertEqual(
+            scalar(iterable_reference["bindingId"]), scalar(outer_binding["semanticId"]), report
+        )
+        self.assertEqual(
+            scalar(body_reference["bindingId"]), scalar(loop_binding["semanticId"]), report
+        )
+
     def test_assignment_typing_mutability_and_spans_match_ocaml(self):
         cases = [
             ("mutable-valid", "fn main() -> Int { var x: Int = 0; x = 1; return x }", "valid", None, "", {}),
