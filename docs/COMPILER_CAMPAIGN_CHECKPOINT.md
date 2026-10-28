@@ -37,3 +37,31 @@ A reduced resource probe found that A13 accepts `negate(negate(false))`, a direc
 The main checkout has one uncommitted C23 regression test in `tests/test_a14_c23.py`; preserve it. `tests/test_c23_cli.py` was committed at `cf764d9` and passed 4/4. An earlier A14 suite run at pre-optimization base `fe1b24d` passed 11 tests and failed the nested-helper case with the same `PEP_RUNTIME_STEP_LIMIT`, so the failure predates the latest optimization and is not evidence of a new regression.
 
 Next action: profile/reduce the A13 two-distinct-helper nested-call case on a stable snapshot, identify repeated work, and optimize a narrow checker path without changing semantics or budgets. Then rerun the exact reproducer and A13/nested-record regression suites. A13 remains experimental and unaccepted; no merge, master, `CURRENT.md` or manifest advancement.
+
+
+## Continuation 03 — nested helper resource repair (2026-10-28)
+
+This update supersedes the prior checkpoint's unprofiled root-cause hypothesis. The campaign branch advanced to `ec3782964629860ad0d6a24c7b007113aac2119e` while work was isolated. That commit changes `token_at` to return on the requested token rather than scanning the rest of the token list, and adds the exact nested Boolean A13 budget regression. The local implementation was rebased onto that commit before verification.
+
+Implementation and test commit: `ab1f7f01d9511c9b49f1a55a37c775a73152fb0b`. The CLI test source `tests/test_c23_cli.py` has blob SHA-1 `a7d0b449f2771326bf5e40f7c485795b27ceb994`; the resource probe used the exact nested source SHA-256 `58c3734651c51667eb2d304ed9cdc4d08760bb11321fb2c547d0f8ae3ba3d175` (167 UTF-8 bytes). The measured compiler bundle SHA-256 was `c7d2270b726e9eb44eb76e660da632f03e54b1b70c75b74702adccfd97265ad8`.
+
+### Resource evidence and decision
+
+On the same nested-helper program after the parser lookup change, test-only OCaml step instrumentation recorded parser-only `59,964`, checker-only `32,803`, and the A13 combined parse/check path `98,613` steps. The prior parser-only measurement was `65,877`, a reduction of `5,913` steps. The combined A13 path now completes, but has only `1,387` steps of headroom. The monolithic A14 `emit_c23` path still reaches the unchanged `100,001` sentinel. These measurements identify accumulated parser, checker and emitter execution as the boundary; `lookup_node` scans are present but are not alone the cause.
+
+The native CLI now passes the exact typed `ParserProgress` result into `analyze_parsed`, then passes that same parse value and the checker's exact `CheckerReport` into `emit_c23_checked`. The three isolated Pep invocations measured `59,962`, `32,800` and `19,015` steps, respectively, each under the unchanged `100,000` per-invocation ceiling. The Python driver only relays stage results; parsing, semantic checking and C23 emission remain Pep-authored. No token-by-token host round trips, hidden host lexer/checker, budget increase or protocol schema change was introduced. The older one-shot `emit_c23` entrypoint remains available and can still exceed the budget on this case; CLI compilation uses the bounded staged path.
+
+### Verification at implementation SHA
+
+- `python -m unittest discover -s tests -v`: **174/174 passed** in 315.410 seconds. This full-discovery count includes the 11 historical MoonBit tests; those are included once in 174.
+- A13 nested-helper regression: passed in full discovery; the source is now parsed and checked under budget on the updated campaign branch.
+- A14/C23 and actual `run-c23` coverage: passed in full discovery. The new native regression compares interpreter output with C23 execution under both installed Clang and GCC; both return `42`.
+- Fresh OCaml 5.5.2 `ocamlopt` compile and `describe --json`: passed; the report still declares `maxSteps=100000`.
+- `python -m py_compile pep_c23.py tests/test_c23_cli.py`: passed. `git diff --check`: passed before the checkpoint append.
+- Test-only profile run emitted all 52/52 expected profile records. It is instrumentation evidence, not an isolated CPU or memory benchmark.
+
+### Boundaries and next work
+
+A13 remains experimental and unaccepted. The exact A13 combined nested case is close to the budget, larger variants such as a nested relay and two-argument helpers still reach the runtime step limit, and the monolithic A14 tool path can still fail where its individual stages pass. The practical improvement is limited to the staged native CLI route and the measured A13 case; no broad large-program guarantee is established. There are no new semantics, `CURRENT.md` or manifest changes, merges, or master updates. The main checkout's unrelated uncommitted A14 test remains untouched.
+
+Next: continue the campaign after checking the Parser outbox again. Prioritise a measured A13 cost reduction or the next bounded A13 semantic rule; retain the same budget and report unsupported cases as such.
