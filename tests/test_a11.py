@@ -144,7 +144,7 @@ class A11DifferentialTests(unittest.TestCase):
         build_env["PEPIN_OPAM_ROOT"] = opam_root
         compiled = subprocess.run(
             ["opam", "exec", "--root", opam_root, "--switch", "pepin-5.5.2", "--",
-             "ocamlopt", "-o", str(cls.oracle_executable), str(helper_source)],
+             "ocamlopt", "unix.cmxa", "-o", str(cls.oracle_executable), str(helper_source)],
             cwd=ROOT, env=build_env, text=True, capture_output=True, check=False,
         )
         if compiled.returncode != 0:

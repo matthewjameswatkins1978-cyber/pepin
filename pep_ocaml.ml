@@ -16,7 +16,7 @@ type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of 
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
 type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span; public:bool }
 type import_decl = { module_name:string; alias:string; import_span:span }
-type top = TopFun of func | TopStmt of stmt | TopType of type_decl | TopImport of import_decl
+type top = TopFun of func | TopStmt of stmt | TopType of type_decl | TopPublicType of type_decl | TopImport of import_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
@@ -171,7 +171,7 @@ let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "E
 let rec parse_type p = match take p with
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
-  |{kind=Id name;_}->Named name
+  |{kind=Id name;_}->if accept_sym p "." then Named(name^"."^expect_id p) else Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
 let combine a b = mkspan ~file:a.file a.lo b.hi a.line a.column
 let rec parse_pattern p =
@@ -340,7 +340,8 @@ let parse ?file source =
       else if keyword p "pub" then (
         let start=(take p).at in
         if keyword p "fn" then (let function_=parse_func p true in tops:=TopFun{function_ with fspan=combine start function_.fspan}::!tops)
-        else fail "PEP_PUB_DECLARATION" "Only function declarations may use pub in the current module slice" start ())
+        else if keyword p "type" then tops:=TopPublicType(parse_type_decl p)::!tops
+        else fail "PEP_PUB_DECLARATION" "Only functions and nominal types may use pub in the current module slice" start ())
       else if keyword p "fn" then tops:=TopFun(parse_func p false)::!tops
       else if keyword p "type" then tops:=TopType(parse_type_decl p)::!tops
       else tops:=TopStmt(parse_stmt p)::!tops
@@ -421,7 +422,9 @@ let ast_json tops = "["^String.concat ","(List.map(function
  |TopStmt s->ast_stmt_json s
  |TopImport i->"{\"kind\":\"import\",\"module\":"^json_string i.module_name^",\"alias\":"^json_string i.alias^",\"span\":"^span_json i.import_span^"}"
  |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
- |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
+ |TopPublicType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"visibility\":\"public\",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
+ |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}"
+ |TopPublicType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"visibility\":\"public\",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
 
 let check tops =
   List.iter (function TopImport import -> fail "PEP_PROJECT_REQUIRED" "Imports require the explicit project command mode" import.import_span () | _ -> ()) tops;
@@ -434,13 +437,13 @@ let check tops =
   let records=ref [] and unions=ref [] in
   List.iter (fun info -> Hashtbl.add type_table info.record_name (`Record info)) semantic_record_infos;
   List.iter(function
-    |TopType (RecordDecl(name,fields,sp))->
+    |TopType (RecordDecl(name,fields,sp))|TopPublicType (RecordDecl(name,fields,sp))->
         if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ids=Hashtbl.create 8 in
         let resolved=List.map(fun(field,ty,fsp)->if Hashtbl.mem ids field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add ids field ();fresh_field(),field,ty,fsp) fields in
         let info={record_id=fresh_type();record_name=name;record_fields=resolved;record_span=sp} in
         Hashtbl.add type_table name (`Record info); records:=info::!records
-    |TopType (UnionDecl(name,variants,sp))->
+    |TopType (UnionDecl(name,variants,sp))|TopPublicType (UnionDecl(name,variants,sp))->
         if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ctor_ids=Hashtbl.create 8 in
         let resolved=List.map(fun(ctor,args,csp)->
@@ -456,8 +459,8 @@ let check tops =
     |List element -> valid_type element sp
     |_ -> () in
   List.iter (function
-    |TopType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
-    |TopType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
+    |TopType (RecordDecl(_,fields,_))|TopPublicType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
+    |TopType (UnionDecl(_,variants,_))|TopPublicType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
     |TopFun f->List.iter(fun(_,ty,sp)->valid_type ty sp)f.params;valid_type f.result f.fspan
     |TopStmt _|TopImport _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
@@ -2044,11 +2047,16 @@ type project_analysis = {
 let module_internal_name module_name function_name = module_name ^ "$" ^ function_name
 let module_type_names unit =
   List.filter_map(function
-    |TopType (RecordDecl(name,_,_))|TopType (UnionDecl(name,_,_))->Some name
+    |TopType (RecordDecl(name,_,_))|TopType (UnionDecl(name,_,_))|TopPublicType (RecordDecl(name,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
     |_->None)unit.unit_tops
+let module_public_type_names unit =
+  List.filter_map(function
+    |TopPublicType (RecordDecl(name,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
+    |_->None)unit.unit_tops
+let module_type_is_public unit name = List.mem name (module_public_type_names unit)
 let module_constructor_names unit =
   List.concat_map(function
-    |TopType (UnionDecl(_,variants,_))->List.map(fun(name,_,_)->name)variants
+    |TopType (UnionDecl(_,variants,_))|TopPublicType (UnionDecl(_,variants,_))->List.map(fun(name,_,_)->name)variants
     |_->[])unit.unit_tops
 let module_reserved_type_names = ["Int";"Bool";"Str";"SourceBytes";"Unit";"List";"FunctionInfo";"CallEdge";"SemanticDiagnostic";"ProgramInfo"]
 let module_reserved_constructor_names = ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"]
@@ -2059,21 +2067,49 @@ let module_internal_type_name unit name =
 let module_internal_constructor_name unit name =
   if List.mem name module_reserved_constructor_names then name
   else module_internal_name unit.unit_name ("ctor$"^name)
-let module_map_type unit ty =
-  let type_names=module_type_names unit in
+let module_import_for_alias unit units alias span =
+  let import=match List.find_opt(fun item->item.alias=alias)unit.unit_imports with
+    |Some item->item
+    |None->fail "PEP_UNKNOWN_MODULE_ALIAS" ("No imported module is named '"^alias^"'") span () in
+  match List.find_opt(fun candidate->candidate.unit_name=import.module_name)units with
+  |Some target->target
+  |None->fail "PEP_MODULE_NOT_FOUND" ("Module '"^import.module_name^"' was not loaded") import.import_span ()
+let module_map_type unit units span ty =
+  let local_type_names=module_type_names unit in
   let rec map=function
-    |Named name when List.mem name type_names->Named(module_internal_type_name unit name)
+    |Named name when String.contains name '.' ->
+      (match String.split_on_char '.' name with
+       |[alias;type_name]->
+         let target=module_import_for_alias unit units alias span in
+         if not(List.mem type_name (module_type_names target)) then
+           fail "PEP_MODULE_TYPE_NOT_FOUND" ("Module '"^target.unit_name^"' has no type '"^type_name^"'") span ();
+         if not(module_type_is_public target type_name) then
+           fail "PEP_PRIVATE_MODULE_TYPE" ("Type '"^type_name^"' is private in module '"^target.unit_name^"'") span ();
+         Named(module_internal_type_name target type_name)
+       |_ -> fail "PEP_MODULE_TYPE_NAME" ("Qualified type name '"^name^"' must contain one module alias and one type name") span ())
+    |Named name when List.mem name local_type_names->Named(module_internal_type_name unit name)
     |List element->List(map element)
     |other->other
   in map ty
-let module_map_type_decl unit = function
+let module_map_type_decl unit units = function
   |RecordDecl(name,fields,span)->
     RecordDecl(module_internal_type_name unit name,
-      List.map(fun(field,ty,field_span)->field,module_map_type unit ty,field_span)fields,span)
+      List.map(fun(field,ty,field_span)->field,module_map_type unit units field_span ty,field_span)fields,span)
   |UnionDecl(name,variants,span)->
     UnionDecl(module_internal_type_name unit name,
       List.map(fun(ctor,args,ctor_span)->
-        module_internal_constructor_name unit ctor,List.map(module_map_type unit)args,ctor_span)variants,span)
+        module_internal_constructor_name unit ctor,List.map(module_map_type unit units ctor_span)args,ctor_span)variants,span)
+let module_validate_public_signature unit function_ =
+  let local_types=module_type_names unit and public_types=module_public_type_names unit in
+  let rec validate=function
+    |Named name when List.mem name local_types && not(List.mem name public_types)->
+      fail "PEP_PRIVATE_MODULE_TYPE" ("Public function '"^function_.fname^"' exposes private type '"^name^"'") function_.fspan ()
+    |List element->validate element
+    |_ -> ()
+  in
+  if function_.public then (
+    List.iter(fun(_,ty,_)->validate ty)function_.params;
+    validate function_.result)
 let module_source_name path = Filename.basename path
 let module_stem path =
   let source=module_source_name path in
@@ -2120,16 +2156,10 @@ let module_validate_names unit =
     if List.mem function_.fname module_builtin_function_names || List.mem function_.fname constructors then
       fail "PEP_RESERVED_FUNCTION" ("Function name "^function_.fname^" is reserved for a builtin or constructor") function_.fspan ()
   )(module_function_declarations unit)
-let rec module_type_has_nominal = function Named _->true|List element->module_type_has_nominal element|_->false
-let module_unsupported span =
-  fail "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED" "Public imported function signatures with nominal types are not supported by this bounded module slice" span ()
 let module_check_imported_unit unit =
   List.iter(function
     |TopStmt statement->fail "PEP_MODULE_TOP_LEVEL_EXECUTION" "Imported modules may contain declarations only" (stmt_span statement) ()
-    |TopFun function_ when function_.public->
-      List.iter(fun(_,ty,span)->if module_type_has_nominal ty then module_unsupported span)function_.params;
-      if module_type_has_nominal function_.result then module_unsupported function_.fspan
-    |TopType _|TopFun _|TopImport _->())unit.unit_tops
+    |TopFun _|TopType _|TopPublicType _|TopImport _->())unit.unit_tops
 let load_project entry_path =
   let directory=Filename.dirname entry_path in
   let canonical_directory=
@@ -2212,10 +2242,10 @@ let rec module_map_expr unit units expression =
 let rec module_map_statement unit units statement =
   let map_expr=module_map_expr unit units in
   let map_stmt=module_map_statement unit units in
-  let map_type=Option.map(module_map_type unit) in
+  let map_type span = Option.map(module_map_type unit units span) in
   match statement with
-  |SLet(name,ty,value,span)->SLet(name,map_type ty,map_expr value,span)
-  |SVar(name,ty,value,span)->SVar(name,map_type ty,map_expr value,span)
+  |SLet(name,ty,value,span)->SLet(name,map_type span ty,map_expr value,span)
+  |SVar(name,ty,value,span)->SVar(name,map_type span ty,map_expr value,span)
   |SAssign(name,value,span)->SAssign(name,map_expr value,span)
   |SReturn(value,span)->SReturn(map_expr value,span)
   |SBlock(items,span)->SBlock(List.map map_stmt items,span)
@@ -2228,17 +2258,62 @@ let project_transform_unit unit units =
   List.filter_map(function
     |TopImport _->None
     |TopFun function_->
+      module_validate_public_signature unit function_;
       Some(TopFun{function_ with
         fname=module_internal_name unit.unit_name function_.fname;
-        params=List.map(fun(name,ty,span)->name,module_map_type unit ty,span)function_.params;
-        result=module_map_type unit function_.result;
+        params=List.map(fun(name,ty,span)->name,module_map_type unit units span ty,span)function_.params;
+        result=module_map_type unit units function_.fspan function_.result;
         body=List.map(module_map_statement unit units)function_.body})
     |TopStmt statement->Some(TopStmt(module_map_statement unit units statement))
-    |TopType declaration->Some(TopType(module_map_type_decl unit declaration)))unit.unit_tops
+    |TopType declaration->Some(TopType(module_map_type_decl unit units declaration))
+    |TopPublicType declaration->Some(TopPublicType(module_map_type_decl unit units declaration)))unit.unit_tops
+let module_type_owner units name =
+  List.find_opt(fun unit->let prefix=module_internal_name unit.unit_name "type$" in
+    String.length name>String.length prefix &&
+    String.sub name 0 (String.length prefix)=prefix)units
+let module_function_owner units function_name =
+  List.find_opt(fun unit->let prefix=unit.unit_name^"$" in
+    String.length function_name>=String.length prefix &&
+    String.sub function_name 0 (String.length prefix)=prefix)units
+let module_validate_opaque_fields units entry checked =
+  let rec expression owner expr =
+    let visit=expression owner in
+    match expr.node with
+    |XField(_,receiver)->
+      (match receiver.ety with
+       |Some(Named type_name)->
+         (match module_type_owner units type_name with
+          |Some defining when defining.unit_name<>owner->
+            fail "PEP_OPAQUE_TYPE_FIELD_ACCESS" "Fields of an imported public type are private to its defining module" expr.espan ()
+          |_->())
+       |_->());
+      visit receiver
+    |XCall(_,_,arguments)|XList arguments->List.iter visit arguments
+    |XBin(_,left,right)->visit left;visit right
+    |XUnary(_,value)->visit value
+    |XIf(condition,yes,no)->visit condition;visit yes;visit no
+    |XRecord(_,fields)->List.iter(fun(_,value)->visit value)fields
+    |XConstructor(_,_,_,arguments)->List.iter visit arguments
+    |XMatch(subject,arms)->visit subject;List.iter(fun arm->visit arm.tresult)arms
+    |XInt _|XBool _|XStr _|XVar _|XHole _->()
+  in
+  let rec statement owner = function
+    |TLet(_,value)|TVar(_,value)|TReturn value|TExpr value->expression owner value
+    |TAssign(_,value,_) ->expression owner value
+    |TBlock statements->List.iter(statement owner)statements
+    |TIf(condition,yes,no,_)->expression owner condition;List.iter(statement owner)yes;List.iter(statement owner)no
+    |TFor(_,values,body,_) ->expression owner values;List.iter(statement owner)body
+    |TWhile(condition,body,_) ->expression owner condition;List.iter(statement owner)body
+  in
+  List.iter(fun function_ ->
+    let owner=match module_function_owner units function_.sig_.name with Some unit->unit.unit_name|None->entry.unit_name in
+    List.iter(statement owner)function_.tbody)checked.functions;
+  List.iter(statement entry.unit_name)checked.tops
 let analyse_project entry_path =
   let units,entry=load_project entry_path in
   let transformed=List.concat_map(fun unit->project_transform_unit unit units)units in
   let checked=check transformed in
+  module_validate_opaque_fields units entry checked;
   {project_units=units;project_entry=entry;project_tops=entry.unit_tops;project_checked=checked}
 let project_modules_json units =
   "["^String.concat ","(List.map(fun unit->

@@ -1071,19 +1071,91 @@ class PepModuleCliTests(unittest.TestCase):
             self.assertEqual(diagnostic["span"]["source"], "main.pep")
             self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("import"))
 
-    def test_imported_nominal_types_fail_closed(self):
+    def test_public_nominal_type_crosses_module_as_opaque_value(self):
         with tempfile.TemporaryDirectory() as temporary:
             project = pathlib.Path(temporary)
-            entry = "import geometry\n"
-            library = "type Point { x: Int }\npub fn origin() -> Point { return Point { x: 0 } }\n"
+            entry = (
+                "import geometry as g\n"
+                "let point: g.Point = g.origin()\n"
+                "say(int_text(g.x(point)))\n"
+            )
+            library = (
+                "pub type Point { x: Int }\n"
+                "pub fn origin() -> Point { return Point { x: 40 } }\n"
+                "pub fn x(point: Point) -> Int { return point.x }\n"
+            )
+            self._write_project(project, {"main.pep": entry, "geometry.pep": library})
+
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["status"], "valid")
+
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "40\n")
+
+    def test_public_union_type_crosses_module_as_opaque_value(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = (
+                "import choices as c\n"
+                "let choice: c.Choice = c.yes()\n"
+                "say(int_text(c.score(choice)))\n"
+            )
+            library = (
+                "pub type Choice = Yes(Int) | No()\n"
+                "pub fn yes() -> Choice { return Yes(42) }\n"
+                "pub fn score(choice: Choice) -> Int { return match choice {\n"
+                "  Yes(value) => value\n"
+                "  No() => 0\n"
+                "} }\n"
+            )
+            self._write_project(project, {"main.pep": entry, "choices.pep": library})
+
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["status"], "valid")
+
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "42\n")
+
+    def test_public_nominal_type_fields_are_opaque_to_importer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = (
+                "import geometry as g\n"
+                "let point: g.Point = g.origin()\n"
+                "say(int_text(point.x))\n"
+            )
+            library = (
+                "pub type Point { x: Int }\n"
+                "pub fn origin() -> Point { return Point { x: 40 } }\n"
+            )
             self._write_project(project, {"main.pep": entry, "geometry.pep": library})
 
             result = invoke("check", project / "main.pep", "--project", "--json")
             self.assertEqual(result.returncode, 1)
             diagnostic = json.loads(result.stdout)["diagnostics"][0]
-            self.assertEqual(diagnostic["code"], "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED")
+            self.assertEqual(diagnostic["code"], "PEP_OPAQUE_TYPE_FIELD_ACCESS")
+            self.assertEqual(diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("point.x"))
+
+    def test_public_function_cannot_expose_private_nominal_type(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import geometry\n"
+            library = (
+                "type Point { x: Int }\n"
+                "pub fn origin() -> Point { return Point { x: 0 } }\n"
+            )
+            self._write_project(project, {"main.pep": entry, "geometry.pep": library})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_PRIVATE_MODULE_TYPE")
             self.assertEqual(diagnostic["span"]["source"], "geometry.pep")
-            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index("pub fn origin"))
 
     def test_imported_module_private_records_are_isolated(self):
         with tempfile.TemporaryDirectory() as temporary:
