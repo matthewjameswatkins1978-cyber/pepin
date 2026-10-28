@@ -316,3 +316,18 @@ Verification on this implementation/test SHA:
 - No full repository discovery, clean standalone OCaml rebuild, MoonBit suite, A14/C23 suite or new performance measurement was run. The immediately preceding staged profiling remains valid for its recorded source SHA; this checker behavior change has not been separately profiled.
 
 No runtime budget, protocol, A14 implementation, master, `CURRENT.md`, manifest or release change. A13 remains partial, experimental and unaccepted; cycle 2/3.
+
+## Continuation 03 — contextual nested-list branch mismatch diagnostics (2026-10-28; cycle 3/3)
+
+**Implementation/test SHA:** `c3adf5da8a9ce503d46367afe696a46194099480`, pushed to `campaign/pep-v01-sustained-build-20261027`. Found and fixed a contextual inference hole in `if` return checking: nested list literals could be assigned the expected outer type while a wrong leaf such as `true` remained unchecked. The checker now asks the existing structural list-leaf helper for direct list-literal branches before trusting their contextual type, reports the first offending branch/leaf in source order, and retains the whole-branch fallback for ordinary type mismatches. Tests cover wrong leaves in both then and else positions with exact OCaml code and byte spans (then: **57–61**, else: **72–76** on the two-level fixtures).
+
+**Nonblocking independent 3/3 review:** no semantic or diagnostic-order blocker. Review flagged unnecessary branch traversals under the fixed step ceiling. Follow-up narrows leaf scans to direct list-literal branches and skips the else scan after a then-side mismatch. The full suite was rerun after this guard. The structural helper's tick savings were not instrumented separately, so no performance improvement figure is claimed.
+
+Verification on the final implementation/test SHA:
+
+- Focused return mismatch differential: **1/1 test method passed** after the review guard.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **68/68 passed** in **222.601 seconds**.
+- `python -m py_compile tests/test_a13.py` and `git diff --check`: passed.
+- No C23/A14 suite, historical MoonBit suite, clean OCaml build, full repository discovery or new benchmark was run.
+
+No runtime-budget, protocol, A14 implementation, master, `CURRENT.md`, manifest or release change. A13 remains partial, experimental and unaccepted; the review cycle is complete and work continues.
