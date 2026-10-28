@@ -20,6 +20,10 @@ python stdlib-conformance/conformance.py --library-rev 872a997 --json
 
 # native column, where the emitter supports those shapes
 python stdlib-conformance/conformance.py --backend interpreter,clang,gcc
+
+# the integer module owned by this lane
+python stdlib-conformance/conformance.py --library stdlib/intmath.pep `
+  --cases stdlib-conformance/cases-intmath.json
 ```
 
 Exit codes are the runner's: `0` all cases pass, `1` a case failed, `2`
@@ -85,6 +89,18 @@ instead — see "Missing primitives" below.
   their regression files belong to Agent 2. This harness only reads library
   revisions and asserts public behaviour.
 
+## Modules covered
+
+| Module | Owner | Contract | Status |
+| --- | --- | --- | --- |
+| `stdlib/collections.pep` | Agent 2 | `cases.json` (25 cases) | measured against `872a997`; runs in-tree once the library merges |
+| `stdlib/intmath.pep` | Agent 3 | `cases-intmath.json` (40 cases) | in this branch; 40/40 pass |
+
+`stdlib/intmath.pep` provides `int_abs`, `int_sign`, `int_min`, `int_max`,
+`int_clamp`, `int_mod`, `int_gcd`, `int_lcm`, `int_is_even`, `int_is_odd` and
+`int_pow`, each with its domain documented in the module header. It is written
+only with operators this base accepts, so it needs no language change.
+
 ## Missing primitives found
 
 Reported, not patched — inventing language surface is a compiler decision:
@@ -93,10 +109,17 @@ Reported, not patched — inventing language surface is a compiler decision:
    `PEP_UNKNOWN_FUNCTION`. Any library function returning `Bool` can only be
    observed through branching, which makes every Bool case two lines instead of
    one and blocks a symmetric text-conversion story for the standard library.
+2. **No `<`, `>`, `>=` operators.** Each raises `PEP_UNEXPECTED_CHARACTER`, so
+   only `==`, `!=` and `<=` compare. `stdlib/intmath.pep` spells `a > b` as
+   `!(a <= b)`, which works but reads badly and forces every author to
+   rediscover the idiom.
+3. **No `%` operator.** `PEP_UNEXPECTED_CHARACTER` again. Remainder has to be
+   reimplemented by subtraction, which `int_mod` does for a non-negative domain;
+   negative remainders are simply not expressible without a language decision.
 2. **No imports/modules.** Library helpers cannot reference each other across
    files, so a conformance case must concatenate the whole library. This is the
    main reason the harness composes sources.
-3. **No list/collection display or `length` on `List` in this base's library
+4. **No list/collection display or `length` on `List` in this base's library
    contract.** `length`, `contains` and friends are C23-emitter features on
    Agent 2's branch; on this base only `contains` is available to library code.
 

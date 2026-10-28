@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "about": [
+    "Public-behaviour contract for stdlib/intmath.pep. Each case names a helper,",
+    "an expression and the observable result; nothing depends on the",
+    "implementation. Domains follow the module's documented boundaries: mod/gcd",
+    "are non-negative, lcm is positive, pow takes a non-negative exponent."
+  ],
+  "cases": [
+    { "id": "int_abs/negative", "expr": "int_abs(-7)", "result": "Int", "expect": "7" },
+    { "id": "int_abs/zero", "expr": "int_abs(0)", "result": "Int", "expect": "0" },
+    { "id": "int_abs/positive", "expr": "int_abs(5)", "result": "Int", "expect": "5" },
+
+    { "id": "int_sign/negative", "expr": "int_sign(-3)", "result": "Int", "expect": "-1" },
+    { "id": "int_sign/zero", "expr": "int_sign(0)", "result": "Int", "expect": "0" },
+    { "id": "int_sign/positive", "expr": "int_sign(4)", "result": "Int", "expect": "1" },
+
+    { "id": "int_min/lesser-first", "expr": "int_min(3, 2)", "result": "Int", "expect": "2" },
+    { "id": "int_min/equal", "expr": "int_min(2, 2)", "result": "Int", "expect": "2" },
+    { "id": "int_min/negative", "expr": "int_min(-1, 4)", "result": "Int", "expect": "-1" },
+
+    { "id": "int_max/greater-first", "expr": "int_max(3, 2)", "result": "Int", "expect": "3" },
+    { "id": "int_max/equal", "expr": "int_max(2, 2)", "result": "Int", "expect": "2" },
+    { "id": "int_max/negative", "expr": "int_max(-1, 4)", "result": "Int", "expect": "4" },
+
+    { "id": "int_clamp/below", "expr": "int_clamp(-5, 0, 10)", "result": "Int", "expect": "0" },
+    { "id": "int_clamp/above", "expr": "int_clamp(15, 0, 10)", "result": "Int", "expect": "10" },
+    { "id": "int_clamp/inside", "expr": "int_clamp(7, 0, 10)", "result": "Int", "expect": "7" },
+    { "id": "int_clamp/at-lower-bound", "expr": "int_clamp(0, 0, 10)", "result": "Int", "expect": "0" },
+    { "id": "int_clamp/at-upper-bound", "expr": "int_clamp(10, 0, 10)", "result": "Int", "expect": "10" },
+
+    { "id": "int_mod/basic", "expr": "int_mod(7, 3)", "result": "Int", "expect": "1" },
+    { "id": "int_mod/exact", "expr": "int_mod(9, 3)", "result": "Int", "expect": "0" },
+    { "id": "int_mod/smaller-than-divisor", "expr": "int_mod(2, 5)", "result": "Int", "expect": "2" },
+    { "id": "int_mod/zero-dividend", "expr": "int_mod(0, 3)", "result": "Int", "expect": "0" },
+
+    { "id": "int_gcd/classic", "expr": "int_gcd(48, 18)", "result": "Int", "expect": "6" },
+    { "id": "int_gcd/zero-left", "expr": "int_gcd(0, 5)", "result": "Int", "expect": "5" },
+    { "id": "int_gcd/zero-right", "expr": "int_gcd(5, 0)", "result": "Int", "expect": "5" },
+    { "id": "int_gcd/coprime", "expr": "int_gcd(7, 13)", "result": "Int", "expect": "1" },
+    { "id": "int_gcd/equal", "expr": "int_gcd(12, 12)", "result": "Int", "expect": "12" },
+
+    { "id": "int_lcm/classic", "expr": "int_lcm(4, 6)", "result": "Int", "expect": "12" },
+    { "id": "int_lcm/coprime", "expr": "int_lcm(3, 5)", "result": "Int", "expect": "15" },
+    { "id": "int_lcm/equal", "expr": "int_lcm(6, 6)", "result": "Int", "expect": "6" },
+
+    { "id": "int_pow/basic", "expr": "int_pow(2, 10)", "result": "Int", "expect": "1024" },
+    { "id": "int_pow/zero-exponent", "expr": "int_pow(5, 0)", "result": "Int", "expect": "1" },
+    { "id": "int_pow/cubed", "expr": "int_pow(3, 3)", "result": "Int", "expect": "27" },
+    { "id": "int_pow/negative-base", "expr": "int_pow(-2, 3)", "result": "Int", "expect": "-8" },
+
+    { "id": "int_is_even/zero", "expr": "int_is_even(0)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_even/four", "expr": "int_is_even(4)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_even/seven", "expr": "int_is_even(7)", "result": "Bool", "expect": "false" },
+    { "id": "int_is_even/negative", "expr": "int_is_even(-4)", "result": "Bool", "expect": "true" },
+
+    { "id": "int_is_odd/seven", "expr": "int_is_odd(7)", "result": "Bool", "expect": "true" },
+    { "id": "int_is_odd/eight", "expr": "int_is_odd(8)", "result": "Bool", "expect": "false" },
+    { "id": "int_is_odd/negative", "expr": "int_is_odd(-3)", "result": "Bool", "expect": "true" }
+  ]
+}

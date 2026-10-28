@@ -172,8 +172,21 @@ class EndToEndHarnessTests(unittest.TestCase):
         self.assertNotIn("pass=", proc.stdout)
 
 
+INTMATH_CASES = ROOT / "stdlib-conformance" / "cases-intmath.json"
+
+
 class RealLibraryConformanceTests(unittest.TestCase):
-    def test_working_tree_library_satisfies_contract(self):
+    def test_intmath_module_satisfies_its_contract(self):
+        # stdlib/intmath.pep is owned by this lane, so this always runs.
+        proc = run_harness("--library", "stdlib/intmath.pep",
+                           "--cases", str(INTMATH_CASES), "--json", timeout=1800)
+        self.assertEqual(proc.returncode, 0, proc.stdout[-3000:] + proc.stderr[-1500:])
+        doc = json.loads(proc.stdout)
+        self.assertEqual(doc["counts"]["fail"], 0)
+        self.assertEqual(doc["counts"]["infra_error"], 0)
+        self.assertGreaterEqual(doc["counts"]["pass"], 35)
+
+    def test_collections_library_satisfies_contract_when_present(self):
         library = ROOT / "stdlib" / "collections.pep"
         if not library.is_file():
             self.skipTest("stdlib/collections.pep is not in this branch yet "
