@@ -700,6 +700,37 @@ fn pattern_binding_shape(nodes: List[FlatAstNode], pattern: FlatAstNode, functio
   } else {}
   return empty_type_shape()
 }
+fn union_variant_count(nodes: List[FlatAstNode], unionName: Str) -> Int {
+  let union = union_declaration(nodes, unionName)
+  if !union.found { return 0 } else {}
+  var count = 0
+  for variant in nodes {
+    if variant.parentId == union.node.id && variant.kind == "variant_declaration" { count = count + 1 } else {}
+  }
+  return count
+}
+fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
+  if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" { return true } else {}
+  if pattern.kind != "constructor_pattern" || constructor_union_type(nodes, pattern.text) != expectedType { return false } else {}
+  if union_variant_count(nodes, expectedType) != 1 { return false } else {}
+  let variant = variant_declaration(nodes, pattern.text)
+  if !variant.found || count_children(nodes, variant.node.id, "field_type") != count_children(nodes, pattern.id, "argument") { return false } else {}
+  for payload in nodes {
+    if payload.parentId == pattern.id && payload.role == "argument" && payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" { return false } else {}
+  }
+  return true
+}
+fn constructor_pattern_covers_variant(nodes: List[FlatAstNode], pattern: FlatAstNode) -> Bool {
+  let variant = variant_declaration(nodes, pattern.text)
+  if !variant.found || count_children(nodes, variant.node.id, "field_type") != count_children(nodes, pattern.id, "argument") { return false } else {}
+  for payload in nodes {
+    if payload.parentId == pattern.id && payload.role == "argument" {
+      let expected = variant_payload_type(nodes, pattern.text, payload.childIndex)
+      if !pattern_covers_payload(nodes, payload, expected) { return false } else {}
+    } else {}
+  }
+  return true
+}
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   var typed: List[BindingFact] = []
   for binding in bindings {
@@ -1143,7 +1174,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                   invalidPattern = true
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Constructor pattern does not belong to the match subject type", pattern.node))
                 } else {}
-                if union.found && patternUnion == subjectType {
+                let coversVariant = constructor_pattern_covers_variant(nodes, pattern.node)
+                if union.found && patternUnion == subjectType && coversVariant {
                   if contains(seenConstructors, pattern.node.text) {
                     invalidPattern = true
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_MATCH_ARM", "Match constructor pattern is repeated", pattern.node))
@@ -1152,11 +1184,38 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 let variant = variant_declaration(nodes, pattern.node.text)
                 let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
                 if expectedArity != count_children(nodes, pattern.node.id, "argument") {
+                  invalidPattern = true
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Constructor pattern payload count does not match its variant", pattern.node))
                 } else {}
                 for payload in nodes {
-                  if payload.parentId == pattern.node.id && payload.role == "argument" && payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" {
-                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Nested constructor patterns are outside the scalar-payload checker subset", payload))
+                  if payload.parentId == pattern.node.id && payload.role == "argument" {
+                    if payload.kind == "constructor_pattern" {
+                      let expectedType = variant_payload_type(nodes, pattern.node.text, payload.childIndex)
+                      let actualUnion = constructor_union_type(nodes, payload.text)
+                      if expectedType == "" || actualUnion != expectedType {
+                        invalidPattern = true
+                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Nested constructor pattern does not match its payload type", payload))
+                      } else {
+                        let nestedVariant = variant_declaration(nodes, payload.text)
+                        let nestedArity = if nestedVariant.found { count_children(nodes, nestedVariant.node.id, "field_type") } else { -1 }
+                        if nestedArity != count_children(nodes, payload.id, "argument") {
+                          invalidPattern = true
+                          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Nested constructor pattern payload count does not match its variant", payload))
+                        } else {
+                          for nestedPayload in nodes {
+                            if nestedPayload.parentId == payload.id && nestedPayload.role == "argument" && nestedPayload.kind != "binding_pattern" && nestedPayload.kind != "wildcard_pattern" {
+                              invalidPattern = true
+                              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Constructor patterns deeper than one nested payload are outside this checker slice", nestedPayload))
+                            } else {}
+                          }
+                        }
+                      }
+                    } else {
+                      if payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" {
+                        invalidPattern = true
+                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Pattern form is outside the implemented checker subset", payload))
+                      } else {}
+                    }
                   } else {}
                 }
               } else {}

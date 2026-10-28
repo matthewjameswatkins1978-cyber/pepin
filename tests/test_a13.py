@@ -708,6 +708,45 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(len(actual), 1)
         self.assertEqual(actual[0][0], "PEP_UNKNOWN_VARIABLE")
 
+    def test_nested_single_variant_constructor_patterns_match_ocaml(self):
+        cases = [
+            ("singleton-valid", "type Inner = I(Int)" + NL + "type Outer = O(Inner) | N()" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value N() => 0 } }", "valid"),
+            ("multivariant-fallback", "type Inner = I(Int) | J()" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value O(_) => 0 } }", "valid"),
+            ("multivariant-incomplete", "type Inner = I(Int) | J()" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value } }", "invalid"),
+            ("wrong-nested-constructor", "type Inner = I(Int)" + NL + "type Other = Q()" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(Q()) => 0 _ => 0 } }", "invalid"),
+            ("wrong-nested-arity", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I()) => 0 _ => 0 } }", "invalid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("nested-pattern-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                if name == "singleton-valid":
+                    binding = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == "value")
+                    self.assertEqual(scalar(binding["typeName"]), "Int")
+                    reference_fact = next(fields(item) for item in report["references"]["value"] if scalar(fields(item)["name"]) == "value")
+                    self.assertEqual(scalar(reference_fact["bindingId"]), scalar(binding["semanticId"]))
+
+    def test_nested_constructor_patterns_fail_closed_beyond_supported_depth(self):
+        source = "type Leaf = L(Int)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(value))) => value } }"
+        reference = self._reference_check("nested-pattern-deeper-than-supported", source)
+        self.assertEqual(reference["status"], "valid", reference)
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertIn("PEP_PATTERN_UNSUPPORTED", codes, report)
+
+
     def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
         source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v B() => 0 } }"
         reference = self._reference_check("match-valid", source)
