@@ -22,12 +22,16 @@ Edited revisions are fully parsed and checked; this is not cross-revision increm
 
 The A10 review branch adds an opaque `SourceBytes` value, `source_bytes() -> SourceBytes` for the host-granted `semanticTarget` revision, unsigned `byte_at`, raw checked `byte_slice`, explicit UTF-8-validating `utf8_slice`, O(1) `prepend`, and O(n) `reverse`. Raw bytes cannot be represented as `Str` or cross the typed tool boundary; only a successful `utf8_slice` produces text. `open_bytes` retains and hashes up to 65,536 exact bytes, including malformed UTF-8. [`lexer_fragment.pep`](../examples/lexer_fragment.pep) demonstrates Pep scanning authorised bytes into typed tokens with original UTF-8 byte spans. It is a bounded A10 fragment, not the complete A11 lexer. The 100,000-step tool budget and typed-result limits constrain practical input size. A10 remains unaccepted; see the [A10-R1 review receipt](A10_R1_REVIEW_RECEIPT.md) for the repaired raw-byte contract, revision evidence, and measured runtime envelope.
 
+## Compiler-campaign module slice (unaccepted)
+
+The current compiler-campaign branch adds opt-in `--project` modes for `check` and `run`. It resolves single-segment imports to sibling `.pep` files, supports alias-qualified calls to imported `pub fn` declarations, transitive imports, and module-local private helper functions. Imported modules must contain declarations only; only the selected entry module's top-level statements execute. This first slice supports imported functions using built-in scalar and `List[T]` types. Imported nominal types and values fail closed with `PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED`. Project JSON exposes module revisions, import edges, resolved declarations, and source-local byte spans. The feature is not part of the accepted seed or a completed module system; user generics, imported records/unions, package paths, session integration, and native C23 module output remain unimplemented.
+
 ## Designed or planned, not implemented in this seed
 The following v0.3 commitments are not current compiler capabilities:
 
 - structural edits beyond the supported named typed-hole fill; there is no general AST-targeted refactoring system;
 - cross-revision incremental parsing or type checking; each new source revision is fully analysed;
-- user-defined generics, maps, modules, and general mutable references;
+- user-defined generics, maps, a complete module system beyond the unaccepted function-import slice, and general mutable references;
 - a Pep-written C23 generator (ISO/IEC 9899:2024) or self-hosted compiler.
 
 Same-revision cached analysis is implemented, but it does not constitute incremental compilation. A4 added records, recursive tagged unions, constructors, checked pattern matching, and match-arm holes. A5 added the in-process tool registry, test-vector validation, explicit activation, scalar invocation, side-effect rejection, runtime budgets, and hot replacement. A6 adds compiler-known lists and practical control flow; see the implemented list above. The local tool host is trusted and is not a sandbox. A Pep-written C23 generator and self-hosting remain future work. [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md) establishes the forward-looking C23 target; MoonBit A0's C11 generation is historical only. See [SESSION_PROTOCOL.md](SESSION_PROTOCOL.md) for the versioned message boundary and [packets/CURRENT.md](packets/CURRENT.md) for the next authorised packet.

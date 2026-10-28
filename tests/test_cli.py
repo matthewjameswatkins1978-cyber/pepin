@@ -870,5 +870,172 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(json.loads(malformed.stdout)["status"], "invalid")
         self.assertEqual(json.loads(reserved.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
 
+class PepModuleCliTests(unittest.TestCase):
+    @staticmethod
+    def _write_project(directory, files):
+        for name, source in files.items():
+            (directory / name).write_bytes(source.encode("utf-8"))
+
+    def test_imported_public_function_runs_and_reports_resolved_declaration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            library = (
+                "pub fn add(left: Int, right: Int) -> Int { return left + right }\n"
+                "fn helper(value: Int) -> Int { return value + 1 }\n"
+            )
+            entry = "import math as m\nsay(int_text(m.add(20, 22)))\n"
+            self._write_project(project, {"main.pep": entry, "math.pep": library})
+
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+            report = json.loads(checked.stdout)
+            self.assertEqual(report["status"], "valid")
+            declaration = next(item for item in report["resolvedDeclarations"]
+                               if item["module"] == "math" and item["name"] == "add")
+            self.assertEqual(declaration["visibility"], "public")
+            self.assertEqual(declaration["parameters"], ["Int", "Int"])
+            self.assertEqual(declaration["returnType"], "Int")
+            self.assertEqual(declaration["source"], "math.pep")
+            self.assertEqual(declaration["span"]["source"], "math.pep")
+            self.assertEqual(declaration["span"]["start"]["offset"], library.index("pub fn add"))
+
+            executed = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(executed.stdout, "42\n")
+
+    def test_private_imported_function_is_rejected_at_qualified_member(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            library = "fn helper(value: Int) -> Int { return value }\n"
+            entry = "import math as m\nsay(int_text(m.helper(1)))\n"
+            self._write_project(project, {"main.pep": entry, "math.pep": library})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_PRIVATE_MODULE_FUNCTION")
+            self.assertEqual(diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("helper"))
+            self.assertEqual(diagnostic["span"]["endOffset"], entry.index("helper") + len("helper"))
+
+    def test_import_cycle_is_rejected_at_cycle_closing_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import first\n"
+            second = "import first\npub fn value() -> Int { return 1 }\n"
+            self._write_project(project, {
+                "main.pep": entry,
+                "first.pep": "import second\npub fn first_value() -> Int { return second.value() }\n",
+                "second.pep": second,
+            })
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_MODULE_CYCLE")
+            self.assertEqual(diagnostic["span"]["source"], "second.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], second.index("import first"))
+
+    def test_imported_module_top_level_statement_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import math\n"
+            library = 'say("must not execute")\npub fn value() -> Int { return 1 }\n'
+            self._write_project(project, {"main.pep": entry, "math.pep": library})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_MODULE_TOP_LEVEL_EXECUTION")
+            self.assertEqual(diagnostic["span"]["source"], "math.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], 0)
+
+
+    def test_default_alias_and_transitive_imports_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            self._write_project(project, {
+                "main.pep": "import outer\nsay(int_text(outer.answer()))\n",
+                "outer.pep": (
+                    "import inner as i\n"
+                    "pub fn answer() -> Int { return i.value() + hidden() }\n"
+                    "fn hidden() -> Int { return 2 }\n"
+                ),
+                "inner.pep": "pub fn value() -> Int { return 40 }\n",
+            })
+            result = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
+
+    def test_missing_module_and_single_file_import_are_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import missing\n"
+            self._write_project(project, {"main.pep": entry})
+
+            project_result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(project_result.returncode, 1)
+            project_diagnostic = json.loads(project_result.stdout)["diagnostics"][0]
+            self.assertEqual(project_diagnostic["code"], "PEP_MODULE_NOT_FOUND")
+            self.assertEqual(project_diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(project_diagnostic["span"]["start"]["offset"], entry.index("import"))
+
+            single_file_result = invoke("check", project / "main.pep", "--json")
+            self.assertEqual(single_file_result.returncode, 1)
+            single_file_diagnostic = json.loads(single_file_result.stdout)["diagnostics"][0]
+            self.assertEqual(single_file_diagnostic["code"], "PEP_PROJECT_REQUIRED")
+            self.assertEqual(single_file_diagnostic["span"]["start"]["offset"], entry.index("import"))
+
+    def test_imported_function_type_error_keeps_imported_source_span(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            library = 'pub fn answer() -> Int { return "wrong" }\n'
+            entry = "import math\nsay(int_text(math.answer()))\n"
+            self._write_project(project, {"main.pep": entry, "math.pep": library})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_TYPE_MISMATCH")
+            self.assertEqual(diagnostic["span"]["source"], "math.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index('"wrong"'))
+
+    def test_module_filename_case_mismatch_is_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import math\n"
+            self._write_project(project, {"main.pep": entry, "Math.pep": "pub fn answer() -> Int { return 42 }\n"})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_MODULE_CASE_MISMATCH")
+            self.assertEqual(diagnostic["span"]["source"], "main.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], entry.index("import"))
+
+    def test_imported_nominal_types_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            entry = "import geometry\n"
+            library = "type Point { x: Int }\npub fn origin() -> Point { return Point { x: 0 } }\n"
+            self._write_project(project, {"main.pep": entry, "geometry.pep": library})
+
+            result = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(result.returncode, 1)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED")
+            self.assertEqual(diagnostic["span"]["source"], "geometry.pep")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], library.index("type Point"))
+
+    def test_project_function_imports_are_discoverable(self):
+        described = invoke("describe", "--json")
+        self.assertEqual(described.returncode, 0, described.stderr)
+        self.assertIn("project_function_imports", json.loads(described.stdout)["features"])
+
+        help_result = invoke("--help")
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("check FILE [--project]", help_result.stdout)
+        self.assertIn("run FILE [--project]", help_result.stdout)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

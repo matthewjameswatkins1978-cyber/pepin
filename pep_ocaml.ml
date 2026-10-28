@@ -1,5 +1,6 @@
 type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | List of ty
-type span = { lo:int; hi:int; line:int; column:int }
+type span = { lo:int; hi:int; line:int; column:int; file:string option }
+let current_source_file = ref None
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
 type token = { kind:token_kind; at:span }
 type expr =
@@ -8,19 +9,21 @@ type expr =
   | ECall of string*expr list*span | EBin of string*expr*expr*span | EUnary of string*expr*span | EList of expr list*span | EIf of expr*expr*expr*span
   | ERecord of string*(string*expr*span) list*span | EField of expr*string*span
   | EMatch of expr*match_arm list*span
+  | EQualifiedCall of string*string*expr list*span*span
 and pattern = PWildcard of span | PBind of string*span | PConstructor of string*pattern list*span
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
-type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
-type top = TopFun of func | TopStmt of stmt | TopType of type_decl
+type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span; public:bool }
+type import_decl = { module_name:string; alias:string; import_span:span }
+type top = TopFun of func | TopStmt of stmt | TopType of type_decl | TopImport of import_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 
 let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
-let mkspan lo hi line column = {lo;hi;line;column}
+let mkspan ?(file = !current_source_file) lo hi line column = {lo;hi;line;column;file}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
 let json_string s =
   let b=Buffer.create (String.length s+8) in
@@ -34,11 +37,12 @@ let json_string s =
     | c -> Buffer.add_char b c) s;
   Buffer.add_char b '"'; Buffer.contents b
 let pos_json s = Printf.sprintf "{\"offset\":%d,\"line\":%d,\"column\":%d}" s.lo s.line s.column
-let span_json s = Printf.sprintf "{\"start\":%s,\"endOffset\":%d}" (pos_json s) s.hi
-let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)->s
+let span_json s = Printf.sprintf "{\"start\":%s,\"endOffset\":%d%s}" (pos_json s) s.hi (match s.file with None->""|Some file->",\"source\":"^json_string file)
+let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)|EQualifiedCall(_,_,_,s,_)->s
 let rec contains_empty_list = function
  |EList([],_) -> true
  |EList(items,_) -> List.exists contains_empty_list items
+ |EQualifiedCall(_,_,args,_,_) -> List.exists contains_empty_list args
  |ECall(_,args,_) -> List.exists contains_empty_list args
  |EBin(_,left,right,_) -> contains_empty_list left || contains_empty_list right
  |EUnary(_,value,_) -> contains_empty_list value
@@ -159,7 +163,7 @@ let rec parse_type p = match take p with
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
   |{kind=Id name;_}->Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
-let combine a b = mkspan a.lo b.hi a.line a.column
+let combine a b = mkspan ~file:a.file a.lo b.hi a.line a.column
 let rec parse_pattern p =
   let first = take p in
   match first.kind with
@@ -237,12 +241,21 @@ let rec parse_expr p min_prec =
         let close=at p in expect_sym p "}"; ERecord(name,!fields,combine first.at close)
       ) else EName(name,first.at)
     |Sym "(" ->let e=parse_expr p 0 in let close=at p in expect_sym p ")";
-        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EBin(o,l,r,_)->EBin(o,l,r,s)|EUnary(o,x,_)->EUnary(o,x,s)|EList(xs,_)->EList(xs,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s))
+        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EQualifiedCall(m,n,args,_,member_span)->EQualifiedCall(m,n,args,s,member_span)|EBin(o,l,r,_)->EBin(o,l,r,s)|EUnary(o,x,_)->EUnary(o,x,s)|EList(xs,_)->EList(xs,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s))
     |Sym "-" -> let rhs=parse_expr p 30 in EBin("neg",EInt(0L,first.at),rhs,combine first.at (expr_span rhs))
     |t->fail "PEP_PARSE_EXPRESSION" "Expected an expression" first.at () in
   parse_tail p min_prec lhs
 and parse_tail p min_prec lhs =
-  if symbol p "." then (ignore (take p); let field_token=peek p in let field=expect_id p in parse_tail p min_prec (EField(lhs,field,combine (expr_span lhs) field_token.at)))
+  if symbol p "." then (
+    ignore (take p);
+    let field_token=peek p in let field=expect_id p in
+    match lhs with
+    |EName(module_alias,_) when symbol p "(" ->
+      ignore(take p);
+      let args=ref [] in if not(symbol p ")") then (args:=[parse_expr p 0];while accept_sym p "," do args:= !args@[parse_expr p 0] done);
+      let close=at p in expect_sym p ")";
+      parse_tail p min_prec (EQualifiedCall(module_alias,field,!args,combine (expr_span lhs) close,field_token.at))
+    |_->parse_tail p min_prec (EField(lhs,field,combine (expr_span lhs) field_token.at)))
   else let op,prec=match (peek p).kind with Sym "||"->"||",1|Sym "&&"->"&&",2|Sym "=="->"==",3|Sym "!="->"!=",3|Sym "<="->"<=",5|Sym "+"->"+",10|Sym "-"->"-",10|Sym "*"->"*",20|Sym "/"->"/",20|_->"",-1 in
   if prec<min_prec then lhs else (ignore(take p); let rhs=parse_expr p (prec+1) in parse_tail p min_prec (EBin(op,lhs,rhs,combine (expr_span lhs) (expr_span rhs))))
 let rec parse_stmt p =
@@ -293,7 +306,7 @@ let rec parse_stmt p =
         let value=parse_expr p 0 in let sp=combine (expr_span e) (expr_span value) in
         ignore(accept_sym p ";");SAssign(name,value,sp)
     |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
-let parse_func p =
+let parse_func p public =
   let start=(take p).at in let name=expect_id p in expect_sym p "(";
   let params=ref [] in
   if not(symbol p ")") then (
@@ -301,12 +314,28 @@ let parse_func p =
     param();while accept_sym p "," do param() done);
   expect_sym p ")"; expect_sym p "->"; let result=parse_type p in
   let body=match parse_stmt p with SBlock(xs,_)->xs|s->fail "PEP_FUNCTION_BODY" "Expected a braced function body" (stmt_span s) () in
-  let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending}
-let parse source =
-  let p={ts=lex source;p=0;record_literals_allowed=true} and tops=ref [] in
-  while (peek p).kind<>Eof do
-    if keyword p "fn" then tops:=TopFun(parse_func p)::!tops else if keyword p "type" then tops:=TopType(parse_type_decl p)::!tops else tops:=TopStmt(parse_stmt p)::!tops
-  done; List.rev !tops
+  let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending;public}
+let parse_import p =
+  let start=(take p).at in
+  let module_name=expect_id p in
+  let alias=if keyword p "as" then (ignore(take p);expect_id p) else module_name in
+  {module_name;alias;import_span=combine start p.ts.(p.p-1).at}
+let parse ?file source =
+  let previous_source_file = !current_source_file in
+  current_source_file := file;
+  Fun.protect ~finally:(fun()->current_source_file:=previous_source_file) (fun () ->
+    let p={ts=lex source;p=0;record_literals_allowed=true} and tops=ref [] in
+    while (peek p).kind<>Eof do
+      if keyword p "import" then tops:=TopImport(parse_import p)::!tops
+      else if keyword p "pub" then (
+        let start=(take p).at in
+        if keyword p "fn" then (let function_=parse_func p true in tops:=TopFun{function_ with fspan=combine start function_.fspan}::!tops)
+        else fail "PEP_PUB_DECLARATION" "Only function declarations may use pub in the current module slice" start ())
+      else if keyword p "fn" then tops:=TopFun(parse_func p false)::!tops
+      else if keyword p "type" then tops:=TopType(parse_type_decl p)::!tops
+      else tops:=TopStmt(parse_stmt p)::!tops
+    done;
+    List.rev !tops)
 
 let parse_single_expression source =
   let p={ts=lex source;p=0;record_literals_allowed=true} in
@@ -355,6 +384,7 @@ let rec ast_expr_json e = let s=span_json(expr_span e) in match e with
  |EName(n,_)->"{\"kind\":\"name\",\"name\":"^json_string n^",\"span\":"^s^"}"
  |EHole(h,_)->"{\"kind\":\"hole\",\"name\":"^(match h with None->"null"|Some x->json_string x)^",\"span\":"^s^"}"
  |ECall(n,args,_)->"{\"kind\":\"call\",\"name\":"^json_string n^",\"arguments\":["^String.concat ","(List.map ast_expr_json args)^"],\"span\":"^s^"}"
+ |EQualifiedCall(module_alias,name,args,_,_)->"{\"kind\":\"qualified_call\",\"moduleAlias\":"^json_string module_alias^",\"name\":"^json_string name^",\"arguments\":["^String.concat ","(List.map ast_expr_json args)^"],\"span\":"^s^"}"
  |EBin(o,a,b,_)->"{\"kind\":\"binary\",\"operator\":"^json_string o^",\"left\":"^ast_expr_json a^",\"right\":"^ast_expr_json b^",\"span\":"^s^"}"
  |EUnary(o,x,_)->"{\"kind\":\"unary\",\"operator\":"^json_string o^",\"operand\":"^ast_expr_json x^",\"span\":"^s^"}"
  |EList(xs,_)->"{\"kind\":\"list\",\"elements\":["^String.concat ","(List.map ast_expr_json xs)^"],\"span\":"^s^"}"
@@ -377,12 +407,14 @@ let rec ast_stmt_json s=match s with
  |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
 let ast_json tops = "["^String.concat ","(List.map(function
- |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
+ |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"visibility\":"^json_string(if f.public then "public" else "private")^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
  |TopStmt s->ast_stmt_json s
+ |TopImport i->"{\"kind\":\"import\",\"module\":"^json_string i.module_name^",\"alias\":"^json_string i.alias^",\"span\":"^span_json i.import_span^"}"
  |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
  |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
 
 let check tops =
+  List.iter (function TopImport import -> fail "PEP_PROJECT_REQUIRED" "Imports require the explicit project command mode" import.import_span () | _ -> ()) tops;
   let next_id=ref 0 and next_fid=ref 0 and next_type_id=ref 0 and next_field_id=ref 0 and next_ctor_id=ref 0 and holes=ref [] in
   let fresh ()=let n= !next_id in incr next_id;n in
   let fresh_type ()=let n= !next_type_id in incr next_type_id;n in
@@ -417,7 +449,7 @@ let check tops =
     |TopType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
     |TopType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
     |TopFun f->List.iter(fun(_,ty,sp)->valid_type ty sp)f.params;valid_type f.result f.fspan
-    |TopStmt _->()) tops;
+    |TopStmt _|TopImport _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
   List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
@@ -461,6 +493,7 @@ let check tops =
       |Some b->(match b.bty with None->fail "PEP_UNCONSTRAINED_BINDING" ("Binding '"^n^"' has no known type") s ()
         |Some t->{node=XVar b.bid;ety=Some t;espan=s}))
    |ECall(n,args,s)->call env scope n args s
+   |EQualifiedCall(_,_,_,s,_)->fail "PEP_PROJECT_REQUIRED" "Qualified module calls require the explicit project command mode" s ()
    |ERecord(name,fields,s)->
       let info=match Hashtbl.find_opt type_table name with Some (`Record info)->info |Some (`Union _)->fail "PEP_NOT_A_RECORD" ("Type '"^name^"' is not a record") s () |None->fail "PEP_UNKNOWN_TYPE" ("Unknown record type '"^name^"'") s () in
       let supplied=Hashtbl.create 8 in
@@ -1985,26 +2018,199 @@ let run_session_jsonl () =
   loop ()
 
 let read_file path = let ic=open_in_bin path in Fun.protect ~finally:(fun()->close_in ic)(fun()->really_input_string ic (in_channel_length ic))
-let usage () = prerr_endline "usage: pep describe [--json] | inspect|check|run FILE [--json] | query FILE --holes --json [--offset N] | session --jsonl";exit 2
+type project_unit = {
+  unit_name : string;
+  unit_source_path : string;
+  unit_source : string;
+  unit_tops : top list;
+  unit_imports : import_decl list;
+}
+type project_analysis = {
+  project_units : project_unit list;
+  project_entry : project_unit;
+  project_tops : top list;
+  project_checked : checked;
+}
+let module_internal_name module_name function_name = module_name ^ "$" ^ function_name
+let module_source_name path = Filename.basename path
+let module_stem path =
+  let source=module_source_name path in
+  if not(Filename.check_suffix source ".pep") then
+    fail "PEP_PROJECT_ENTRY_EXTENSION" "Project source files must use the .pep extension" (mkspan ~file:(Some source) 0 0 1 1) ();
+  Filename.chop_extension source
+let module_import_path directory module_name import_span =
+  let expected=module_name^".pep" in
+  let matches =
+    try Sys.readdir directory |> Array.to_list |> List.filter(fun name->String.lowercase_ascii name=String.lowercase_ascii expected)
+    with Sys_error _ -> fail "PEP_MODULE_DIRECTORY_UNAVAILABLE" "The entry source directory cannot be read for module imports" import_span ()
+  in
+  match matches with
+  |[]->fail "PEP_MODULE_NOT_FOUND" ("No sibling module file '"^expected^"' exists") import_span ()
+  |[actual] when actual<>expected->fail "PEP_MODULE_CASE_MISMATCH" ("Module file spelling must match '"^expected^"' exactly") import_span ()
+  |[_]->Filename.concat directory expected
+  |_ -> fail "PEP_MODULE_CASE_COLLISION" ("More than one sibling file matches module '"^module_name^"' under case-insensitive comparison") import_span ()
+let module_function_declarations unit =
+  List.filter_map(function TopFun function_->Some function_|_->None)unit.unit_tops
+let module_import_declarations unit =
+  List.filter_map(function TopImport import->Some import|_->None)unit.unit_tops
+let rec module_type_has_nominal = function Named _->true|List element->module_type_has_nominal element|_->false
+let module_unsupported span =
+  fail "PEP_MODULE_NOMINAL_TYPES_UNSUPPORTED" "Imported module types and nominal values are not supported by this first module slice" span ()
+let module_check_imported_unit unit =
+  List.iter(function
+    |TopStmt statement->fail "PEP_MODULE_TOP_LEVEL_EXECUTION" "Imported modules may contain declarations only" (stmt_span statement) ()
+    |TopType (RecordDecl(_,_,span))|TopType (UnionDecl(_,_,span))->module_unsupported span
+    |TopFun function_->
+      List.iter(fun(_,ty,span)->if module_type_has_nominal ty then module_unsupported span)function_.params;
+      if module_type_has_nominal function_.result then module_unsupported function_.fspan;
+      let rec expression = function
+        |ERecord(_,_,span)|EMatch(_,_,span)->module_unsupported span
+        |ECall(name,args,span) when name<>"" && name.[0]>='A' && name.[0]<='Z'->module_unsupported span
+        |ECall(_,args,_)->List.iter expression args
+        |EQualifiedCall(_,_,args,_,_)->List.iter expression args
+        |EBin(_,left,right,_)->expression left;expression right
+        |EUnary(_,value,_)->expression value
+        |EList(items,_)->List.iter expression items
+        |EIf(condition,yes,no,_)->expression condition;expression yes;expression no
+        |EField(value,_,_)->expression value
+        |EInt _|EBool _|EStr _|EName _|EHole _->()
+      and statement = function
+        |SLet(_,_,value,_)|SVar(_,_,value,_)|SAssign(_,value,_)|SReturn(value,_)|SExpr(value,_)->expression value
+        |SBlock(items,_)->List.iter statement items
+        |SIf(condition,yes,no,_)->expression condition;List.iter statement yes;List.iter statement no
+        |SFor(_,iterable,body,_) ->expression iterable;List.iter statement body
+        |SWhile(condition,body,_)->expression condition;List.iter statement body
+      in List.iter statement function_.body
+    |TopImport _->())unit.unit_tops
+let load_project entry_path =
+  let directory=Filename.dirname entry_path in
+  let entry_name=module_stem entry_path in
+  let states=Hashtbl.create 8 and units=Hashtbl.create 8 and ordered=ref [] in
+  let rec load is_entry module_name source_path import_span =
+    match Hashtbl.find_opt states module_name with
+    |Some `visiting->
+      let cycle_span=match import_span with Some span->span|None->mkspan ~file:(Some(module_source_name source_path)) 0 0 1 1 in
+      fail "PEP_MODULE_CYCLE" ("Import cycle reaches module '"^module_name^"'") cycle_span ()
+    |Some `done_->()
+    |None->
+      Hashtbl.add states module_name `visiting;
+      let source=try read_file source_path with Sys_error _->
+        let span=match import_span with Some span->span|None->mkspan ~file:(Some(module_source_name source_path)) 0 0 1 1 in
+        fail "PEP_MODULE_READ_FAILED" ("Could not read module '"^module_source_name source_path^"'") span () in
+      let source_name=module_source_name source_path in
+      let tops=parse ~file:source_name source in
+      let unit={unit_name=module_name;unit_source_path=source_name;unit_source=source;unit_tops=tops;unit_imports=module_import_declarations {unit_name=module_name;unit_source_path=source_name;unit_source=source;unit_tops=tops;unit_imports=[]}} in
+      Hashtbl.add units module_name unit;
+      let aliases=Hashtbl.create 8 in
+      List.iter(fun import->
+        if Hashtbl.mem aliases import.alias then fail "PEP_DUPLICATE_IMPORT_ALIAS" ("Import alias '"^import.alias^"' is declared more than once") import.import_span ();
+        Hashtbl.add aliases import.alias ();
+        let target=module_import_path directory import.module_name import.import_span in
+        load false import.module_name target (Some import.import_span)
+      )unit.unit_imports;
+      if not is_entry then module_check_imported_unit unit;
+      Hashtbl.replace states module_name `done_;
+      ordered:=unit::!ordered
+  in
+  load true entry_name entry_path None;
+  let ordered_units=List.rev !ordered in
+  let entry=match Hashtbl.find_opt units entry_name with Some unit->unit|None->assert false in
+  ordered_units,entry
+let rec module_map_expr unit units expression =
+  let map=module_map_expr unit units in
+  let local_names=List.map(fun function_->function_.fname)(module_function_declarations unit) in
+  match expression with
+  |EQualifiedCall(alias,name,args,span,member_span)->
+    let import=List.find_opt(fun item->item.alias=alias)unit.unit_imports in
+    let import=match import with Some item->item|None->fail "PEP_UNKNOWN_MODULE_ALIAS" ("No imported module is named '"^alias^"'") member_span () in
+    let target=List.find_opt(fun candidate->candidate.unit_name=import.module_name)units in
+    let target=match target with Some candidate->candidate|None->fail "PEP_MODULE_NOT_FOUND" ("Module '"^import.module_name^"' was not loaded") import.import_span () in
+    let declaration=List.find_opt(fun function_->function_.fname=name)(module_function_declarations target) in
+    let declaration=match declaration with Some function_->function_|None->fail "PEP_MODULE_FUNCTION_NOT_FOUND" ("Module '"^import.module_name^"' has no function '"^name^"'") member_span () in
+    if not declaration.public then fail "PEP_PRIVATE_MODULE_FUNCTION" ("Function '"^name^"' is private in module '"^import.module_name^"'") member_span ();
+    ECall(module_internal_name import.module_name name,List.map map args,span)
+  |ECall(name,args,span) when List.mem name local_names->
+    ECall(module_internal_name unit.unit_name name,List.map map args,span)
+  |ECall(name,args,span)->ECall(name,List.map map args,span)
+  |ERecord(name,fields,span)->ERecord(name,List.map(fun(field,value,field_span)->field,map value,field_span)fields,span)
+  |EField(value,name,span)->EField(map value,name,span)
+  |EBin(operator,left,right,span)->EBin(operator,map left,map right,span)
+  |EUnary(operator,value,span)->EUnary(operator,map value,span)
+  |EList(items,span)->EList(List.map map items,span)
+  |EIf(condition,yes,no,span)->EIf(map condition,map yes,map no,span)
+  |EMatch(subject,arms,span)->EMatch(map subject,List.map(fun (arm:match_arm)->{arm with result=map arm.result})arms,span)
+  |EInt _|EBool _|EStr _|EName _|EHole _->expression
+let rec module_map_statement unit units statement =
+  let map_expr=module_map_expr unit units in
+  let map_stmt=module_map_statement unit units in
+  match statement with
+  |SLet(name,ty,value,span)->SLet(name,ty,map_expr value,span)
+  |SVar(name,ty,value,span)->SVar(name,ty,map_expr value,span)
+  |SAssign(name,value,span)->SAssign(name,map_expr value,span)
+  |SReturn(value,span)->SReturn(map_expr value,span)
+  |SBlock(items,span)->SBlock(List.map map_stmt items,span)
+  |SIf(condition,yes,no,span)->SIf(map_expr condition,List.map map_stmt yes,List.map map_stmt no,span)
+  |SFor(name,values,body,span)->SFor(name,map_expr values,List.map map_stmt body,span)
+  |SWhile(condition,body,span)->SWhile(map_expr condition,List.map map_stmt body,span)
+  |SExpr(value,span)->SExpr(map_expr value,span)
+let project_transform_unit unit units =
+  List.filter_map(function
+    |TopImport _->None
+    |TopFun function_->Some(TopFun{function_ with fname=module_internal_name unit.unit_name function_.fname;body=List.map(module_map_statement unit units)function_.body})
+    |TopStmt statement->Some(TopStmt(module_map_statement unit units statement))
+    |TopType declaration->Some(TopType declaration))unit.unit_tops
+let analyse_project entry_path =
+  let units,entry=load_project entry_path in
+  let transformed=List.concat_map(fun unit->project_transform_unit unit units)units in
+  let checked=check transformed in
+  {project_units=units;project_entry=entry;project_tops=entry.unit_tops;project_checked=checked}
+let project_modules_json units =
+  "["^String.concat ","(List.map(fun unit->
+    let imports=String.concat ","(List.map(fun import->
+      let span=span_json import.import_span in
+      "{\"alias\":"^json_string import.alias^",\"module\":"^json_string import.module_name^",\"span\":"^span^"}")unit.unit_imports) in
+    "{\"name\":"^json_string unit.unit_name^",\"source\":"^json_string unit.unit_source_path^",\"revision\":\"sha256:"^sha256_hex unit.unit_source^"\",\"imports\":["^imports^"]}")units)^"]"
+let project_declaration_json units checked =
+  let declarations=List.concat_map(fun unit->List.map(fun function_->unit,function_)(module_function_declarations unit))units in
+  "["^String.concat ","(List.map(fun(unit,function_)->
+    let internal=module_internal_name unit.unit_name function_.fname in
+    let function_id=match List.find_opt(fun checked_function->checked_function.sig_.name=internal)checked.functions with Some checked_function->checked_function.sig_.fid|None-> -1 in
+    let parameters=String.concat ","(List.map(fun(_,ty,_)->json_string(type_name ty))function_.params) in
+    "{\"module\":"^json_string unit.unit_name^",\"name\":"^json_string function_.fname^",\"visibility\":"^json_string(if function_.public then "public" else "private")^",\"functionId\":"^string_of_int function_id^",\"parameters\":["^parameters^"],\"returnType\":"^json_string(type_name function_.result)^",\"source\":"^json_string unit.unit_source_path^",\"span\":"^span_json function_.fspan^"}")declarations)^"]"
+let project_check_json project =
+  let checked=project.project_checked in
+  "{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"entryModule\":"^json_string project.project_entry.unit_name^",\"modules\":"^project_modules_json project.project_units^",\"resolvedDeclarations\":"^project_declaration_json project.project_units checked^",\"holes\":["^String.concat ","(List.map hole_json checked.holes)^"],\"diagnostics\":[]}"
+let usage () = prerr_endline "usage: pep describe [--json] | inspect|check|run FILE [--project] [--json] | query FILE --holes --json [--offset N] | session --jsonl";exit 2
 let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"project_function_imports\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
-    let source=read_file file in let tops=parse source in
-    if command="inspect" then print_endline("{\"schemaVersion\":2,\"status\":\"parsed\",\"ast\":"^ast_json tops^"}") else
-    let checked=check tops in
-    if command="query" then (
-      let holes=if List.mem "--holes" flags then checked.holes else checked.holes in
-      let selected=match List.find_index (fun x->x="--offset") flags with None->holes|Some i->
-        if i+1>=List.length flags then usage();let off=try int_of_string(List.nth flags (i+1))with _->usage() in List.filter(fun h->h.hspan.lo=off)holes in
-      if selected=[] && List.exists(fun f->f="--offset")flags then (print_endline("{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"holes\":[]}");exit 1);
-      print_endline("{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"holes\":["^String.concat ","(List.map hole_json selected)^"]}"))
-    else if command="check" then (print_endline(check_json tops checked);if checked.holes<>[] then exit 1)
-    else if checked.holes<>[] then (if List.mem "--json" flags then print_endline(check_json tops checked) else prerr_endline "incomplete: unresolved typed holes";exit 1)
-    else ignore (execute checked)
+    if List.mem "--project" flags then (
+      if command<>"check" && command<>"run" then fail "PEP_PROJECT_COMMAND_UNSUPPORTED" "Project mode currently supports check and run" (mkspan 0 0 1 1) ();
+      let project=analyse_project file in
+      if command="check" then (
+        print_endline(project_check_json project);
+        if project.project_checked.holes<>[] then exit 1)
+      else if project.project_checked.holes<>[] then (
+        if List.mem "--json" flags then print_endline(project_check_json project) else prerr_endline "incomplete: unresolved typed holes";
+        exit 1)
+      else ignore(execute project.project_checked)
+    ) else (
+      let source=read_file file in let tops=parse source in
+      if command="inspect" then print_endline("{\"schemaVersion\":2,\"status\":\"parsed\",\"ast\":"^ast_json tops^"}") else
+      let checked=check tops in
+      if command="query" then (
+        let holes=if List.mem "--holes" flags then checked.holes else checked.holes in
+        let selected=match List.find_index (fun x->x="--offset") flags with None->holes|Some i->
+          if i+1>=List.length flags then usage();let off=try int_of_string(List.nth flags (i+1))with _->usage() in List.filter(fun h->h.hspan.lo=off)holes in
+        if selected=[] && List.exists(fun f->f="--offset")flags then (print_endline("{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"holes\":[]}");exit 1);
+        print_endline("{\"schemaVersion\":2,\"status\":"^json_string(program_status checked)^",\"holes\":["^String.concat ","(List.map hole_json selected)^"]}"))
+      else if command="check" then (print_endline(check_json tops checked);if checked.holes<>[] then exit 1)
+      else if checked.holes<>[] then (if List.mem "--json" flags then print_endline(check_json tops checked) else prerr_endline "incomplete: unresolved typed holes";exit 1)
+      else ignore (execute checked))
   |_ ->usage()
  with
  |Error d->if Array.exists((=)"--json")Sys.argv then print_endline(diag_json d) else prerr_endline(Printf.sprintf "%s:%d:%d: %s: %s" (List.hd(Array.to_list Sys.argv)) d.at.line d.at.column d.code d.message);exit 1
