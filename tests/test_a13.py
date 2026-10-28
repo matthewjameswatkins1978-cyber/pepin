@@ -1284,6 +1284,32 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 expected_end = expected_start + len(first_declaration.encode("utf-8"))
                 self.assertEqual(actual, [("PEP_DUPLICATE_TYPE", expected_start, expected_end)])
 
+    def test_nested_list_constructor_payload_mismatches_match_ocaml(self):
+        cases = [
+            ("list-leaf", "type Boxed = Box(List[Int])\nfn f() -> Boxed { return Box([true]) }", "invalid"),
+            ("nested-first-leaf", "type Boxed = Box(List[List[Int]])\nfn f() -> Boxed { return Box([[true], [1]]) }", "invalid"),
+            ("nested-later-leaf", "type Boxed = Box(List[List[Int]])\nfn f() -> Boxed { return Box([[1], [true]]) }", "invalid"),
+            ("nested-valid", "type Boxed = Box(List[List[Int]])\nfn f() -> Boxed { return Box([[1], [2]]) }", "valid"),
+            ("nominal-list-leaf", "type P { x: Int }\ntype Q { x: Int }\ntype Container = Wrap(List[P])\nfn f() -> Container { return Wrap([Q { x: 1 }]) }", "invalid"),
+            ("nominal-list-variable-mismatch", "type P { x: Int }\ntype Q { x: Int }\ntype Container = Wrap(List[P])\nfn f(values: List[Q]) -> Container { return Wrap(values) }", "invalid"),
+            ("nominal-list-variable-valid", "type P { x: Int }\ntype Container = Wrap(List[P])\nfn f(values: List[P]) -> Container { return Wrap(values) }", "valid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("constructor-payload-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+
     def test_union_constructors_and_duplicate_names_match_reference_errors(self):
         source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
         reference = self._reference_check("constructor-valid", source)

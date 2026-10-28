@@ -166,6 +166,12 @@ fn variant_payload_type(nodes: List[FlatAstNode], variantName: Str, index: Int) 
   let payload = child_at(nodes, variant.node.id, "field_type", index)
   if payload.found { return type_name_at(nodes, payload.node.id) } else { return "" }
 }
+fn variant_payload_shape(nodes: List[FlatAstNode], variantName: Str, index: Int) -> PepTypeShape {
+  let variant = variant_declaration(nodes, variantName)
+  if !variant.found { return empty_type_shape() } else {}
+  let payload = child_at(nodes, variant.node.id, "field_type", index)
+  if payload.found { return type_shape_at(nodes, payload.node.id) } else { return empty_type_shape() }
+}
 fn record_field_type(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) -> Str {
   let record = record_declaration(nodes, recordName)
   if !record.found { return "" } else {}
@@ -1666,9 +1672,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if argument.parentId == node.id && argument.role == "argument" {
             let expected = variant_payload_type(nodes, node.text, payloadIndex)
             let actual = infer_expression_type(nodes, argument.id, functions, bindings, references)
-            if expected != "" && actual != "" && expected != actual {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", argument))
-            } else {}
+            let expectedShape = variant_payload_shape(nodes, node.text, payloadIndex)
+            let actualShape = expression_type_shape(nodes, argument.id, functions, bindings, references)
+            let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+            let nestedMismatch = if argument.kind == "list" && expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            if nestedMismatch.found {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", nestedMismatch.node))
+            } else {
+              if shapeMismatch || expected != "" && actual != "" && expected != actual {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", argument))
+              } else {}
+            }
             payloadIndex = payloadIndex + 1
           } else {}
         }
