@@ -72,9 +72,23 @@ fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, no
     var count = 0
     for element in nodes {
       if element.parentId == node.id && element.role == "element" {
-        if element.kind != "integer" { return pep_c23_unsupported("Pep C23 List[Int] parameter arguments currently require integer elements") } else {}
         if count != 0 { parts = append(parts, ", ") } else {}
-        parts = append(parts, int_text(element.integerValue))
+        if element.kind == "integer" {
+          parts = append(parts, int_text(element.integerValue))
+        } else {
+          let zero = if element.kind == "binary" && element.text == "neg" {
+            pep_c23_child(nodes, element.id, "left", 0)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let operand = if zero.found && zero.node.kind == "integer" && zero.node.integerValue == 0 {
+            pep_c23_child(nodes, element.id, "right", 1)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          if !operand.found || operand.node.kind != "integer" {
+            return pep_c23_unsupported("Pep C23 List[Int] parameter arguments currently require integer or negative integer literal elements")
+          } else {}
+          let lowered = pep_c23_expression(nodes, function, element)
+          if lowered.status != "emitted" { return lowered } else {}
+          for part in lowered.sourceParts { parts = append(parts, part) }
+        }
         count = count + 1
       } else {}
     }
