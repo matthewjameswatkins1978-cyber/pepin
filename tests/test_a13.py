@@ -760,6 +760,30 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     reference_fact = next(fields(item) for item in report["references"]["value"] if scalar(fields(item)["name"]) == "value")
                     self.assertEqual(scalar(reference_fact["bindingId"]), scalar(binding["semanticId"]))
 
+    def test_constructor_pattern_reachability_diagnostics_match_ocaml(self):
+        cases = [
+            ("nested-then-payload-wildcard", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value O(_) => 0 } }", "PEP_UNREACHABLE_MATCH_ARM"),
+            ("payload-wildcard-then-nested", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(_) => 0 O(I(value)) => value } }", "PEP_UNREACHABLE_MATCH_ARM"),
+            ("duplicate-nested-pattern", "type Inner = I(Int)" + NL + "type Outer = O(Inner)" + NL + "fn f(x: Outer) -> Int { return match x { O(I(value)) => value O(I(other)) => other } }", "PEP_DUPLICATE_MATCH_ARM"),
+            ("duplicate-top-level-pattern", "type Maybe = None() | Some(Int)" + NL + "fn f(x: Maybe) -> Int { return match x { None() => 0 None() => 1 Some(value) => value } }", "PEP_DUPLICATE_MATCH_ARM"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("pattern-reachability-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertIn(expected_code, [item[0] for item in expected], reference)
+                self.assertEqual(actual, expected, report)
+
     def test_nested_constructor_patterns_fail_closed_beyond_supported_depth(self):
         source = "type Leaf = L(Int)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(value))) => value } }"
         reference = self._reference_check("nested-pattern-deeper-than-supported", source)
