@@ -991,10 +991,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
               let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
               let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+              let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
               if expected == "" && expectedShape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Record literal names a field absent from its declaration", field)) } else {}
               if expected != "" && actual != "" && actual != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", value.node)) } else {}
-              if (expected == "" || actual == "") && shapeMismatch {
-                let mismatch = list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references)
+              if ((expected == "" || actual == "") && shapeMismatch) || (expected == actual && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found) {
+                let mismatch = listMismatch
                 let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Record field value type does not match its declaration", mismatchNode))
               } else {}
@@ -1146,9 +1147,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
               let actualShape = expression_type_shape(nodes, argument.id, functions, bindings, references)
               let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-              if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch {
-                let code = if expected == "" || actualArgument == "" { "PEP_TYPE_MISMATCH" } else { "PEP_ARGUMENT_TYPE" }
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Function argument type does not match its parameter", argument))
+              let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+              if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch || listMismatch.found {
+                let code = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found || expected == "" || actualArgument == "" { "PEP_TYPE_MISMATCH" } else { "PEP_ARGUMENT_TYPE" }
+                let mismatchNode = if expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found { listMismatch.node } else { argument }
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Function argument type does not match its parameter", mismatchNode))
               } else {}
               index = index + 1
             } else {}
@@ -1295,8 +1298,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let actualInitializer = infer_expression_type(nodes, value.node.id, functions, bindings, references)
         let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-        if expected == "" || actualInitializer == "" {
-          if shapeMismatch {
+        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+        if expected == "" || actualInitializer == "" || listMismatch.found {
+          if shapeMismatch || listMismatch.found {
             let mismatch = list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references)
             let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Initialiser type does not match the declared binding type", mismatchNode))

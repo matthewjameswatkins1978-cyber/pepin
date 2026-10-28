@@ -231,6 +231,23 @@ class A13NestedRecordTests(unittest.TestCase):
                 "fn values() -> Box { return Box { values: [Q { x: 1 }] } }",
                 "invalid",
             ),
+            (
+                "annotated-nested-list-element-mismatch",
+                "fn values() -> Unit { let values: List[List[Int]] = [[1], [true]] }",
+                "invalid",
+            ),
+            (
+                "record-field-nested-list-element-mismatch",
+                "type Box { values: List[List[Int]] }\n"
+                "fn values() -> Box { return Box { values: [[1], [true]] } }",
+                "invalid",
+            ),
+            (
+                "function-argument-nested-list-element-mismatch",
+                "fn accept(values: List[List[Int]]) -> Unit {}\n"
+                "fn values() -> Unit { accept([[1], [true]]) }",
+                "invalid",
+            ),
         )
         for name, source, expected_status in cases:
             with self.subTest(name=name):
