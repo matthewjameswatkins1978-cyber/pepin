@@ -23,7 +23,11 @@ attack:
         - pep.ps1
         - build-c23
         - $param: fixture
-        - -o
+        # `--output`, not `-o`: under `pwsh -File` a single-dash `-o` is bound
+        # as an ambiguous PowerShell common parameter (matches -OutVariable /
+        # -OutBuffer) and the step dies before Pep ever runs. Measured, not
+        # assumed; recorded as a finding for #20.
+        - --output
         - tb-composition-out.exe
 
 oracle:

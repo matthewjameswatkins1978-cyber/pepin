@@ -70,6 +70,20 @@ is trustworthy.
 - `composed_forwarding_wrapper.pep` — two-level forwarding wrapper, the shape
   measured independently by Agent 2
 
+## Findings the experiments already produced
+
+- **`-o` is unusable through `pwsh -File`.** `pwsh -NoProfile -File pep.ps1
+  build-c23 FILE -o OUT` fails with *"Parameter name 'o' is ambiguous. Possible
+  matches: -OutVariable -OutBuffer"* and exits 1 before Pep runs. `--output`
+  works. The CLI help lists `-o, --output`, so the short form is a trap for any
+  harness (or agent) that invokes the script non-interactively. The first ceiling
+  Bat run returned `NOT OBSERVED` purely because of this, which is exactly the
+  kind of misleading-green failure these Bats exist to expose — `NOT OBSERVED`
+  meant "the attack never reached the target", not "the blocker is gone".
+- **The blocker reproduces with parse_count 3, typecheck_count 3, cache_hits 0**
+  and `PEP_RUNTIME_STEP_LIMIT` at the staged parser, matching Agent 2's
+  independent measurement of the same composition.
+
 ## Rules these Bats obey
 
 - **Never** raise the 100,000-step per-invocation limit; a Bat that would need
