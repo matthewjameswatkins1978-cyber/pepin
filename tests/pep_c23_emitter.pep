@@ -463,8 +463,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
           let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-          if !iterable.found || !iterableList.found || count_children(nodes, iterableList.node.id, "element") == 0 || count_children(nodes, statement.id, "body") == 0 {
-            return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty integer list literal or immutable list binding")
+          if !iterable.found || !iterableList.found || count_children(nodes, statement.id, "body") == 0 {
+            return pep_c23_unsupported("Pep C23 for-in lowering requires an integer list literal or immutable list binding and a non-empty assignment body")
           } else {}
           for item in nodes {
             if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" {
@@ -613,29 +613,35 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 elementCount = elementCount + 1
               } else {}
             }
-            if elementCount == 0 { return pep_c23_unsupported("Pep C23 for-in lowering requires a non-empty list literal") } else {}
-            var arrayDeclaration: List[Str] = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
-            for element in parsed.nodes {
-              if element.parentId == iterableList.node.id && element.role == "element" {
-                arrayDeclaration = append(arrayDeclaration, int_text(element.integerValue))
-                arrayDeclaration = append(arrayDeclaration, ", ")
-              } else {}
+            var arrayDeclaration: List[Str] = []
+            if elementCount == 0 {
+              for part in ["  if (0) {\n    int64_t pep_local_", int_text(statement.id), " = 0;\n"] {
+                arrayDeclaration = append(arrayDeclaration, part)
+              }
+            } else {
+              arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+              for element in parsed.nodes {
+                if element.parentId == iterableList.node.id && element.role == "element" {
+                  arrayDeclaration = append(arrayDeclaration, int_text(element.integerValue))
+                  arrayDeclaration = append(arrayDeclaration, ", ")
+                } else {}
+              }
+              arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, " < ")
+              arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
+              arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, "[pep_index_")
+              arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+              arrayDeclaration = append(arrayDeclaration, "];\n")
             }
-            arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, " < ")
-            arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
-            arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, "[pep_index_")
-            arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-            arrayDeclaration = append(arrayDeclaration, "];\n")
             for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
             for loopStatement in parsed.nodes {
               if loopStatement.parentId == statement.id && loopStatement.role == "body" {
