@@ -50,6 +50,12 @@ fn list_int_count_negative(values: List[Int]) -> Int {
   return total
 }
 
+fn list_int_count_positive(values: List[Int]) -> Int {
+  var total = 0
+  for item in values { total = if item != 0 && !(item <= -1) { total + 1 } else { total } }
+  return total
+}
+
 fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }

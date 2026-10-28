@@ -860,6 +860,8 @@ class PepC23CollectionLoopTests(unittest.TestCase):
              "fn main() -> Int { return if list_int_count_nonzero([-2, 0, 3]) == 2 { 42 } else { 0 } }\n"),
             ("list_int_count_negative",
              "fn main() -> Int { return if list_int_count_negative([-2, 0, 3]) == 1 { 42 } else { 0 } }\n"),
+            ("list_int_count_positive",
+             "fn main() -> Int { return if list_int_count_positive([-2, 0, 3]) == 1 { 42 } else { 0 } }\n"),
             ("list_int_contains",
              "fn main() -> Int { var values = [2, 4, 6]; "
              "return if list_int_contains(values, 4) { 42 } else { 0 } }\n"),
