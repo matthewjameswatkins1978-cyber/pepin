@@ -966,6 +966,42 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", report)
             self.assertIn(expected_code, codes)
 
+    def test_record_literal_diagnostics_match_ocaml_first_error_priority(self):
+        cases = [
+            ("multiple-missing", "type P { a: Int, b: Bool, c: Str }" + NL +
+             "fn f() -> Int { let p = P { }; return 0 }", "a: Int"),
+            ("missing-precedes-wrong-type", "type P { a: Int, b: Bool }" + NL +
+             "fn f() -> Int { let p = P { b: 1 }; return 0 }", "a: Int"),
+            ("missing-precedes-unknown", "type P { a: Int, b: Bool }" + NL +
+             "fn f() -> Int { let p = P { extra: 2 }; return 0 }", "a: Int"),
+            ("duplicate-precedes-missing", "type P { a: Int, b: Bool }" + NL +
+             "fn f() -> Int { let p = P { a: 1, a: 2 }; return 0 }", "a: 2"),
+            ("first-supplied-type-error", "type P { a: Int, b: Bool }" + NL +
+             "fn f() -> Int { let p = P { b: 1, a: true }; return 0 }", "1"),
+            ("unknown-only", "type P { a: Int }" + NL +
+             "fn f() -> Int { let p = P { a: 1, extra: 2 }; return 0 }", "extra: 2"),
+        ]
+        expected_codes = [
+            "PEP_MISSING_FIELD", "PEP_MISSING_FIELD", "PEP_MISSING_FIELD",
+            "PEP_DUPLICATE_FIELD", "PEP_TYPE_MISMATCH", "PEP_UNKNOWN_FIELD",
+        ]
+        for (name, source, marker), expected_code in zip(cases, expected_codes):
+            with self.subTest(name=name):
+                reference = self._reference_check("record-literal-priority-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(expected, [(expected_code, source.index(marker), source.index(marker) + len(marker))])
+                self.assertEqual(actual, expected, report)
+
     def test_record_field_duplicates_report_only_the_first_repetition(self):
         cases = [
             ("record-literal", "type Point { x: Int }" + NL +
