@@ -252,6 +252,14 @@ fn pep_c23_record_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23Node
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_record_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23NodeLookup {
+  if node.kind == "list" {
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" && element.kind == "record" {
+        return pep_c23_record_declaration(nodes, element.text)
+      } else {}
+    }
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
   if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
   let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
   if !elementType.found || elementType.node.kind != "type_named" {
@@ -294,6 +302,22 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
       } else {}
     }
   } else {}
+  for loop in nodes {
+    if loop.parentId == function.id && loop.role == "statement" && loop.kind == "for_in" && loop.text == value.text {
+      let iterable = pep_c23_child(nodes, loop.id, "iterable", 0)
+      if iterable.found && iterable.node.kind == "list" {
+        return pep_c23_record_list_declaration(nodes, iterable.node)
+      } else {}
+      if iterable.found && iterable.node.kind == "name" {
+        let parameter = pep_c23_record_list_parameter(nodes, function, iterable.node.text)
+        if parameter.found {
+          let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
+          if parameterType.found { return pep_c23_record_list_declaration(nodes, parameterType.node) } else {}
+        } else {}
+      } else {}
+      return PepC23NodeLookup { found: false, node: empty_node() }
+    } else {}
+  }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str {
@@ -961,14 +985,26 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_bool_list_parameter(nodes, function, iterable.node.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
-          let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
+          let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_record_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
+            if iterableBooleanParameter.found { iterableBooleanParameter } else { iterableRecordParameter }
+          }
           if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || count_children(nodes, statement.id, "body") == 0 {
-            return pep_c23_unsupported("Pep C23 for-in lowering requires an integer or Bool list literal or immutable literal binding, or a List[Int] or List[Bool] parameter, and a non-empty assignment body")
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty assignment body")
           } else {}
           if iterableList.found {
+            let recordLiteral = pep_c23_record_list_declaration(nodes, iterableList.node)
             for item in nodes {
-              if item.parentId == iterableList.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
-                return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
+              if item.parentId == iterableList.node.id && item.role == "element" {
+                if recordLiteral.found {
+                  if item.kind != "record" { return pep_c23_unsupported("Pep C23 record list iteration requires record values") } else {}
+                } else {
+                  if item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
+                    return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
+                  } else {}
+                }
               } else {}
             }
           } else {}
@@ -1158,6 +1194,9 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
             let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableRecordLiteral = if iterableList.found {
+              pep_c23_record_list_declaration(parsed.nodes, iterableList.node)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
@@ -1165,7 +1204,12 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_bool_list_parameter(parsed.nodes, node, iterable.node.text)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
-            let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else { iterableBooleanParameter }
+            let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
+              pep_c23_record_list_parameter(parsed.nodes, node, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
+              if iterableBooleanParameter.found { iterableBooleanParameter } else { iterableRecordParameter }
+            }
             if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) {
               return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or List[Int]/List[Bool] parameter")
             } else {}
@@ -1180,9 +1224,19 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             } else {}
             var arrayDeclaration: List[Str] = []
             if iterableParameter.found {
-              for part in ["  if (pep_arg_", int_text(iterableParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+              if iterableRecordParameter.found {
+                let recordParameterType = pep_c23_child(parsed.nodes, iterableRecordParameter.node.id, "type", 0)
+                let record = if recordParameterType.found { pep_c23_record_list_declaration(parsed.nodes, recordParameterType.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                if !record.found { return pep_c23_unsupported("Pep C23 record list parameter has no declared record type") } else {}
+                for part in ["  if (pep_arg_", int_text(iterableRecordParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableRecordParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableRecordParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    pep_record_", int_text(record.node.id), " pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableRecordParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+                  arrayDeclaration = append(arrayDeclaration, part)
+                }
+              } else {}
+              if !iterableRecordParameter.found {
+                for part in ["  if (pep_arg_", int_text(iterableParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
                 arrayDeclaration = append(arrayDeclaration, part)
-              }
+                }
+              } else {}
             } else {
               if iterableLocal.found {
                 let localList = pep_c23_child(parsed.nodes, iterableLocal.node.id, "value", 0)
@@ -1198,7 +1252,11 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                     arrayDeclaration = append(arrayDeclaration, part)
                   }
                 } else {
-                  arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                  if iterableRecordLiteral.found {
+                    arrayDeclaration = ["  pep_record_", int_text(iterableRecordLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
+                  } else {
+                    arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                  }
                   for element in parsed.nodes {
                     if element.parentId == iterableList.node.id && element.role == "element" {
                       if element.kind == "boolean" {
@@ -1219,7 +1277,12 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                   arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
                   arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
                   arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
-                  arrayDeclaration = append(arrayDeclaration, ") {\n    int64_t pep_local_")
+                  arrayDeclaration = append(arrayDeclaration, ") {\n    ")
+                  if iterableRecordLiteral.found {
+                    arrayDeclaration = append(arrayDeclaration, "pep_record_")
+                    arrayDeclaration = append(arrayDeclaration, int_text(iterableRecordLiteral.node.id))
+                  } else { arrayDeclaration = append(arrayDeclaration, "int64_t") }
+                  arrayDeclaration = append(arrayDeclaration, " pep_local_")
                   arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
                   arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
                   arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
