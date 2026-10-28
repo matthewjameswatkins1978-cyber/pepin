@@ -88,19 +88,19 @@ fn list_int_all_nonpositive(values: List[Int]) -> Bool {
 
 fn list_int_all_positive(values: List[Int]) -> Bool {
   var all = true
-  for item in values { all = all && (item != 0 && !(item <= -1)) }
+  for item in values { all = all && (!(item <= 0)) }
   return all
 }
 
 fn list_int_any_positive(values: List[Int]) -> Bool {
   var found = false
-  for item in values { found = found || (item != 0 && !(item <= -1)) }
+  for item in values { found = found || (!(item <= 0)) }
   return found
 }
 
 fn list_int_sum_positive(values: List[Int]) -> Int {
   var total = 0
-  for item in values { total = if item <= -1 { total } else { total + item } }
+  for item in values { total = if item <= 0 { total } else { total + item } }
   return total
 }
 
@@ -112,7 +112,7 @@ fn list_int_sum_negative(values: List[Int]) -> Int {
 
 fn list_int_count_positive(values: List[Int]) -> Int {
   var total = 0
-  for item in values { total = if item != 0 && !(item <= -1) { total + 1 } else { total } }
+  for item in values { total = if !(item <= 0) { total + 1 } else { total } }
   return total
 }
 
