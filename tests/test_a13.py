@@ -881,6 +881,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("nested-list", "fn main() -> Int { let values: List[List[Int]] = [[1]]; for item in values { let copy: List[Int] = item } return 0 }", "valid", None, ""),
             ("scalar-iterable", "fn main() -> Int { for item in 1 {} return 0 }", "invalid", "PEP_FOR_REQUIRES_LIST", "1"),
             ("empty-iterable", "fn main() -> Int { for item in [] {} return 0 }", "invalid", "PEP_EMPTY_LIST_NEEDS_TYPE", "[]"),
+            ("unknown-iterable", "fn main() -> Int { for item in missing {} return 0 }", "invalid", "PEP_UNKNOWN_VARIABLE", "missing"),
             ("immutable-item", "fn main() -> Int { for item in [1] { item = 2 } return 0 }", "invalid", "PEP_ASSIGN_IMMUTABLE", "item = 2"),
         ]
         for name, source, expected_status, expected_code, span_text in cases:
