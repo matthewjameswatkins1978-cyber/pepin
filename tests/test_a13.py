@@ -1596,6 +1596,23 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(actual, expected, (reference, report))
         self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
 
+    def test_deep_list_builtin_call_equality_is_rejected_like_ocaml(self):
+        source = "fn same() -> Bool { return reverse([[[1]]]) == [[[2]]] }"
+        reference = self._reference_check("deep-list-builtin-call-equality", source)
+        _, report = self._analyze(source)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (reference, report))
+        self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
     def test_match_bindings_are_arm_local_and_union_coverage_is_checked(self):
         source = (
             "type Maybe = None() | Some(Int)" + NL
