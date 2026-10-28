@@ -1572,6 +1572,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           let operandType = if operand.found { infer_expression_type(nodes, operand.node.id, functions, bindings, references) } else { "" }
           if operand.found && operand.node.kind != "hole" && operandType != expected { subjectHasPrimaryError = true } else {}
         } else {}
+        if subject.found && subject.node.kind != "name" {
+          for nested in nodes {
+            if nested.kind == "name" && subject.node.startByte <= nested.startByte && nested.endByte <= subject.node.endByte {
+              let reference = find_reference(references, nested.id)
+              if !reference.found { subjectHasPrimaryError = true } else {}
+            } else {}
+          }
+        } else {}
         if subject.found && subject.node.kind == "call" {
           let target = find_function(functions, subject.node.text)
           if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
