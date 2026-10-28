@@ -19,7 +19,8 @@ type BindingLookup { found: Bool, binding: BindingFact }
 type ReferenceLookup { found: Bool, reference: ResolvedName }
 type PatternKeyNestedPart { position: Int, kind: Str, constructor: Str, payloadArity: Int }
 type PatternKeyPart { position: Int, kind: Str, constructor: Str, payloadArity: Int, nestedParts: List[PatternKeyNestedPart] }
-type ConstructorPatternKey { name: Str, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
+type ConstructorPatternKey { name: Str, syntaxId: Int, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
+type PatternValidation { valid: Bool, covers: Bool, code: Str, node: FlatAstNode }
 
 
 fn empty_type_shape() -> PepTypeShape {
@@ -831,18 +832,40 @@ fn union_variant_count(nodes: List[FlatAstNode], unionName: Str) -> Int {
   }
   return count
 }
-fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
-  if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" { return true } else {}
-  if pattern.kind != "constructor_pattern" || constructor_union_type(nodes, pattern.text) != expectedType { return false } else {}
-  if union_variant_count(nodes, expectedType) != 1 { return false } else {}
+fn validate_nested_pattern(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> PatternValidation {
+  if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" {
+    return PatternValidation { valid: true, covers: true, code: "", node: empty_node() }
+  } else {}
+  if pattern.kind != "constructor_pattern" {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_UNSUPPORTED", node: pattern }
+  } else {}
+  if !is_constructor(nodes, pattern.text) {
+    return PatternValidation { valid: false, covers: false, code: "PEP_UNKNOWN_CONSTRUCTOR", node: pattern }
+  } else {}
+  let actualUnion = constructor_union_type(nodes, pattern.text)
+  if expectedType == "" || actualUnion != expectedType {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_TYPE_MISMATCH", node: pattern }
+  } else {}
   let variant = variant_declaration(nodes, pattern.text)
-  if !variant.found || count_children(nodes, variant.node.id, "field_type") != count_children(nodes, pattern.id, "argument") { return false } else {}
+  let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
+  if expectedArity != count_children(nodes, pattern.id, "argument") {
+    return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_ARITY", node: pattern }
+  } else {}
+  var covers = union_variant_count(nodes, expectedType) == 1
   for payload in nodes {
-    if payload.parentId == pattern.id && payload.role == "argument" && payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" { return false } else {}
+    if payload.parentId == pattern.id && payload.role == "argument" {
+      let payloadType = variant_payload_type(nodes, pattern.text, payload.childIndex)
+      let nested = validate_nested_pattern(nodes, payload, payloadType)
+      if !nested.valid { return nested } else {}
+      if !nested.covers { covers = false } else {}
+    } else {}
   }
-  return true
+  return PatternValidation { valid: true, covers: covers, code: "", node: empty_node() }
 }
-
+fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
+  let checked = validate_nested_pattern(nodes, pattern, expectedType)
+  return checked.valid && checked.covers
+}
 fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> List[PatternKeyNestedPart] {
   var reversed: List[PatternKeyNestedPart] = []
   for payload in nodes {
@@ -855,6 +878,42 @@ fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> L
   }
   return reverse(reversed)
 }
+fn pattern_has_unkeyed_constructor(nodes: List[FlatAstNode], rootId: Int) -> Bool {
+  for top in nodes {
+    if top.parentId == rootId && top.role == "argument" && top.kind == "constructor_pattern" {
+      for nested in nodes {
+        if nested.parentId == top.id && nested.role == "argument" && nested.kind == "constructor_pattern" {
+          for deeper in nodes {
+            if deeper.parentId == nested.id && deeper.role == "argument" && deeper.kind == "constructor_pattern" { return true } else {}
+          }
+        } else {}
+      }
+    } else {}
+  }
+  return false
+}
+fn same_pattern_structure(nodes: List[FlatAstNode], leftId: Int, rightId: Int) -> Bool {
+  let left = lookup_node(nodes, leftId)
+  let right = lookup_node(nodes, rightId)
+  if !left.found || !right.found { return false } else {}
+  if left.node.kind == "binding_pattern" || left.node.kind == "wildcard_pattern" {
+    return right.node.kind == "binding_pattern" || right.node.kind == "wildcard_pattern"
+  } else {}
+  if left.node.kind != "constructor_pattern" || right.node.kind != "constructor_pattern" { return false } else {}
+  if left.node.text != right.node.text { return false } else {}
+  let leftCount = count_children(nodes, leftId, "argument")
+  let rightCount = count_children(nodes, rightId, "argument")
+  if leftCount != rightCount { return false } else {}
+  var index = 0
+  while index <= leftCount - 1 {
+    let leftArgument = child_at(nodes, leftId, "argument", index)
+    let rightArgument = child_at(nodes, rightId, "argument", index)
+    if !leftArgument.found || !rightArgument.found { return false } else {}
+    if !same_pattern_structure(nodes, leftArgument.node.id, rightArgument.node.id) { return false } else {}
+    index = index + 1
+  }
+  return true
+}
 fn same_nested_pattern_parts(left: List[PatternKeyNestedPart], right: List[PatternKeyNestedPart]) -> Bool {
   if length(left) != length(right) { return false } else {}
   for leftPart in left {
@@ -866,18 +925,24 @@ fn same_nested_pattern_parts(left: List[PatternKeyNestedPart], right: List[Patte
   }
   return true
 }
-fn same_constructor_pattern_key(left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
-  if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
-  for leftPart in left.argumentPatterns {
+fn same_pattern_key_parts(left: List[PatternKeyPart], right: List[PatternKeyPart]) -> Bool {
+  if length(left) != length(right) { return false } else {}
+  for leftPart in left {
     var found = false
-    for rightPart in right.argumentPatterns {
+    for rightPart in right {
       if leftPart.position == rightPart.position && leftPart.kind == rightPart.kind && leftPart.constructor == rightPart.constructor && leftPart.payloadArity == rightPart.payloadArity && same_nested_pattern_parts(leftPart.nestedParts, rightPart.nestedParts) { found = true } else {}
     }
     if !found { return false } else {}
   }
   return true
 }
-
+fn same_constructor_pattern_key(nodes: List[FlatAstNode], left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
+  if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
+  if pattern_has_unkeyed_constructor(nodes, left.syntaxId) || pattern_has_unkeyed_constructor(nodes, right.syntaxId) {
+    return same_pattern_structure(nodes, left.syntaxId, right.syntaxId)
+  } else {}
+  return same_pattern_key_parts(left.argumentPatterns, right.argumentPatterns)
+}
 fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   var typed: List[BindingFact] = []
   for binding in bindings {
@@ -1408,65 +1473,17 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     let partArity = if payload.kind == "constructor_pattern" { count_children(nodes, payload.id, "argument") } else { 0 }
                     reversedArgumentPatterns = prepend(reversedArgumentPatterns, PatternKeyPart { position: payload.childIndex, kind: partKind, constructor: partConstructor, payloadArity: partArity, nestedParts: pattern_key_nested_parts(nodes, payload) })
                     if payload.kind == "constructor_pattern" {
-                      var nestedCoversVariant = false
                       let expectedType = variant_payload_type(nodes, pattern.node.text, payload.childIndex)
-                      let actualUnion = constructor_union_type(nodes, payload.text)
-                      if expectedType == "" || actualUnion != expectedType {
+                      let nested = validate_nested_pattern(nodes, payload, expectedType)
+                      if !nested.valid {
                         coversVariant = false
                         duplicatePatternEligible = false
                         invalidPattern = true
-                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Nested constructor pattern does not match its payload type", payload))
+                        let message = if nested.code == "PEP_PATTERN_ARITY" { "Nested constructor pattern payload count does not match its variant" } else { if nested.code == "PEP_PATTERN_TYPE_MISMATCH" { "Nested constructor pattern does not match its payload type" } else { if nested.code == "PEP_UNKNOWN_CONSTRUCTOR" { "Unknown constructor in nested pattern" } else { "Pattern form is outside the implemented checker subset" } } }
+                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(nested.code, message, nested.node))
                       } else {
-                        let nestedVariant = variant_declaration(nodes, payload.text)
-                        let nestedArity = if nestedVariant.found { count_children(nodes, nestedVariant.node.id, "field_type") } else { -1 }
-                        if nestedArity != count_children(nodes, payload.id, "argument") {
-                          coversVariant = false
-                          duplicatePatternEligible = false
-                          invalidPattern = true
-                          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Nested constructor pattern payload count does not match its variant", payload))
-                        } else {
-                          var nestedIrrefutable = true
-                          for nestedPayload in nodes {
-                            if nestedPayload.parentId == payload.id && nestedPayload.role == "argument" {
-                              if nestedPayload.kind == "constructor_pattern" {
-                                let deeperExpectedType = variant_payload_type(nodes, payload.text, nestedPayload.childIndex)
-                                let deeperActualType = constructor_union_type(nodes, nestedPayload.text)
-                                if deeperExpectedType == "" || deeperActualType != deeperExpectedType {
-                                  duplicatePatternEligible = false
-                                  invalidPattern = true
-                                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_TYPE_MISMATCH", "Nested constructor pattern does not match its payload type", nestedPayload))
-                                } else {
-                                  let deeperVariant = variant_declaration(nodes, nestedPayload.text)
-                                  let deeperArity = if deeperVariant.found { count_children(nodes, deeperVariant.node.id, "field_type") } else { -1 }
-                                  if deeperArity != count_children(nodes, nestedPayload.id, "argument") {
-                                    duplicatePatternEligible = false
-                                    invalidPattern = true
-                                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_ARITY", "Nested constructor pattern payload count does not match its variant", nestedPayload))
-                                  } else {
-                                    if !pattern_covers_payload(nodes, nestedPayload, deeperExpectedType) { nestedIrrefutable = false } else {}
-                                    for deepestPayload in nodes {
-                                      if deepestPayload.parentId == nestedPayload.id && deepestPayload.role == "argument" && deepestPayload.kind != "binding_pattern" && deepestPayload.kind != "wildcard_pattern" {
-                                        duplicatePatternEligible = false
-                                        invalidPattern = true
-                                        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Constructor patterns deeper than two nested payloads are outside this checker slice", deepestPayload))
-                                      } else {}
-                                    }
-                                  }
-                                }
-                              } else {
-                                if nestedPayload.kind != "binding_pattern" && nestedPayload.kind != "wildcard_pattern" {
-                                  nestedIrrefutable = false
-                                  duplicatePatternEligible = false
-                                  invalidPattern = true
-                                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_PATTERN_UNSUPPORTED", "Pattern form is outside the implemented checker subset", nestedPayload))
-                                } else {}
-                              }
-                            } else {}
-                          }
-                          if union_variant_count(nodes, expectedType) == 1 && nestedIrrefutable { nestedCoversVariant = true } else {}
-                        }
+                        if !nested.covers { coversVariant = false } else {}
                       }
-                      if !nestedCoversVariant { coversVariant = false } else {}
                     } else {
                       if payload.kind != "binding_pattern" && payload.kind != "wildcard_pattern" {
                         coversVariant = false
@@ -1477,11 +1494,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                     }
                   } else {}
                 }
-                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
+                let currentPatternKey = ConstructorPatternKey { name: pattern.node.text, syntaxId: pattern.node.id, argumentCount: patternArgumentCount, argumentPatterns: reverse(reversedArgumentPatterns) }
                 if union.found && patternUnion == subjectType && duplicatePatternEligible {
                   var samePattern = false
                   for previousPatternKey in seenConstructorPatterns {
-                    if same_constructor_pattern_key(previousPatternKey, currentPatternKey) { samePattern = true } else {}
+                    if same_constructor_pattern_key(nodes, previousPatternKey, currentPatternKey) { samePattern = true } else {}
                   }
                   if samePattern {
                     invalidPattern = true

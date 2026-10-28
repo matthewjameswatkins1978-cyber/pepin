@@ -364,6 +364,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("wrong-nested-type", nested_prefix + "type Wrong = W()" + NL +
              "fn f(x: Outer) -> Int { return match x { O(M(W())) => 1 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_PATTERN_TYPE_MISMATCH"),
+            ("depth-three-valid", "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }", "valid", None),
+            ("depth-three-distinct-partials", "type Seed = K(Int) | R(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(_)))) => 1 O(M(L(R(_)))) => 2 _ => 0 } }", "valid", None),
+            ("depth-three-duplicate", "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(_)))) => 1 O(M(L(K(_)))) => 2 _ => 0 } }", "invalid", "PEP_DUPLICATE_MATCH_ARM"),
             ("wrong-nested-arity", nested_prefix +
              "fn f(x: Outer) -> Int { return match x { O(M(L())) => 1 O(_) => 0 Empty() => 0 } }",
              "invalid", "PEP_PATTERN_ARITY"),
@@ -417,12 +420,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
         depth_three_report = fields(depth_three_checked["result"])
         depth_three_reference = self._reference_check("nested-pattern-depth-three", depth_three_source)
         self.assertEqual(depth_three_reference["status"], "valid", depth_three_reference)
-        self.assertEqual(scalar(depth_three_report["status"]), "invalid", depth_three_report)
+        self.assertEqual(scalar(depth_three_report["status"]), "valid", depth_three_report)
         depth_three_diagnostics = [
             (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
             for item in depth_three_report["diagnostics"]["value"]
         ]
-        self.assertEqual([item[0] for item in depth_three_diagnostics], ["PEP_PATTERN_UNSUPPORTED"])
+        self.assertEqual(depth_three_diagnostics, [])
         one_shot = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                      "op": "tool_invoke", "tool": "pep-a13-checker", "arguments": [],
                                      "semanticTarget": target})
@@ -1328,9 +1331,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertIn(expected_code, [item[0] for item in expected], reference)
                 self.assertEqual(actual, expected, report)
 
-    def test_nested_constructor_patterns_fail_closed_beyond_supported_depth(self):
+    def test_deep_constructor_patterns_match_ocaml_or_report_one_shot_budget(self):
         source = "type Seed = K(Int)" + NL + "type Leaf = L(Seed)" + NL + "type Mid = M(Leaf)" + NL + "type Outer = O(Mid)" + NL + "fn f(x: Outer) -> Int { return match x { O(M(L(K(value)))) => value } }"
-        reference = self._reference_check("nested-pattern-deeper-than-supported", source)
+        reference = self._reference_check("nested-pattern-one-shot-depth-three", source)
         self.assertEqual(reference["status"], "valid", reference)
         opened = self._open(source)
         result = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -1340,10 +1343,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(result["error"]["code"], "PEP_RUNTIME_STEP_LIMIT", result)
         else:
             report = fields(result["result"])
-            self.assertEqual(scalar(report["status"]), "invalid", report)
-            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-            self.assertIn("PEP_PATTERN_UNSUPPORTED", codes, report)
-
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            self.assertEqual(report["diagnostics"]["value"], [])
 
     def test_scalar_union_match_bindings_holes_and_fail_closed_cases(self):
         source = "type M = A(Int) | B()" + NL + "fn f(x: M) -> Int { return match x { A(v) => v B() => 0 } }"
