@@ -866,6 +866,8 @@ class PepC23CollectionLoopTests(unittest.TestCase):
              "fn main() -> Int { return if list_int_all_negative([-2, -1]) { 42 } else { 0 } }\n"),
             ("list_int_all_negative",
              "fn main() -> Int { return if list_int_all_negative([]) { 42 } else { 0 } }\n"),
+            ("list_int_any_positive",
+             "fn main() -> Int { return if list_int_any_positive([-2, 0, 3]) { 42 } else { 0 } }\n"),
             ("list_int_count_positive",
              "fn main() -> Int { return if list_int_count_positive([-2, 0, 3]) == 1 { 42 } else { 0 } }\n"),
             ("list_int_contains",
