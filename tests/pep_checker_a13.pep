@@ -777,6 +777,13 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
   }
   return reverse(typed)
 }
+fn is_first_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+  var earlierMatches = 0
+  for node in nodes {
+    if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name && node.id + 1 <= nodeId { earlierMatches = earlierMatches + 1 } else {}
+  }
+  return earlierMatches == 0
+}
 fn is_first_duplicate_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
@@ -1011,8 +1018,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "record_declaration" {
-      if is_first_duplicate_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
-      if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
+      if is_first_duplicate_type_declaration(nodes, node.text, node.id) && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if supported_primitive_type(node.text) && is_first_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for field in nodes {
         if field.parentId == node.id && field.kind == "field_declaration" {
           if is_first_duplicate_occurrence(nodes, node.id, "field_declaration", field.text, field.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
@@ -1024,8 +1031,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       }
     } else {}
     if node.kind == "union_declaration" {
-      if is_first_duplicate_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
-      if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
+      if is_first_duplicate_type_declaration(nodes, node.text, node.id) && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if supported_primitive_type(node.text) && is_first_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for variant in nodes {
         if variant.parentId == node.id && variant.kind == "variant_declaration" {
           if is_first_duplicate_constructor(nodes, variant.text, variant.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}

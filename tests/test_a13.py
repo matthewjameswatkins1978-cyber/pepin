@@ -914,6 +914,37 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 expected_end = expected_start + len(repeated_declaration.encode("utf-8"))
                 self.assertEqual(actual_diagnostics, [(expected_code, expected_start, expected_end)])
 
+    def test_reserved_type_name_duplicates_report_once_at_the_first_declaration(self):
+        cases = [
+            ("single", "type Int { value: Bool }" + NL +
+             "fn main() -> Int { return 0 }"),
+            ("three-records", "type Int { a: Bool }" + NL +
+             "type Int { b: Bool }" + NL +
+             "type Int { c: Bool }" + NL +
+             "fn main() -> Int { return 0 }"),
+            ("record-union", "type Int { value: Bool }" + NL +
+             "type Int = A() | B()" + NL +
+             "fn main() -> Int { return 0 }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("reserved-type-duplicate-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                first_declaration = source.split(NL)[0]
+                expected_start = len(source[:source.index(first_declaration)].encode("utf-8"))
+                expected_end = expected_start + len(first_declaration.encode("utf-8"))
+                self.assertEqual(actual, [("PEP_DUPLICATE_TYPE", expected_start, expected_end)])
+
     def test_union_constructors_and_duplicate_names_match_reference_errors(self):
         source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
         reference = self._reference_check("constructor-valid", source)
