@@ -20,9 +20,11 @@ test: kind=reject passes only when `check --json` parses AND reports
 status=invalid with exactly the expected diagnostic code (and span, if given).
 """
 import argparse
+import datetime
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -81,6 +83,23 @@ def check_fixture(cli, pep_file, timeout):
             "elapsed_s": round(elapsed, 3)}, None
 
 
+def slugify(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "test"
+
+
+def write_evidence(evidence_dir, fixture_id, name, text):
+    """Persist one artifact file; return its path, never raise."""
+    try:
+        target_dir = pathlib.Path(evidence_dir) / slugify(fixture_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / name
+        path.write_text(text if isinstance(text, str) else json.dumps(text, indent=2),
+                        encoding="utf-8")
+        return str(path)
+    except OSError:
+        return None
+
+
 def span_matches(actual, expected):
     if not isinstance(actual, dict):
         return False
@@ -96,7 +115,8 @@ def span_matches(actual, expected):
     return True
 
 
-def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default):
+def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default,
+                evidence_dir=None):
     """Execute one manifest fixture. Returns a result dict (never raises)."""
     fid = fx.get("id", "<missing-id>")
     rel = fx.get("file", "")
@@ -137,6 +157,10 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default):
     doc = checked["doc"]
     diags = doc.get("diagnostics", []) if isinstance(doc, dict) else []
     status = doc.get("status") if isinstance(doc, dict) else None
+    if evidence_dir is not None:
+        path = write_evidence(evidence_dir, fid, "check.json", doc)
+        if path:
+            base["evidence"] = {"check.json": path}
 
     if kind == "reject":
         # Negative passes ONLY on parsed proof of the exact rejection.
@@ -185,6 +209,14 @@ def run_fixture(cli, repo_root, fx, manifest_dir, timeout_default):
     base["exit"] = rc
     base["stdout"] = out
     base["stderr"] = err_text
+    if evidence_dir is not None:
+        artifacts = base.get("evidence", {})
+        for name, content in (("stdout.txt", out), ("stderr.txt", err_text)):
+            path = write_evidence(evidence_dir, fid, name, content)
+            if path:
+                artifacts[name] = path
+        if artifacts:
+            base["evidence"] = artifacts
     want_exit = expect.get("exit", 0)
     want_code = expect.get("diagnosticCode")
     if rc == want_exit and out == expect.get("stdout", out) and (
@@ -229,6 +261,8 @@ def main(argv=None):
                     help="Pep CLI entry (default: pep.ps1 next to this script's repo root)")
     ap.add_argument("--repo", default=None,
                     help="repository root (default: parent of test-runner/)")
+    ap.add_argument("--evidence-dir", default=None,
+                    help="artifact directory (default: _build/pep-test-evidence/<UTC timestamp> under repo root)")
     args = ap.parse_args(argv)
 
     here = pathlib.Path(__file__).resolve()
@@ -276,7 +310,14 @@ def main(argv=None):
                                             entry["file"], flag))
         return EXIT_OK
 
-    results = [run_fixture(cli_base, repo_root, fx, manifest_dir, timeout_default)
+    if args.evidence_dir:
+        evidence_root = pathlib.Path(args.evidence_dir)
+    else:
+        evidence_root = repo_root / "_build" / "pep-test-evidence" / \
+            datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    results = [run_fixture(cli_base, repo_root, fx, manifest_dir, timeout_default,
+                           evidence_root)
                for fx in fixtures]
     counts = summarize(results)
     try:
@@ -294,6 +335,7 @@ def main(argv=None):
     doc = {"schemaVersion": SCHEMA_VERSION, "runner": "pep test v1",
            "repoRevision": repo_rev, "backend": "interpreter",
            "toolchain": toolchain, "manifest": str(manifest_path),
+           "evidence_root": str(evidence_root),
            "counts": counts, "tests": results}
     failed = counts["fail"] + counts["compile_error"] + counts["runtime_error"] + \
         counts["timeout"] + counts["infra_error"]

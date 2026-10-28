@@ -163,5 +163,27 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertEqual(doc["tests"][0]["id"], "check/record-shape")
 
 
+    def test_evidence_artifacts_recorded_per_test(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = pathlib.Path(tmp) / "exp"
+            proc = run_runner("--json", "--filter", "pass/add",
+                              "--evidence-dir", str(exp))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            doc = json.loads(proc.stdout)
+            t = doc["tests"][0]
+            self.assertIn("evidence", t)
+            self.assertIn("stdout.txt", t["evidence"])
+            self.assertIn("check.json", t["evidence"])
+            for name, path in t["evidence"].items():
+                self.assertTrue(pathlib.Path(path).is_file(), name)
+            self.assertEqual(
+                pathlib.Path(t["evidence"]["stdout.txt"]).read_text(encoding="utf-8"),
+                t["stdout"])
+            check_doc = json.loads(
+                pathlib.Path(t["evidence"]["check.json"]).read_text(encoding="utf-8"))
+            self.assertEqual(check_doc["status"], "valid")
+            self.assertEqual(doc["evidence_root"], str(exp))
+
+
 if __name__ == "__main__":
     unittest.main()

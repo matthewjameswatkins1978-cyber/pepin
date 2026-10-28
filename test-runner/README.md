@@ -18,6 +18,11 @@ Exit code: `0` when every executed test passes or skips, `1` when any
 test fails/errors/times out, `2` for runner infrastructure problems
 (missing or malformed manifest).
 
+Each executed test writes per-test evidence artifacts (`check.json`,
+`stdout.txt`, `stderr.txt` under `--evidence-dir`, default
+`_build/pep-test-evidence/<UTC timestamp>/`); paths are recorded in the
+JSON result alongside the inlined values.
+
 `--list` prints the declared fixtures (id, kind, file, skip reason)
 without executing them — the discovery query other tools can rely on.
 
