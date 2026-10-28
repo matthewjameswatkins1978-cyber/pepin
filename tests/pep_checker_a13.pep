@@ -707,14 +707,29 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
     let declaration = lookup_node(nodes, binding.syntaxId)
     var typeShape = binding.typeShape
     if typeName == "" && declaration.found {
-      if declaration.node.kind == "binding_pattern" {
-        if typeShape.kind == "" { typeShape = pattern_binding_shape(nodes, declaration.node, functions, typed, references) } else {}
-        if typeShape.kind != "" { typeName = legacy_type_name(typeShape) } else {
-          typeName = pattern_binding_type(nodes, declaration.node, functions, typed, references)
-        }
+      if declaration.node.kind == "for_in" {
+        let iterable = child_at(nodes, declaration.node.id, "iterable", 0)
+        if iterable.found {
+          let iterableShape = expression_type_shape(nodes, iterable.node.id, functions, typed, references)
+          if iterableShape.listDepth != 0 {
+            typeShape = without_one_list(iterableShape)
+            typeName = legacy_type_name(typeShape)
+          } else {
+            let iterableType = infer_expression_type(nodes, iterable.node.id, functions, typed, references)
+            typeName = list_element_type(iterableType)
+            if typeName != "" { typeShape = legacy_type_shape(nodes, typeName) } else {}
+          }
+        } else {}
       } else {
-        let value = child_at(nodes, declaration.node.id, "value", 0)
-        if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+        if declaration.node.kind == "binding_pattern" {
+          if typeShape.kind == "" { typeShape = pattern_binding_shape(nodes, declaration.node, functions, typed, references) } else {}
+          if typeShape.kind != "" { typeName = legacy_type_name(typeShape) } else {
+            typeName = pattern_binding_type(nodes, declaration.node, functions, typed, references)
+          }
+        } else {
+          let value = child_at(nodes, declaration.node.id, "value", 0)
+          if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+        }
       }
     } else {}
     if typeShape.kind == "" && typeName != "" { typeShape = legacy_type_shape(nodes, typeName) } else {}
@@ -975,7 +990,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       }
     } else {}
     if node.kind == "for_in" {
-      reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_CONTROL_FLOW_UNSUPPORTED", "For-in semantics are outside the implemented checker subset", node))
+      let iterable = child_at(nodes, node.id, "iterable", 0)
+      if iterable.found {
+        let iterableType = infer_expression_type(nodes, iterable.node.id, functions, bindings, references)
+        let iterableShape = expression_type_shape(nodes, iterable.node.id, functions, bindings, references)
+        let isList = iterableShape.listDepth != 0 || list_element_type(iterableType) != ""
+        if !isList && (iterableType != "" || iterableShape.kind != "") {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FOR_REQUIRES_LIST", "for-in requires a list value", iterable.node))
+        } else {}
+      } else {}
     } else {}
     if node.kind == "assignment" {
       let target = find_reference(references, node.id)

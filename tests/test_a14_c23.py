@@ -383,6 +383,9 @@ class A14C23EmissionTests(unittest.TestCase):
         )
         self.assertEqual(scalar(local_return_call["status"]), "unsupported")
         self.assertEqual(local_return_call["sourceParts"]["value"], [])
+        for_in = self._emit("fn main() -> Int { for item in [1] {} return 0 }")
+        self.assertEqual(scalar(for_in["status"]), "unsupported")
+        self.assertEqual(for_in["sourceParts"]["value"], [])
 
     def test_recursive_call_is_rejected_before_native_lowering(self):
         emitted = self._emit(

@@ -431,7 +431,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("while-condition", "fn main() -> Unit { while 1 {} }", "PEP_TYPE_MISMATCH", "PEP_TYPE_MISMATCH"),
             ("builtin-arity", "fn main() -> Int { return length() }", "PEP_ARGUMENT_COUNT", "PEP_ARGUMENT_COUNT"),
             ("builtin-type", "fn main() -> Int { return length(1) }", "PEP_LIST_EXPECTED", "PEP_LIST_EXPECTED"),
-            ("for-in-source", "fn main() -> Int { for item in 1 {} return 0 }", "PEP_FOR_REQUIRES_LIST", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
+            ("for-in-source", "fn main() -> Int { for item in 1 {} return 0 }", "PEP_FOR_REQUIRES_LIST", "PEP_FOR_REQUIRES_LIST"),
             ("missing-return", "fn main() -> Int { let x: Int = 1 }", "PEP_MISSING_RETURN", "PEP_A13_CONTROL_FLOW_UNSUPPORTED"),
         ]
         for name, source, reference_code, checker_code in cases:
@@ -455,6 +455,56 @@ class A13FunctionResolutionTests(unittest.TestCase):
         hole = fields(report["holes"]["value"][0])
         self.assertEqual(scalar(hole["name"]), "field")
         self.assertEqual(scalar(hole["expectedType"]), "Int")
+
+    def test_for_in_item_types_scope_and_list_requirement_match_ocaml(self):
+        cases = [
+            ("literal", "fn main() -> Int { for item in [1, 2] { let copy: Int = item } return 0 }", "valid", None, ""),
+            ("typed-list", "fn main() -> Int { let values: List[Int] = [1]; for item in values { let copy: Int = item } return 0 }", "valid", None, ""),
+            ("record-list", "type Point { x: Int }" + NL + "fn main(points: List[Point]) -> Int { for point in points { let copy: Int = point.x } return 0 }", "valid", None, ""),
+            ("nested-list", "fn main() -> Int { let values: List[List[Int]] = [[1]]; for item in values { let copy: List[Int] = item } return 0 }", "valid", None, ""),
+            ("scalar-iterable", "fn main() -> Int { for item in 1 {} return 0 }", "invalid", "PEP_FOR_REQUIRES_LIST", "1"),
+            ("empty-iterable", "fn main() -> Int { for item in [] {} return 0 }", "invalid", "PEP_EMPTY_LIST_NEEDS_TYPE", "[]"),
+            ("immutable-item", "fn main() -> Int { for item in [1] { item = 2 } return 0 }", "invalid", "PEP_ASSIGN_IMMUTABLE", "item = 2"),
+        ]
+        for name, source, expected_status, expected_code, span_text in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("for-in-" + name, source)
+                opened, report = self._analyze(source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), expected_status, report)
+                expected_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, expected_diagnostics, report)
+                if expected_code is None:
+                    self.assertEqual(actual_diagnostics, [])
+                else:
+                    self.assertEqual(len(actual_diagnostics), 1)
+                    self.assertEqual(actual_diagnostics[0][0], expected_code)
+                    start = len(source[:source.index(span_text)].encode("utf-8"))
+                    end = start + len(span_text.encode("utf-8"))
+                    self.assertEqual(actual_diagnostics[0][1:], (start, end))
+                if name in {"literal", "typed-list", "record-list", "nested-list"}:
+                    expected_type = "Point" if name == "record-list" else ("List[Int]" if name == "nested-list" else "Int")
+                    loop_name = "point" if name == "record-list" else "item"
+                    loop = next(fields(item) for item in report["bindings"]["value"] if scalar(fields(item)["name"]) == loop_name)
+                    function = fields(report["functions"]["value"][0])
+                    self.assertEqual(scalar(loop["typeName"]), expected_type, report)
+                    self.assertIs(loop["mutable"]["value"], False)
+                    self.assertNotEqual(scalar(loop["scopeId"]), scalar(function["semanticId"]))
+                    body_start = source.index("{", source.index("for "))
+                    reference_start = len(source[:source.index(loop_name, body_start)].encode("utf-8"))
+                    body_reference = next(fields(item) for item in report["references"]["value"] if scalar(fields(item)["startByte"]) == reference_start)
+                    self.assertEqual(scalar(body_reference["bindingId"]), scalar(loop["semanticId"]))
+                    if name == "record-list":
+                        field_start = len(source[:source.index("point.x")].encode("utf-8"))
+                        field_type = next(fields(item) for item in report["expressionTypes"]["value"] if scalar(fields(item)["startByte"]) == field_start)
+                        self.assertEqual(scalar(field_type["typeName"]), "Int")
 
     def test_assignment_typing_mutability_and_spans_match_ocaml(self):
         cases = [
