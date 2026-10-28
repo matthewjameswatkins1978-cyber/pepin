@@ -1597,7 +1597,6 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
 
     def test_match_bindings_are_arm_local_and_union_coverage_is_checked(self):
-
         source = (
             "type Maybe = None() | Some(Int)" + NL
             + "fn pick(value: Maybe) -> Int { return match value { None() => 0 Some(number) => number } }"
