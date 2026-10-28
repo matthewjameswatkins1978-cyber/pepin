@@ -6,6 +6,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
 CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
+GCC = pathlib.Path(r"C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe")
 
 
 @unittest.skipUnless(CLANG.is_file(), f"Clang not installed at {CLANG}")
@@ -68,6 +69,19 @@ class PepC23CliTests(unittest.TestCase):
             self.assertIn("Pep C23 unsupported:", rejected.stderr)
             self.assertFalse((folder / "answer.exe").exists())
 
+
+    @unittest.skipUnless(GCC.is_file(), f"GCC not installed at {GCC}")
+    def test_run_c23_builds_and_executes_pep_calls_with_gcc(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "sum.pep"
+            source.write_text(
+                "fn add(left: Int, right: Int) -> Int { return left + right }\n"
+                "fn main() -> Int { return add(20, 22) }\n",
+                encoding="utf-8", newline="\n")
+            result = self.invoke("run-c23", source, "--compiler", GCC)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout, "42\n")
 
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
