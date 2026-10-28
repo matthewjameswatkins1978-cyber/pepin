@@ -2,8 +2,8 @@
 
 **Date:** 2026-10-28
 **Repository:** `matthewjameswatkins1978-cyber/pepin`
-**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (remote-equal)
-**Verification test head:** `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (remote-equal)
+**Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `cf764d9888c4175b2126ae1bdaad16ab4ac098b5` (remote-equal; test-only commit after checker SHA below)
+**Verification test head:** `cf764d9888c4175b2126ae1bdaad16ab4ac098b5` (remote-equal)
 
 ## Baselines and authority
 
@@ -28,12 +28,12 @@ A13 remains partial and unaccepted. Recursive nominal/union relationships, neste
 
 ## Latest continuation state — 2026-10-28
 
-The campaign branch advanced through `0d8852409aa811bc76608a596c1df19e9cf0745f` (`perf(checker): skip redundant call shape walks`) to `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (`perf(checker): reuse function result shapes`), remote-equal when checked. The A13 diagnostic integration `facc4a34f1e3d60d13a0d3a66abb995d3f610f87` is an ancestor of this head; its list-return `PEP_TYPE_MISMATCH` correction remains present.
+The latest branch head is `cf764d9888c4175b2126ae1bdaad16ab4ac098b5`, a C23 CLI test-only commit after checker SHA `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33` (`perf(checker): reuse function result shapes`). The A13 diagnostic integration `facc4a34f1e3d60d13a0d3a66abb995d3f610f87` is an ancestor; its list-return `PEP_TYPE_MISMATCH` correction remains present.
 
-On exact code/test SHA `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33`, `python -m unittest tests.test_a13 tests.test_a13_nested_records tests.test_a14_c23.A14C23EmissionTests.test_native_bool_helpers_compose_with_direct_returns -q` ran **43 tests**: the A13 and nested-record/list suites passed **42/42**, while the added A14 case failed with `PEP_RUNTIME_STEP_LIMIT` at emitter position `3804:5`. No clean OCaml rebuild or full suite is implied.
+On checker SHA `ca1f5a0cfdcc30178f5cf979fe7eab765d8a6c33`, `python -m unittest tests.test_a13 tests.test_a13_nested_records tests.test_a14_c23.A14C23EmissionTests.test_native_bool_helpers_compose_with_direct_returns -q` ran **43 tests**: the A13 and nested-record/list suites passed **42/42**, while the added A14 case failed with `PEP_RUNTIME_STEP_LIMIT` at emitter position `3804:5`. At branch head `cf764d9`, `python -m unittest tests.test_c23_cli -q` passed **4/4** in 12.444 seconds, including GCC native CLI execution. No clean OCaml rebuild or full suite is implied.
 
 A reduced resource probe found that A13 accepts `negate(negate(false))`, a direct call to either helper, and an unused extra helper, but the valid program `identity(negate(false))` with separate `identity` and `negate` helpers returns `PEP_RUNTIME_STEP_LIMIT` at checker bundle position `2766:15` on `0d88524`. After the `ca1f5a0` function-result-shape optimization, the same A14 case still exceeds the existing limit at emitter position `3804:5`. The 100,000-step budget is unchanged. Root cause is not yet established; repeated `lookup_node` scans during type inference are a concrete candidate, not a measured attribution.
 
-The main checkout has uncommitted work in `tests/test_a14_c23.py` and `tests/test_c23_cli.py`; preserve both. An earlier A14 suite run at pre-optimization base `fe1b24d` passed 11 tests and failed the nested-helper case with the same `PEP_RUNTIME_STEP_LIMIT`, so the failure predates the latest optimization and is not evidence of a new regression.
+The main checkout has one uncommitted C23 regression test in `tests/test_a14_c23.py`; preserve it. `tests/test_c23_cli.py` was committed at `cf764d9` and passed 4/4. An earlier A14 suite run at pre-optimization base `fe1b24d` passed 11 tests and failed the nested-helper case with the same `PEP_RUNTIME_STEP_LIMIT`, so the failure predates the latest optimization and is not evidence of a new regression.
 
 Next action: profile/reduce the A13 two-distinct-helper nested-call case on a stable snapshot, identify repeated work, and optimize a narrow checker path without changing semantics or budgets. Then rerun the exact reproducer and A13/nested-record regression suites. A13 remains experimental and unaccepted; no merge, master, `CURRENT.md` or manifest advancement.
