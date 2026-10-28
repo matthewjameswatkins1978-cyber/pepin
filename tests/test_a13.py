@@ -1948,6 +1948,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("context-last-mismatch", "fn f(flag: Bool) -> Int { return if flag { 0 } else { true } }", "invalid", {}),
             ("context-both-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { false } }", "invalid", {}),
             ("uncontextual-mismatch", "fn f(flag: Bool) -> Int { let value = if flag { 0 } else { true }; return 1 }", "invalid", {}),
+            ("nested-context-branch", "fn f(flag: Bool) -> Int { return if flag { if flag { true } else { 0 } } else { 0 } }", "invalid", {}),
+            ("nested-condition-type", "fn f(flag: Bool) -> Int { return if flag { if 1 { 1 } else { 2 } } else { 3 } }", "invalid", {}),
+            ("nested-condition-unresolved", "fn f(flag: Bool) -> Int { return if flag { if missing { 1 } else { 2 } } else { 3 } }", "invalid", {}),
+            ("nested-list-then-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { if flag { [[1]] } else { [[true]] } } else { [[2]] } }", "invalid", {}),
+            ("nested-list-else-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { if flag { [[true]] } else { [[1]] } } else { [[2]] } }", "invalid", {}),
+            ("nested-call-unknown", "fn f(flag: Bool) -> Int { return if flag { if flag { missing() } else { 0 } } else { 1 } }", "invalid", {}),
+            ("nested-hole-context", "fn f(flag: Bool) -> Int { return if flag { if flag { ?one } else { 0 } } else { 1 } }", "incomplete", {"one": "Int"}),
         ]
         for name, source, expected_status, expected_holes in cases:
             with self.subTest(name=name):
