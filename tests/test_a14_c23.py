@@ -218,6 +218,13 @@ class A14C23EmissionTests(unittest.TestCase):
             42,
         )
 
+    def test_native_bool_comparison_helpers_match_reference_execution(self):
+        self._compile_and_run(
+            "fn equals_seven(value: Int) -> Bool { return value == 7 }\n"
+            "fn main() -> Int { return if equals_seven(7) { 42 } else { 0 } }",
+            42,
+        )
+
     def test_c23_comparisons_and_short_circuit_logic_match_the_interpreter(self):
         self._compile_and_run(
             "fn main() -> Int { if 2 == 2 && 2 != 3 && 2 <= 3 { return 42 } else { return 0 } }",
