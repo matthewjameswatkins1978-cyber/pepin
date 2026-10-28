@@ -162,3 +162,16 @@ Verification on the implementation/test SHA:
 - Python compilation and `git diff --check`: passed. No clean OCaml rebuild or full repository discovery was run.
 
 **Nonblocking 3/3 review:** the diff is confined to A13 pattern checking and its OCaml differential. The added eligibility guard avoids registering malformed or unsupported shapes; partial patterns are recorded without claiming outer coverage, and full coverage still drives unreachable-arm detection. No runtime-budget, protocol, A14, master, `CURRENT.md`, manifest, or release changes. A13 remains experimental and partial. Continue the campaign after refreshing peer coordination notes.
+
+## Continuation 03 — staged record-match hole analysis (2026-10-28; cycle 1/3)
+
+**Test SHA:** `779017b858948c74e3c5c536de7c12ca9fcb91e2`, pushed to `campaign/pep-v01-sustained-build-20261027`. Added a real JSONL integration regression for a record-field `match` containing a typed hole. The Pep-written parser is invoked as `parser_parse_program`; its revision-bound `ParserProgress` is passed to the already existing `analyze_parsed` checker entry point. The staged result matches the OCaml status/diagnostics and retains the `pending: Int` hole fact, source document and revision. The existing one-shot `analyze` entry point remains unchanged.
+
+Verification on the test SHA:
+
+- Focused staged-path integration test: **1/1 passed** in 1.818 seconds.
+- `python -m unittest tests.test_a13 tests.test_a13_nested_records -q`: **51/51 passed** in 145.388 seconds.
+- A14 emission-boundary tests (`test_unsupported_valid_program_is_reported_without_c_output`, `test_checker_invalid_program_is_not_emitted`): **2/2 passed**.
+- Python compilation and `git diff --check`: passed. No full repository discovery or clean OCaml rebuild was run.
+
+**Measured boundary:** manually invoking one-shot `analyze` on this exact source still returns `PEP_RUNTIME_STEP_LIMIT` (100,000-step ceiling; runtime message location `2971:6`). The staged parser and checker each complete under their existing per-call cap. This is evidence for the existing staged protocol path, not a fix to the one-shot analyzer or a general large-source guarantee. No budgets were changed; A13 remains experimental.
