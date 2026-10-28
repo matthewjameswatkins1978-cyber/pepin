@@ -1301,8 +1301,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
         if expected == "" || actualInitializer == "" || listMismatch.found {
           if shapeMismatch || listMismatch.found {
-            let mismatch = list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references)
-            let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
+            let mismatchNode = if listMismatch.found { listMismatch.node } else { value.node }
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Initialiser type does not match the declared binding type", mismatchNode))
           } else {}
         } else {
