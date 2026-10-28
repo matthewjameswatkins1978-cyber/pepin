@@ -5,6 +5,10 @@
 **Branch / verified code SHA:** `campaign/pep-v01-sustained-build-20261027` / `cf764d9888c4175b2126ae1bdaad16ab4ac098b5` (remote-equal; test-only commit after checker SHA below)
 **Verification test head:** `cf764d9888c4175b2126ae1bdaad16ab4ac098b5` (remote-equal)
 
+## Strategic development roads (planning only, 28 October 2026)
+
+Read [roadmap index](roadmaps/ROADMAP-INDEX.md) for (1) reproducible Lucy self-hosting, (2) whole accepted Pepin 1.0, and (3) the feature/evidence ledger. These are planning documents, not current implementation/test claims or accepted phase/status changes. Maintain this checkpoint as time- and SHA-bound evidence; do not rewrite historical receipts. Both current agents keep their declared code ownership and continue through nonblocking three-slice reviews.
+
 ## Baselines and authority
 
 - Accepted A12 parser base: `69a47fe77187666bdd045b8dc8a9f633a7dd49d7`.
