@@ -128,6 +128,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
     let target = pep_c23_function(nodes, node.text)
+    if node.text == "length" {
+      if !argument.found || secondArgument.found || extraArgument.found || argument.node.kind != "list" {
+        return pep_c23_unsupported("Pep C23 length lowering currently requires one explicit list literal")
+      } else {}
+      return PepC23Emission { status: "emitted", sourceParts: [int_text(count_children(nodes, argument.node.id, "element"))], diagnostic: "" }
+    } else {}
     if !target.found || extraArgument.found {
       return pep_c23_unsupported("Pep C23 calls require a known target and at most two arguments")
     } else {}

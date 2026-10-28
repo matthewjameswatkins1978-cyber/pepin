@@ -62,7 +62,7 @@ class PepC23CliTests(unittest.TestCase):
             too_deep = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertNotEqual(too_deep.returncode, 0)
             self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
-            source.write_text("fn main() -> Int { return length([1, 2]) }\n",
+            source.write_text("fn main() -> Int { let values = [1, 2]; return length(values) }\n",
                               encoding="utf-8", newline="\n")
             rejected = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)

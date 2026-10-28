@@ -333,9 +333,9 @@ class A14C23EmissionTests(unittest.TestCase):
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
         emitted = self._emit("fn main() -> Int { return length([1, 2]) }")
-        self.assertEqual(scalar(emitted["status"]), "unsupported")
-        self.assertEqual(emitted["sourceParts"]["value"], [])
-        self.assertNotEqual(scalar(emitted["diagnostic"]), "")
+        self.assertEqual(scalar(emitted["status"]), "emitted")
+        self.assertTrue(emitted["sourceParts"]["value"])
+        self.assertEqual(scalar(emitted["diagnostic"]), "")
         dual_failure = self._emit(
             "fn main() -> Int { return (9223372036854775807 + 1) + (1 / 0) }"
         )
