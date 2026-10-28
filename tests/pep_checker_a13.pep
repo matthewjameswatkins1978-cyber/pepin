@@ -8,9 +8,10 @@ type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape,
 type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
-type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic] }
+type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
+type UnreachableLookup { found: Bool, node: FlatAstNode }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
@@ -1194,7 +1195,12 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var activeFunctionFound = false
   var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
+  var unreachable = UnreachableLookup { found: false, node: empty_node() }
   for node in nodes {
+    if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
+      let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
+      if nextStatement.found { unreachable = UnreachableLookup { found: true, node: nextStatement.node } } else {}
+    } else {}
     if sequentialFunctionOwner && node.parentId == -1 && node.kind == "function" {
       let activeLookup = find_function_by_syntax(functions, node.id)
       activeFunction = activeLookup.function
@@ -1782,7 +1788,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
-  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed) }
+  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
@@ -1909,7 +1915,23 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
     } else {}
   }
   let calls = reverse(reversedCalls)
-  let diagnostics = reverse(reversedDiagnostics)
+  let collectedDiagnostics = reverse(reversedDiagnostics)
+  var diagnostics = collectedDiagnostics
+  if typeResult.unreachable.found {
+    var earlierFound = false
+    var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+    for candidate in collectedDiagnostics {
+      if candidate.code != "PEP_MISSING_RETURN" && candidate.startByte + 1 <= typeResult.unreachable.node.startByte && (!earlierFound || candidate.startByte + 1 <= earlier.startByte) {
+        earlierFound = true
+        earlier = candidate
+      } else {}
+    }
+    if earlierFound {
+      diagnostics = [earlier]
+    } else {
+      diagnostics = [diagnostic("PEP_UNREACHABLE", "Statement follows an unconditional return", typeResult.unreachable.node)]
+    }
+  } else {}
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
   return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
 }

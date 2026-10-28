@@ -1471,6 +1471,32 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 ]
                 self.assertEqual(actual, expected, report)
 
+    def test_unreachable_statements_match_ocaml_across_blocks(self):
+        cases = [
+            ("after-return", "fn main() -> Int { return 1; let x: Int = 2 }"),
+            ("after-both-if-branches-return", "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 2 }" + NL + "let x: Int = 3 }"),
+            ("after-returning-nested-block", "fn main() -> Int { { return 1 }" + NL + "let x: Int = 2 }"),
+            ("unreachable-invalid-statement", "fn main() -> Int { return 1; let x: Bool = 2 }"),
+            ("unreachable-while-body", "fn main() -> Int { while false { return 1; let x: Int = 2 } return 3 }"),
+            ("unreachable-for-body", "fn main() -> Int { for item in [1] { return item; let x: Int = 2 } return 3 }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("unreachable-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(expected[0][0], "PEP_UNREACHABLE", (name, expected))
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual))
+
     def test_non_unit_return_completeness_follows_nested_blocks_and_if_branches(self):
         valid_sources = [
             "fn main() -> Int { return 1 }",
