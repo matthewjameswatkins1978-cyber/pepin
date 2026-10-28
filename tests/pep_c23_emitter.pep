@@ -352,7 +352,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         pep_c23_int_list_parameter(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if listParameter.found {
-        if secondArgument.node.kind != "integer" && secondArgument.node.kind != "name" {
+        if secondArgument.node.kind != "integer" && secondArgument.node.kind != "name" && !pep_c23_is_negative_int_literal(nodes, secondArgument.node) {
           return pep_c23_unsupported("Pep C23 runtime List[Int] contains requires an integer literal or local needle")
         } else {}
         let value = pep_c23_expression(nodes, function, secondArgument.node)
