@@ -26,6 +26,7 @@ be clean, and each run gets its own disposable worktree from the framework.
 | `02-session-continuation-invariants` | six hostile session probes | **NOT OBSERVED** | every probe `HOLD`: `PEP_SESSION_UNKNOWN_OPERATION`, `PEP_SESSION_MALFORMED_JSON`, `PEP_SESSION_FIELD_REQUIRED`, `PEP_TOOL_NOT_ACTIVE`, stable content revisions, liveness intact |
 | `03-session-stateful-handshake` | supervised session, one piped request | **NOT OBSERVED** | `observe` returned `{"outcome":"ok","operation":"open","document":"doc-1","revision":"sha256:09d129…","status":"valid",…}` |
 | `04-parser-cursor-protocol` | seven cursor/AST attacks | **NOT OBSERVED** | all seven HOLD, including ceiling uplift: monolithic aborts, cursor protocol completes in 24 steps / 58 nodes |
+| `05-parser-source-handling` | CRLF, UTF-8, invalid input, growth | **NOT OBSERVED** | all four HOLD: CRLF shifts extents by exactly one byte per prior line, multibyte extents decode, no malformed source completes, 1–4 functions parse in 8–17 steps |
 
 ## Receipts
 
@@ -39,6 +40,7 @@ be clean, and each run gets its own disposable worktree from the framework.
 | continuation invariants | `receipt:sha256:6bfb2023e67ecb41e3ddcae190f1d3a43ea07619f4f598521d12326536c8801d` | `0d01279a622b` | 0 | driver stdout (ATTACK/HOLD/SUMMARY lines) |
 | stateful handshake | `receipt:sha256:3553920a3727271ace1826361b81bccd493c542c57b72e54dca93a152b82a873` | `0d01279a622b` | — | `observe` stream on step 3 |
 | cursor protocol | `receipt:sha256:1b3271d7d3e863898bfbb420fccec5ad507bde6cfc7c52f69122ac568ff92412` | `28c41a4e2292` | 0 | driver stdout (seven ATTACK lines + SUMMARY) |
+| source handling | `receipt:sha256:82af7d523110a1b97087efc90fb4ce98ad65aa606d4892cbe1dca96ab8769a5e` | `bd1ddef788a2` | 0 | driver stdout (four ATTACK lines + SUMMARY) |
 
 ## Exact commands
 
@@ -141,6 +143,24 @@ parity first compared typed representation wrappers (false VIOLATED), and the
 span attack searched for a `span` object that does not exist in the inline
 `startByte`/`endByte` representation, producing a vacuous HOLD across zero
 checked nodes.
+
+## Source handling and scaling
+
+Bat `05` on target `bd1ddef788a2`, all four HOLD:
+
+| Attack | Measurement |
+| --- | --- |
+| CRLF span equivalence | LF and CRLF copies of one program: 25 nodes each, identical kind/text/line/column, every extent shifted by exactly the number of prior carriage returns (0 problems) |
+| UTF-8 byte extents | multibyte literal `"héllo ☃"` in a 47-byte source yields a decodable UTF-8 byte slice at its extent — spans are byte offsets, not character offsets |
+| invalid-input truthfulness | no malformed source completes: `missing_else` → invalid/`PEP_PARSE_ELSE`, `unterminated_brace` → incomplete/`PEP_PARSE_EXPECTED`, `garbage_character` → invalid/`PEP_UNEXPECTED_CHARACTER`, `truncated_union` → incomplete/`PEP_PARSE_NAME` |
+| growth scaling | 1/2/3/4 functions parse in 8/11/14/17 steps with 13/21/29/37 nodes — linear at roughly **+3 steps per function**, no budget hit at any size |
+
+**Third completion state.** The protocol has three terminal-ish statuses, not two:
+`complete`, `invalid`, and **`incomplete`** (needs more input). An orchestrator
+that accepts anything other than `invalid` as success would treat `incomplete` as
+a finished parse. Combined with the earlier finding that `done: true` accompanies
+`invalid`, the defensive rule is: success requires `status == "complete"` **and**
+empty `errorCode`, nothing weaker.
 
 ## Deliberately failing control
 
