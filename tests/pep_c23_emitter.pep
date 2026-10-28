@@ -658,6 +658,22 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
         } else {}
       }
       if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
+      let targetList = pep_c23_mutable_list_binding(nodes, function, statement.text)
+      if targetList.found {
+        let targetKind = pep_c23_mutable_list_element_kind(nodes, targetList.node)
+        var sourceKind = ""
+        if value.node.kind == "name" {
+          let sourceList = pep_c23_mutable_list_binding(nodes, function, value.node.text)
+          let sourceIntParameter = pep_c23_int_list_parameter(nodes, function, value.node.text)
+          let sourceBoolParameter = pep_c23_bool_list_parameter(nodes, function, value.node.text)
+          if sourceList.found { sourceKind = pep_c23_mutable_list_element_kind(nodes, sourceList.node) } else {}
+          if sourceIntParameter.found { sourceKind = "integer" } else {}
+          if sourceBoolParameter.found { sourceKind = "boolean" } else {}
+        } else {}
+        if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean") {
+          return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
+        } else {}
+      } else {}
       for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
       for part in loweredValue.sourceParts { parts = append(parts, part) }
       parts = append(parts, ";\n")
@@ -694,13 +710,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
               return pep_c23_unsupported("Pep C23 immutable collection bindings currently require integer or Bool list literals")
             } else {}
           }
-          if statement.kind == "var" {
-            for assignment in nodes {
-              if assignment.kind == "assignment" && assignment.text == statement.text {
-                return pep_c23_unsupported("Pep C23 mutable collection binding reassignment is not supported yet")
-              } else {}
-            }
-          } else {}
+          // List descriptors have value semantics, so reassignment copies the descriptor.
         } else {
           let initial = pep_c23_expression(nodes, function, initialValue.node)
           if initial.status != "emitted" { return initial } else {}

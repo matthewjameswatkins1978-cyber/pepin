@@ -182,7 +182,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                         c_source = generated_c.read_text(encoding="utf-8")
                         self.assertRegex(c_source, r"pep_fn_\d+\(pep_local_\d+\)")
 
-    def test_mutable_list_reassignment_fails_closed(self):
+    def test_mutable_list_reassignment_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         source_text = (
@@ -203,11 +203,12 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             reference = self.invoke("run", reference_source)
             self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
             self.assertEqual(reference.stdout, "2\n")
-            result = self.invoke("run-c23", source, "--compiler", CLANG)
-            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-            self.assertIn("mutable collection binding reassignment is not supported yet",
-                          result.stderr)
-            self.assertFalse(source.with_suffix(".exe").exists())
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+                    self.assertEqual(result.stdout, "2\n")
 
     def test_mutable_boolean_list_binding_matches_interpreter(self):
         if not CLANG.is_file() or not GCC.is_file():
