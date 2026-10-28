@@ -354,6 +354,40 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 
+fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode) -> PepC23Emission {
+  let condition = pep_c23_child(nodes, loop.id, "condition", 0)
+  if !condition.found || count_children(nodes, loop.id, "body") == 0 {
+    return pep_c23_unsupported("Pep C23 while lowering requires a condition and a non-empty assignment body")
+  } else {}
+  let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+  if loweredCondition.status != "emitted" { return loweredCondition } else {}
+  var parts: List[Str] = ["  while ("]
+  for part in loweredCondition.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ") {\n")
+  for statement in nodes {
+    if statement.parentId == loop.id && statement.role == "body" {
+      if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies currently require assignments to mutable locals") } else {}
+      let value = pep_c23_child(nodes, statement.id, "value", 0)
+      if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
+      let loweredValue = pep_c23_expression(nodes, function, value.node)
+      if loweredValue.status != "emitted" { return loweredValue } else {}
+      var targetId = -1
+      var targetFound = false
+      for local in nodes {
+        if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
+          targetId = local.id
+          targetFound = true
+        } else {}
+      }
+      if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
+      for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
+      for part in loweredValue.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ";\n")
+    } else {}
+  }
+  parts = append(parts, "  }\n")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
@@ -422,11 +456,16 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             } else {}
           }
         } else {
-          if statement.kind == "return" && !returned {
-            returned = true
-            returnStatement = PepC23NodeLookup { found: true, node: statement }
+          if statement.kind == "while" && !returned {
+            let loweredWhile = pep_c23_while_body(nodes, function, statement)
+            if loweredWhile.status != "emitted" { return loweredWhile } else {}
           } else {
-            return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+            if statement.kind == "return" && !returned {
+              returned = true
+              returnStatement = PepC23NodeLookup { found: true, node: statement }
+            } else {
+              return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+            }
           }
         }
       }
@@ -591,7 +630,13 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               } else {}
             }
             bodyParts = append(bodyParts, "  }\n")
-          } else {}
+          } else {
+            if statement.parentId == node.id && statement.role == "statement" && statement.kind == "while" {
+              let loweredWhile = pep_c23_while_body(parsed.nodes, node, statement)
+              if loweredWhile.status != "emitted" { return loweredWhile } else {}
+              for part in loweredWhile.sourceParts { bodyParts = append(bodyParts, part) }
+            } else {}
+          }
         }
       }
 
