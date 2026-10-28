@@ -50,6 +50,36 @@
       "kind": "run",
       "skip": "native (C23) differential deferred to a later slice; interpreter-only in slice 1",
       "expect": { "exit": 0, "stdout": "42\n" }
+    },
+    {
+      "id": "pass/union-match",
+      "file": "fixtures/pass_union_match.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "3\n" }
+    },
+    {
+      "id": "pass/list-loop",
+      "file": "fixtures/pass_list_loop.pep",
+      "kind": "run",
+      "expect": { "exit": 0, "stdout": "42\n" }
+    },
+    {
+      "id": "reject/non-exhaustive-match",
+      "file": "fixtures/reject_non_exhaustive.pep",
+      "kind": "reject",
+      "expect": {
+        "code": "PEP_NON_EXHAUSTIVE_MATCH",
+        "span": { "start": { "offset": 86, "line": 3, "column": 12 }, "endOffset": 127 }
+      }
+    },
+    {
+      "id": "reject/field-on-int",
+      "file": "fixtures/reject_field_on_int.pep",
+      "kind": "reject",
+      "expect": {
+        "code": "PEP_FIELD_ON_NON_RECORD",
+        "span": { "start": { "offset": 29, "line": 1, "column": 30 }, "endOffset": 32 }
+      }
     }
   ],
   "limits": { "timeoutSeconds": 120 }

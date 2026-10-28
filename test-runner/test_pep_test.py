@@ -40,7 +40,7 @@ class RunnerHonestyTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         doc = json.loads(proc.stdout)
         self.assertEqual(doc["schemaVersion"], 1)
-        self.assertEqual(doc["counts"]["pass"], 6)
+        self.assertEqual(doc["counts"]["pass"], 10)
         self.assertEqual(doc["counts"]["skip"], 1)
         self.assertEqual(doc["counts"]["fail"], 0)
         for t in doc["tests"]:
@@ -146,7 +146,7 @@ class RunnerHonestyTests(unittest.TestCase):
     def test_filter_selects_subset(self):
         proc = run_runner("--json", "--filter", "reject/")
         doc = json.loads(proc.stdout)
-        self.assertEqual(doc["counts"]["pass"], 2)
+        self.assertEqual(doc["counts"]["pass"], 4)
         self.assertTrue(all(t["id"].startswith("reject/") for t in doc["tests"]))
 
     def test_list_lists_without_executing(self):
