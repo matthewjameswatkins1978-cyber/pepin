@@ -151,6 +151,33 @@ class PepC23CliTests(unittest.TestCase):
                             self.assertEqual(native.stdout, reference.stdout)
                             self.assertIn("typedef struct", generated.read_text(encoding="utf-8"))
 
+    def test_record_lists_pass_by_value_and_length_match_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "type Point { x: Int y: Int }\n"
+            "fn count(points: List[Point]) -> Int { return length(points) }\n"
+            "fn forward(points: List[Point]) -> Int { return count(points) }\n"
+            "fn main() -> Int { return forward([Point { x: 10, y: 20 }, Point { x: 12, y: 22 }]) }\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "record-list-values.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source = folder / "record-list-values-reference.pep"
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "2\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    generated = folder / f"record-list-values-{compiler.stem}.c"
+                    native = self.invoke("run-c23", source, "--compiler", compiler,
+                                         "--emit-c", generated)
+                    self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, reference.stdout)
+                    self.assertIn("pep_list_record_", generated.read_text(encoding="utf-8"))
+
     def test_c23_unsupported_programs_fail_closed_consistently_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
@@ -165,6 +192,12 @@ class PepC23CliTests(unittest.TestCase):
              "fn calculate() -> Int { return 42 }\n"
              "fn main() -> Int { let value = Value { value: calculate() }; return value.value }\n",
              "Pep C23 unsupported: Pep C23 record field initializers currently require expressions without runtime failure",
+             "valid"),
+            ("record-list-empty-pep-checker-mismatch",
+             "type Point { x: Int }\n"
+             "fn count(points: List[Point]) -> Int { return length(points) }\n"
+             "fn main() -> Int { return count([]) }\n",
+             "Pep C23 unsupported: Pep C23 emission requires a valid Pep checker report",
              "valid"),
             ("bool-main",
              "fn main() -> Bool { return true }\n",

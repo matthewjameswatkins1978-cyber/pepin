@@ -142,6 +142,19 @@ fn pep_c23_bool_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, 
   } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_record_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
+  let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
+  if parameter.found && parameter.node.text == name {
+    let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
+    if parameterType.found && pep_c23_record_list_declaration(nodes, parameterType.node).found { return parameter } else {}
+  } else {}
+  if secondParameter.found && secondParameter.node.text == name {
+    let parameterType = pep_c23_child(nodes, secondParameter.node.id, "type", 0)
+    if parameterType.found && pep_c23_record_list_declaration(nodes, parameterType.node).found { return secondParameter } else {}
+  } else {}
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_bool_list_parameter(nodes, function, node.text)
@@ -176,9 +189,47 @@ fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, n
   parts = append(parts, " }")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
+fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode, parameterType: PepC23NodeLookup) -> PepC23Emission {
+  let declaration = pep_c23_record_list_declaration(nodes, parameterType.node)
+  if !declaration.found { return pep_c23_unsupported("Pep C23 List[Record] argument has no supported record element type") } else {}
+  if node.kind == "name" {
+    let parameter = pep_c23_record_list_parameter(nodes, function, node.text)
+    if parameter.found {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Record] forwarding requires a direct List[Record] parameter")
+  } else {}
+  if node.kind != "list" {
+    return pep_c23_unsupported("Pep C23 List[Record] arguments currently require a record list literal or direct parameter forwarding")
+  } else {}
+  var parts: List[Str] = ["(pep_list_record_", int_text(declaration.node.id), "){ .data = "]
+  let elementCount = count_children(nodes, node.id, "element")
+  if elementCount == 0 { parts = append(parts, "NULL") } else {
+    parts = append(parts, "(const pep_record_")
+    parts = append(parts, int_text(declaration.node.id))
+    parts = append(parts, "[]){")
+    var count = 0
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" {
+        if element.kind != "record" { return pep_c23_unsupported("Pep C23 List[Record] literal arguments currently require record values") } else {}
+        if count != 0 { parts = append(parts, ", ") } else {}
+        let lowered = pep_c23_expression(nodes, function, element)
+        if lowered.status != "emitted" { return lowered } else {}
+        for part in lowered.sourceParts { parts = append(parts, part) }
+        count = count + 1
+      } else {}
+    }
+    parts = append(parts, "}")
+  }
+  parts = append(parts, ", .length = ")
+  parts = append(parts, int_text(elementCount))
+  parts = append(parts, " }")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_call_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode, parameterType: PepC23NodeLookup) -> PepC23Emission {
   if !parameterType.found { return pep_c23_expression(nodes, function, node) } else {}
   let cType = pep_c23_c_parameter_type(nodes, parameterType.node)
+  if cType == "pep_list_record" { return pep_c23_record_list_argument(nodes, function, node, parameterType) } else {}
   if cType == "pep_list_int" { return pep_c23_int_list_argument(nodes, function, node) } else {}
   if cType == "pep_list_bool" { return pep_c23_bool_list_argument(nodes, function, node) } else {}
   return pep_c23_expression(nodes, function, node)
@@ -199,6 +250,14 @@ fn pep_c23_record_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23Node
     } else {}
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
+}
+fn pep_c23_record_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23NodeLookup {
+  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
+  if !elementType.found || elementType.node.kind != "type_named" {
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
+  return pep_c23_record_declaration(nodes, elementType.node.text)
 }
 fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for node in nodes {
@@ -245,6 +304,10 @@ fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str 
   } else {}
   if node.kind == "type_list" {
     let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
+    if elementType.found && elementType.node.kind == "type_named" &&
+       pep_c23_record_declaration(nodes, elementType.node.text).found {
+      return "pep_list_record"
+    } else {}
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Int" {
       return "pep_list_int"
     } else {}
@@ -255,6 +318,10 @@ fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str 
   return ""
 }
 fn pep_c23_c_parameter_type_parts(nodes: List[FlatAstNode], node: FlatAstNode) -> List[Str] {
+  if node.kind == "type_list" {
+    let declaration = pep_c23_record_list_declaration(nodes, node)
+    if declaration.found { return ["pep_list_record_", int_text(declaration.node.id)] } else {}
+  } else {}
   if node.kind == "type_named" {
     let declaration = pep_c23_record_declaration(nodes, node.text)
     if declaration.found { return ["pep_record_", int_text(declaration.node.id)] } else {}
@@ -554,6 +621,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if boolListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(boolListParameter.node.id), ".length"], diagnostic: "" }
+      } else {}
+      let recordListParameter = if argument.node.kind == "name" {
+        pep_c23_record_list_parameter(nodes, function, argument.node.text)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      if recordListParameter.found {
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(recordListParameter.node.id), ".length"], diagnostic: "" }
       } else {}
       for binding in nodes {
         if binding.parentId == function.id && binding.role == "statement" && binding.kind == "var" && binding.text == argument.node.text {
@@ -996,6 +1069,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       parts = append(parts, int_text(record.id))
       parts = append(parts, ";\n")
       for part in parts { reversed = prepend(reversed, part) }
+      var listParts: List[Str] = ["typedef struct { const pep_record_", int_text(record.id), "*data; size_t length; } pep_list_record_", int_text(record.id), ";\n"]
+      for part in listParts { reversed = prepend(reversed, part) }
     } else {}
   }
   for node in parsed.nodes {
