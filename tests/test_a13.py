@@ -869,6 +869,51 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 expected_end = expected_start + len(repeated_field.encode("utf-8"))
                 self.assertEqual(actual_diagnostics, [("PEP_DUPLICATE_FIELD", expected_start, expected_end)])
 
+    def test_declaration_duplicates_report_only_the_first_repetition(self):
+        cases = [
+            ("record-type", "type Point { x: Int }" + NL +
+             "type Point { y: Int }" + NL +
+             "type Point { z: Int }" + NL +
+             "fn main() -> Int { return 0 }",
+             "type Point { y: Int }", "PEP_DUPLICATE_TYPE"),
+            ("record-union-type", "type Point { x: Int }" + NL +
+             "type Point = A() | B()" + NL +
+             "type Point { y: Int }" + NL +
+             "fn main() -> Int { return 0 }",
+             "type Point = A() | B()", "PEP_DUPLICATE_TYPE"),
+            ("constructor", "type First = Same()" + NL +
+             "type Second = Same()" + NL +
+             "type Third = Same()" + NL +
+             "fn main() -> Int { return 0 }",
+             "Same()", "PEP_DUPLICATE_CONSTRUCTOR"),
+            ("function", "fn same() -> Int { return 1 }" + NL +
+             "fn same() -> Int { return 2 }" + NL +
+             "fn same() -> Int { return 3 }",
+             "fn same() -> Int { return 2 }", "PEP_DUPLICATE_FUNCTION"),
+        ]
+        for name, source, repeated_declaration, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("duplicate-declaration-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, expected_diagnostics, report)
+                self.assertEqual(len(actual_diagnostics), 1)
+                start_index = source.index(repeated_declaration)
+                if name == "constructor":
+                    start_index = source.index(repeated_declaration, start_index + len(repeated_declaration))
+                expected_start = len(source[:start_index].encode("utf-8"))
+                expected_end = expected_start + len(repeated_declaration.encode("utf-8"))
+                self.assertEqual(actual_diagnostics, [(expected_code, expected_start, expected_end)])
+
     def test_union_constructors_and_duplicate_names_match_reference_errors(self):
         source = "type Maybe = Some(Int) | None()" + NL + "fn make() -> Maybe { return Some(4) }"
         reference = self._reference_check("constructor-valid", source)

@@ -777,10 +777,14 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
   }
   return reverse(typed)
 }
-fn named_type_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
-  var count = 0
-  for node in nodes { if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name { count = count + 1 } else {} }
-  return count
+fn is_first_duplicate_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+  var earlierMatches = 0
+  for node in nodes {
+    if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name && node.id + 1 <= nodeId {
+      earlierMatches = earlierMatches + 1
+    } else {}
+  }
+  return earlierMatches == 1
 }
 fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
@@ -791,10 +795,14 @@ fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: 
   }
   return earlierMatches == 1
 }
-fn constructor_declaration_count(nodes: List[FlatAstNode], name: Str) -> Int {
-  var count = 0
-  for node in nodes { if node.kind == "variant_declaration" && node.text == name { count = count + 1 } else {} }
-  return count
+fn is_first_duplicate_constructor(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+  var earlierMatches = 0
+  for node in nodes {
+    if node.kind == "variant_declaration" && node.text == name && node.id + 1 <= nodeId {
+      earlierMatches = earlierMatches + 1
+    } else {}
+  }
+  return earlierMatches == 1
 }
 fn supported_primitive_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" || list_element_type(typeName) != ""
@@ -1003,7 +1011,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "record_declaration" {
-      if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if is_first_duplicate_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
       if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for field in nodes {
         if field.parentId == node.id && field.kind == "field_declaration" {
@@ -1016,11 +1024,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       }
     } else {}
     if node.kind == "union_declaration" {
-      if named_type_declaration_count(nodes, node.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if is_first_duplicate_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
       if supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
       for variant in nodes {
         if variant.parentId == node.id && variant.kind == "variant_declaration" {
-          if constructor_declaration_count(nodes, variant.text) != 1 { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
+          if is_first_duplicate_constructor(nodes, variant.text, variant.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
           for payload in nodes {
             if payload.parentId == variant.id && payload.role == "field_type" && !supported_type_at(nodes, payload.id, type_name_at(nodes, payload.id)) {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, payload.id, type_name_at(nodes, payload.id)), "Union constructor payload type is outside the implemented checker subset", payload))
@@ -1545,6 +1553,13 @@ fn analyze() -> CheckerReport {
   let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorNode.startByte, errorEnd: errorNode.endByte, errorLine: errorNode.line, errorColumn: errorNode.column }
   return analyze_parsed(parsed)
 }
+fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, syntaxId: Int) -> Bool {
+  var earlierMatches = 0
+  for prior in functions {
+    if prior.name == name && prior.syntaxId + 1 <= syntaxId { earlierMatches = earlierMatches + 1 } else {}
+  }
+  return earlierMatches == 1
+}
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
@@ -1583,12 +1598,11 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
       } else {}
     }
   }
-  var seenNames: List[Str] = []
   for function in functions {
-    if contains(seenNames, function.name) {
+    if is_first_duplicate_function(functions, function.name, function.syntaxId) {
       let declaration = lookup_node(nodes, function.syntaxId)
       if declaration.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
-    } else { seenNames = prepend(seenNames, function.name) }
+    } else {}
   }
   let calls = reverse(reversedCalls)
   let diagnostics = reverse(reversedDiagnostics)
