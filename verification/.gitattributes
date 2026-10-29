@@ -1,5 +1,6 @@
 # Agent 3 owned-path line-ending rule: corpus fixtures and Lean sources
 # stay LF in the repository regardless of local core.autocrlf.
+*.py text eol=lf
 *.lean text eol=lf
 *.md text eol=lf
 *.toml text eol=lf
