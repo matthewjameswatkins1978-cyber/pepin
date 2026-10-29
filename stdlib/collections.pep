@@ -20,6 +20,12 @@ fn list_bool_true_prefix_length(values: List[Bool]) -> Int {
   return prefix
 }
 
+fn list_bool_true_suffix_length(values: List[Bool]) -> Int {
+  var suffix = 0
+  for item in values { suffix = if item { suffix + 1 } else { 0 } }
+  return suffix
+}
+
 fn list_bool_count_true(values: List[Bool]) -> Int {
   var total = 0
   for item in values { total = if item { total + 1 } else { total } }
