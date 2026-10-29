@@ -294,6 +294,15 @@ fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNod
 }
 fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "record" { return pep_c23_record_declaration(nodes, value.text) } else {}
+  if value.kind == "call" {
+    let target = pep_c23_function(nodes, value.text)
+    if !target.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
+    if result.found && result.node.kind == "type_named" {
+      return pep_c23_record_declaration(nodes, result.node.text)
+    } else {}
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
   if value.kind == "field_access" {
     let base = pep_c23_child(nodes, value.id, "value", 0)
     if !base.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
@@ -321,8 +330,8 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
       if binding.parentId == function.id && binding.role == "statement" &&
          (binding.kind == "let" || binding.kind == "var") && binding.text == value.text {
         let initial = pep_c23_child(nodes, binding.id, "value", 0)
-        if initial.found && initial.node.kind == "record" {
-          return pep_c23_record_declaration(nodes, initial.node.text)
+        if initial.found && (initial.node.kind == "record" || initial.node.kind == "call") {
+          return pep_c23_record_value_type(nodes, function, initial.node)
         } else {}
         let annotation = pep_c23_child(nodes, binding.id, "annotation", 0)
         if annotation.found && annotation.node.kind == "type_named" {
@@ -725,8 +734,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let thirdParameter = pep_c23_child(nodes, target.node.id, "parameter", 2)
     let extraParameter = pep_c23_child(nodes, target.node.id, "parameter", 3)
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
-    if extraParameter.found || !result.found || pep_c23_c_scalar_type(result.node) == "" {
-      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar result")
+    let recordResult = result.found && result.node.kind == "type_named" && pep_c23_record_declaration(nodes, result.node.text).found
+    if extraParameter.found || !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult) {
+      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar or record result")
     } else {}
     let targetStatement = pep_c23_last_statement(nodes, target.node)
     let targetValue = if targetStatement.found {
@@ -805,8 +815,8 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       }
     } else {
-      if argument.found || secondArgument.found || thirdArgument.found || (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node)) {
-        return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free integer result; recursive calls are unsupported")
+      if argument.found || secondArgument.found || thirdArgument.found || (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) && !(recordResult && targetValue.found && targetValue.node.kind == "record" && !pep_c23_expression_may_fail(nodes, targetValue.node))) {
+        return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result or a safe record construction; recursive calls are unsupported")
       } else {}
       return PepC23Emission { status: "emitted", sourceParts: ["pep_fn_", int_text(target.node.id), "()"], diagnostic: "" }
     }
@@ -1107,9 +1117,9 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   let parameterCType = if parameterType.found { pep_c23_c_parameter_type(nodes, parameterType.node) } else { "" }
   let secondParameterCType = if secondParameterType.found { pep_c23_c_parameter_type(nodes, secondParameterType.node) } else { "" }
   let thirdParameterCType = if thirdParameterType.found { pep_c23_c_parameter_type(nodes, thirdParameterType.node) } else { "" }
-  let resultCType = if result.found { pep_c23_c_scalar_type(result.node) } else { "" }
+  let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
   if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && parameterCType == "") || (secondParameter.found && secondParameterCType == "") || (thirdParameter.found && thirdParameterCType == "") || resultCType == "" || (function.text == "main" && result.node.text != "Int") {
-    return pep_c23_unsupported("Pep C23 functions require supported scalar parameters and results")
+    return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
   for local in nodes {
@@ -1295,7 +1305,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
       let thirdParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 2)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
-      reversed = prepend(reversed, pep_c23_c_scalar_type(result.node))
+      for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       if parameter.found {
@@ -1375,10 +1385,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               bodyParts = append(bodyParts, ";\n")
             } else {
               let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
-              let localRecord = if initialValue.node.kind == "record" {
-                pep_c23_record_declaration(parsed.nodes, initialValue.node.text)
-              } else { PepC23NodeLookup { found: false, node: empty_node() } }
-              if initialValue.node.kind == "record" && !localRecord.found {
+              let localRecord = pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
+              if (initialValue.node.kind == "record" || initialValue.node.kind == "call") && !localRecord.found {
                 return pep_c23_unsupported("Pep C23 record local has no declared record type")
               } else {}
               if localRecord.found {
@@ -1514,12 +1522,15 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       if hasConditionalBody {
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
       } else {
-        bodyParts = append(bodyParts, "  int64_t pep_result = ")
+        let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
+        bodyParts = append(bodyParts, "  ")
+        for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { bodyParts = append(bodyParts, resultPart) }
+        bodyParts = append(bodyParts, " pep_result = ")
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
         bodyParts = append(bodyParts, ";\n  pep_leave();\n  return pep_result;\n")
       }
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
-      reversed = prepend(reversed, pep_c23_c_scalar_type(result.node))
+      for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       if parameter.found {

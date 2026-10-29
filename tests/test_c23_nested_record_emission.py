@@ -82,5 +82,41 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             self.assertIn(".pep_field_0.pep_field_1", generated)
 
 
+    def test_nested_record_return_and_projection_emit_c(self):
+        source_text = (
+            "type Point { x: Int y: Int }\n"
+            "type Box { point: Point }\n"
+            "fn make_box() -> Box {\n"
+            "  return Box { point: Point { x: 19, y: 23 } }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let box = make_box()\n"
+            "  return box.point.x + 23\n"
+            "}\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "nested-record-return.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "42\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(
+                generated,
+                r"pep_record_\d+ pep_fn_\d+\(void\);")
+            self.assertRegex(
+                generated,
+                r"pep_record_\d+ pep_result = \(pep_record_\d+\)")
+            self.assertRegex(generated, r"pep_record_\d+ pep_local_\d+ = pep_fn_\d+\(\)")
+            self.assertIn(".pep_field_0.pep_field_0", generated)
+            self.assertIn(".pep_field_1 = 23", generated)
+
+
 if __name__ == "__main__":
     unittest.main()
