@@ -234,6 +234,10 @@ class TextbufNativeTests(unittest.TestCase):
         return self._build_c(compiler, exe_name,
             ["frag_probe.c", "pep_textbuf.c"])
 
+    def build_fragn_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["fragn_probe.c", "pep_textbuf.c"])
+
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["num_probe.c", "pep_num.c", "pep_textbuf.c"])
@@ -669,6 +673,39 @@ class TextbufNativeTests(unittest.TestCase):
             ran = run_program([str(exe)])
             self.assertEqual(ran.returncode, 0, ran.stderr)
             self.assertEqual(ran.stdout.strip(), "0")
+
+
+    def test_fragn_probe_joins_slices_with_nuls(self):
+        # NOTE (security hold): implemented but never executed. Every
+        # expected byte below was hand-derived from the documented
+        # algorithm; the post-hold suite re-run is the real gate.
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        fixture = BUILD / "fragn_mixed.bin"
+        fixture.write_bytes(b"a\x00b\r\n\xc3\xa9\x00end")
+        cases = [
+            (["0", "3", "3", "2", "5", "2", "7", "4"],
+             b"a\x00b\r\n\xc3\xa9\x00end"),
+            (["0", "0", "0", "11", "11", "0"],
+             b"a\x00b\r\n\xc3\xa9\x00end"),
+            ([], b""),
+        ]
+        for args, expected in cases:
+            outputs = []
+            for compiler, name in ((clang, "fragn_clang.exe"), (gcc, "fragn_gcc.exe")):
+                probe = self.build_fragn_probe(compiler, name)
+                ran = run_bytes([str(probe), str(fixture), *args])
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                outputs.append(ran.stdout)
+            self.assertEqual(outputs[0], outputs[1])
+            self.assertEqual(outputs[0], expected)
+        probe = self.build_fragn_probe(clang, "fragn_reject.exe")
+        for bad in (["10", "5"], ["11", "1"], ["x", "1"], ["0"]):
+            ran = run_bytes([str(probe), str(fixture), *bad])
+            self.assertEqual(ran.returncode, 2, bad)
+            self.assertEqual(ran.stdout, b"")
 
 
 if __name__ == "__main__":

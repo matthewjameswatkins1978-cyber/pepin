@@ -237,3 +237,11 @@ can relay them.
   `clang -fsyntax-only` strict-clean on the new probe, zero output
   artifacts. Implemented-but-untested, like all slice-11/12 code:
   post-hold suite re-run plus new fragn vectors remain required.
+
+## 2026-10-29 -- slice 13: fragn test vectors (hold-safe, unexecuted)
+
+- New `test_fragn_probe_joins_slices_with_nuls`: hand-derived vectors
+  over fixture `a\0b\r\n<é>\0end` (offsets/lengths incl. empty and
+  full-file slices, plus four fail-closed rejects). Written but
+  never executed — `py_compile` clean is the only check the hold
+  permits. The post-hold re-run executes it with everything else.
