@@ -31,19 +31,18 @@ and constructions renamed from `pep_record_<id>` to declared names.
 5. `List[Point]` and undeclared/named-non-record types map to `""` →
    unsupported. No silent lowering.
 
-## O1 (observation, not a defect): emitted C type names vs C keywords
+## O1 (observation, low severity, not a defect) — mechanism now directly confirmed
 
-`pep_c23_c_type` / typedef emission use the declared Pep type name
-verbatim. Probed on the OCaml seed (base `805062b`, TESTED):
-`type Point` twice → `PEP_DUPLICATE_TYPE` (uniqueness enforced ✓), but
-`type int { x: Int }` → `valid`. The staged emitter would therefore emit
-`} int;`, which Clang/GCC reject — fail-closed, but with a C-level
-diagnostic far from the Pep source, and native confirmation is blocked
-under the hold. Suggested owner-side hardening (no patch supplied, A2
-owns the file): reject Pep type names colliding with C23 keywords (and
-the `pep_` prefix space) at emission time with a `PepC23Emission`
-`unsupported` diagnostic. Low severity: single-file scope, C compiler
-remains the backstop, unusual names in practice.
+Declared Pep type names are emitted verbatim as C typedefs. Probed end-to-end at the pinned A2 tip via in-process `emit` (no C compiler):
+
+```pep
+type int { x: Int }
+fn main() -> Int { let v = int { x: 1 } return v.x }
+```
+
+checker: `valid`. Staged emitter: EMITTED 1,642 chars including the line `typedef struct { int64_t pep_field_0; } int;` — TESTED. The typedef name collides with the C keyword, so this C is uncompilable; the failure surfaces only at Clang/GCC with a far-from-source diagnostic (native confirmation itself blocked under the hold). Uniqueness is enforced (`PEP_DUPLICATE_TYPE`), so the gap is keywords only, not collisions.
+
+Suggested owner-side hardening (no patch supplied, A2 owns the file): reject Pep type names colliding with C23 keywords (and the `pep_` prefix space) with a `PepC23Emission` `unsupported` diagnostic at emission time. Low severity: single-file scope, unusual names in practice, C compiler remains the backstop.
 
 ## Status
 
