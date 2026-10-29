@@ -10,6 +10,16 @@ fn list_int_product(values: List[Int]) -> Int {
   return product
 }
 
+fn list_bool_false_prefix_length(values: List[Bool]) -> Int {
+  var prefix = 0
+  var ended = false
+  for item in values {
+    prefix = if !ended && !item { prefix + 1 } else { prefix }
+    ended = ended || item
+  }
+  return prefix
+}
+
 fn list_bool_true_prefix_length(values: List[Bool]) -> Int {
   var prefix = 0
   var ended = false
