@@ -869,6 +869,8 @@ class PepCliTests(unittest.TestCase):
         reserved = invoke("check", self.source("fn say(x: Int) -> Int { return x }\n"), "--json")
         self.assertEqual(json.loads(malformed.stdout)["status"], "invalid")
         self.assertEqual(json.loads(reserved.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
+        reserved_string_search = invoke("check", self.source("fn str_contains(x: Str, y: Str) -> Bool { return true }\n"), "--json")
+        self.assertEqual(json.loads(reserved_string_search.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
