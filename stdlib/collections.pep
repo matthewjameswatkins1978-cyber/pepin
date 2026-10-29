@@ -513,6 +513,12 @@ fn list_bool_has_true_majority(values: List[Bool]) -> Bool {
   return !(balance <= 0)
 }
 
+fn list_bool_last_or(values: List[Bool], fallback: Bool) -> Bool {
+  var last = fallback
+  for item in values { last = item }
+  return last
+}
+
 fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
   for item in values { return item }
   return fallback
