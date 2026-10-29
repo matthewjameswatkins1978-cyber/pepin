@@ -467,8 +467,13 @@ fn list_int_count_positive(values: List[Int]) -> Int {
 }
 
 fn list_int_first_or(values: List[Int], fallback: Int) -> Int {
-  for item in values { return item }
-  return fallback
+  var first = fallback
+  var found = false
+  for item in values {
+    first = if !found { item } else { first }
+    found = true
+  }
+  return first
 }
 
 fn list_int_last_or(values: List[Int], fallback: Int) -> Int {
