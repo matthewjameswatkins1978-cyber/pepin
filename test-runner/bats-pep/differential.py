@@ -126,11 +126,25 @@ def rust_run_verdict(tb, repo, workdir, ident, body):
 
 def pep_verdict(composed, use_equals, equals_value, use_not_equals,
                 not_equals_value, executed, exit_code):
-    bools = ("true" if use_equals else "false", str(equals_value),
-             "true" if use_not_equals else "false", str(not_equals_value),
-             "true" if executed else "false", str(exit_code))
+    """Judge the same inputs with the typed Pep oracle.
+
+    The six scalars are gone: the mode is a tagged union and missing evidence is
+    `AbsentExit(...)`. A malformed mode is representable here (`BothModes`/`NoMode`)
+    instead of being encoded as two contradictory booleans.
+    """
+    if use_equals and use_not_equals:
+        mode = "BothModes(%d, %d)" % (equals_value, not_equals_value)
+    elif use_equals:
+        mode = "EqualsMode(%d)" % equals_value
+    elif use_not_equals:
+        mode = "NotEqualsMode(%d)" % not_equals_value
+    else:
+        mode = 'NoMode("none set")'
+    absent = (not executed) or str(exit_code) == "pep_no_exit_code()"
+    observed = ('AbsentExit("no exit code")' if absent
+                else "ObservedExit(%d)" % int(exit_code))
     source = ORACLE.read_text(encoding="utf-8") + (
-        "\nsay(verdict_label(exit_code_verdict(%s)))\n" % ", ".join(bools))
+        "\nsay(verdict_label(judge(%s, %s)))\n" % (mode, observed))
     composed.write_text(source, encoding="utf-8", newline="\n")
     proc = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "run", str(composed)],
                           text=True, capture_output=True, timeout=600)

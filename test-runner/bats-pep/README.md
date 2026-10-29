@@ -29,19 +29,28 @@ Verdict labels in the reference and here: `Falsified` → **PROVEN**,
 `NotFalsified` → **NOT OBSERVED** (never a certificate), `Undetermined` →
 **INCONCLUSIVE**, malformed spec → **INVALID**.
 
-## The Pep implementation
+## The Pep implementation (typed)
 
-`oracle.pep` — two ordinary functions, no host process spawning, no imports:
+`oracle.pep` — ordinary functions over typed values, no host process spawning, no
+imports, and no sentinel:
 
-- `pep_no_exit_code()` — a sentinel for "no exit code", because Pep has no option
-  type. Checked before any comparison, so it can never masquerade as evidence.
-- `verdict_label(code)` — Int verdict code to the reference's label.
-- `exit_code_verdict(...)` — validates first (a malformed experiment is never
-  evidence about the claim), then treats missing evidence as `INCONCLUSIVE`, then
-  applies the reference's fired/not-fired rule.
+```pep
+type Mode = EqualsMode(Int) | NotEqualsMode(Int) | BothModes(Int, Int) | NoMode(Str)
+type ExitObservation = ObservedExit(Int) | AbsentExit(Str)
+type EvidenceStep { index: Int, exit: ExitObservation }
+type Verdict = Proven(Str) | NotObserved(Str) | Inconclusive(Str) | Invalid(Str)
+```
 
-Verdict codes are Ints (`0` PROVEN, `1` NOT OBSERVED, `2` INCONCLUSIVE,
-`3` INVALID) so the kernel stays inside currently supported Pep.
+- `judge(mode, observation)` — validation first (a malformed mode is `Invalid`,
+  never evidence about the claim), then `AbsentExit` is `Inconclusive`, then the
+  reference's fired/not-fired rule.
+- `judge_step(mode, step)` — the same judgement over a recorded evidence record.
+- `verdict_label(verdict)` / `verdict_reason(verdict)` — the label and the reason a
+  verdict carries, so a result explains itself.
+
+Missing evidence is now an explicit `AbsentExit(reason)` case instead of a sentinel
+integer, and a malformed specification is a representable `BothModes`/`NoMode`
+instead of two booleans that could contradict each other.
 
 ## Run it
 
@@ -54,19 +63,21 @@ $lib = Get-Content oracle.pep -Raw; $st = Get-Content selftest.pep -Raw
 .\..\..\pep.ps1 run _composed.pep
 ```
 
-Observed (9 cases, one verdict per line):
+Observed (11 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
-| 1 | `equals 1`, executed, exit 1 | PROVEN |
-| 2 | `equals 1`, executed, exit 0 | NOT OBSERVED |
-| 3 | `not_equals 0`, executed, exit 0 | NOT OBSERVED |
-| 4 | `not_equals 0`, executed, exit 2 | PROVEN |
-| 5 | `equals 1`, not executed | INCONCLUSIVE |
-| 6 | `equals 1`, executed, no exit code | INCONCLUSIVE |
-| 7 | both `equals` and `not_equals` set | INVALID |
-| 8 | neither set | INVALID |
-| 9 | both set **and** no exit code | INVALID (validation outranks missing evidence) |
+| 1 | `EqualsMode(1)`, `ObservedExit(1)` | PROVEN |
+| 2 | `EqualsMode(1)`, `ObservedExit(0)` | NOT OBSERVED |
+| 3 | `NotEqualsMode(0)`, `ObservedExit(0)` | NOT OBSERVED |
+| 4 | `NotEqualsMode(0)`, `ObservedExit(2)` | PROVEN |
+| 5 | `EqualsMode(7)`, `ObservedExit(3)` | NOT OBSERVED |
+| 6 | `BothModes(1, 0)`, `ObservedExit(1)` | INVALID |
+| 7 | `NoMode(...)`, `ObservedExit(1)` | INVALID |
+| 8 | `EqualsMode(1)`, `AbsentExit(...)` | INCONCLUSIVE |
+| 9 | `BothModes(1, 0)`, `AbsentExit(...)` | INVALID (validation outranks missing evidence) |
+| 10 | `judge_step` over `EvidenceStep{exit: ObservedExit(1)}` | PROVEN |
+| 11 | `judge_step` over `EvidenceStep{exit: AbsentExit(...)}` | INCONCLUSIVE |
 
 Case 9 is the vacuity guard: a malformed experiment must never be reported as
 merely inconclusive, and case 5/6 are the infrastructure guard: missing evidence
@@ -76,6 +87,24 @@ An earlier draft of this table expected NOT OBSERVED for `equals 0, exit 0`; tha
 expectation was wrong, because `equals` fires when the code equals the configured
 value. The table was corrected, not the oracle — recorded here because a wrong
 expectation is indistinguishable from a wrong implementation until it is checked.
+
+## Grammar and checker rules measured here (for Agent 1, minimal repros)
+
+Each of these cost real time, so each is recorded with the smallest case that shows
+it:
+
+1. **A bare nullary pattern is a binding, not a constructor.** `type T = A(Int) | B()`
+   then `match x { A(n) => n` / `B => 0 }` is **accepted** but `B` is an irrefutable
+   catch-all — and a third arm after it is rejected with
+   `PEP_UNREACHABLE_MATCH_ARM: Match arm follows an irrefutable pattern`. So a nullary
+   constructor cannot be distinguished in a match at all. This oracle therefore gives
+   every alternative a payload (`Proven(Str)`, `AbsentExit(Str)`), which makes each
+   arm a refutable constructor pattern.
+2. **A nullary constructor must be declared with empty parentheses.** `type T = A(Int) | B`
+   fails with `PEP_PARSE_EXPECTED: Expected '('`.
+3. **Match arms are newline-separated, and arm bodies are expressions.** Two arms on
+   one line parse as one; `P(why) => { return "X" }` fails with
+   `PEP_PARSE_EXPRESSION: Expected an expression` where the `{` starts.
 
 ## Language dependencies found (for Agent 1, reproducible)
 
