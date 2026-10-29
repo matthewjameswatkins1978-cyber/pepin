@@ -478,6 +478,12 @@ fn list_int_count_runs(values: List[Int]) -> Int {
   return runs
 }
 
+fn list_int_sum_less_than(values: List[Int], upper: Int) -> Int {
+  var total = 0
+  for item in values { total = if !(upper <= item) { total + item } else { total } }
+  return total
+}
+
 fn list_int_sum_at_most(values: List[Int], upper: Int) -> Int {
   var total = 0
   for item in values { total = if item <= upper { total + item } else { total } }
