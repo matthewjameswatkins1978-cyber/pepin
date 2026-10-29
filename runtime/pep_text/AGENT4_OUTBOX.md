@@ -365,3 +365,13 @@ can relay them.
   content: nothing retrievable here. The in-repo codex branch
   inspection remains our only Agent-2 signal (no overlap found).
   Future sessions: use `mcp(connect)` first, match schemas exactly.
+
+## 2026-10-29 -- structural lint of Pep sources (no execution)
+
+- New check, same hold rules: a small script counts braces/parens/
+  brackets per `.pep` file, raw and with `"..."` spans masked, as
+  a tripwire for the unbalanced-meg aline class of error that broke
+  the first `digit_width` draft. All five `runtime/pep_text/*.pep`
+  files balance exactly (`pep_find_model`: 14/14, 38/38, 22/22).
+  Script kept at `_build/spanprobe/pepcheck.py` as evidence.
+  This checks shape only — semantics still await the post-hold run.
