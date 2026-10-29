@@ -166,6 +166,20 @@ fn list_int_index_of(values: List[Int], needle: Int) -> Int {
   return -1
 }
 
+fn list_int_last_index_of(values: List[Int], needle: Int) -> Int {
+  var index = 0
+  var foundAt = -1
+  for item in values {
+    if item == needle {
+      foundAt = index
+      index = index + 1
+    } else {
+      index = index + 1
+    }
+  }
+  return foundAt
+}
+
 fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }
