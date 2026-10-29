@@ -109,3 +109,15 @@ can relay them.
 - Gap logged openly: JSON/number `BADARG` paths lack direct negative
   calls (slice-7 micro-item). `REVIEW_SLICE6.md` holds the slices 4–6
   cumulative review; no independent reviewer available in-session.
+
+## 2026-10-29 -- slice 7: negative probe + utf8check tool
+- New: `neg_probe.c` pins every null path (`n 3 3 3 3 3 3 3`) and the
+  sticky-error contract (`s 2 2 2` after a forced overflow), closing
+  the slice-6 gap with executed assertions instead of documentation.
+- New: `utf8check.c`, the first real native application on the
+  runtime: `utf8check FILE...` prints `FILE: ok`,
+  `FILE:OFFSET: invalid UTF-8` (first bad byte), or `FILE: cannot
+  read`, exit 0 only when all files are valid. 16/16 suite green on
+  both toolchains, outputs byte-identical.
+- No Pep files, same standing rule: host I/O and byte-level C work
+  stay in minimal runtime primitives; the compiler keeps semantics.

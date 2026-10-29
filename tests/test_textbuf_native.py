@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -201,6 +201,15 @@ class TextbufNativeTests(unittest.TestCase):
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["num_probe.c", "pep_num.c", "pep_textbuf.c"])
+
+    def build_neg_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["neg_probe.c", "pep_textbuf.c", "pep_utf8.c", "pep_span.c",
+             "pep_json.c", "pep_num.c"])
+
+    def build_utf8check(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["utf8check.c", "pep_textbuf.c", "pep_utf8.c"])
 
     @staticmethod
     def parse_span_blocks(output):
@@ -454,6 +463,46 @@ class TextbufNativeTests(unittest.TestCase):
             self.assertEqual(ran.stdout, expected)
             outputs.append(ran.stdout)
         self.assertEqual(outputs[0], outputs[1])
+
+
+    def test_neg_probe_pins_null_and_sticky_paths(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        expected = b"n 3 3 3 3 3 3 3\ns 2 2 2\n"
+        outputs = []
+        for compiler, name in ((clang, "neg_clang.exe"), (gcc, "neg_gcc.exe")):
+            probe = self.build_neg_probe(compiler, name)
+            ran = run_bytes([str(probe)])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected)
+            outputs.append(ran.stdout)
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_utf8check_tool(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        ok_path = BUILD / "ck_ok.pep"
+        bad_path = BUILD / "ck_bad.pep"
+        missing_path = BUILD / "ck_missing.pep"
+        ok_path.write_bytes(b"fn main() -> Int {\n  return 1\n}\n")
+        bad_path.write_bytes(b"\xff\xfe\n")
+        if missing_path.exists():
+            missing_path.unlink()
+        expected_all = ("%s: ok\n%s:0: invalid UTF-8\n%s: cannot read\n"
+                        % (ok_path, bad_path, missing_path)).encode("utf-8")
+        expected_ok = ("%s: ok\n" % ok_path).encode("utf-8")
+        for compiler, name in ((clang, "check_clang.exe"), (gcc, "check_gcc.exe")):
+            tool = self.build_utf8check(compiler, name)
+            ran = run_bytes([str(tool), str(ok_path), str(bad_path), str(missing_path)])
+            self.assertEqual(ran.returncode, 1, ran.stderr)
+            self.assertEqual(ran.stdout, expected_all)
+            clean = run_bytes([str(tool), str(ok_path)])
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            self.assertEqual(clean.stdout, expected_ok)
 
 
 if __name__ == "__main__":
