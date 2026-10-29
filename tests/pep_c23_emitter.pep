@@ -155,6 +155,19 @@ fn pep_c23_record_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode
   } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_union_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  for parameter in nodes {
+    if parameter.parentId == function.id && parameter.role == "parameter" &&
+       parameter.kind == "parameter" && parameter.text == name {
+      let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+      if parameterType.found && pep_c23_union_list_declaration(nodes, parameterType.node).found {
+        return PepC23NodeLookup { found: true, node: parameter }
+      } else {}
+      return PepC23NodeLookup { found: false, node: empty_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_bool_list_parameter(nodes, function, node.text)
@@ -491,6 +504,18 @@ fn pep_c23_record_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) 
   } else {}
   return pep_c23_record_declaration(nodes, elementType.node.text)
 }
+fn pep_c23_union_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23NodeLookup {
+  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
+  if !elementType.found || elementType.node.kind != "type_named" {
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
+  let declaration = pep_c23_union_declaration(nodes, elementType.node.text)
+  if declaration.found && pep_c23_union_has_recursive_list_payload(nodes, declaration.node) {
+    return declaration
+  } else {}
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for node in nodes {
     if node.parentId == record.id && node.role == "field" && node.kind == "field_declaration" && node.text == name {
@@ -602,6 +627,22 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
         let annotation = pep_c23_child(nodes, binding.id, "annotation", 0)
         if annotation.found && annotation.node.kind == "type_named" {
           return pep_c23_union_declaration(nodes, annotation.node.text)
+        } else {}
+        return PepC23NodeLookup { found: false, node: empty_node() }
+      } else {}
+    }
+    for loop in nodes {
+      if loop.parentId == function.id && loop.role == "statement" &&
+         loop.kind == "for_in" && loop.text == value.text {
+        let iterable = pep_c23_child(nodes, loop.id, "iterable", 0)
+        if iterable.found && iterable.node.kind == "name" {
+          let parameter = pep_c23_union_list_parameter(nodes, function, iterable.node.text)
+          if parameter.found {
+            let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
+            if parameterType.found {
+              return pep_c23_union_list_declaration(nodes, parameterType.node)
+            } else {}
+          } else {}
         } else {}
         return PepC23NodeLookup { found: false, node: empty_node() }
       } else {}
@@ -867,7 +908,7 @@ fn pep_c23_union_constructor(nodes: List[FlatAstNode], function: FlatAstNode,
 }
 fn pep_c23_union_constructor_helper_source(nodes: List[FlatAstNode], declaration: FlatAstNode,
   variant: FlatAstNode) -> List[Str] {
-  var parts: List[Str] = ["static pep_union_", int_text(declaration.id), " pep_make_union_",
+  var parts: List[Str] = ["[[maybe_unused]] static pep_union_", int_text(declaration.id), " pep_make_union_",
     int_text(declaration.id), "_", int_text(variant.childIndex), "("]
   var argumentCount = 0
   for payloadType in nodes {
@@ -1852,8 +1893,13 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_record_list_parameter(nodes, function, iterable.node.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_union_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
           let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
-            if iterableBooleanParameter.found { iterableBooleanParameter } else { iterableRecordParameter }
+            if iterableBooleanParameter.found { iterableBooleanParameter } else {
+              if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
+            }
           }
           if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || count_children(nodes, statement.id, "body") == 0 {
             return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty supported body")
@@ -2180,11 +2226,16 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_record_list_parameter(parsed.nodes, node, iterable.node.text)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
+              pep_c23_union_list_parameter(parsed.nodes, node, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
-              if iterableBooleanParameter.found { iterableBooleanParameter } else { iterableRecordParameter }
+              if iterableBooleanParameter.found { iterableBooleanParameter } else {
+                if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
+              }
             }
             if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) {
-              return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or List[Int]/List[Bool] parameter")
+              return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or supported list parameter")
             } else {}
             var elementCount = 0
             if iterableList.found {
@@ -2205,7 +2256,19 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                   arrayDeclaration = append(arrayDeclaration, part)
                 }
               } else {}
-              if !iterableRecordParameter.found {
+              if iterableUnionParameter.found {
+                let unionParameterType = pep_c23_child(parsed.nodes, iterableUnionParameter.node.id, "type", 0)
+                let unionType = if unionParameterType.found {
+                  pep_c23_union_list_declaration(parsed.nodes, unionParameterType.node)
+                } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                if !unionType.found || !pep_c23_union_supported_layout(parsed.nodes, unionType.node) {
+                  return pep_c23_unsupported("Pep C23 recursive union list parameter has an unsupported layout")
+                } else {}
+                for part in ["  if (pep_arg_", int_text(iterableUnionParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableUnionParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableUnionParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    pep_union_", int_text(unionType.node.id), " pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableUnionParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+                  arrayDeclaration = append(arrayDeclaration, part)
+                }
+              } else {}
+              if !iterableRecordParameter.found && !iterableUnionParameter.found {
                 for part in ["  if (pep_arg_", int_text(iterableParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
                 arrayDeclaration = append(arrayDeclaration, part)
                 }

@@ -384,6 +384,42 @@ fn main() -> Int {
             self.assertRegex(generated, r"\.payload\.payload_\d+\.field_0\.length")
 
 
+    def test_recursive_union_list_parameter_iteration_and_match(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn last_leaf(values: List[Tree]) -> Int {
+  var result = 0
+  for item in values {
+    result = match item {
+      Leaf(number) => number
+      Branch(_) => 0
+    }
+  }
+  return result
+}
+fn main() -> Int { return last_leaf([Leaf(42)]) }
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-union-list-loop.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "42\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn("pep_list_union_", generated)
+            self.assertRegex(generated,
+                             r"pep_union_\d+ pep_local_\d+ = pep_arg_\d+\.data\[pep_index_\d+\]")
+            self.assertIn("PEP_RUNTIME_INVALID_LIST", generated)
+            self.assertRegex(generated, r"\.tag == 0")
+            self.assertIn("payload.payload_0.field_0", generated)
+
+
     def test_recursive_union_list_rejects_computed_constructor_payloads(self):
         source_text = """type Chain = End(Int) | Link(List[Chain])
 fn main() -> Int {
