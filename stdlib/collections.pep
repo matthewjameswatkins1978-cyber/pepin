@@ -542,8 +542,13 @@ fn list_bool_last_or(values: List[Bool], fallback: Bool) -> Bool {
 }
 
 fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
-  for item in values { return item }
-  return fallback
+  var first = fallback
+  var found = false
+  for item in values {
+    first = if !found { item } else { first }
+    found = true
+  }
+  return first
 }
 
 fn list_bool_contains(values: List[Bool], needle: Bool) -> Bool {
