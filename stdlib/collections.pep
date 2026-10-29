@@ -308,6 +308,20 @@ fn list_int_min_index_between(values: List[Int], lower: Int, upper: Int) -> Int 
   return minimumIndex
 }
 
+fn list_int_max_index_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var index = 0
+  var maximumIndex = -1
+  var maximum = 0
+  var found = false
+  for item in values {
+    maximumIndex = if lower <= item && item <= upper && (!found || !(item <= maximum)) { index } else { maximumIndex }
+    maximum = if lower <= item && item <= upper && (!found || !(item <= maximum)) { item } else { maximum }
+    found = found || (lower <= item && item <= upper)
+    index = index + 1
+  }
+  return maximumIndex
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
