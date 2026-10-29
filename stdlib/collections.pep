@@ -88,6 +88,14 @@ fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   return total
 }
 
+fn list_int_sum_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var total = 0
+  for item in values {
+    total = if lower <= item && item <= upper { total + item } else { total }
+  }
+  return total
+}
+
 fn list_int_count_at_most(values: List[Int], upper: Int) -> Int {
   var total = 0
   for item in values { total = if item <= upper { total + 1 } else { total } }
