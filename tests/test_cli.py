@@ -1240,6 +1240,26 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "84\n")
 
+    def test_generic_nullary_union_constructor_uses_result_context(self):
+        source = (
+            "type Option[T] = Some(T) | None()\n"
+            "fn empty[T]() -> Option[T] { return None() }\n"
+            "fn unwrap_or[T](value: Option[T], fallback: T) -> T { "
+            "return match value { Some(item) => item None() => fallback } }\n"
+            "let emptyOption: Option[Int] = empty()\n"
+            "say(int_text(unwrap_or(emptyOption, 42)))\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "generic-nullary-context.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            checked_json = json.loads(checked.stdout)
+            self.assertEqual(checked_json["status"], "valid")
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
+
     def test_generic_union_rejects_conflicting_payloads_and_wrong_arity(self):
         cases = [
             ("type Same[T] = Both(T, T)\nlet value = Both(1, \"text\")\n", "PEP_GENERIC_ARGUMENT_MISMATCH"),
