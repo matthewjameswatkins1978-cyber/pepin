@@ -732,6 +732,14 @@ fn list_int_max_outside(values: List[Int], lower: Int, upper: Int, fallback: Int
   return maximum
 }
 
+fn list_int_count_outside(values: List[Int], lower: Int, upper: Int) -> Int {
+  var count = 0
+  for item in values {
+    count = if !(lower <= item && item <= upper) { count + 1 } else { count }
+  }
+  return count
+}
+
 fn list_int_min_or(values: List[Int], fallback: Int) -> Int {
   var found = false
   var minimum = fallback
