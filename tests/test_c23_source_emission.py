@@ -115,9 +115,9 @@ class C23RecordSourceEmissionTests(unittest.TestCase):
             "}\n"
         )
         generated = emit(source.encode("utf-8"))
-        self.assertIn("pep_record_0 payload_1", generated)
-        self.assertIn(".tag = 1, .payload.payload_1 = (pep_record_0)", generated)
-        self.assertIn(".payload.payload_1.pep_field_1", generated)
+        self.assertIn("pep_record_0 field_0; } payload_1", generated)
+        self.assertIn(".tag = 1, .payload.payload_1 = { .field_0 = (pep_record_0)", generated)
+        self.assertIn(".payload.payload_1.field_0.pep_field_1", generated)
         self.assertIn(".tag == 0", generated)
         self.assertIn(".tag == 1", generated)
         self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
@@ -144,9 +144,9 @@ class C23RecordSourceEmissionTests(unittest.TestCase):
             "}\n"
         )
         generated = emit(source.encode("utf-8"))
-        self.assertIn("pep_record_0 payload_0; int64_t payload_1;", generated)
-        self.assertIn(".tag = 0, .payload.payload_0 = (pep_record_0)", generated)
-        self.assertIn(".tag = 1, .payload.payload_1 = 7", generated)
+        self.assertIn("pep_record_0 field_0; } payload_0; struct { int64_t field_0; } payload_1;", generated)
+        self.assertIn(".tag = 0, .payload.payload_0 = { .field_0 = (pep_record_0)", generated)
+        self.assertIn(".tag = 1, .payload.payload_1 = { .field_0 = 7", generated)
 
         (ROOT / "_build").mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
@@ -158,6 +158,36 @@ class C23RecordSourceEmissionTests(unittest.TestCase):
             )
         self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
         self.assertEqual(reference.stdout, "0\n")
+
+    def test_two_payload_union_matches_scalar_and_record_fields(self):
+        source = (
+            "type S { a: Int, b: Int }\n"
+            "type V = E() | I(Int, S)\n"
+
+            "fn main() -> Int {\n"
+            "  let node = I(19, S { a: 3, b: 23 })\n"
+            "  return match node {\n"
+            "    E() => 0\n"
+            "    I(number, span) => span.b\n"
+            "  }\n"
+            "}\n"
+        )
+        generated = emit(source.encode("utf-8"))
+        self.assertIn("int64_t field_0; pep_record_0 field_1; } payload_1;", generated)
+        self.assertIn(".payload.payload_1 = { .field_0 = 19, .field_1 = (pep_record_0)", generated)
+        self.assertIn(".payload.payload_1.field_1.pep_field_1", generated)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            reference_source = pathlib.Path(temp) / "ast-integer-reference.pep"
+            reference_source.write_text(source + "say(int_text(main()))\n", encoding="utf-8", newline="\n")
+            reference = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(reference_source)],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+        self.assertEqual(reference.stdout, "23\n")
+
     def test_bare_identifier_pattern_is_not_nullary_constructor(self):
         source = (
             "type Maybe = None() | Some(Int)\n"
