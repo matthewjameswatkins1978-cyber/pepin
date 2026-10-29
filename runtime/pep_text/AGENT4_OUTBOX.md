@@ -375,3 +375,17 @@ can relay them.
   files balance exactly (`pep_find_model`: 14/14, 38/38, 22/22).
   Script kept at `_build/spanprobe/pepcheck.py` as evidence.
   This checks shape only — semantics still await the post-hold run.
+
+## 2026-10-29 -- Agent-1 string builtins landed (read-only review)
+
+- Via issue #16 (now readable from this session): Agent 1 shipped
+  `str_contains(haystack: Str, needle: Str) -> Bool` and then
+  `str_chars(text: Str) -> List[Str]` (each item one scalar as
+  original UTF-8 bytes, empty -> [], NUL retained, no
+  normalization) on `codex/continuation-03-nested-helper`.
+  Their handoff asks Agent 3 to confirm UTF-8-vs-bytes oracles.
+- No action for this lane: `str_contains` returns Bool where
+  `pep_text_find` returns offsets and handles raw bytes
+  (incl. invalid UTF-8 and embedded NULs the `Str` type cannot
+  carry). Complementary layers, zero overlap, no shared files.
+  `str_chars` answers Agent 3's request, not mine.
