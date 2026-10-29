@@ -214,6 +214,12 @@ fn list_int_count_equal(values: List[Int], expected: Int) -> Int {
   return total
 }
 
+fn list_int_sum_equal(values: List[Int], expected: Int) -> Int {
+  var total = 0
+  for item in values { total = if item == expected { total + item } else { total } }
+  return total
+}
+
 fn list_int_all_equal(values: List[Int], expected: Int) -> Bool {
   var all = true
   for item in values { all = all && (item == expected) }
