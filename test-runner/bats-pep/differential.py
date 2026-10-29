@@ -11,6 +11,12 @@ Spec-validation cases are compared too: exactly one of `equals`/`not_equals` is
 required by the reference, so a spec with both (or neither) must be rejected --
 the framework says INVALID at spec-check time, the Pep oracle returns INVALID.
 
+Condition composition is compared as well: the reference `eval` treats `all`,
+`any` and `not` as Kleene three-valued logic, `all: []` / `any: []` as
+Undetermined rather than vacuously true, and it validates every node before
+evaluating any of them. Those are semantics, not plumbing, so they are measured
+against the real framework rather than asserted.
+
 Usage: python differential.py [--repo <clean repo>] [--tb <terrorbats.exe>]
 Exit 0 when every case agrees, 1 on any disagreement, 2 if the harness cannot run.
 """
@@ -90,6 +96,88 @@ timeout:
   total: 120s
 """
 
+# Composition probes need only a stable attack step; the oracle shape is the
+# variable under test. The attack exits 1, so `equals: 1` fires and `equals: 0`
+# does not, which makes every Kleene case expressible from two leaf conditions.
+SPEC_TEMPLATE = """version: terrorbat/v1
+id: {ident}
+claim:
+  text: Composition differential probe for the Pep-written oracle.
+requires: [process.spawn]
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args: ["-NoProfile", "-Command", "exit 1"]
+oracle:
+{oracle_body}
+evidence:
+  capture: [stdout, stderr]
+timeout:
+  run: 60s
+  total: 120s
+"""
+
+# (id, Rust oracle body, equivalent Pep expression, expected verdict)
+#
+# The Pep expression is evaluated over the SAME leaf judgements the Rust spec
+# makes, so a disagreement is a disagreement about composition semantics and not
+# about whether the two sides were fed different inputs.
+COMPOSITION_CASES = [
+    ("comp-all-empty", "  all: []", "compose_all([])", "INCONCLUSIVE"),
+    ("comp-any-empty", "  any: []", "compose_any([])", "INCONCLUSIVE"),
+    ("comp-all-proven-notobs",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 0",
+     "compose_all([judge(EqualsMode(1), ObservedExit(1)),"
+     " judge(EqualsMode(0), ObservedExit(1))])",
+     "NOT OBSERVED"),
+    ("comp-any-notobs-proven",
+     "  any:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 0\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1",
+     "compose_any([judge(EqualsMode(0), ObservedExit(1)),"
+     " judge(EqualsMode(1), ObservedExit(1))])",
+     "PROVEN"),
+    ("comp-not-proven",
+     "  not:\n    type: exit_code\n    step: run:0\n    equals: 1",
+     "compose_not(judge(EqualsMode(1), ObservedExit(1)))",
+     "NOT OBSERVED"),
+    ("comp-not-notobs",
+     "  not:\n    type: exit_code\n    step: run:0\n    equals: 0",
+     "compose_not(judge(EqualsMode(0), ObservedExit(1)))",
+     "PROVEN"),
+    # One malformed child invalidates the whole tree: the reference validates
+    # every node before evaluating any of them.
+    ("comp-all-invalid-child",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "      not_equals: 0",
+     "compose_all([judge(EqualsMode(1), ObservedExit(1)),"
+     " judge(BothModes(1, 0), ObservedExit(1))])",
+     "INVALID"),
+    # An unparseable child is equally fatal, and equally fatal inside `any`.
+    ("comp-any-unknown-child",
+     "  any:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: nonsense_condition\n      thing: x",
+     "compose_any([judge(EqualsMode(1), ObservedExit(1)),"
+     " judge(BothModes(1, 0), ObservedExit(1))])",
+     "INVALID"),
+    # A step that never executed is Undetermined and survives composition as
+    # Undetermined, never as a falsification.
+    ("comp-all-absent-step",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:9\n      equals: 1",
+     "compose_all([judge(EqualsMode(1), ObservedExit(1)),"
+     ' judge(EqualsMode(1), AbsentExit("step did not execute"))])',
+     "INCONCLUSIVE"),
+]
+
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
     bat = workdir / ("%s.yaml" % ident)
@@ -143,8 +231,16 @@ def pep_verdict(composed, use_equals, equals_value, use_not_equals,
     absent = (not executed) or str(exit_code) == "pep_no_exit_code()"
     observed = ('AbsentExit("no exit code")' if absent
                 else "ObservedExit(%d)" % int(exit_code))
-    source = ORACLE.read_text(encoding="utf-8") + (
-        "\nsay(verdict_label(judge(%s, %s)))\n" % (mode, observed))
+    return pep_expression(composed, "judge(%s, %s)" % (mode, observed))
+
+
+def pep_expression(composed, expr):
+    """Run one Pep expression on top of the oracle library and return its label.
+
+    The label comes from the oracle's own `verdict_label`, so the comparison is
+    against Pep's judgement and not against a Python re-implementation of it.
+    """
+    source = ORACLE.read_text(encoding="utf-8") + "\nsay(verdict_label(%s))\n" % expr
     composed.write_text(source, encoding="utf-8", newline="\n")
     proc = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "run", str(composed)],
                           text=True, capture_output=True, timeout=600)
@@ -214,7 +310,21 @@ def main():
         if receipt:
             print("     rust_receipt=%s" % receipt)
 
-    print("SUMMARY cases=%d mismatches=%d" % (len(CASES) + 3, mismatches))
+        # Composition differential: all / any / not, empty combinators, and the
+        # validate-before-evaluate rule that makes one malformed child fatal.
+        for ident, oracle_body, pep_expr, expected in COMPOSITION_CASES:
+            body = SPEC_TEMPLATE.format(ident=ident, oracle_body=oracle_body)
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(composed, pep_expr)
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
+    total = len(CASES) + 3 + len(COMPOSITION_CASES)
+    print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 
 
