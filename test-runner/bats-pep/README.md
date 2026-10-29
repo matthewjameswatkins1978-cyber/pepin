@@ -90,10 +90,38 @@ expectation is indistinguishable from a wrong implementation until it is checked
    library entry point cannot be exercised by the interpreter today; the self-test
    is therefore top-level calls rather than a `main`.
 
+## Same-input differential against the Rust runtime
+
+`differential.py` judges the *same* inputs twice: once with a real framework Bat
+whose attack step exits with the chosen code, and once with `oracle.pep` under
+Pep's interpreter. Run with `--repo <clean clone>` (default
+`D:\Projects\wt-bats-clean`).
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `equals 1`, exit 1 | PROVEN | PROVEN | PROVEN |
+| `equals 1`, exit 0 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `not_equals 0`, exit 0 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `not_equals 0`, exit 2 | PROVEN | PROVEN | PROVEN |
+| `equals 7`, exit 3 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| both modes set | INVALID | INVALID | INVALID |
+| neither mode set | INVALID | INVALID | INVALID |
+
+`SUMMARY cases=7 mismatches=0`.
+
+One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
+`exit_code` sets both modes; the reference rejects it at **run** time with verdict
+`INVALID` and `status: Invalid` ("oracle not evaluated"). The differential first
+compared the wrong phase and reported a false disagreement. Validating the
+validation-phase assumption is part of the work.
+
+Not yet compared at runtime: the "step produced no exit code" path (reference:
+Undetermined). Forcing it needs a supervised process killed before it exits, which
+is why the Pep side covers it with recorded inputs while the Rust side does not yet.
+
 ## Not claimed
 
 - No process/Git host adapters, no receipts, no `pep bats` CLI, no native C23
   integration. Those are explicitly out of scope for this first kernel.
-- The Rust differential (same inputs through the real framework's oracle) is the
-  next slice; until it exists, this is Pep-native judgement checked against the
-  reference's *documented and read* semantics, not yet against its *runtime*.
+- The differential covers the *expressible* slice. Process/Git host adapters,
+  receipt generation and a `pep bats` CLI remain out of scope for this mission.
