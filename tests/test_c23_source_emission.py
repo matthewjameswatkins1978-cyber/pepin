@@ -101,6 +101,93 @@ class C23RecordSourceEmissionTests(unittest.TestCase):
         self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
         self.assertEqual(reference.stdout, "42\n")
 
+    def test_record_payload_union_passes_helpers_and_matches(self):
+        source = (
+            "type Point { x: Int }\n"
+            "type Maybe = None() | Some(Point)\n"
+            "fn relay(value: Maybe) -> Maybe { return value }\n"
+            "fn main() -> Int {\n"
+            "  let wrapped = relay(Some(Point { x: 23 }))\n"
+            "  return match wrapped {\n"
+            "    None() => 0\n"
+            "    Some(point) => point.x\n"
+            "  }\n"
+            "}\n"
+        )
+        generated = emit(source.encode("utf-8"))
+        self.assertIn("pep_record_0 payload_1", generated)
+        self.assertIn(".tag = 1, .payload.payload_1 = (pep_record_0)", generated)
+        self.assertIn(".payload.payload_1.pep_field_0", generated)
+        self.assertIn(".tag == 0", generated)
+        self.assertIn(".tag == 1", generated)
+        self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            reference_source = pathlib.Path(temp) / "union-record-reference.pep"
+            reference_source.write_text(source + "say(int_text(main()))\n", encoding="utf-8", newline="\n")
+            reference = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(reference_source)],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+        self.assertEqual(reference.stdout, "23\n")
+
+    def test_record_and_scalar_union_variants_are_constructed(self):
+        source = (
+            "type Point { x: Int }\n"
+            "type Mixed = Wrapped(Point) | Number(Int)\n"
+            "fn main() -> Int {\n"
+            "  let recordValue = Wrapped(Point { x: 23 })\n"
+            "  let numberValue = Number(7)\n"
+            "  return 0\n"
+            "}\n"
+        )
+        generated = emit(source.encode("utf-8"))
+        self.assertIn("pep_record_0 payload_0; int64_t payload_1;", generated)
+        self.assertIn(".tag = 0, .payload.payload_0 = (pep_record_0)", generated)
+        self.assertIn(".tag = 1, .payload.payload_1 = 7", generated)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            reference_source = pathlib.Path(temp) / "union-constructors-reference.pep"
+            reference_source.write_text(source + "say(int_text(main()))\n", encoding="utf-8", newline="\n")
+            reference = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(reference_source)],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+            )
+        self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+        self.assertEqual(reference.stdout, "0\n")
+    def test_bare_identifier_pattern_is_not_nullary_constructor(self):
+        source = (
+            "type Maybe = None() | Some(Int)\n"
+            "fn main() -> Int {\n"
+            "  let value = None()\n"
+            "  return match value { None => 7 }\n"
+            "}\n"
+        )
+        with self.assertRaisesRegex(ValueError, "bare identifiers are bindings"):
+            emit(source.encode("utf-8"))
+
+    def test_non_exhaustive_union_match_fails_closed(self):
+        source = (
+            "type Maybe = None() | Some(Int)\n"
+            "fn main() -> Int {\n"
+            "  let value = None()\n"
+            "  return match value { None() => 0 }\n"
+            "}\n"
+        )
+        with self.assertRaisesRegex((RuntimeError, ValueError), "exhaustive|constructor|valid Pep checker report"):
+            emit(source.encode("utf-8"))
+    def test_recursive_union_payload_fails_closed(self):
+        source = "type Chain = End() | Link(Chain)\nfn main() -> Int { return 0 }\n"
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
+            emit(source.encode("utf-8"))
+
+    def test_unsupported_union_payload_type_fails_closed(self):
+        source = "type Maybe = None() | Some(Bool)\nfn main() -> Int { return 0 }\n"
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
+            emit(source.encode("utf-8"))
     def test_nested_record_layout_fails_closed(self):
         source = (
             "type Point { x: Int }\n"
