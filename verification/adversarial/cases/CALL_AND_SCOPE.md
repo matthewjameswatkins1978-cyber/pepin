@@ -12,6 +12,7 @@ interpreter only; static layer — no execution needed).
 | dup-let | two top-level `let x` | `TESTED` — `invalid`, `PEP_DUPLICATE_BINDING` (bindings have their own duplicate code, distinct from functions) |
 | top-return | `return 1` at top level | `TESTED` — `invalid`, `PEP_RETURN_OUTSIDE_FUNCTION` (entry form is statements, but `return` is still function-scoped) |
 | say-int | `say(42)` | `TESTED` — `invalid`, `PEP_TYPE_MISMATCH` (no implicit Int→Str) |
+| say-noarg | `say()` (zero args for a one-arg builtin) | `TESTED` — `invalid`, `PEP_ARGUMENT_COUNT` (builtins share the arity check) |
 | arg-type | `id(true)` for `(Int) -> Int` | `TESTED` — `invalid`, `PEP_TYPE_MISMATCH` at the argument span |
 
 No findings: every malformed call/scope shape is rejected statically

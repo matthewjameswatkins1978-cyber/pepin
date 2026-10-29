@@ -616,6 +616,25 @@ def main():
             else _br[3].get("outcome") == "error")
     results.append(("T7-invoke-rejected", PASS if _ok7 else FAIL,
                     "invoke=%s" % _br[3].get("outcome")))
+    check("C-say-noarg", "say()\nfn main() -> Int { return 0 }",
+          "invalid", ("PEP_ARGUMENT_COUNT",))
+    _hs = sess([{"schemaVersion": 3, "op": "open", "name": "h",
+                  "source": "fn f(n: Int) -> Int { return n + ?h }\nfn main() -> Int { return 0 }\n"}])[0]
+    _hd2, _hr2 = _hs["document"], _hs["revision"]
+    _HB2 = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 1,
+                       "tool": nm, "document": _hd2, "revision": _hr2}
+    _hr = sess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": "fn f(n: Int) -> Int { return n + ?h }\nfn main() -> Int { return 0 }\n"},
+        dict(_HB2("hf"), op="tool_register", function="f"),
+        dict(_HB2("hf"), op="tool_validate",
+             testVectors=[{"arguments": [{"type": "Int", "value": "21"}],
+                           "expect": {"type": "Int", "value": "22"}}]),
+    ])
+    _he = _hr[2]
+    ok = _he.get("outcome") == "rejected"
+    results.append(("T-hole-src", PASS if ok else FAIL,
+                    "validate=%s" % _he.get("outcome")))
     # Session edges (set 11)
     _om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
     ok = _om.get("outcome") == "ok" and "metrics" in _om

@@ -34,10 +34,10 @@ green by assumption.
 Run from the agent3 worktree root:
 
 ```powershell
-python verification/adversarial/replay.py   # exit 0 iff 143/143 PASS
+python verification/adversarial/replay.py   # exit 0 iff 145/145 PASS
 ```
 
-Verified 143/143 PASS at base `805062b` on 2026-10-29. Only `pep.ps1
+Verified 145/145 PASS at base `805062b` on 2026-10-29. Only `pep.ps1
 check/run/query/session` (OCaml seed, in-process) plus temp files — no
 C toolchain, no binaries, hold-safe. Pin-specific suites
 (`str_contains` @ A1 tip, A2 emit re-runs) are NOT replayed here;
