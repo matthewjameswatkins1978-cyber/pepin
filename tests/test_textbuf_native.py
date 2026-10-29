@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10), length-tagged fragment join (slice 12).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep

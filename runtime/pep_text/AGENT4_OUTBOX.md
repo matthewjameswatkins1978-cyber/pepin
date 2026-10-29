@@ -218,3 +218,22 @@ can relay them.
   -Werror` with zero output artifacts (exe count unchanged).
   Everything new is implemented-but-untested: the 19-test suite must
   be re-run green after the hold before any behavior-dependent commit.
+
+## 2026-10-29 -- slice 12: join_n probe + third hold review
+
+- New: `fragn_probe.c` joining explicit `[OFF, LEN)` file slices in
+  one `pep_textbuf_join_n` call (NUL-preserving; argv cannot carry
+  NULs so slices address the file directly). Out-of-range slices
+  fail closed before anything is written; `malloc(0)` avoided;
+  ordered cleanup on every failure path.
+- `REVIEW_SLICE12.md` holds the slices 10–12 cumulative review; no
+  independent reviewer available in-session.
+- Closes two audit-uniformity items: the `msvc_flags()` helper is in
+  and the module docstring is current through slice 12 (the audit
+  note claiming "only slice 1" was stale — it was already current
+  through slice 10; corrected here). The utf8/demo inline builds
+  stay as-is deliberately (no fopen, no define needed).
+- Verification within hold limits: `py_compile` clean (test edits),
+  `clang -fsyntax-only` strict-clean on the new probe, zero output
+  artifacts. Implemented-but-untested, like all slice-11/12 code:
+  post-hold suite re-run plus new fragn vectors remain required.

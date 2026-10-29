@@ -11,7 +11,7 @@ here invents language semantics.
 - `pep_textbuf.{h,c}` — growable byte builder: checked doubling growth,
   `append_bytes/cstr/i64/u64`, fragment join (`join` for C strings,
   `join_n` length-tagged, see INTEGRATION.md for the NUL contract),
-  file read/write, sticky-error cleanup.
+  file read/write, sticky-error cleanup, length-tagged join.
 - `pep_textbuf_core.pep` — saturating-double step + self-test `main`,
   lowered through the Pep-written C23 emitter (282 bytes; the v2
   tool-host front end fits only ~450 bytes per invocation).
@@ -30,11 +30,11 @@ here invents language semantics.
 - `pep_cstr.{h,c}` — C string-literal emission (unconditional `\?`,
   fixed 3-digit octal, no trigraphs or octal-merge hazards).
 - `*_probe.c`, `demo_textbuf.c`, `utf8check.c` — test drivers and the
-  first real tools on the library (probes print deterministic output;
+  first real tools on the library (`frag_probe` joins argv fragments, `fragn_probe` joins explicit file slices NUL-safely; probes print deterministic output;
   `utf8check FILE...` validates UTF-8).
 - `INTEGRATION.md` — smallest Agent-2 handoff for the fragment join,
   including the NUL-fragment contract and the differential gate.
-- `REVIEW_SLICE{3,6,9}.md` — cumulative review notes with openly
+- `REVIEW_SLICE{3,6,9,12}.md` — cumulative review notes with openly
   logged gaps. `AGENT4_OUTBOX.md` — append-only coordination log.
 - `SECURITY_2026-10-29_DEFENDER.md` — incident record (hold active).
 
