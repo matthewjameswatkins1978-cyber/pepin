@@ -1097,7 +1097,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             if iterableBooleanParameter.found { iterableBooleanParameter } else { iterableRecordParameter }
           }
           if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || count_children(nodes, statement.id, "body") == 0 {
-            return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty assignment body")
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty supported body")
           } else {}
           if iterableList.found {
             let recordLiteral = pep_c23_record_list_declaration(nodes, iterableList.node)

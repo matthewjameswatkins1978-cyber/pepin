@@ -1380,7 +1380,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     c_source = generated_c.read_text(encoding="utf-8")
                     self.assertGreaterEqual(c_source.count("!!("), 2)
 
-    def test_loop_conditionals_can_return_early(self):
+    def test_loop_bodies_can_return_early(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         cases = (
@@ -1409,6 +1409,12 @@ class PepC23CollectionLoopTests(unittest.TestCase):
              "  return -1\n"
              "}\n",
              "6\n"),
+            ("for-in-direct-return",
+             "fn main() -> Int {\n"
+             "  for item in [2, 3, 8] { return item }\n"
+             "  return -1\n"
+             "}\n",
+             "2\n"),
         )
         for label, source_text, expected in cases:
             with self.subTest(loop=label):
