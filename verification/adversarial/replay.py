@@ -433,6 +433,108 @@ def main():
     ok = ((hu.get("error") or {}).get("code") == "PEP_HOLE_NOT_FOUND")
     results.append(("H5-unknown", PASS if ok else FAIL,
                     "error=%s" % (hu.get("error") or {}).get("code")))
+    # Tool registry trust boundary (set 10)
+    tsrc = ("fn double(n: Int) -> Int { return n + n }\n"
+            "fn main() -> Int { return 0 }\n")
+    ssrc = ("fn loud(s: Str) -> Str { say(s) return s }\n"
+            "fn main() -> Int { return 0 }\n")
+    def tsess(reqs):
+        r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                  inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(ln) for ln in (r.stdout or "").splitlines()
+                if ln.strip()]
+    def IV(v):
+        return {"type": "Int", "value": str(v)}
+    to = tsess([{"schemaVersion": 3, "op": "open", "name": "t",
+                  "source": tsrc}])
+    tdoc, trev = to[0]["document"], to[0]["revision"]
+    TB = {"schemaVersion": 3, "toolProtocolVersion": 1, "tool": "dbl",
+          "document": tdoc, "revision": trev}
+    tr = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": tsrc},
+        dict(TB, op="tool_register", function="double",
+             description="double it"),
+        dict(TB, op="tool_validate",
+             testVectors=[{"arguments": [IV(21)],
+                           "expect": IV(42)}]),
+        dict(TB, op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dbl",
+         "arguments": [IV(21)]},
+    ])[1:]
+    ok = (tr[0].get("status") == "Registered"
+          and tr[0].get("callable") is False
+          and tr[1].get("status") == "Validated"
+          and tr[2].get("status") == "Active"
+          and tr[2].get("callable") is True
+          and tr[3].get("result") == IV(42))
+    results.append(("T1-lifecycle", PASS if ok else FAIL,
+                    "statuses=%s" % [x.get("status") for x in tr[:3]]))
+    tf = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": tsrc},
+        dict(TB, op="tool_register", function="double"),
+        dict(TB, op="tool_validate",
+             testVectors=[{"arguments": [IV(21)],
+                           "expect": IV(43)}]),
+    ])[2]
+    ok = tf.get("outcome") == "rejected"
+    results.append(("T2-badvector", PASS if ok else FAIL,
+                    "outcome=%s" % tf.get("outcome")))
+    tn = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": tsrc},
+        dict(TB, op="tool_register", function="double"),
+        dict(TB, op="tool_validate",
+             testVectors=[{"arguments": [IV(21)],
+                           "expect": IV(42)}]),
+        dict(TB, op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dbl",
+         "arguments": [{"type": "Str", "value": "x"}]},
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dbl",
+         "arguments": [IV(1), IV(2)]},
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "nosuch",
+         "arguments": [IV(1)]},
+    ])[4:]
+    want = ("PEP_TOOL_ARGUMENT_TYPE", "PEP_TOOL_ARGUMENT_COUNT",
+            "PEP_TOOL_NOT_ACTIVE")
+    ok = tuple((x.get("error") or {}).get("code") for x in tn) == want
+    results.append(("T3-invoke-errs", PASS if ok else FAIL,
+                    "codes=%s" % (want,) if ok else "codes=%s" % (tuple(
+                        (x.get("error") or {}).get("code") for x in tn),)))
+    ta = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": tsrc},
+        dict(TB, op="tool_register", function="double"),
+        dict(TB, op="tool_activate"),
+    ])[2]
+    ok = ((ta.get("error") or {}).get("code")
+          == "PEP_TOOL_NOT_VALIDATED")
+    results.append(("T4-no-validate", PASS if ok else FAIL,
+                    "error=%s" % (ta.get("error") or {}).get("code")))
+    so = tsess([{"schemaVersion": 3, "op": "open", "name": "s",
+                  "source": ssrc}])
+    sdoc, srev = so[0]["document"], so[0]["revision"]
+    SB = {"schemaVersion": 3, "toolProtocolVersion": 1,
+          "tool": "loud", "document": sdoc, "revision": srev}
+    ts = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "s",
+         "source": ssrc},
+        dict(SB, op="tool_register", function="loud"),
+        dict(SB, op="tool_validate",
+             testVectors=[{"arguments": [{"type": "Str",
+                                            "value": "hi"}],
+                           "expect": {"type": "Str",
+                                      "value": "hi"}}]),
+    ])[1:]
+    ok = (ts[0].get("status") == "Registered"
+          and ts[1].get("status") == "Rejected")
+    results.append(("T5-say-blocked", PASS if ok else FAIL,
+                    "validate=%s" % ts[1].get("status")))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
