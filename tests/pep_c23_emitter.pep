@@ -298,27 +298,33 @@ fn pep_c23_union_of_variant(nodes: List[FlatAstNode], variant: FlatAstNode) -> P
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_union_payload_type_supported(nodes: List[FlatAstNode], payload: FlatAstNode) -> Bool {
+  if payload.kind == "type_scalar" {
+    return payload.text == "Int"
+  } else {}
+  if payload.kind == "type_named" {
+    return pep_c23_record_declaration(nodes, payload.text).found
+  } else {}
+  return false
+}
 fn pep_c23_union_supported_layout(nodes: List[FlatAstNode], declaration: FlatAstNode) -> Bool {
   var variantCount = 0
-  var hasNullary = false
-  var hasIntPayload = false
+  var hasPayload = false
   for variant in nodes {
     if variant.parentId == declaration.id && variant.role == "variant" &&
        variant.kind == "variant_declaration" {
       variantCount = variantCount + 1
       let payload = pep_c23_child(nodes, variant.id, "field_type", 0)
       let extraPayload = pep_c23_child(nodes, variant.id, "field_type", 1)
-      if !payload.found {
-        hasNullary = true
-      } else {
-        if payload.node.kind == "type_scalar" && payload.node.text == "Int" &&
+      if payload.found {
+        if pep_c23_union_payload_type_supported(nodes, payload.node) &&
            !extraPayload.found {
-          hasIntPayload = true
+          hasPayload = true
         } else { return false }
-      }
+      } else {}
     } else {}
   }
-  return variantCount == 2 && hasNullary && hasIntPayload
+  return !(variantCount <= 1) && hasPayload
 }
 fn pep_c23_record_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23NodeLookup {
   if node.kind == "list" {
@@ -626,20 +632,22 @@ fn pep_c23_union_constructor(nodes: List[FlatAstNode], function: FlatAstNode,
   node: FlatAstNode, variant: FlatAstNode) -> PepC23Emission {
   let declaration = pep_c23_union_of_variant(nodes, variant)
   if !declaration.found || !pep_c23_union_supported_layout(nodes, declaration.node) {
-    return pep_c23_unsupported("Pep C23 tagged unions require exactly a nullary plus one Int payload variant")
+    return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
   } else {}
   let payloadType = pep_c23_child(nodes, variant.id, "field_type", 0)
   let argument = pep_c23_child(nodes, node.id, "argument", 0)
   let extraArgument = pep_c23_child(nodes, node.id, "argument", 1)
   var parts: List[Str] = ["(pep_union_", int_text(declaration.node.id), "){ .tag = ", int_text(variant.childIndex)]
   if payloadType.found {
-    if payloadType.node.kind != "type_scalar" || payloadType.node.text != "Int" ||
+    if !pep_c23_union_payload_type_supported(nodes, payloadType.node) ||
        !argument.found || extraArgument.found {
-      return pep_c23_unsupported("Pep C23 Int-payload constructor requires exactly one Int argument")
+      return pep_c23_unsupported("Pep C23 payload constructor requires exactly one supported argument")
     } else {}
     let value = pep_c23_expression(nodes, function, argument.node)
     if value.status != "emitted" { return value } else {}
-    parts = append(parts, ", .payload = ")
+    parts = append(parts, ", .payload.payload_")
+    parts = append(parts, int_text(variant.childIndex))
+    parts = append(parts, " = ")
     for part in value.sourceParts { parts = append(parts, part) }
   } else {
     if argument.found || extraArgument.found {
@@ -655,25 +663,24 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
   if !subject.found || subject.node.kind != "name" {
     return pep_c23_unsupported("Pep C23 tagged-union match currently requires a named subject")
   } else {}
-  for candidate in nodes {
-    if candidate.parentId == node.id && candidate.role == "arm" && candidate.kind == "match_arm" {
-      let pattern = pep_c23_child(nodes, candidate.id, "pattern", 0)
-      if !pattern.found || pattern.node.kind != "constructor_pattern" {
-        return pep_c23_unsupported("Pep C23 match bare identifiers are bindings, not nullary constructors")
-      } else {}
-    } else {}
-  }
-  if count_children(nodes, node.id, "arm") != 2 {
-    return pep_c23_unsupported("Pep C23 tagged-union match currently requires exactly two arms")
-  } else {}
   let declaration = pep_c23_union_value_type(nodes, function, subject.node)
   if !declaration.found || !pep_c23_union_supported_layout(nodes, declaration.node) {
-    return pep_c23_unsupported("Pep C23 tagged-union match requires the supported nullary plus Int payload layout")
+    return pep_c23_unsupported("Pep C23 tagged-union match requires a supported layout")
+  } else {}
+  let variantCount = count_children(nodes, declaration.node.id, "variant")
+  var armCount = 0
+  for candidate in nodes {
+    if candidate.parentId == node.id && candidate.role == "arm" && candidate.kind == "match_arm" {
+      armCount = armCount + 1
+    } else {}
+  }
+  if armCount != variantCount {
+    return pep_c23_unsupported("Pep C23 tagged-union match must cover every constructor exactly once")
   } else {}
   let loweredSubject = pep_c23_expression(nodes, function, subject.node)
   if loweredSubject.status != "emitted" { return loweredSubject } else {}
   var parts: List[Str] = ["("]
-  var remaining = 2
+  var remaining = variantCount
   var matchedCount = 0
   for variant in nodes {
     if variant.parentId == declaration.node.id && variant.role == "variant" &&
@@ -702,15 +709,39 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
       if payloadType.found {
         if !patternArgument.found || extraPatternArgument.found ||
            patternArgument.node.kind != "binding_pattern" {
-          return pep_c23_unsupported("Pep C23 Int payload patterns require one binding identifier")
+          return pep_c23_unsupported("Pep C23 payload patterns require one binding identifier")
         } else {}
         if result.node.kind == "name" && result.node.text == patternArgument.node.text {
           for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }
-          resultParts = append(resultParts, ".payload")
+          resultParts = append(resultParts, ".payload.payload_")
+          resultParts = append(resultParts, int_text(variant.childIndex))
         } else {
-          let loweredResult = pep_c23_expression(nodes, function, result.node)
-          if loweredResult.status != "emitted" { return loweredResult } else {}
-          resultParts = loweredResult.sourceParts
+          if result.node.kind == "field_access" && payloadType.node.kind == "type_named" {
+            let base = pep_c23_child(nodes, result.node.id, "value", 0)
+            if base.found && base.node.kind == "name" &&
+               base.node.text == patternArgument.node.text {
+              let record = pep_c23_record_declaration(nodes, payloadType.node.text)
+              let field = if record.found {
+                pep_c23_record_field_declaration(nodes, record.node, result.node.text)
+              } else { PepC23NodeLookup { found: false, node: empty_node() } }
+              if !record.found || !field.found {
+                return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
+              } else {}
+              for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }
+              resultParts = append(resultParts, ".payload.payload_")
+              resultParts = append(resultParts, int_text(variant.childIndex))
+              resultParts = append(resultParts, ".pep_field_")
+              resultParts = append(resultParts, int_text(field.node.childIndex))
+            } else {
+              let loweredResult = pep_c23_expression(nodes, function, result.node)
+              if loweredResult.status != "emitted" { return loweredResult } else {}
+              resultParts = loweredResult.sourceParts
+            }
+          } else {
+            let loweredResult = pep_c23_expression(nodes, function, result.node)
+            if loweredResult.status != "emitted" { return loweredResult } else {}
+            resultParts = loweredResult.sourceParts
+          }
         }
       } else {
         if patternArgument.found || extraPatternArgument.found {
@@ -734,7 +765,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
       matchedCount = matchedCount + 1
     } else {}
   }
-  if matchedCount != 2 { return pep_c23_unsupported("Pep C23 tagged-union match does not cover its declared constructors") } else {}
+  if matchedCount != variantCount { return pep_c23_unsupported("Pep C23 tagged-union match does not cover its declared constructors") } else {}
   parts = append(parts, ")")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
@@ -1524,11 +1555,30 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   for declaration in parsed.nodes {
     if declaration.parentId == -1 && declaration.kind == "union_declaration" {
       if !pep_c23_union_supported_layout(parsed.nodes, declaration) {
-        return pep_c23_unsupported("Pep C23 tagged unions require exactly a nullary plus one Int payload variant")
+        return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
       } else {}
-      for part in ["typedef struct { uint32_t tag; int64_t payload; } pep_union_", int_text(declaration.id), ";\\n"] {
-        reversed = prepend(reversed, part)
+      var parts: List[Str] = ["typedef struct { uint32_t tag; union { "]
+      var payloadCount = 0
+      for variant in parsed.nodes {
+        if variant.parentId == declaration.id && variant.role == "variant" &&
+           variant.kind == "variant_declaration" {
+          let payload = pep_c23_child(parsed.nodes, variant.id, "field_type", 0)
+          if payload.found {
+            if payloadCount != 0 { parts = append(parts, " ") } else {}
+            for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, payload.node) {
+              parts = append(parts, typePart)
+            }
+            parts = append(parts, " payload_")
+            parts = append(parts, int_text(variant.childIndex))
+            parts = append(parts, ";")
+            payloadCount = payloadCount + 1
+          } else {}
+        } else {}
       }
+      parts = append(parts, " } payload; } pep_union_")
+      parts = append(parts, int_text(declaration.id))
+      parts = append(parts, ";\\n")
+      for part in parts { reversed = prepend(reversed, part) }
     } else {}
   }
   for node in parsed.nodes {
@@ -1627,7 +1677,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               } else {
                 if localUnion.found {
                   if !pep_c23_union_supported_layout(parsed.nodes, localUnion.node) {
-                    return pep_c23_unsupported("Pep C23 tagged unions require exactly a nullary plus one Int payload variant")
+                    return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
                   } else {}
                   for part in ["  ", "pep_union_", int_text(localUnion.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
                 } else {

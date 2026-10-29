@@ -158,31 +158,73 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             generated = emit(source.read_bytes())
             self.assertRegex(
                 generated,
-                r"typedef struct \{ uint32_t tag; int64_t payload; \} pep_union_\d+;")
+                r"typedef struct \{ uint32_t tag; union \{ int64_t payload_1; \} payload; \} pep_union_\d+;")
             self.assertRegex(
                 generated,
                 r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
             self.assertRegex(generated, r"\.tag = 0")
             self.assertRegex(
                 generated,
-                r"\.tag = 1, \.payload = 42")
+                r"\.tag = 1, \.payload\.payload_1 = 42")
             self.assertRegex(generated, r"\.tag == 0")
             self.assertRegex(generated, r"\.tag == 1")
             self.assertRegex(generated, r"\.payload")
+            self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
+
+    def test_record_payload_union_variants_relay_and_match_fields(self):
+        source_text = """type AstSpan { startByte: Int }
+type AstValue = Number(Int) | Spanned(AstSpan)
+fn relay(value: AstValue) -> AstValue { return value }
+fn main() -> Int {
+  let located = relay(Spanned(AstSpan { startByte: 31 }))
+  let counted = Number(11)
+  return match located {
+    Number(number) => number
+    Spanned(span) => span.startByte
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "ast-value.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "31\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(
+                generated,
+                r"typedef struct \{ uint32_t tag; union \{ int64_t payload_0; "
+                r"pep_record_\d+ payload_1; \} payload; \} pep_union_\d+;")
+            self.assertRegex(
+                generated,
+                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
+            self.assertRegex(generated, r"\.tag = 0, \.payload\.payload_0 = 11")
+            self.assertRegex(
+                generated,
+                r"\.tag = 1, \.payload\.payload_1 = \(pep_record_\d+\)")
+            self.assertRegex(generated, r"\.tag == 1")
+            self.assertIn(".payload.payload_1.pep_field_0", generated)
             self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
 
     def test_tagged_union_rejects_non_int_payload_layout(self):
         source_text = (
             "type MaybeText = None() | Some(Str)\n"
             "fn main() -> Int { return 0 }\n")
-        with self.assertRaisesRegex(ValueError, "nullary plus one Int payload"):
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
 
     def test_recursive_union_layout_fails_closed(self):
         source_text = (
             "type Chain = End() | Link(Chain)\n"
             "fn main() -> Int { return 0 }\n")
-        with self.assertRaisesRegex(ValueError, "nullary plus one Int payload"):
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
 
     def test_bare_identifier_pattern_is_not_a_nullary_constructor(self):
@@ -201,7 +243,7 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             self.assertEqual(interpreted.returncode, 0,
                              interpreted.stdout + interpreted.stderr)
             self.assertEqual(interpreted.stdout, "7\n")
-            with self.assertRaisesRegex(ValueError, "bare identifiers are bindings"):
+            with self.assertRaisesRegex(ValueError, "cover every constructor"):
                 emit(source.read_bytes())
 
 if __name__ == "__main__":
