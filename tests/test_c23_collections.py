@@ -1343,6 +1343,40 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
             self.assertIn("Pep C23 unsupported:", rejected.stderr)
 
+    def test_while_conditionals_update_loop_state(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var index = 0\n"
+            "  var total = 0\n"
+            "  while index != 4 {\n"
+            "    if index == 2 { total = total + 10 } else { total = total + index }\n"
+            "    index = index + 1\n"
+            "  }\n"
+            "  return total\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "conditional-while.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "14\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    generated_c = folder / f"conditional-while-{compiler.stem}.c"
+                    result = self.invoke("run-c23", source, "--compiler", compiler,
+                                         "--emit-c", generated_c)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+                    c_source = generated_c.read_text(encoding="utf-8")
+                    self.assertGreaterEqual(c_source.count("!!("), 2)
+
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")

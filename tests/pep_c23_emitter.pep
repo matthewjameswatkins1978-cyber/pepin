@@ -951,39 +951,45 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   parts = append(parts, ")) {\n")
   for statement in nodes {
     if statement.parentId == loop.id && statement.role == "body" {
-      if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies currently require assignments to mutable locals") } else {}
-      let value = pep_c23_child(nodes, statement.id, "value", 0)
-      if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
-      let loweredValue = pep_c23_expression(nodes, function, value.node)
-      if loweredValue.status != "emitted" { return loweredValue } else {}
-      var targetId = -1
-      var targetFound = false
-      for local in nodes {
-        if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
-          targetId = local.id
-          targetFound = true
+      if statement.kind == "if_statement" {
+        let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0)
+        if loweredConditional.status != "emitted" { return loweredConditional } else {}
+        for part in loweredConditional.sourceParts { parts = append(parts, part) }
+      } else {
+        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support assignments and assignment-only conditionals") } else {}
+        let value = pep_c23_child(nodes, statement.id, "value", 0)
+        if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
+        let loweredValue = pep_c23_expression(nodes, function, value.node)
+        if loweredValue.status != "emitted" { return loweredValue } else {}
+        var targetId = -1
+        var targetFound = false
+        for local in nodes {
+          if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
+            targetId = local.id
+            targetFound = true
+          } else {}
+        }
+        if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
+        let targetList = pep_c23_mutable_list_binding(nodes, function, statement.text)
+        if targetList.found {
+          let targetKind = pep_c23_mutable_list_element_kind(nodes, targetList.node)
+          var sourceKind = ""
+          if value.node.kind == "name" {
+            let sourceList = pep_c23_mutable_list_binding(nodes, function, value.node.text)
+            let sourceIntParameter = pep_c23_int_list_parameter(nodes, function, value.node.text)
+            let sourceBoolParameter = pep_c23_bool_list_parameter(nodes, function, value.node.text)
+            if sourceList.found { sourceKind = pep_c23_mutable_list_element_kind(nodes, sourceList.node) } else {}
+            if sourceIntParameter.found { sourceKind = "integer" } else {}
+            if sourceBoolParameter.found { sourceKind = "boolean" } else {}
+          } else {}
+          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean") {
+            return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
+          } else {}
         } else {}
+        for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
+        for part in loweredValue.sourceParts { parts = append(parts, part) }
+        parts = append(parts, ";\n")
       }
-      if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
-      let targetList = pep_c23_mutable_list_binding(nodes, function, statement.text)
-      if targetList.found {
-        let targetKind = pep_c23_mutable_list_element_kind(nodes, targetList.node)
-        var sourceKind = ""
-        if value.node.kind == "name" {
-          let sourceList = pep_c23_mutable_list_binding(nodes, function, value.node.text)
-          let sourceIntParameter = pep_c23_int_list_parameter(nodes, function, value.node.text)
-          let sourceBoolParameter = pep_c23_bool_list_parameter(nodes, function, value.node.text)
-          if sourceList.found { sourceKind = pep_c23_mutable_list_element_kind(nodes, sourceList.node) } else {}
-          if sourceIntParameter.found { sourceKind = "integer" } else {}
-          if sourceBoolParameter.found { sourceKind = "boolean" } else {}
-        } else {}
-        if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean") {
-          return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
-        } else {}
-      } else {}
-      for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
-      for part in loweredValue.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ";\n")
     } else {}
   }
   parts = append(parts, "  }\n")
