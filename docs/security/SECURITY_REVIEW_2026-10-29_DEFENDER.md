@@ -625,3 +625,15 @@ branch under owner instruction: `runtime/pep_text/README.md:48` and the
 verification-state blocks in `runtime/pep_text/README.md` and
 `runtime/pep_arena/README.md`. The lane owner should confirm that wording when
 merging; no source or test file was touched.
+**Owner decision, 2026-10-29.** The native lane is cleared as recommended and
+**no Defender exclusion was added**; the deferral is deliberate rather than
+pending. Qualifying trigger for revisiting: a Defender detection on a **Pepin
+build artefact during normal lane work** — explicitly *not* the clang
+empty-literal runner deliberately executed in §16, which is expected to flag
+and is excluded from the trigger by design.
+
+If that trigger occurs, the agreed fallback is a scoped exclusion on
+`D:\Projects\pepin\_build` only — build artefacts, never source — recorded here
+with its removal condition, because an exclusion trades detection for quiet
+precisely where the native lane does its work. The standing preference order is:
+measure first, submit the false positive to Microsoft second, exclude last.
