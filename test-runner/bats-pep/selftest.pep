@@ -261,3 +261,51 @@ show(judge_path_changed("nothing.txt", ChangeStatusRecorded(sample_changes())))
 show(judge_path_unchanged("nothing.txt", ChangeStatusRecorded(sample_changes())))
 show(judge_path_unchanged("tracked.txt", ChangeStatusRecorded(sample_changes())))
 show(judge_path_changed("anything.txt", ChangeStatusMissing()))
+
+// --- Source-selector validation (the decidable half of text_contains) ---
+//
+// 74 src-path-only        path, readable file              -> INCONCLUSIVE
+// 75 src-step-only        step, default stream             -> INCONCLUSIVE
+// 76 src-step-stderr      step + stream stderr             -> INCONCLUSIVE
+// 77 src-none             no source at all                 -> INVALID
+// 78 src-two-sources      path + evidence                  -> INVALID
+// 79 src-stream-no-step   path + stream                    -> INVALID
+// 80 src-bad-stream       step + stream "bogus"            -> INVALID
+// 81 src-bad-phase        step phase "bogus"               -> INVALID
+//
+// Cases 74-76 are valid specifications, and Pep answers INCONCLUSIVE for them rather
+// than guessing a verdict: the byte search needs str_bytes(Str) -> SourceBytes. Cases
+// 77-81 are judged exactly as the reference judges them, because they are
+// specification errors and validation needs no string bytes at all.
+fn sel_path_only() -> SourceSelector {
+  return SourceSelector { path: FieldPresent("README.md"), evidence: FieldAbsent(), step: NoStepSource(), stream: FieldAbsent() }
+}
+fn sel_step_only() -> SourceSelector {
+  return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: StepAt("run", 0), stream: FieldAbsent() }
+}
+fn sel_step_stderr() -> SourceSelector {
+  return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: StepAt("run", 0), stream: FieldPresent("stderr") }
+}
+fn sel_none() -> SourceSelector {
+  return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: NoStepSource(), stream: FieldAbsent() }
+}
+fn sel_two_sources() -> SourceSelector {
+  return SourceSelector { path: FieldPresent("README.md"), evidence: FieldPresent("ev"), step: NoStepSource(), stream: FieldAbsent() }
+}
+fn sel_stream_no_step() -> SourceSelector {
+  return SourceSelector { path: FieldPresent("README.md"), evidence: FieldAbsent(), step: NoStepSource(), stream: FieldPresent("stdout") }
+}
+fn sel_bad_stream() -> SourceSelector {
+  return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: StepAt("run", 0), stream: FieldPresent("bogus") }
+}
+fn sel_bad_phase() -> SourceSelector {
+  return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: StepAt("bogus", 0), stream: FieldAbsent() }
+}
+show(judge_source_only(sel_path_only()))
+show(judge_source_only(sel_step_only()))
+show(judge_source_only(sel_step_stderr()))
+show(judge_source_only(sel_none()))
+show(judge_source_only(sel_two_sources()))
+show(judge_source_only(sel_stream_no_step()))
+show(judge_source_only(sel_bad_stream()))
+show(judge_source_only(sel_bad_phase()))

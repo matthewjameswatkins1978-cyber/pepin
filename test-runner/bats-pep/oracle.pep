@@ -864,3 +864,132 @@ fn evaluate_evidence_any(children: List[EvidenceExpr], evidence: RunEvidence) ->
   }
   return Evaluation { result: result, trail: trail }
 }
+
+// ---------------------------------------------------------------------------
+// Source-selector validation: the decidable half of text_contains
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//
+//   DataSourceFlat::resolve()  — exactly one of `path`, `evidence`, or `step`
+//                                (+ optional `stream`, allowed only with `step`)
+//   validate_source()          — for a step source: parse_step_ref, then require
+//                                stream ∈ {stdout, stderr}
+//
+// `text_contains`, `text_matches` and `json_value_equals` all call `validate_source`
+// before reading a single byte, so a malformed source is a *specification* problem
+// and is judged here exactly as the reference judges it. Measured against the
+// framework:
+//
+//   path + evidence          -> INVALID
+//   path + step              -> INVALID
+//   path + stream            -> INVALID
+//   no source at all         -> INVALID
+//   step + stream: bogus     -> INVALID
+//   step + stream: stderr    -> accepted
+//   path, readable           -> PROVEN / NOT OBSERVED (the search itself)
+//   path, present but unreadable -> INCONCLUSIVE
+//
+// That last row is the reason this section exists: a *valid* source whose bytes
+// cannot be read is Undetermined, not Invalid, so validation and reading are
+// genuinely different phases.
+//
+// The step reference arrives already split into phase and index, because Pep cannot
+// slice a string. Everything after the split — phase name, stream name — is judged
+// here. The byte search itself is the one branch Pep cannot take yet, and it says so
+// rather than guessing.
+
+// A spec field that may be present or absent.
+type SourceField = FieldAbsent() | FieldPresent(Str)
+
+// A step source, already split by the driver: phase name plus index.
+type StepSource = NoStepSource() | StepAt(Str, Int)
+
+// The flat source selector of a spec.
+type SourceSelector {
+  path: SourceField,
+  evidence: SourceField,
+  step: StepSource,
+  stream: SourceField
+}
+
+type SourceValidation = SourceShapeValid() | SourceRejected(Str)
+
+fn field_present(field: SourceField) -> Bool {
+  return match field {
+    FieldAbsent() => false
+    FieldPresent(value) => true
+  }
+}
+
+fn has_step_source(step: StepSource) -> Bool {
+  return match step {
+    NoStepSource() => false
+    StepAt(phase, index) => true
+  }
+}
+
+fn step_phase(step: StepSource) -> Str {
+  return match step {
+    NoStepSource() => ""
+    StepAt(phase, index) => phase
+  }
+}
+
+fn source_shape_count(selector: SourceSelector) -> Int {
+  var count = 0
+  if field_present(selector.path) { count = count + 1 } else { }
+  if field_present(selector.evidence) { count = count + 1 } else { }
+  if has_step_source(selector.step) { count = count + 1 } else { }
+  return count
+}
+
+fn stream_allowed(selector: SourceSelector) -> Bool {
+  return match selector.stream {
+    FieldAbsent() => true
+    FieldPresent(value) => if value == "stdout" {
+      true
+    } else {
+      value == "stderr"
+    }
+  }
+}
+
+// The reference's order: resolve the shape, then validate the step reference, then the
+// stream. A malformed source is Rejected with the reference's own wording.
+fn validate_source(selector: SourceSelector) -> SourceValidation {
+  if source_shape_count(selector) == 1 {
+  } else {
+    return SourceRejected("condition source needs exactly one of path, evidence, or step")
+  }
+  if field_present(selector.stream) {
+    if has_step_source(selector.step) {
+    } else {
+      return SourceRejected("condition source needs exactly one of path, evidence, or step")
+    }
+  } else {
+  }
+  if has_step_source(selector.step) {
+    if is_known_phase(step_phase(selector.step)) {
+    } else {
+      return SourceRejected("bad step reference: unknown phase")
+    }
+    if stream_allowed(selector) {
+    } else {
+      return SourceRejected("stream must be `stdout` or `stderr`")
+    }
+  } else {
+  }
+  return SourceShapeValid()
+}
+
+// What Pep can decide about a `text_contains`-shaped condition today. A malformed
+// source gets the reference's own INVALID verdict; a well-formed source is honestly
+// INCONCLUSIVE, because the byte search needs a primitive Pep does not have. When
+// `str_bytes` or `str_contains` lands, only the second branch changes.
+fn judge_source_only(selector: SourceSelector) -> Verdict {
+  return match validate_source(selector) {
+    SourceRejected(reason) => Invalid(reason)
+    SourceShapeValid() => Inconclusive("substring search needs str_bytes(Str) -> SourceBytes")
+  }
+}

@@ -410,6 +410,59 @@ PATH_CASES = [
     ("path-unchanged-clean", "path_unchanged", "untouched.txt", "PROVEN"),
     ("path-unchanged-changed", "path_unchanged", "tracked.txt", "NOT OBSERVED"),
 ]
+# Source-selector validation. Only the malformed cases are comparable: for a valid
+# source the reference actually performs the byte search and answers PROVEN or
+# NOT OBSERVED, while Pep honestly answers INCONCLUSIVE because it has no string
+# bytes. Comparing those would be comparing a capability gap to a verdict, so they are
+# covered by the self-test instead of claimed here.
+TEXT_CONTAINS_TEMPLATE = """version: terrorbat/v1
+id: {ident}
+claim:
+  text: Source selector differential probe.
+requires: [process.spawn]
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args: ["-NoProfile", "-Command", "exit 0"]
+oracle:
+  all:
+    - type: text_contains
+{source_block}
+      substring: "ref"
+evidence:
+  capture: [stdout, stderr]
+timeout:
+  run: 60s
+  total: 120s
+"""
+
+
+def selector(path="FieldAbsent()", evidence="FieldAbsent()",
+             step="NoStepSource()", stream="FieldAbsent()"):
+    return ("SourceSelector { path: %s, evidence: %s, step: %s, stream: %s }"
+            % (path, evidence, step, stream))
+
+
+SOURCE_CASES = [
+    ("src-none", "      ", selector()),
+    ("src-two-sources",
+     "      path: \"README.md\"\n      evidence: \"ev\"",
+     selector(path='FieldPresent("README.md")', evidence='FieldPresent("ev")')),
+    ("src-path-and-step",
+     "      path: \"README.md\"\n      step: \"run:0\"",
+     selector(path='FieldPresent("README.md")', step='StepAt("run", 0)')),
+    ("src-path-and-stream",
+     "      path: \"README.md\"\n      stream: \"stdout\"",
+     selector(path='FieldPresent("README.md")', stream='FieldPresent("stdout")')),
+    ("src-bad-stream",
+     "      step: \"run:0\"\n      stream: \"bogus\"",
+     selector(step='StepAt("run", 0)', stream='FieldPresent("bogus")')),
+    ("src-bad-phase",
+     "      step: \"bogus:0\"",
+     selector(step='StepAt("bogus", 0)')),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -728,9 +781,22 @@ def main():
             print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
                 ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
 
+        # Source-selector validation differential: malformed sources only.
+        for ident, source_block, pep_selector in SOURCE_CASES:
+            body = TEXT_CONTAINS_TEMPLATE.format(ident=ident,
+                                                source_block=source_block)
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(composed, "judge_source_only(%s)" % pep_selector)
+            agree = rust == pep == "INVALID"
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, "INVALID", "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
              + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES)
-             + len(EVIDENCE_TREE_CASES) + len(PATH_CASES))
+             + len(EVIDENCE_TREE_CASES) + len(PATH_CASES) + len(SOURCE_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

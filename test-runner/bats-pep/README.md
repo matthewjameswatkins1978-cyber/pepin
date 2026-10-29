@@ -1,12 +1,51 @@
 # First Pep-written Terror Bats oracle
 
-A real Terror Bats judgement written in ordinary Pep: the `exit_code`
-falsification condition, evaluated by Pep's own checker and interpreter.
+A real Terror Bats oracle written in ordinary Pep: six of the reference's falsification
+conditions judged by Pep's own checker and interpreter, plus the full expression layer
+(`all` / `any` / `not`, trails, verdict explanations) and the decidable half of
+`text_contains`.
 
 This is not a wrapper and not a reimplementation of the framework in another
 language. It is the smallest honest kernel of "Terror Bats in Pep": given recorded
 observations, decide whether the claim was falsified, with the same verdict
 semantics as the Rust reference.
+
+## Coverage at a glance
+
+The reference at `@ d5e6404` has twelve `Condition` variants. Six are decided in
+full in Pep, one is decided as far as validation reaches, and five are blocked by two
+missing primitives rather than by design choices. Stated up front so prioritisation
+does not depend on reading
+this document end to end.
+
+| `Condition` | Status | Verdicts exercised |
+| --- | --- | --- |
+| `exit_code` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE / INVALID |
+| `evidence_present` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `file_exists` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `file_absent` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `path_changed` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `path_unchanged` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `text_contains` | validation only | byte search needs `str_bytes(Str) -> SourceBytes` or `str_contains(Str, Str) -> Bool`; the source selector is already validated exactly as the reference does |
+| `text_matches` | blocked | same, plus a regex engine |
+| `git_diff_contains` | blocked | same as `text_contains` (the diff capture itself is available) |
+| `git_diff_matches` | blocked | same as `text_matches` |
+| `json_value_equals` | blocked | same as `text_contains`, plus a JSON parser |
+| `command` | blocked | needs host process execution, which this engine deliberately does not do |
+
+The **expression layer is complete**: `all`, `any`, `not`, Kleene three-valued
+composition, empty-combinator handling, depth-first trails, and validate-before-
+evaluate are all implemented and differential-tested.
+
+Four of the twelve are also limited in *reach* rather than blocked: `file_exists`,
+`file_absent`, `path_changed` and `path_unchanged` judge a **recorded** view of the
+worktree, so a driver must supply the observed paths. That is the engine's contract —
+it decides over evidence; it does not perform the run.
+
+**One primitive unblocks four conditions.** `str_bytes(s: Str) -> SourceBytes` is the
+cheapest single addition: `byte_length` and `byte_at` already exist, so a byte-window
+search can be written in Pep and `text_contains` and `git_diff_contains` both follow,
+with `text_matches` and `git_diff_matches` additionally needing regex.
 
 ## Reference contract pinned, not guessed
 
@@ -374,6 +413,46 @@ because the runner always captures git state.
 Both conditions are also available as tree leaves: `PathChangedCondition(path)` and
 `PathUnchangedCondition(path)`.
 
+## Source-selector validation: the decidable half of `text_contains`
+
+`text_contains`, `text_matches` and `json_value_equals` all call `validate_source`
+before reading a single byte, so a malformed source is a *specification* problem and
+Pep can judge it exactly. Measured against the framework:
+
+| Spec source | Verdict |
+| --- | --- |
+| no source at all | INVALID |
+| `path` + `evidence` | INVALID |
+| `path` + `step` | INVALID |
+| `path` + `stream` | INVALID |
+| `step` + `stream: bogus` | INVALID |
+| `step` + `stream: stderr` | accepted |
+| `path` to a readable file | PROVEN / NOT OBSERVED (the search itself) |
+| `path` present but unreadable | INCONCLUSIVE |
+
+The last two rows are the point: a *valid* source that cannot be read is Undetermined,
+not Invalid. Validation and reading are different phases, and conflating them would
+turn an unreadable file into a malformed spec.
+
+```pep
+type SourceField = FieldAbsent() | FieldPresent(Str)
+type StepSource = NoStepSource() | StepAt(Str, Int)
+type SourceSelector { path: SourceField, evidence: SourceField, step: StepSource, stream: SourceField }
+
+fn validate_source(selector: SourceSelector) -> SourceValidation
+fn judge_source_only(selector: SourceSelector) -> Verdict
+```
+
+`judge_source_only` returns the reference's own INVALID verdict for a malformed
+source, and answers honestly `Inconclusive("substring search needs str_bytes(Str) ->
+SourceBytes")` for a well-formed one. When the primitive lands, only that second
+branch changes — the validation half is already correct and differential-tested.
+
+The step reference arrives already split into phase and index because Pep cannot slice
+a string; everything after the split is judged here. The `:` split and the
+non-numeric-index rejection remain an explicit host boundary, not an invented
+primitive.
+
 ## Run it
 
 ```powershell
@@ -463,6 +542,14 @@ Observed (73 cases; each prints its verdict label then its reason):
 | 71 | `path_unchanged "nothing.txt"` | PROVEN |
 | 72 | `path_unchanged "tracked.txt"` | NOT OBSERVED |
 | 73 | no `git_status` capture | INCONCLUSIVE |
+| 74 | source `path` only | INCONCLUSIVE (search unavailable) |
+| 75 | source `step` only, default stream | INCONCLUSIVE |
+| 76 | source `step` + `stream: stderr` | INCONCLUSIVE |
+| 77 | no source at all | INVALID |
+| 78 | `path` + `evidence` | INVALID |
+| 79 | `path` + `stream` | INVALID |
+| 80 | `step` + `stream: bogus` | INVALID |
+| 81 | `step` phase `bogus` | INVALID |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -649,7 +736,21 @@ Bat's own attack step modifies, because the runner refuses to start on a dirty t
 | `path_unchanged` untouched path | PROVEN | PROVEN | PROVEN |
 | `path_unchanged` changed file | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
 
-`SUMMARY cases=49 mismatches=0`.
+Source selectors are compared as verdict-only cases, and only the malformed ones: for a
+valid source the reference performs the byte search while Pep honestly reports the
+missing primitive, and comparing those would be comparing a capability gap to a
+verdict.
+
+| Spec source | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| no source | INVALID | INVALID | INVALID |
+| `path` + `evidence` | INVALID | INVALID | INVALID |
+| `path` + `step` | INVALID | INVALID | INVALID |
+| `path` + `stream` | INVALID | INVALID | INVALID |
+| `step` + `stream: bogus` | INVALID | INVALID | INVALID |
+| `step` phase `bogus` | INVALID | INVALID | INVALID |
+
+`SUMMARY cases=55 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict
