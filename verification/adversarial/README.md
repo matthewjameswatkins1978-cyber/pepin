@@ -30,14 +30,14 @@ green by assumption.
 ## Reproducible replay lab
 
 `replay.py` re-executes every base-tree probe in this corpus
-(P/N/U/R/S/REC/L/C/F sets) and asserts each receipted outcome.
+(P/N/U/R/S/REC/L/C/F/H sets) and asserts each receipted outcome.
 Run from the agent3 worktree root:
 
 ```powershell
-python verification/adversarial/replay.py   # exit 0 iff 66/66 PASS
+python verification/adversarial/replay.py   # exit 0 iff 72/72 PASS
 ```
 
-Verified 66/66 PASS at base `805062b` on 2026-10-29. Only `pep.ps1
+Verified 72/72 PASS at base `805062b` on 2026-10-29. Only `pep.ps1
 check/run/query/session` (OCaml seed, in-process) plus temp files — no
 C toolchain, no binaries, hold-safe. Pin-specific suites
 (`str_contains` @ A1 tip, A2 emit re-runs) are NOT replayed here;
@@ -47,7 +47,8 @@ their receipts state exact detached-worktree commands.
 
 All case files live under `cases/` (one topic per file: value-copy,
 negatives, UTF-8/spans, revision/limits, eval-order/fuel, records/unions,
-str_contains, bridge, literals/conditions, calls/scope, control-flow). `replay.py`
+str_contains, bridge, literals/conditions, calls/scope, control-flow,
+hole lifecycle). `replay.py`
 is the executable index: every base-tree assertion in those files is
 replayed by name (P/N/U/R/S/REC/L/C prefixes).
 

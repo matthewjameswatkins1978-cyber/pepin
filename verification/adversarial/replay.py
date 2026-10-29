@@ -351,6 +351,88 @@ def main():
         'say(int_text(f(A(5))))\n', exp_out="0\n")
     check("F-bare-B-decl", "type E = A(Int) | B\nsay(int_text(1))",
           "invalid", ("PEP_PARSE_EXPECTED",))
+    # Hole lifecycle (set 9) — stateful session sequences
+    hsrc = ("fn double(n: Int) -> Int { return ?calc }\n"
+            "fn main() -> Int { return 0 }\n")
+    def hsess(reqs):
+        r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                  inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(ln) for ln in (r.stdout or "").splitlines()
+                if ln.strip()]
+    ho = hsess([{"schemaVersion": 3, "op": "open", "name": "h",
+                  "source": hsrc}])
+    hdoc, hrev = ho[0]["document"], ho[0]["revision"]
+    hq = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "query", "document": hdoc,
+         "revision": hrev}])[1]
+    hh = hq.get("holes", [])
+    def _hname(h):
+        ident = h.get("identity")
+        if isinstance(ident, dict):
+            return ident.get("name")
+        return ident
+    ok = (hq.get("status") == "incomplete" and len(hh) == 1
+          and _hname(hh[0]) == "calc"
+          and hh[0].get("expectedType") == "Int")
+    results.append(("H-query", PASS if ok else FAIL,
+                    "holes=%s" % [(x.get("identity"),
+                                     x.get("expectedType")) for x in hh]))
+    hp = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "fill_hole", "document": hdoc,
+         "expected_revision": hrev, "scope": "double",
+         "name": "calc", "replacement": "n + n",
+         "mode": "preview"}])[1]
+    ok = (hp.get("outcome") == "ok" and hp.get("status") == "valid"
+          and hp.get("baseRevision") == hp.get("currentRevision")
+          and (hp.get("sourceDiff") or {}).get("removed") == "?calc")
+    results.append(("H1-preview", PASS if ok else FAIL,
+                    "outcome=%s status=%s" % (hp.get("outcome"),
+                                               hp.get("status"))))
+    hm = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "fill_hole", "document": hdoc,
+         "expected_revision": hrev, "scope": "double",
+         "name": "calc", "replacement": "true",
+         "mode": "preview"}])[1]
+    ok = hm.get("outcome") == "rejected"
+    results.append(("H2-mismatch", PASS if ok else FAIL,
+                    "outcome=%s" % hm.get("outcome")))
+    ha = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "fill_hole", "document": hdoc,
+         "expected_revision": hrev, "scope": "double",
+         "name": "calc", "replacement": "n + n", "mode": "apply"}])[1]
+    ok = (ha.get("outcome") == "ok" and ha.get("status") == "valid"
+          and ha.get("holes") == []
+          and ha.get("currentRevision") != ha.get("baseRevision"))
+    results.append(("H3-apply", PASS if ok else FAIL,
+                    "outcome=%s holes=%s" % (ha.get("outcome"),
+                                              ha.get("holes"))))
+    hs = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "fill_hole", "document": hdoc,
+         "expected_revision": "sha256:" + "0" * 64,
+         "scope": "double", "name": "calc",
+         "replacement": "n + n", "mode": "preview"}])[1]
+    ok = ((hs.get("error") or {}).get("code") == "PEP_STALE_REVISION")
+    results.append(("H4-stale", PASS if ok else FAIL,
+                    "error=%s" % (hs.get("error") or {}).get("code")))
+    hu = hsess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": hsrc},
+        {"schemaVersion": 3, "op": "fill_hole", "document": hdoc,
+         "expected_revision": hrev, "scope": "double",
+         "name": "nope", "replacement": "1", "mode": "preview"}])[1]
+    ok = ((hu.get("error") or {}).get("code") == "PEP_HOLE_NOT_FOUND")
+    results.append(("H5-unknown", PASS if ok else FAIL,
+                    "error=%s" % (hu.get("error") or {}).get("code")))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
