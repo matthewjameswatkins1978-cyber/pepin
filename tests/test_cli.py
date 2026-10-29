@@ -889,8 +889,10 @@ class PepCliTests(unittest.TestCase):
     def test_invalid_syntax_and_reserved_builtin_names_do_not_crash(self):
         malformed = invoke("check", self.source("fn broken(n: Int -> Int { return n }\n"), "--json")
         reserved = invoke("check", self.source("fn say(x: Int) -> Int { return x }\n"), "--json")
+        reserved_string_search = invoke("check", self.source("fn str_contains(x: Str, y: Str) -> Bool { return true }\n"), "--json")
         self.assertEqual(json.loads(malformed.stdout)["status"], "invalid")
         self.assertEqual(json.loads(reserved.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
+        self.assertEqual(json.loads(reserved_string_search.stdout)["diagnostics"][0]["code"], "PEP_RESERVED_FUNCTION")
 
 class PepGenericFunctionTests(unittest.TestCase):
     def test_generic_identity_and_nested_list_helper_infer_and_run(self):
