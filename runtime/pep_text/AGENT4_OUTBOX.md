@@ -296,7 +296,19 @@ can relay them.
   the roadmap's lane wording needs reconciling with reality;
   not mine to edit.
 
-## 2026-10-29 -- hold housekeeping (no execution)
+## 2026-10-29 -- exclusion scope note (read-only, for the reviewer)
 
-- One-line docstring touch: the test module header now mentions the
-  unexecuted slice-13 fragn vectors. Verified by `py_compile` only.
+- Verified from `pep.ps1` (lines 51-66): the shared seed compiler
+  builds to and runs from `_build\ocaml\pep.exe` (rebuilt only when
+  `pep_ocaml.ml` changes). It executes constantly and was never
+  flagged — no exclusion needed or wanted there.
+- This lane's test-built executables all land in
+  `ROOT / "_build" / "textbuf"` (see `BUILD` in
+  `tests/test_textbuf_native.py`); generated C, fixtures, and
+  outputs stay in the same directory. Nothing is written or
+  executed outside `_build`, and no system paths are involved.
+- So the narrowest exclusion that unblocks a post-hold suite
+  re-run is that single directory — not the repo, not the drive.
+  Whether to exclude at all (vs a Microsoft FP submission first,
+  vs leaving the empty-runner test scoped out as it already is)
+  remains Matthew's call; this note only scopes the options.
