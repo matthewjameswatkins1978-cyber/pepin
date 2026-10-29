@@ -160,6 +160,20 @@ fn list_bool_is_non_increasing(values: List[Bool]) -> Bool {
   return ordered
 }
 
+fn list_bool_is_monotonic(values: List[Bool]) -> Bool {
+  var monotonic = true
+  var hasPrevious = false
+  var previous = false
+  var seenTransition = false
+  for item in values {
+    monotonic = if hasPrevious && item != previous && seenTransition { false } else { monotonic }
+    seenTransition = seenTransition || (hasPrevious && item != previous)
+    previous = item
+    hasPrevious = true
+  }
+  return monotonic
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
