@@ -36,7 +36,7 @@ static int emit(pep_textbuf_t *out)
     if (pep_textbuf_append_cstr(out, "}\n\n") != 0) {
         return out->err;
     }
-    // Main prints a computed constant: 6 * 7, formatted by the builder.
+    // Main prints a computed constant: 6 + 7, formatted by the builder.
     if (pep_textbuf_append_cstr(out, "int main(void)\n{\n") != 0) {
         return out->err;
     }

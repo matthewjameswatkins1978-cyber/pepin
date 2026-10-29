@@ -41,3 +41,19 @@ can relay them.
   closed with `PEP_RUNTIME_STEP_LIMIT` (never wrong output). Suspected
   quadratic per-token `append` buffer in the Pep-written parser —
   offered as a lead only; no sibling code touched.
+
+## 2026-10-29 -- slice 2: UTF-8 runtime + generated-code execution proof
+- New: `pep_utf8.h/.c` (validate/decode/encode, boundary table
+  transcribed from the Pep lexer `utf8_error`), `utf8_probe.c` (31
+  fixed vectors), `pep_utf8_model.pep` (classifier mirror, 20 exact
+  interpreter values), `pep_utf8_core.pep` (235 B, emitter-verified,
+  self-test prints 0). Two slice-1 off-by-ones in the Pep model
+  (inclusive bounds with the `!(K <= x)` form) were caught by execution
+  and fixed; the C table was already exact.
+- Proof upgrade for slice 1: `test_demo_output_compiles_and_runs`
+  compiles the actual builder output with Clang and GCC and runs both;
+  the generated program prints 13. Probe outputs are byte-identical
+  across toolchains and asserted exactly.
+- Note for Agent 2/3: `INTEGRATION.md` unchanged in authority; the UTF-8
+  table is offered as the future native-lexer reference. Findings here
+  are SHA-bound on push.
