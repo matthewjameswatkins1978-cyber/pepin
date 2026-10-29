@@ -929,6 +929,43 @@ def main():
                              or "PEP_TOOL_VALUE_DEPTH" in str(_e))
     results.append(("V6-depth16-17", PASS if v6ok else FAIL,
                     "boundary-16/17"))
+    _snt7 = ("fn nfuncs() -> Int { let p = semantic_snapshot() return length(p.functions) }\n"
+             "fn main() -> Int { return 0 }\n")
+    _gt = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _snt7},
+        {"schemaVersion": 3, "op": "open", "name": "g",
+         "source": "fn main() -> Int { return 0 }\n"},
+    ])
+    _gtd, _gtr = _gt[0]["document"], _gt[0]["revision"]
+    _ggd, _ggr = _gt[1]["document"], _gt[1]["revision"]
+    _tok = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 2,
+                       "tool": nm, "document": _gtd, "revision": _gtr}
+    _IV0 = {"type": "Int", "value": "0"}
+    _gid_ok = True
+    for _tn, _st in (("forged-rev",
+                       {"document": _ggd,
+                        "revision": "sha256:" + "f" * 64,
+                        "entryFunctions": ["main"]}),
+                      ("wrong-doc",
+                       {"document": "doc-NOPE", "revision": _ggr,
+                        "entryFunctions": ["main"]})):
+        _gr = sess([
+            {"schemaVersion": 3, "op": "open", "name": "t",
+             "source": _snt7},
+            {"schemaVersion": 3, "op": "open", "name": "g",
+             "source": "fn main() -> Int { return 0 }\n"},
+            dict(_tok("nf"), op="tool_register", function="nfuncs"),
+            dict(_tok("nf"), op="tool_validate",
+                 testVectors=[{"arguments": [], "expect": _IV0,
+                               "semanticTarget": _st}]),
+        ])
+        _ge = _gr[3].get("error")
+        _gc = _ge.get("code") if isinstance(_ge, dict) else str(_ge)
+        _gid_ok = (_gid_ok and _gr[3].get("outcome") == "rejected"
+                   and ("NOT_FOUND" in str(_gc)))
+    results.append(("V7-grant-identity", PASS if _gid_ok else FAIL,
+                    "both-rejected"))
     # Tool hot-replacement (set 14)
     _hv1 = ("fn f(n: Int) -> Int { return n + 1 }\n"
             "fn main() -> Int { return 0 }\n")

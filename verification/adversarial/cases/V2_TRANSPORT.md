@@ -49,6 +49,16 @@ not stressed (depth is the binding documented axis and is now pinned).
 The staged `emit` path already exercises v2 `semanticTarget`
 authentication in production (see F2).
 
+## Grant identity is pinned too (forged revision, wrong document)
+
+Same grant path, identity attacks instead of entry-name attacks:
+forged target revision (`sha256:fff...`) → `TESTED`: `rejected`,
+`PEP_REVISION_NOT_FOUND` ("Revision is not retained in this
+session"); unknown document id → `TESTED`: `rejected`,
+`PEP_DOCUMENT_NOT_FOUND`. Forged, missing, and mismatched grant
+identities all fail closed with dedicated codes — completing the
+grant-identity side alongside the entry-name case above.
+
 ## Status
 
 No findings: v2 transport is fail-closed at every probed transition
