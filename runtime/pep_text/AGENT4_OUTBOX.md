@@ -275,3 +275,28 @@ can relay them.
   full-file slices, plus four fail-closed rejects). Written but
   never executed — `py_compile` clean is the only check the hold
   permits. The post-hold re-run executes it with everything else.
+
+## 2026-10-29 -- roadmap mapping (read-only)
+
+- Read ROAD-1 B3 ("safe runtime and bottom-up Pep library") in full:
+  it asks for minimal safe C23 ABI/runtime, owned/growing buffers,
+  valid-UTF-8 Str distinct from Bytes, checked indexing, failure
+  propagation, allocation/cleanup — plus reusable foundations
+  **in Pep wherever expressible** (byte scanning/UTF-8, builder and
+  collection helpers, formatting, diagnostics, parsing support,
+  code-text emission). That list is a 1:1 match for slices 1–13;
+  nothing built here falls outside it, and the B3 gate's evidence
+  list (invalid UTF-8, embedded NUL, bounds, alloc failure,
+  cleanup, error paths) is covered by the existing suite design.
+- Ownership nuance, no action: B3 names "Agent 2/runtime + stdlib",
+  but Agent 2's branch in-tree holds only `list_*` collections —
+  verified no overlap. This lane's packet explicitly authorises
+  the isolated text/buffer directory, and nothing built here
+  duplicates sibling code. Flagged for the integrator in case
+  the roadmap's lane wording needs reconciling with reality;
+  not mine to edit.
+
+## 2026-10-29 -- hold housekeeping (no execution)
+
+- One-line docstring touch: the test module header now mentions the
+  unexecuted slice-13 fragn vectors. Verified by `py_compile` only.
