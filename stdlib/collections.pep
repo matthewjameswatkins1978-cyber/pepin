@@ -140,6 +140,16 @@ fn list_bool_longest_run_of(values: List[Bool], expected: Bool) -> Int {
   return longest
 }
 
+fn list_bool_is_non_decreasing(values: List[Bool]) -> Bool {
+  var ordered = true
+  var seenTrue = false
+  for item in values {
+    ordered = if !item && seenTrue { false } else { ordered }
+    seenTrue = seenTrue || item
+  }
+  return ordered
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
