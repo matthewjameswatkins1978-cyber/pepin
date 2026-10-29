@@ -10,6 +10,7 @@ type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, sc
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
@@ -1330,8 +1331,20 @@ fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, fun
 fn type_analysis_over_nodes_raw(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
-  var activeFunctionFound = false
-  var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
+  var firstActiveFound = false
+  var firstActiveNode = empty_node()
+  for activeNode in activeNodes {
+    if !firstActiveFound { firstActiveFound = true; firstActiveNode = activeNode } else {}
+  }
+  var initialFunctionFound = false
+  var initialFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
+  if sequentialFunctionOwner && firstActiveFound {
+    let initialOwner = owner_function(nodes, firstActiveNode, functions)
+    initialFunctionFound = initialOwner.found
+    initialFunction = initialOwner.function
+  } else {}
+  var activeFunctionFound = initialFunctionFound
+  var activeFunction = initialFunction
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
   for node in activeNodes {
@@ -2154,25 +2167,7 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
   }
   return earlierMatches == 1
 }
-fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
-  let authority = semantic_snapshot()
-  if parsed.document != authority.document || parsed.revision != authority.revision {
-    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
-  } else {}
-  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
-  if parsed.status != "complete" {
-    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
-    return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
-  } else {}
-  let sourceLength = byte_length(source_bytes())
-  let nodes = sort_nodes(parsed.nodes)
-  if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
-  let functions = collect_functions(nodes)
-  let bindingResult = collect_bindings(nodes, functions)
-  let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
-  let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
-  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
-  let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
+fn checker_report_from_parts(document: Str, revision: Str, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact]) -> CheckerReport {
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
@@ -2278,5 +2273,112 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   }
   }
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
-  return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
+  return CheckerReport { document: document, revision: revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
+}
+fn empty_checker_report(document: Str, revision: Str) -> CheckerReport {
+  return CheckerReport { document: document, revision: revision, status: "valid", syntaxNodeCount: 0, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [] }
+}
+fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report }
+}
+fn checker_start(parsed: ParserProgress) -> CheckerCursor {
+  let authority = semantic_snapshot()
+  let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
+  let emptyNames = NameResolution { references: [], diagnostics: [] }
+  let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
+  let report = empty_checker_report(authority.document, authority.revision)
+  if parsed.document != authority.document || parsed.revision != authority.revision {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node()))
+  } else {}
+  if !parsed.done { return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node())) } else {}
+  if parsed.status != "complete" || parsed.errorCode != "" {
+    let code = if parsed.errorCode != "" { parsed.errorCode } else { "A13_PARSER_STATUS" }
+    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, code, parsed.message, errorNode))
+  } else {}
+  let nodes = sort_nodes(parsed.nodes)
+  if !tree_is_valid(nodes, byte_length(source_bytes())) {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
+  } else {}
+  return make_checker_cursor(authority.document, authority.revision, "functions", false, parsed, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
+}
+fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
+  let proposed = startNode + 8
+  return if proposed <= length(nodes) { proposed } else { length(nodes) }
+}
+fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
+  return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
+}
+// Cursor fields are caller-carried, not authenticated proof of earlier checks. Only the host's cooperative start -> step sequence is meaningful; every step rechecks document/revision authority.
+fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
+  let authority = semantic_snapshot()
+  if cursor.document != authority.document || cursor.revision != authority.revision {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
+  } else {}
+  if cursor.done { return cursor } else {}
+  if cursor.phase == "functions" {
+    let functions = collect_functions(cursor.nodes)
+    return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "bindings" {
+    let result = collect_bindings(cursor.nodes, cursor.functions)
+    return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "names" {
+    let result = resolve_names(cursor.nodes, cursor.functions, cursor.bindingResult.bindings)
+    return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "binding_types" {
+    let bindings = infer_binding_types(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references)
+    return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, bindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "type_analysis" {
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(cursor.nodes)) || length(cursor.nodes) != 0 && length(cursor.nodes) <= cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", empty_node()))
+    } else {}
+    let chunkEnd = checker_type_chunk_end(cursor.nodes, cursor.typeOffset)
+    let result = type_analysis_chunk(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
+    var reversedFacts = cursor.typeResult.expressionTypes
+    for fact in result.expressionTypes { reversedFacts = prepend(reversedFacts, fact) }
+    var reversedDiagnostics = cursor.typeResult.diagnostics
+    for item in result.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
+    let unreachable = if cursor.typeResult.unreachable.found { cursor.typeResult.unreachable } else { result.unreachable }
+    if length(cursor.nodes) <= chunkEnd {
+      let finalTypeResult = TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: select_type_diagnostics(reverse(reversedDiagnostics)), unreachable: unreachable }
+      return checker_replace(cursor, "holes", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypeResult, chunkEnd, cursor.holes, cursor.report)
+    } else {
+      let partialTypeResult = TypeAnalysis { expressionTypes: reversedFacts, diagnostics: reversedDiagnostics, unreachable: unreachable }
+      return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, partialTypeResult, chunkEnd, cursor.holes, cursor.report)
+    }
+  } else {}
+  if cursor.phase == "holes" {
+    let holes = hole_facts(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
+    return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, holes, cursor.report)
+  } else {}
+  if cursor.phase == "report" {
+    let report = checker_report_from_parts(cursor.document, cursor.revision, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
+    return checker_replace(cursor, "done", true, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, report)
+  } else {}
+  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
+}
+fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision {
+    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
+  } else {}
+  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
+  if parsed.status != "complete" {
+    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
+  } else {}
+  let sourceLength = byte_length(source_bytes())
+  let nodes = sort_nodes(parsed.nodes)
+  if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
+  let functions = collect_functions(nodes)
+  let bindingResult = collect_bindings(nodes, functions)
+  let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
+  let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
+  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
+  let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
+  return checker_report_from_parts(authority.document, authority.revision, nodes, functions, bindingResult, nameResult, typedBindings, typeResult, holes)
 }

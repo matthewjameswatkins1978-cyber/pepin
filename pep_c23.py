@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 MAX_SESSION_MESSAGE_BYTES = 1_048_576
 MAX_TYPED_NODES = 10_000
 MAX_PARSER_STEPS = 4_096
+MAX_CHECKER_STEPS = 4_096
 SOURCES = (
     ROOT / "examples" / "pep_lexer.pep",
     ROOT / "examples" / "pep_parser.pep",
@@ -378,6 +379,94 @@ def checker_report(document, revision):
     return typed_record_value("CheckerReport", fields)
 
 
+def checker_cursor_value(document, revision, parsed, phase, done=False):
+    empty_node = typed_record_value("FlatAstNode", [
+        ("id", typed("Int", -1)), ("parentId", typed("Int", -1)),
+        ("childIndex", typed("Int", -1)), ("role", typed("Str", "")),
+        ("kind", typed("Str", "")), ("text", typed("Str", "")),
+        ("integerValue", typed("Int", 0)), ("booleanValue", typed("Bool", False)),
+        ("stringParts", typed_list("Str")), ("startByte", typed("Int", 0)),
+        ("endByte", typed("Int", 0)), ("line", typed("Int", 1)),
+        ("column", typed("Int", 1)),
+    ])
+    empty_bindings = typed_record_value("BindingCollection", [
+        ("bindings", typed_list("BindingFact")), ("diagnostics", typed_list("CheckDiagnostic")),
+    ])
+    empty_names = typed_record_value("NameResolution", [
+        ("references", typed_list("ResolvedName")), ("diagnostics", typed_list("CheckDiagnostic")),
+    ])
+    empty_types = typed_record_value("TypeAnalysis", [
+        ("expressionTypes", typed_list("ExpressionTypeFact")),
+        ("diagnostics", typed_list("CheckDiagnostic")),
+        ("unreachable", typed_record_value("UnreachableLookup", [
+            ("found", typed("Bool", False)), ("node", empty_node),
+        ])),
+    ])
+    return typed_record_value("CheckerCursor", [
+        ("document", typed("Str", document)), ("revision", typed("Str", revision)),
+        ("phase", typed("Str", phase)), ("done", typed("Bool", done)),
+        ("parsed", parsed), ("nodes", typed_list("FlatAstNode")),
+        ("functions", typed_list("CheckedFunction")), ("bindingResult", empty_bindings),
+        ("nameResult", empty_names), ("typedBindings", typed_list("BindingFact")),
+        ("typeResult", empty_types), ("typeOffset", typed("Int", 0)),
+        ("holes", typed_list("HoleFact")), ("report", checker_report(document, revision)),
+    ])
+
+
+def check_target(session, parsed, target, tool_revision):
+    started = time.perf_counter_ns()
+    request_bytes_before = session.request_bytes_total
+    response_bytes_before = session.response_bytes_total
+    cursor = invoke_tool(session, "pep-c23-checker-start", [parsed], target,
+                         tool_revision, "start checker")
+    start_ms = (time.perf_counter_ns() - started) / 1_000_000
+    max_request_bytes = session.last_request_bytes
+    max_response_bytes = session.last_response_bytes
+    node_count = len(typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
+                                       "nodes", "List[FlatAstNode]", "parser result"))
+    maximum_steps = min(MAX_CHECKER_STEPS, 8 + (node_count + 7) // 8)
+    step_elapsed_ms = []
+    cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
+    for _ in range(maximum_steps):
+        if typed_field_value(cursor_fields, "document", "Str", "checker cursor") != target["document"] or \
+           typed_field_value(cursor_fields, "revision", "Str", "checker cursor") != target["revision"]:
+            raise RuntimeError("Pep checker cursor changed the authorised source revision")
+        if typed_field_value(cursor_fields, "done", "Bool", "checker cursor"):
+            break
+        previous_cursor = cursor
+        step_started = time.perf_counter_ns()
+        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor], target,
+                             tool_revision, "advance checker")
+        step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
+        max_request_bytes = max(max_request_bytes, session.last_request_bytes)
+        max_response_bytes = max(max_response_bytes, session.last_response_bytes)
+        if cursor == previous_cursor:
+            raise RuntimeError("Pep checker continuation did not make progress")
+        cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+    if not typed_field_value(cursor_fields, "done", "Bool", "final checker cursor"):
+        raise RuntimeError(f"Pep checker exceeded the host continuation limit of {maximum_steps} steps")
+    report = cursor_fields.get("report")
+    report_fields = typed_fields(report, "CheckerReport", "checker report")
+    if typed_field_value(report_fields, "document", "Str", "checker report") != target["document"] or \
+       typed_field_value(report_fields, "revision", "Str", "checker report") != target["revision"]:
+        raise RuntimeError("Pep checker report changed the authorised source revision")
+    measurements = {}
+    measurements.update({
+        "checker_start_ms": start_ms,
+        "checker_step_count": len(step_elapsed_ms),
+        "checker_step_elapsed_ms": step_elapsed_ms,
+        "checker_step_median_ms": statistics.median(step_elapsed_ms) if step_elapsed_ms else 0.0,
+        "checker_elapsed_ms": (time.perf_counter_ns() - started) / 1_000_000,
+        "checker_request_bytes": session.request_bytes_total - request_bytes_before,
+        "checker_response_bytes": session.response_bytes_total - response_bytes_before,
+        "checker_max_request_bytes": max_request_bytes,
+        "checker_max_response_bytes": max_response_bytes,
+        "checker_node_count": node_count,
+        "checker_host_step_limit": maximum_steps,
+    })
+    return report, measurements
+
+
 def emit(source_bytes, measurements=None):
     measurements = measurements if measurements is not None else {}
     emit_started = time.perf_counter_ns()
@@ -430,6 +519,11 @@ def emit(source_bytes, measurements=None):
 
         empty_expected = [
             ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
+            ("pep-c23-checker-start", "checker_start", [empty_parsed],
+             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")),
+            ("pep-c23-checker-step", "checker_step",
+             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")],
+             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "bindings")),
         ]
         for tool, function, arguments, expected in empty_expected:
             registered = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -477,20 +571,16 @@ def emit(source_bytes, measurements=None):
         parsed_value = parse_target(session, source_bytes, target, tool_revision)
         measurements.update(session.parser_measurements)
         checker_started = time.perf_counter_ns()
-        checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
-                                "op": "tool_invoke", "tool": "pep-c23-checker",
-                                "arguments": [parsed_value], "semanticTarget": semantic_target})
+        checked_report, checker_measurements = check_target(
+            session, parsed_value, semantic_target, tool_revision)
+        measurements.update(checker_measurements)
         measurements["checker_stage_ms"] = (time.perf_counter_ns() - checker_started) / 1_000_000
-        if checked.get("outcome") != "ok":
-            measurements["checker_stage_error"] = checked.get("error")
-        else:
-            report_fields = typed_fields(checked.get("result"), "CheckerReport", "checker report")
-            measurements["checker_status"] = typed_field_value(report_fields, "status", "Str", "checker report")
-        require(checked, "outcome", "ok", "check parsed source")
+        report_fields = typed_fields(checked_report, "CheckerReport", "checker report")
+        measurements["checker_status"] = typed_field_value(report_fields, "status", "Str", "checker report")
         emitter_started = time.perf_counter_ns()
         emitted = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                 "op": "tool_invoke", "tool": "pep-c23-emitter",
-                                "arguments": [parsed_value, checked["result"]],
+                                "arguments": [parsed_value, checked_report],
                                 "semanticTarget": semantic_target})
         measurements["emitter_stage_ms"] = (time.perf_counter_ns() - emitter_started) / 1_000_000
         require(emitted, "outcome", "ok", "emit checked source")

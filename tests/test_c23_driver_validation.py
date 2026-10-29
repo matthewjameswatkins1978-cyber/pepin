@@ -1,6 +1,6 @@
 import unittest
 
-from pep_c23 import (validate_parser_final_outcome, validate_parser_node_sequence,
+from pep_c23 import (emit, validate_parser_final_outcome, validate_parser_node_sequence,
                       validate_parser_parent_links)
 
 
@@ -42,6 +42,19 @@ class PepC23ParserValidationTests(unittest.TestCase):
     def test_final_status_is_closed_to_unknown_values(self):
         with self.assertRaisesRegex(RuntimeError, "unknown final status"):
             validate_parser_final_outcome("continuing", "")
+
+
+
+class PepC23CheckerDriverTests(unittest.TestCase):
+    def test_staged_checker_emits_small_program_with_fixed_budgets(self):
+        measurements = {}
+        c_source = emit(b"fn main() -> Int { return 0 }\n", measurements)
+
+        self.assertIn("int main", c_source)
+        self.assertEqual(measurements["checker_status"], "valid")
+        self.assertEqual(measurements["emitter_status"], "emitted")
+        self.assertGreater(measurements["checker_step_count"], 1)
+        self.assertLess(measurements["checker_step_count"], measurements["checker_host_step_limit"])
 
 
 if __name__ == "__main__":
