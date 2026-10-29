@@ -1,0 +1,912 @@
+# First Pep-written Terror Bats oracle
+
+A real Terror Bats oracle written in ordinary Pep: six of the reference's falsification
+conditions judged by Pep's own checker and interpreter, plus the full expression layer
+(`all` / `any` / `not`, trails, verdict explanations) and the decidable half of
+`text_contains`.
+
+This is not a wrapper and not a reimplementation of the framework in another
+language. It is the smallest honest kernel of "Terror Bats in Pep": given recorded
+observations, decide whether the claim was falsified, with the same verdict
+semantics as the Rust reference.
+
+## Coverage at a glance
+
+The reference at `@ d5e6404` has twelve `Condition` variants. Six are decided in full, one
+is decided for every input except a single search branch, and five are blocked by two
+missing primitives rather than by design choices. Stated up front so prioritisation
+does not depend on reading
+this document end to end.
+
+| `Condition` | Status | Verdicts exercised |
+| --- | --- | --- |
+| `exit_code` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE / INVALID |
+| `evidence_present` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `file_exists` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `file_absent` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `path_changed` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `path_unchanged` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
+| `text_contains` | **implemented** | source validation, load ordering, empty-needle rule and the search itself all decided in Pep; a capture that is not valid UTF-8 is reported INCONCLUSIVE rather than decoded lossily |
+| `text_matches` | blocked | same, plus a regex engine |
+| `git_diff_contains` | blocked | same as `text_contains` (the diff capture itself is available) |
+| `git_diff_matches` | blocked | same as `text_matches` |
+| `json_value_equals` | blocked | same as `text_contains`, plus a JSON parser |
+| `command` | blocked | needs host process execution, which this engine deliberately does not do |
+
+The **expression layer is complete**: `all`, `any`, `not`, Kleene three-valued
+composition, empty-combinator handling, depth-first trails, and validate-before-
+evaluate are all implemented and differential-tested.
+
+Four of the twelve are also limited in *reach* rather than blocked: `file_exists`,
+`file_absent`, `path_changed` and `path_unchanged` judge a **recorded** view of the
+worktree, so a driver must supply the observed paths. That is the engine's contract —
+it decides over evidence; it does not perform the run.
+
+**One primitive unblocks four conditions.** `str_bytes(s: Str) -> SourceBytes` is the
+cheapest single addition: `byte_length` and `byte_at` already exist, so a byte-window
+search can be written in Pep and `text_contains` and `git_diff_contains` both follow,
+with `text_matches` and `git_diff_matches` additionally needing regex.
+
+## Reference contract pinned, not guessed
+
+Read from The-Terror-Bats `@ d5e6404` (`src/oracle.rs`):
+
+```rust
+Condition::ExitCode { step, equals: Option<i64>, not_equals: Option<i64> }
+```
+
+| Reference behaviour | Source |
+| --- | --- |
+| exactly one of `equals` / `not_equals`, else INVALID | `validate`: "exit_code requires exactly one of `equals` or `not_equals`" |
+| bad step reference → Undetermined | `eval_condition` |
+| step did not execute → Undetermined | `eval_condition` |
+| step produced no exit code → Undetermined (a crash is never a falsification) | `eval_condition` |
+| `fired = (code == equals)` / `fired = (code != not_equals)` | `eval_condition` |
+| `fired ? Falsified : NotFalsified` | `OracleResult` |
+
+Verdict labels in the reference and here: `Falsified` → **PROVEN**,
+`NotFalsified` → **NOT OBSERVED** (never a certificate), `Undetermined` →
+**INCONCLUSIVE**, malformed spec → **INVALID**.
+
+## The Pep implementation (typed)
+
+`oracle.pep` — ordinary functions over typed values, no host process spawning, no
+imports, and no sentinel:
+
+```pep
+type Mode = EqualsMode(Int) | NotEqualsMode(Int) | BothModes(Int, Int) | NoMode(Str)
+type ExitObservation = ObservedExit(Int) | AbsentExit(Str)
+type EvidenceStep { phase: Str, index: Int, exit: ExitObservation }
+type Verdict = Proven(Str) | NotObserved(Str) | Inconclusive(Str) | Invalid(Str)
+```
+
+- `judge(mode, observation)` — validation first (a malformed mode is `Invalid`,
+  never evidence about the claim), then `AbsentExit` is `Inconclusive`, then the
+  reference's fired/not-fired rule.
+- `judge_step(mode, step)` — the same judgement over a recorded evidence record.
+- `verdict_label(verdict)` / `verdict_reason(verdict)` — the label and the reason a
+  verdict carries, so a result explains itself.
+
+Missing evidence is now an explicit `AbsentExit(reason)` case instead of a sentinel
+integer, and a malformed specification is a representable `BothModes`/`NoMode`
+instead of two booleans that could contradict each other.
+
+## Condition composition
+
+`OracleExpr::All` / `Any` / `Not` are Kleene three-valued logic in the reference,
+not boolean logic, and an empty conjunction is **not** vacuously true. The Pep
+engine now reproduces that shape over its own typed verdicts:
+
+```pep
+type Found = NotFound() | FoundReason(Str)
+fn compose_all(verdicts: List[Verdict]) -> Verdict
+fn compose_any(verdicts: List[Verdict]) -> Verdict
+fn compose_not(verdict: Verdict) -> Verdict
+```
+
+| Rule | Reference (`src/oracle.rs`) | Here |
+| --- | --- | --- |
+| `all` | NotFalsified wins, then Undetermined, then Falsified | `NotObserved` > `Inconclusive` > `Proven` |
+| `any` | Falsified wins, then Undetermined, then NotFalsified | `Proven` > `Inconclusive` > `NotObserved` |
+| `not` | swaps Falsified/NotFalsified, leaves Undetermined | swaps `Proven`/`NotObserved`, leaves `Inconclusive` |
+| `all: []` / `any: []` | Undetermined, "empty combinator: nothing to judge" | `Inconclusive("empty combinator: nothing to judge")` |
+| malformed child | `validate` runs on every node before `evaluate`, so nothing is evaluated | the child's `Invalid` propagates carrying its own reason |
+
+Composition is written as assignment in priority order — least decisive first, most
+decisive last — so the surviving verdict is the most decisive finding and no
+`if`-nesting is needed. `Invalid` is assigned last because a malformed experiment
+must never be composed into a judgement, the same principle as case 9.
+
+Because each component is an ordinary function, composition composes: `compose_not`
+of `compose_all` of any list of `judge(...)` results is just a call.
+
+## Judgement trail
+
+A verdict that only prints a label cannot be audited. The reference records one
+`ConditionOutcome { condition, result, note }` per leaf and an `OracleEvaluation
+{ result, conditions }` around them, so the Pep engine now does the same:
+
+```pep
+type ConditionOutcome { label: Str, verdict: Verdict }
+type Evaluation { result: Verdict, trail: List[ConditionOutcome] }
+
+fn outcome(label: Str, verdict: Verdict) -> ConditionOutcome
+fn evaluate_all(trail: List[ConditionOutcome]) -> Evaluation
+fn evaluate_any(trail: List[ConditionOutcome]) -> Evaluation
+fn evaluate_not(negated: ConditionOutcome) -> Evaluation
+fn explain(evaluation: Evaluation) -> Unit        // human-readable
+fn say_trail(evaluation: Evaluation) -> Unit      // machine-readable
+```
+
+Two details are copied deliberately rather than invented:
+
+- **A combinator does not record itself.** Only leaves appear in the trail. The one
+  exception is a childless `all`/`any`, which records the synthetic outcome
+  `("all: []", Undetermined, "empty combinator: nothing to judge")` because
+  otherwise nothing in the trail would explain the verdict.
+- **`not` records the leaf, not the negation.** The leaf keeps the verdict it
+  actually reached and only the composed result inverts, because "what was seen"
+  and "what was concluded" are different facts.
+
+Leaf labels use the reference's own `describe(cond)` wording — `exit_code run:0
+equals 1` — so a Pep trail and a Rust receipt trail are directly comparable. The
+differential exploits exactly that.
+
+`say_trail` emits one record per line (`RESULT <label>`, then repeated `LEAF
+<condition> <label>`) because Pep has no `Str` concatenation, so a positional
+format is the honest one.
+
+## Recursive oracle expression
+
+Composition over a flat list is not the reference's shape. `OracleExpr` is a
+recursive tree, and A4 recursive tagged unions make that expressible directly:
+
+```pep
+type OracleExpr =
+  LeafNode(ConditionOutcome) |
+  AllNode(List[OracleExpr]) |
+  AnyNode(List[OracleExpr]) |
+  NotNode(OracleExpr)
+
+fn evaluate_tree(expr: OracleExpr) -> Evaluation
+```
+
+Two facts were measured against the real framework before this was written, because
+guessing either one yields a wrong oracle that still looks plausible:
+
+1. **A combinator combines its direct child RESULTS, not the flattened leaves.**
+   Kleene AND/OR are associative, so for pure nesting the difference is invisible —
+   but it is decisive once `not` is nested. Measured: with exit 1,
+   `all[not(equals 0), equals 1]` is **PROVEN** in the reference (the leaves are
+   `NotFalsified` and `Falsified`; `not(NotFalsified)` is `Falsified`, and
+   `Falsified AND Falsified` is `Falsified`). Flattening the leaves instead gives
+   `NotFalsified AND Falsified` = NOT OBSERVED. The self-test case and the
+   differential both pin that case precisely for this reason.
+2. **The trail is depth-first, left to right**, leaves only, and `not` leaves the
+   child's trail untouched while inverting only the result it returns.
+
+So `evaluate_tree_all` accumulates two parallel things: each child's composed
+`Verdict` for the Kleene step, and each child's trail concatenated in evaluation
+order for the explanation. The two are deliberately not derived from each other.
+
+## Multi-step evidence and step references
+
+An `exit_code` condition names a step. Reading `eval_condition` closely shows the
+reference resolves that name in three ordered steps, and that only two of them are
+evidence problems:
+
+| Order | Reference step | On failure |
+| --- | --- | --- |
+| 1 | `parse_step_ref(step)` | **validation** — the spec is INVALID |
+| 2 | `find_step(steps, phase, index)` | Undetermined, `step ... did not execute` |
+| 3 | `record.exit_code` | Undetermined, `step ... produced no exit code` |
+
+Step 1 is the surprising one. It is tempting to model an unknown phase as the
+defensive `bad step reference` → Undetermined branch inside `eval_condition`, but
+`validate_condition` calls `parse_step_ref` first, so the spec never reaches
+evaluation. Measured against the framework:
+
+| Spec step | Verdict |
+| --- | --- |
+| `run:0` | PROVEN / NOT OBSERVED, depending on `equals` |
+| `run:9` (not executed) | INCONCLUSIVE |
+| `setup:0` (wrong phase, no such record) | INCONCLUSIVE |
+| `bogus:0` (unknown phase) | **INVALID** |
+| `run0` (no colon) | **INVALID** |
+| `run:x` (non-numeric index) | **INVALID** |
+
+So `judge_step_ref` validates the mode and the phase first and answers `Invalid` for
+either, matching the reference's validate-before-evaluate ordering and the same
+vacuity principle as self-test case 9.
+
+```pep
+type EvidenceStep { phase: Str, index: Int, exit: ExitObservation }
+
+type StepResolution =
+  ResolvedExit(Int) |
+  StepNotExecuted(Str) |
+  StepHasNoExitCode(Str)
+
+fn judge_step_ref(mode: Mode, steps: List[EvidenceStep], phase: Str, index: Int) -> Verdict
+```
+
+`EvidenceStep` gained a `phase` because a step record genuinely has one, and because
+without it `judge_step_ref` could not tell `run:0` from `setup:0`.
+
+The two evidence causes are kept apart on purpose. `judge_step(mode, step)` over a
+single step cannot distinguish "this step never executed" from "this step ran and
+produced no exit code", and those are different facts about a run:
+
+| Case | Verdict | Reason |
+| --- | --- | --- |
+| `run:9` against a record containing only `run:0` | INCONCLUSIVE | `step did not execute` |
+| `run:0` present with `AbsentExit("process killed")` | INCONCLUSIVE | `process killed` |
+
+`find_step` searches in record order and the first match wins, which is the
+reference's `steps.iter().find(...)`. Matching requires both phase **and** index, so
+a resolver that matched on index alone would wrongly resolve `setup:0`.
+
+## Condition: `evidence_present`
+
+The first leaf condition here that is not `exit_code`, and it is fully expressible
+because the reference reads it from captures rather than from the filesystem:
+
+```pep
+type Capture = CaptureAbsent() | CapturePresent()
+type Captures { git_diff: Capture, git_status: Capture, base_snapshot: Capture }
+
+fn judge_evidence_present(kind: Str, captures: Captures) -> Verdict
+```
+
+`git_diff`, `git_status` and `base_snapshot` are present → PROVEN; absent → NOT
+OBSERVED; any other kind → INCONCLUSIVE.
+
+**Two measured findings, and the first one contradicts the step-reference rule.**
+
+1. An unknown kind is **INCONCLUSIVE, not INVALID.** `evidence_present` has no rule
+   in `validate_condition`, so `kind: bogus` is an evaluation problem. That is the
+   exact opposite of a malformed step reference, which is a validation problem. The
+   two conditions look similar and behave differently, which is why each condition is
+   measured instead of generalised from the previous one.
+2. The runner **always** captures git state. `git_diff`, `git_status` and
+   `base_snapshot` are PROVEN even with `capture: []`, so the absence branch cannot be
+   reached by an ordinary spec run. It is modelled anyway, from the source's
+   `is_some()`, because absence is representable in the reference's type and a model
+   that cannot express it would be a weaker model. The self-test covers it; the
+   differential does not claim it.
+
+Dispatch is on the kind name and therefore per-capture, not "is any capture present".
+Self-test case 55 exists to catch that specific shortcut: with only `git_status`
+present, asking for `git_diff` must answer NOT OBSERVED.
+
+## Conditions: `file_exists` and `file_absent`
+
+These judge a **recorded** view of the worktree rather than the live filesystem, for
+the same reason the exit-code condition judges recorded steps: this engine evaluates
+evidence, it does not perform the run. A driver supplies what it observed and Pep
+decides.
+
+```pep
+type WorktreeView { present_paths: List[Str], rejected_paths: List[Str] }
+
+fn judge_file_exists(path: Str, view: WorktreeView) -> Verdict
+fn judge_file_absent(path: Str, view: WorktreeView) -> Verdict
+```
+
+Measured against the framework:
+
+| Case | Verdict |
+| --- | --- |
+| `file_exists ".git"` | PROVEN |
+| `file_exists "no-such-file.txt"` | NOT OBSERVED |
+| `file_absent ".git"` | NOT OBSERVED |
+| `file_absent "no-such-file.txt"` | PROVEN |
+| `file_exists "../outside.txt"` | INCONCLUSIVE |
+| `file_exists "C:/Windows/system.ini"` | INCONCLUSIVE |
+
+`rejected_paths` exists because the reference distinguishes a path it refused
+(`resolve_in_worktree` error → Undetermined) from a path it checked and did not find
+(NotFalsified). Collapsing the two would let a broken experiment look like a clean
+negative result, which is the same error the vacuity guard exists to prevent.
+
+**Not attempted, deliberately:** `resolve_in_worktree` normalisation itself —
+rejecting `..` escapes, absolutising, symlink policy. Pep has no string manipulation,
+so a path either arrives worktree-relative or arrives in `rejected_paths` as a host
+fact. That boundary is recorded rather than faked.
+
+This is also the first condition to use `contains` over `List[Str]` (scalar list
+membership), which exists and works.
+
+## Evidence-driven trees: all four conditions composed
+
+Until here the tree judged leaves that had already been judged. This section judges
+**conditions** against run evidence, so one oracle can mix condition types — which is
+what a real bat does, and the first time this engine composes more than one condition
+type in a single judgement.
+
+```pep
+type Condition =
+  ExitCodeCondition(Mode, Str, Int) |
+  EvidencePresentCondition(Str) |
+  FileExistsCondition(Str) |
+  FileAbsentCondition(Str)
+
+type RunEvidence {
+  steps: List[EvidenceStep],
+  captures: Captures,
+  worktree: WorktreeView
+}
+
+type EvidenceExpr =
+  ConditionLeaf(Str, Condition) |
+  AllOf(List[EvidenceExpr]) |
+  AnyOf(List[EvidenceExpr]) |
+  NotOf(EvidenceExpr)
+
+fn evaluate_evidence_tree(expr: EvidenceExpr, evidence: RunEvidence) -> Evaluation
+```
+
+Measured against the framework (exit 1, clean clone):
+
+```yaml
+oracle:
+  all:
+    - { type: exit_code, step: run:0, equals: 1 }
+    - { type: evidence_present, kind: git_diff }
+    - { type: file_exists, path: ".git" }
+    - { type: file_absent, path: "no-such-file.txt" }
+```
+
+→ **PROVEN**, four leaves, in exactly that order, with labels `exit_code run:0 equals
+1`, `evidence_present git_diff`, `file_exists .git`, `file_absent no-such-file.txt`.
+The differential compares result *and* the full leaf trail for four such trees.
+
+`EvidenceExpr` is a second tree type rather than a fifth case on `OracleExpr`. A leaf
+here is a condition still to be judged, not a finished judgement; without generics on
+this base one parameterised tree cannot be both, and keeping them apart keeps
+`evaluate_tree`'s contract exactly as it was — it never has to answer a node it has no
+evidence for.
+
+Leaf labels are supplied by the caller because the reference's `describe(cond)`
+renders arguments (`exit_code run:0 equals 1`) and Pep has no string concatenation.
+The label is descriptive text; every verdict is still decided in Pep.
+
+`condition_name(condition)` gives the bare kind name for callers that do not need the
+arguments.
+
+## Conditions: `path_changed` and `path_unchanged`
+
+```pep
+type WorktreeChanges { changed_paths: List[Str], untracked_paths: List[Str] }
+type ChangeEvidence = ChangeStatusMissing() | ChangeStatusRecorded(WorktreeChanges)
+
+fn judge_path_changed(path: Str, evidence: ChangeEvidence) -> Verdict
+fn judge_path_unchanged(path: Str, evidence: ChangeEvidence) -> Verdict
+```
+
+The reference derives "changed" from `git status --porcelain` plus its untracked
+list: a path matches the column-3 entry, a rename target (`old -> new`), any
+`" -> "` segment, or the untracked list. That parsing is string slicing Pep cannot
+do, so a driver supplies the already-extracted path sets and Pep decides.
+
+Measured with a throwaway repo whose working tree the *attack step* modifies (the
+runner refuses to start on an already-dirty target):
+
+| Case | Verdict |
+| --- | --- |
+| `path_changed "tracked.txt"` (modified by the attack) | PROVEN |
+| `path_changed "wrote.txt"` (left untracked by the attack) | PROVEN |
+| `path_changed "untouched.txt"` | NOT OBSERVED |
+| `path_unchanged "untouched.txt"` | PROVEN |
+| `path_unchanged "tracked.txt"` | NOT OBSERVED |
+| no `git_status` capture | INCONCLUSIVE |
+
+The untracked row is the one worth naming: the reference merges untracked paths into
+the same judgement, so a model that only read tracked modifications would answer
+NOT OBSERVED for a file the bat had just created.
+
+A missing `git_status` capture is INCONCLUSIVE, not a negative result — the
+reference says `git status capture missing` rather than pretending the path did not
+change. That branch is representable here but unreachable through an ordinary run,
+because the runner always captures git state.
+
+Both conditions are also available as tree leaves: `PathChangedCondition(path)` and
+`PathUnchangedCondition(path)`.
+
+## Source-selector validation: the decidable half of `text_contains`
+
+`text_contains`, `text_matches` and `json_value_equals` all call `validate_source`
+before reading a single byte, so a malformed source is a *specification* problem and
+Pep can judge it exactly. Measured against the framework:
+
+| Spec source | Verdict |
+| --- | --- |
+| no source at all | INVALID |
+| `path` + `evidence` | INVALID |
+| `path` + `step` | INVALID |
+| `path` + `stream` | INVALID |
+| `step` + `stream: bogus` | INVALID |
+| `step` + `stream: stderr` | accepted |
+| `path` to a readable file | PROVEN / NOT OBSERVED (the search itself) |
+| `path` present but unreadable | INCONCLUSIVE |
+
+The last two rows are the point: a *valid* source that cannot be read is Undetermined,
+not Invalid. Validation and reading are different phases, and conflating them would
+turn an unreadable file into a malformed spec.
+
+```pep
+type SourceField = FieldAbsent() | FieldPresent(Str)
+type StepSource = NoStepSource() | StepAt(Str, Int)
+type SourceSelector { path: SourceField, evidence: SourceField, step: StepSource, stream: SourceField }
+
+fn validate_source(selector: SourceSelector) -> SourceValidation
+fn judge_source_only(selector: SourceSelector) -> Verdict
+```
+
+`judge_source_only` returns the reference's own INVALID verdict for a malformed
+source, and answers honestly `Inconclusive("substring search needs str_bytes(Str) ->
+SourceBytes")` for a well-formed one. When the primitive lands, only that second
+branch changes — the validation half is already correct and differential-tested.
+
+The step reference arrives already split into phase and index because Pep cannot slice
+a string; everything after the split is judged here. The `:` split and the
+non-numeric-index rejection remain an explicit host boundary, not an invented
+primitive.
+
+## Condition: `text_contains`, decided as far as it can be
+
+The reference loads the source, *then* tests the needle, and an empty needle matches
+any text. Measured in exactly that order:
+
+| Source | Needle | Verdict |
+| --- | --- | --- |
+| readable path | `""` | PROVEN |
+| readable path | `"zzz-no-such-text-zzz"` | NOT OBSERVED |
+| unreadable path | `""` | INCONCLUSIVE |
+| step source | `""` | PROVEN |
+
+The third row is the one that matters, and it is why this is not simply "empty needle
+always wins": **an unloadable source is Undetermined even for a needle that matches
+anything**, because the load happens before the test. A model that short-circuited on
+the needle would report PROVEN for a source it never read.
+
+```pep
+type SourceAvailability = SourceLoaded() | SourceUnavailable(Str)
+
+fn judge_text_contains(selector: SourceSelector, needle: Str,
+                       availability: SourceAvailability) -> Verdict
+```
+
+Precedence, highest first: malformed source → INVALID; unloadable source →
+INCONCLUSIVE; empty needle → PROVEN; non-empty needle over a loaded source →
+INCONCLUSIVE naming `str_bytes`.
+
+`text_contains` is now **implemented**, not merely partly decided. `str_contains(Str, Str)
+-> Bool` provides the search, and the remaining `SourceAvailability` flag was replaced by
+`SourceContent`, which carries what the capture actually is:
+
+```pep
+type SourceContent =
+  SourceContentText(Str) |          // decoded as UTF-8: searchable in Pep
+  SourceContentNotUtf8(Str) |       // present, but not valid UTF-8
+  SourceContentUnavailable(Str)     // absent or unreadable
+```
+
+That third distinction is the part worth stating plainly, and it is why the type is not
+just `Str`. The reference byte-searches a `&[u8]` haystack with `needle.as_bytes()`, so it
+answers for any captured bytes at all. Pep's `str_contains` takes two `Str` values, so it
+can only search a capture that decoded as UTF-8. The three cases are therefore kept apart:
+
+| Capture | Pep | Reference |
+| --- | --- | --- |
+| valid UTF-8 text | the search runs; verdicts agree | same |
+| present, not UTF-8 | **INCONCLUSIVE** | byte-searches and answers |
+| absent or unreadable | INCONCLUSIVE (load precedes search) | same |
+
+A lossy decode was rejected deliberately. `from_utf8_lossy`-style substitution would
+manufacture a `Str` the reference never saw, so an empty needle would fire on a capture
+that was never read as text — turning a capability limit into a confident PROVEN. The
+self-test pins that case (93) and the mutation check has a guard for it.
+
+So the honest statement is: `text_contains` is implemented for UTF-8 captures, which is
+what `text_contains` over a source *means* in practice, and it declines rather than guesses
+on arbitrary bytes. `text_matches` and `json_value_equals` share the validation, load
+ordering and this boundary; they still need a regex engine and a JSON parser.
+
+## Run it
+
+```powershell
+cd test-runner/bats-pep
+.\..\..\pep.ps1 check oracle.pep --json          # status valid, 0 diagnostics
+# selftest calls run at top level because the interpreter does not call fn main
+$lib = Get-Content oracle.pep -Raw; $st = Get-Content selftest.pep -Raw
+New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
+[IO.File]::WriteAllText("$PWD\..\..\_build\composed.pep", $lib + "`n" + $st, [Text.UTF8Encoding]::new($false))
+.\..\..\pep.ps1 run ..\..\_build\composed.pep
+```
+
+Observed (91 cases; each prints its verdict label then its reason):
+
+| # | Inputs | Verdict |
+| --- | --- | --- |
+| 1 | `EqualsMode(1)`, `ObservedExit(1)` | PROVEN |
+| 2 | `EqualsMode(1)`, `ObservedExit(0)` | NOT OBSERVED |
+| 3 | `NotEqualsMode(0)`, `ObservedExit(0)` | NOT OBSERVED |
+| 4 | `NotEqualsMode(0)`, `ObservedExit(2)` | PROVEN |
+| 5 | `EqualsMode(7)`, `ObservedExit(3)` | NOT OBSERVED |
+| 6 | `BothModes(1, 0)`, `ObservedExit(1)` | INVALID |
+| 7 | `NoMode(...)`, `ObservedExit(1)` | INVALID |
+| 8 | `EqualsMode(1)`, `AbsentExit(...)` | INCONCLUSIVE |
+| 9 | `BothModes(1, 0)`, `AbsentExit(...)` | INVALID (validation outranks missing evidence) |
+| 10 | `judge_step` over `EvidenceStep{exit: ObservedExit(1)}` | PROVEN |
+| 11 | `judge_step` over `EvidenceStep{exit: AbsentExit(...)}` | INCONCLUSIVE |
+| 12 | `compose_all([Proven])` | PROVEN |
+| 13 | `compose_all([Proven, Proven])` | PROVEN |
+| 14 | `compose_all([Proven, NotObserved])` | NOT OBSERVED |
+| 15 | `compose_all([Proven, Inconclusive])` | INCONCLUSIVE |
+| 16 | `compose_all([Inconclusive, NotObserved])` | NOT OBSERVED |
+| 17 | `compose_all([])` | INCONCLUSIVE (empty combinator) |
+| 18 | `compose_all([Proven, Invalid(...)])` | INVALID (child's own reason survives) |
+| 19 | `compose_any([NotObserved, Proven])` | PROVEN |
+| 20 | `compose_any([NotObserved, NotObserved])` | NOT OBSERVED |
+| 21 | `compose_any([NotObserved, Inconclusive])` | INCONCLUSIVE |
+| 22 | `compose_any([Inconclusive, Proven])` | PROVEN |
+| 23 | `compose_any([])` | INCONCLUSIVE (empty combinator) |
+| 24 | `compose_any([Proven, Invalid(...)])` | INVALID |
+| 25 | `compose_not(Proven)` | NOT OBSERVED |
+| 26 | `compose_not(NotObserved)` | PROVEN |
+| 27 | `compose_not(Inconclusive)` | INCONCLUSIVE |
+| 28 | `compose_not(Invalid)` | INVALID |
+| 29 | `compose_all` over two real `judge(...)` verdicts | NOT OBSERVED |
+| 30 | `evaluate_all` over two Proven leaves | PROVEN |
+| 31 | `evaluate_all` over Proven + NotObserved | NOT OBSERVED |
+| 32 | `evaluate_any` over NotObserved + Proven | PROVEN |
+| 33 | `evaluate_all([])` | INCONCLUSIVE |
+| 34 | `evaluate_not(Proven leaf)` | NOT OBSERVED |
+| 35 | `evaluate_all` over Proven + Invalid child | INVALID |
+| 36 | `evaluate_tree(LeafNode(Proven leaf))` | PROVEN |
+| 37 | `all[not(equals 0), equals 1]` on exit 1 | PROVEN (the flattening discriminator) |
+| 38 | `not(all[equals 1, equals 1])` | NOT OBSERVED |
+| 39 | `all[any[equals 0, equals 1], equals 1]` | PROVEN |
+| 40 | `any[not(equals 1), equals 0]` | NOT OBSERVED |
+| 41 | `evaluate_tree(AllNode([]))` | INCONCLUSIVE |
+| 42 | `run:0` exit 1, `equals 1` | PROVEN |
+| 43 | `run:0` exit 1, `equals 0` | NOT OBSERVED |
+| 44 | `run:9` against `[run:0]` | INCONCLUSIVE (`step did not execute`) |
+| 45 | phase `bogus` | INVALID (`bad step reference: unknown phase`) |
+| 46 | `setup:0` against `[run:0]` | INCONCLUSIVE (phase guard) |
+| 47 | `run:0` present with `AbsentExit(...)` | INCONCLUSIVE (`process killed`) |
+| 48 | `[run:0 exit 1, run:1 exit 2]`, `run:1`, `equals 2` | PROVEN (index guard) |
+| 49 | `BothModes` with an empty step list | INVALID (vacuity guard) |
+| 50 | `git_diff`, all captures present | PROVEN |
+| 51 | `git_diff`, nothing captured | NOT OBSERVED |
+| 52 | `git_status`, all present | PROVEN |
+| 53 | `base_snapshot`, nothing captured | NOT OBSERVED |
+| 54 | kind `bogus` | INCONCLUSIVE (`unknown evidence kind`) |
+| 55 | `git_diff` absent but others present | NOT OBSERVED (dispatch guard) |
+| 56 | `file_exists ".git"` | PROVEN |
+| 57 | `file_exists "no-such-file.txt"` | NOT OBSERVED |
+| 58 | `file_absent ".git"` | NOT OBSERVED |
+| 59 | `file_absent "no-such-file.txt"` | PROVEN |
+| 60 | `file_exists "../outside.txt"` (rejected path) | INCONCLUSIVE |
+| 61 | `file_absent` absolute path (rejected) | INCONCLUSIVE |
+| 62 | `all` of exit + evidence + `file_exists` + `file_absent` | PROVEN |
+| 63 | `all` of exit fires + `file_exists` misses | NOT OBSERVED |
+| 64 | `any` of `file_exists` missing + present | PROVEN |
+| 65 | `not` of `file_exists .git` | NOT OBSERVED |
+| 66 | `all` with no children | INCONCLUSIVE |
+| 67 | `trail_size` of the case-62 tree | `4` |
+| 68 | `path_changed "tracked.txt"` | PROVEN |
+| 69 | `path_changed "fresh.txt"` (untracked counts) | PROVEN |
+| 70 | `path_changed "nothing.txt"` | NOT OBSERVED |
+| 71 | `path_unchanged "nothing.txt"` | PROVEN |
+| 72 | `path_unchanged "tracked.txt"` | NOT OBSERVED |
+| 73 | no `git_status` capture | INCONCLUSIVE |
+| 74 | source `path` only | INCONCLUSIVE (search unavailable) |
+| 75 | source `step` only, default stream | INCONCLUSIVE |
+| 76 | source `step` + `stream: stderr` | INCONCLUSIVE |
+| 77 | no source at all | INVALID |
+| 78 | `path` + `evidence` | INVALID |
+| 79 | `path` + `stream` | INVALID |
+| 80 | `step` + `stream: bogus` | INVALID |
+| 81 | `step` phase `bogus` | INVALID |
+| 82 | readable source, needle `""` | PROVEN |
+| 83 | readable source, needle `"ref"` | INCONCLUSIVE |
+| 84 | unloadable source, needle `""` | INCONCLUSIVE (ordering guard) |
+| 85 | step source, needle `""` | PROVEN |
+| 86 | malformed source, needle `""` | INVALID |
+| 87 | malformed source + failed load | INVALID (vacuity guard) |
+| 88 | tree leaf `text_contains`, needle `""` | PROVEN |
+| 89 | tree leaf `text_contains`, needle `"ref"` | INCONCLUSIVE |
+| 90 | `all` of an exit leaf + a text leaf | PROVEN |
+| 91 | `any` of a malformed text leaf | INVALID |
+
+Then `trail_size` of the case-90 tree is `2`.
+
+Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
+`evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
+the case-39 tree is `3`, and `explain` prints the composed verdict followed by
+every leaf: label, verdict, reason.
+
+Case 9 is the vacuity guard: a malformed experiment must never be reported as
+merely inconclusive, and case 5/6 are the infrastructure guard: missing evidence
+must never be reported as a falsification.
+
+An earlier draft of this table expected NOT OBSERVED for `equals 0, exit 0`; that
+expectation was wrong, because `equals` fires when the code equals the configured
+value. The table was corrected, not the oracle — recorded here because a wrong
+expectation is indistinguishable from a wrong implementation until it is checked.
+
+## Grammar and checker rules measured here (for Agent 1, minimal repros)
+
+Each of these cost real time, so each is recorded with the smallest case that shows
+it:
+
+1. **Nullary constructors ARE matchable — with `B()`.** An earlier revision of this
+   file claimed they were not. That was wrong, and Agent 1 confirmed the actual
+   grammar: `B()` is a nullary constructor pattern while bare `B` is a binding.
+   Measured here: `type Found = NotFound() | FoundReason(Str)` with
+   `match f { NotFound() => "none"` / `FoundReason(r) => r }` is accepted and
+   behaves correctly, so `compose_*` uses `NotFound()` patterns. What *is* true is
+   that a bare `B` arm is an irrefutable catch-all, so any arm after it is rejected
+   with `PEP_UNREACHABLE_MATCH_ARM: Match arm follows an irrefutable pattern`.
+2. **A nullary constructor must be declared with empty parentheses.** `type T = A(Int) | B`
+   fails with `PEP_PARSE_EXPECTED: Expected '('`.
+3. **Match arms are newline-separated, and arm bodies are expressions.** Two arms on
+   one line parse as one; `P(why) => { return "X" }` fails with
+   `PEP_PARSE_EXPRESSION: Expected an expression` where the `{` starts.
+
+4. **`if` requires an `else`, even an empty one.** `if c { ... }` followed by a new
+   line is rejected with `PEP_PARSE_ELSE: Expected else after if block`. `else { }`
+   with an empty body is accepted, and that is what the composition loops use.
+5. **There are no ordering comparisons.** `<` is not a token at all
+   (`PEP_UNEXPECTED_CHARACTER: Unexpected character '<'`), and `>` / `>=` are absent
+   from the operator table. Available: `<=`, `==`, `!=`, `&&`, `||`, `+`, `-`, `*`,
+   `/`. A loop counter must therefore be driven by `==`, `!=` or `<=`.
+6. **A match arm body cannot be an assignment.** `P(w) => acc = found` fails with
+   `PEP_PARSE_PATTERN: Expected a constructor pattern, binding, or wildcard` — a
+   different error from the `{ ... }` case in rule 3. Assign in an enclosing `if`
+   block around a `match` that returns a value.7. **`var` may hold a union and be reassigned across its cases.** `var acc =
+   NotFound()` then `acc = FoundReason(...)` type-checks, and `for x in xs` over a
+   `List[Union]` binds each element at the union type.
+
+## Language dependencies found (for Agent 1, reproducible)
+
+1. **No `Str` concatenation.** `"a" + b` is `PEP_TYPE_MISMATCH: Expected Int but
+   found Str`, so a verdict message cannot be composed inline; the self-test emits
+   positional lines instead. This is the main blocker for human-readable verdicts.
+2. **No generic option type.** There is no `Option[T]`, but a dedicated union per
+   absence is the honest substitute and it works: `AbsentExit(reason)` for a
+   missing exit code, and `NotFound()` / `FoundReason(r)` for a searched-for value.
+   No sentinel is needed.
+3. **The interpreter does not call `fn main`.** Top-level statements execute, so a
+   library entry point cannot be exercised by the interpreter today; the self-test
+   is therefore top-level calls rather than a `main`.
+4. **No `Str` → bytes, so `text_contains` still cannot be implemented.** This is a
+   measured wall, not a guess:
+
+   | Attempt | Result |
+   | --- | --- |
+   | `byte_length("abc")` | `PEP_TYPE_MISMATCH: Expected SourceBytes but found Str` |
+   | `byte_length(s)` for a `s: Str` parameter | `PEP_TYPE_MISMATCH: Expected SourceBytes but found Str` |
+   | `length("abc")` | `PEP_LIST_EXPECTED: Builtin 'length' expects a List, found Str` |
+   | `contains("abcdef", "cd")` | `PEP_LIST_EXPECTED: Builtin 'contains' expects a List, found Str` |
+   | `byte_length(source_bytes())` | checks, but `PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is available only for a host-authorised v2 semanticTarget` |
+
+   `byte_at`, `byte_slice` and `utf8_slice` all take `SourceBytes`, and the only
+   producer of `SourceBytes` is `source_bytes()`, which reads the program's **own**
+   source under a host-authorised v2 semanticTarget. `contains` is list membership
+   with scalar element equality, not substring search. `Str` supports `==` and `!=`
+   and nothing else.
+
+   **The precise missing primitive** is either
+   - `str_bytes(s: Str) -> SourceBytes`, after which `byte_length` / `byte_at`
+     suffice for a byte-window substring search; or
+   - `str_contains(haystack: Str, needle: Str) -> Bool` directly.
+
+   Until one exists, `text_contains`'s judgement is not attempted: it is neither
+   approximated nor delegated to Python. Composition over the conditions that *are*
+   expressible is what shipped instead.
+
+## Same-input differential against the Rust runtime
+
+`differential.py` judges the *same* inputs twice: once with a real framework Bat
+whose attack step exits with the chosen code, and once with `oracle.pep` under
+Pep's interpreter. Run with `--repo <clean clone>` (default
+`D:\Projects\wt-bats-clean`).
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `equals 1`, exit 1 | PROVEN | PROVEN | PROVEN |
+| `equals 1`, exit 0 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `not_equals 0`, exit 0 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `not_equals 0`, exit 2 | PROVEN | PROVEN | PROVEN |
+| `equals 7`, exit 3 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| both modes set | INVALID | INVALID | INVALID |
+| neither mode set | INVALID | INVALID | INVALID |
+| supervised process killed before exit | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `all: []` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `any: []` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `all` fired + not fired | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `any` not fired + fired | PROVEN | PROVEN | PROVEN |
+| `not` fired | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `not` not fired | PROVEN | PROVEN | PROVEN |
+| `all` with a malformed child | INVALID | INVALID | INVALID |
+| `any` with an unparseable child | INVALID | INVALID | INVALID |
+| `all` with an unexecuted step (`run:9`) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+
+Composition is one claim; the trail is a stronger one. For six more specs the
+differential compares Rust's own `oracle.conditions` against the Pep `Evaluation`
+trail — the same leaf labels and the same per-leaf verdicts, not just the same
+composed result:
+
+| Trail case | Leaves | Rust trail | Pep trail |
+| --- | --- | --- | --- |
+| `all` fired + not fired | 2 | `Falsified`, `NotFalsified` | PROVEN, NOT OBSERVED |
+| `all` fired + fired | 2 | `Falsified`, `Falsified` | PROVEN, PROVEN |
+| `any` not fired + fired | 2 | `NotFalsified`, `Falsified` | NOT OBSERVED, PROVEN |
+| `not` not fired | 1 | `NotFalsified` | NOT OBSERVED |
+| `all: []` | 1 | `all: []` Undetermined | INCONCLUSIVE (synthetic) |
+| `all` fired + unexecuted step | 2 | `Falsified`, `Undetermined` | PROVEN, INCONCLUSIVE |
+| `all[not(equals 0), equals 1]` | 2 | `NotFalsified`, `Falsified` | NOT OBSERVED, PROVEN |
+| `not(all[equals 1, equals 1])` | 2 | `Falsified`, `Falsified` | PROVEN, PROVEN |
+| `all[any[equals 0, equals 1], equals 1]` | 3 | `NotFalsified`, `Falsified`, `Falsified` | NOT OBSERVED, PROVEN, PROVEN |
+| `any[not(equals 1), equals 0]` | 2 | `Falsified`, `NotFalsified` | PROVEN, NOT OBSERVED |
+
+Those four nested rows are what distinguish "combines child results" from "combines
+flattened leaves": in each one the flattened composition answers differently from
+the reference, and the Pep engine matches the reference.
+
+Step references are compared separately, as verdict-only cases, because an INVALID
+spec is never evaluated and therefore has no trail:
+
+| Step reference | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `step: run:0` | PROVEN | PROVEN | PROVEN |
+| `step: run:9` (not executed) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `step: setup:0` (wrong phase) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `step: bogus:0` (unknown phase) | INVALID | INVALID | INVALID |
+
+`evidence_present` is compared as verdict-only cases too:
+
+| Evidence kind | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `git_diff` | PROVEN | PROVEN | PROVEN |
+| `git_status` | PROVEN | PROVEN | PROVEN |
+| `base_snapshot` | PROVEN | PROVEN | PROVEN |
+| `bogus` (unknown kind) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+
+`file_exists` / `file_absent` are compared against a clean clone, so `.git` is present
+and `no-such-file.txt` is not:
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `file_exists ".git"` | PROVEN | PROVEN | PROVEN |
+| `file_exists "no-such-file.txt"` | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `file_absent ".git"` | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `file_absent "no-such-file.txt"` | PROVEN | PROVEN | PROVEN |
+| `file_exists "../outside.txt"` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+
+Mixed-condition trees are compared on result **and** full leaf trail, so a leaf that
+is judged correctly but recorded in the wrong order still shows up:
+
+| Tree | Rust runtime | Pep oracle | Leaves |
+| --- | --- | --- | --- |
+| `all` of exit + evidence + `file_exists` + `file_absent` | PROVEN | PROVEN | 4 |
+| `all` of exit fires + `file_exists` misses | NOT OBSERVED | NOT OBSERVED | 2 |
+| `any` of `file_exists` missing + present | PROVEN | PROVEN | 2 |
+| `not` of `file_exists .git` | NOT OBSERVED | NOT OBSERVED | 1 |
+| `all` of exit + `text_contains` (empty needle) | PROVEN | PROVEN | 2 |
+
+`path_changed` / `path_unchanged` run against a throwaway repo whose working tree the
+Bat's own attack step modifies, because the runner refuses to start on a dirty target:
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `path_changed` tracked file | PROVEN | PROVEN | PROVEN |
+| `path_changed` untracked file | PROVEN | PROVEN | PROVEN |
+| `path_changed` untouched path | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `path_unchanged` untouched path | PROVEN | PROVEN | PROVEN |
+| `path_unchanged` changed file | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+
+Source selectors are compared as verdict-only cases, and only the malformed ones: for a
+valid source the reference performs the byte search while Pep honestly reports the
+missing primitive, and comparing those would be comparing a capability gap to a
+verdict.
+
+| Spec source | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| no source | INVALID | INVALID | INVALID |
+| `path` + `evidence` | INVALID | INVALID | INVALID |
+| `path` + `step` | INVALID | INVALID | INVALID |
+| `path` + `stream` | INVALID | INVALID | INVALID |
+| `step` + `stream: bogus` | INVALID | INVALID | INVALID |
+| `step` phase `bogus` | INVALID | INVALID | INVALID |
+
+`text_contains` is compared only where Pep can actually decide it — an empty needle over
+a source whose load state is known. A non-empty needle is excluded on purpose: the
+reference performs the search while Pep reports the missing primitive, and comparing a
+capability gap to a verdict would be dishonest.
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| readable path, needle `""` | PROVEN | PROVEN | PROVEN |
+| missing path, needle `""` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| step source, needle `""` | PROVEN | PROVEN | PROVEN |
+
+`SUMMARY cases=59 mismatches=0`.
+
+One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
+`exit_code` sets both modes; the reference rejects it at **run** time with verdict
+`INVALID` and `status: Invalid` ("oracle not evaluated"). The differential first
+compared the wrong phase and reported a false disagreement. Validating the
+validation-phase assumption is part of the work.
+
+The "step produced no exit code" path is now compared at runtime too: the Bat
+starts a supervised `Start-Sleep` process and kills it before it exits, so the step
+has no exit code. The reference answers Undetermined and the Pep oracle answers
+INCONCLUSIVE for the same recorded inputs (executed, no exit code). A kill or crash
+is never a falsification on either side.
+
+## Does the suite detect bugs?
+
+Agreeing with the reference is one claim; being *sensitive to defects* is another. A
+suite of ninety-odd cases that still passes after `all` and `any` have their precedence
+swapped is not evidence, however long it looks.
+
+`mutation_check.py` applies nine single-defect mutations to `oracle.pep` and fails if any
+of them leaves the self-test output unchanged. Each mutation is a plausible mistake
+rather than a random character flip: an inverted comparison, a dropped guard, an ignored
+input field, or a confident verdict returned where the reference demands a cautious one.
+
+| Mutation | Detected at |
+| --- | --- |
+| `equals` comparison inverted | output line 0 |
+| `not` stops inverting | line 50 |
+| `run` phase name misspelled | line 93 |
+| untracked paths ignored by `path_changed` | line 146 |
+| unloadable source fires | line 176 |
+| `find_step` ignores the phase | line 101 |
+| empty `all` fires | line 22 |
+| both modes no longer INVALID | line 10 |
+| bad `stream` accepted | line 168 |
+
+`SUMMARY mutations=9 survived=0 stale=0`.
+
+A mutation whose anchor no longer matches is reported as **stale** rather than counted as
+a pass, so refactoring `oracle.pep` cannot quietly retire a guard.
+
+### Is the differential itself sensitive?
+
+A green differential could in principle be a vacuous harness. Checked directly: with a
+single deliberate defect (`equals` inverted) applied to `oracle.pep`, the differential
+reports `DISAGREE` across the leaf, composition, step-reference and trail families, then
+the file is restored byte-identically.
+
+The most useful line from that run:
+
+```
+CASE trail-all-mixed        rust=NOT OBSERVED  pep=NOT OBSERVED  leaves=2 DISAGREE
+```
+
+Both sides agree on the composed verdict and the case still fails, because a leaf verdict
+differs. That is the trail comparison doing work the verdict comparison cannot do — which
+is precisely why the trail is compared leaf by leaf rather than only as a final label.
+## Not claimed
+
+- No process/Git host adapters, no receipts, no `pep bats` CLI, no native C23
+  integration. Those are explicitly out of scope for this first kernel.
+- `text_contains` is **not yet implemented on this branch**. Its source validation,
+  load ordering and empty-needle rule are decided; the non-empty search waits only on
+  `str_contains` reaching this branch, and `TEXT_CONTAINS_LANDING.md` holds the
+  verified landing patch.- The differential covers the *expressible* slice. Process/Git host adapters,
+  receipt generation and a `pep bats` CLI remain out of scope for this mission.
+
+**Agent 1 has landed the primitive.** `str_contains(haystack: Str, needle: Str) -> Bool`
+exists at `codex/continuation-03-nested-helper@4d8ddef` with `emptyNeedle: true`, and its
+semantics were measured to agree with the reference on eight edge cases. The full
+implementation was verified against it — 91 self-test cases unchanged, and 6/6
+`text_contains` verdicts agreeing with the framework including the empty needle. It is not
+committed here because the compiler on this branch does not yet carry the builtin;
+`TEXT_CONTAINS_LANDING.md` holds the exact four-hunk patch, the fixture change and the
+evidence.
