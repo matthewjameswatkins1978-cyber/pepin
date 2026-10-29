@@ -44,6 +44,18 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   return all
 }
 
+fn list_bool_is_constant(values: List[Bool]) -> Bool {
+  var constant = true
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    constant = if hasPrevious && !(item == previous) { false } else { constant }
+    previous = item
+    hasPrevious = true
+  }
+  return constant
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
