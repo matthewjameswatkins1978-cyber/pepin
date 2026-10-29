@@ -60,6 +60,18 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   return all
 }
 
+fn list_bool_count_adjacent_equal_pairs(values: List[Bool]) -> Int {
+  var pairs = 0
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    pairs = if hasPrevious && item == previous { pairs + 1 } else { pairs }
+    previous = item
+    hasPrevious = true
+  }
+  return pairs
+}
+
 fn list_bool_is_alternating(values: List[Bool]) -> Bool {
   var alternating = true
   var hasPrevious = false
