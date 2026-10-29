@@ -322,6 +322,17 @@ fn list_int_max_index_between(values: List[Int], lower: Int, upper: Int) -> Int 
   return maximumIndex
 }
 
+fn list_int_count_between_runs(values: List[Int], lower: Int, upper: Int) -> Int {
+  var runs = 0
+  var inRun = false
+  for item in values {
+    var matches = lower <= item && item <= upper
+    runs = if matches && !inRun { runs + 1 } else { runs }
+    inRun = matches
+  }
+  return runs
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {

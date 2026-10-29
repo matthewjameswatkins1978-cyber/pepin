@@ -4917,6 +4917,36 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertEqual(result.stdout, str(expected) + "\n")
 
+    def test_pep_written_int_count_between_runs_matches_interpreter(self):
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_count_between_runs(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (
+            ("[]", -10, 10, 0),
+            ("[1, 2, 3]", 1, 3, 1),
+            ("[1, 8, 2, 9, 3]", 1, 3, 3),
+            ("[-3, -2, 4, -1, 0, 5, 2]", -3, 0, 2),
+            ("[4, 4, 4]", 4, 4, 1),
+            ("[1, 2, 3]", 5, 1, 0),
+            ("[0, 1, 0, 1, 0]", 1, 1, 2),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for index, (values, lower, upper, expected) in enumerate(cases):
+                with self.subTest(values=values, lower=lower, upper=upper):
+                    source = folder / f"int_count_between_runs_{index}.pep"
+                    source.write_text(
+                        helper
+                        + "\nfn main() -> Int {\n"
+                        + f"  return list_int_count_between_runs({values}, {lower}, {upper})\n"
+                        + "}\n"
+                        + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    result = self.invoke("run", source)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, str(expected) + "\n")
+
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
