@@ -439,3 +439,11 @@ can relay them.
   42/6). Verified with `py_compile` + strict `-fsyntax-only`
   only: zero output artifacts. Post-hold: run suite, then the
   demo, then consider the growable node-collection follow-up.
+
+## 2026-10-29 -- arena board receipt posted (issue #16)
+
+- Posted the mission-required Workshop Board receipt as comment
+  `6490765498`: HEAD `a886faf`, full deliverable list,
+  no-duplication statement vs Agent-2's branch content, INTEGRATION
+  offer with NUL join already shipped, incident hold statement with
+  file reference, post-hold gate. Verified the comment exists.
