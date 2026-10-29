@@ -578,6 +578,134 @@ def main():
     ok = om.get("outcome") == "ok" and "metrics" in om
     results.append(("O3-metrics", PASS if ok else FAIL,
                     "outcome=%s" % om.get("outcome")))
+    # v2 typed transport + host grants (set 12)
+    vlib = ("type Point { x: Int y: Int }\n"
+            "fn total(xs: List[Int]) -> Int {\n var s = 0\n"
+            " for x in xs {\n s = s + x\n }\n return s\n}\n"
+            "fn getx(p: Point) -> Int { return p.x }\n"
+            "fn main() -> Int { return 0 }\n")
+    def vsess(reqs):
+        r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                  inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(ln) for ln in (r.stdout or "").splitlines()
+                if ln.strip()]
+    vo = vsess([{"schemaVersion": 3, "op": "open", "name": "lib",
+                  "source": vlib}])
+    vdoc, vrev = vo[0]["document"], vo[0]["revision"]
+    VB = lambda tool: {"schemaVersion": 3, "toolProtocolVersion": 2,
+                       "tool": tool, "document": vdoc,
+                       "revision": vrev}
+    def VLV(vals):
+        return {"type": "List[Int]",
+                "value": [{"type": "Int", "value": str(v)}
+                            for v in vals]}
+    def VPV(x, y):
+        return {"type": "Point", "fields": [
+            {"name": "x", "value": {"type": "Int", "value": str(x)}},
+            {"name": "y", "value": {"type": "Int",
+                                        "value": str(y)}}]}
+    vr = vsess([
+        {"schemaVersion": 3, "op": "open", "name": "lib",
+         "source": vlib},
+        dict(VB("total"), op="tool_register", function="total"),
+        dict(VB("total"), op="tool_validate",
+             testVectors=[{"arguments": [VLV([1, 2, 3])],
+                           "expect": {"type": "Int", "value": "6"}}]),
+        dict(VB("total"), op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 2,
+         "op": "tool_invoke", "tool": "total",
+         "arguments": [VLV([4, 5])]},
+    ])[1:]
+    ok = (vr[0].get("status") == "Registered"
+          and vr[1].get("status") == "Validated"
+          and vr[2].get("status") == "Active"
+          and vr[3].get("result") == {"type": "Int", "value": "9"})
+    results.append(("V1-list", PASS if ok else FAIL,
+                    "invoke=%s" % vr[3].get("result")))
+    vg = vsess([
+        {"schemaVersion": 3, "op": "open", "name": "lib",
+         "source": vlib},
+        dict(VB("getx"), op="tool_register", function="getx"),
+        dict(VB("getx"), op="tool_validate",
+             testVectors=[{"arguments": [VPV(3, 4)],
+                           "expect": {"type": "Int", "value": "3"}}]),
+        dict(VB("getx"), op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 2,
+         "op": "tool_invoke", "tool": "getx",
+         "arguments": [VPV(7, 8)]},
+    ])[1:]
+    ok = (vg[3].get("result") == {"type": "Int", "value": "7"})
+    results.append(("V2-record", PASS if ok else FAIL,
+                    "invoke=%s" % vg[3].get("result")))
+    vbad = {"type": "Point", "fields": [
+        {"name": "y", "value": {"type": "Int", "value": "4"}},
+        {"name": "x", "value": {"type": "Int", "value": "3"}}]}
+    vw = vsess([
+        {"schemaVersion": 3, "op": "open", "name": "lib",
+         "source": vlib},
+        dict(VB("getx"), op="tool_register", function="getx"),
+        dict(VB("getx"), op="tool_validate",
+             testVectors=[{"arguments": [vbad],
+                           "expect": {"type": "Int", "value": "3"}}]),
+    ])[2]
+    _ve3 = vw.get("error")
+    _vc3 = _ve3.get("code") if isinstance(_ve3, dict) else _ve3
+    ok = _vc3 == "PEP_TOOL_ARGUMENT_FIELDS" or (vw.get("outcome") == "rejected" and "FIELD" in str(_ve3))
+    results.append(("V3-order", PASS if ok else FAIL,
+                    "outcome=%s" % vw.get("outcome")))
+    pv = TMP / "a3_v4.pep"
+    pv.write_bytes(b"fn probe() -> Int {\n semantic_snapshot()\n return 0\n}\n"
+                   b'say(int_text(probe()))\n')
+    try:
+        rr = _pwsh(["./pep.ps1", "run", str(pv)])
+        ok = (rr.returncode == 1
+              and "PEP_RUNTIME_SEMANTIC_CONTEXT" in (rr.stderr or ""))
+        results.append(("V4-nogrant", PASS if ok else FAIL,
+                        "rc=%d" % rr.returncode))
+    finally:
+        pv.unlink(missing_ok=True)
+    def _deep_type(n):
+        t = "Int"
+        for _ in range(n):
+            t = "List[%s]" % t
+        return t
+    def _deep_val(n):
+        v = {"type": "Int", "value": "1"}
+        inner = "Int"
+        for _ in range(n):
+            inner = "List[%s]" % inner
+            v = {"type": inner, "value": [v]}
+        return v
+    v6ok = True
+    for _n, _want in ((16, "ok"), (17, "rejected")):
+        _fn = ("fn deep(x: %s) -> Int { return 0 }\n"
+               "fn main() -> Int { return 0 }\n" % _deep_type(_n))
+        _o = vsess([{"schemaVersion": 3, "op": "open", "name": "d",
+                      "source": _fn}])
+        if _o[0].get("status") != "valid":
+            v6ok = False
+            break
+        _dd, _dr = _o[0]["document"], _o[0]["revision"]
+        _B = {"schemaVersion": 3, "toolProtocolVersion": 2,
+              "tool": "deep", "document": _dd, "revision": _dr}
+        _r = vsess([
+            {"schemaVersion": 3, "op": "open", "name": "d",
+             "source": _fn},
+            dict(_B, op="tool_register", function="deep"),
+            dict(_B, op="tool_validate",
+                 testVectors=[{"arguments": [_deep_val(_n)],
+                               "expect": {"type": "Int",
+                                          "value": "0"}}]),
+        ])[2]
+        if _want == "ok":
+            v6ok = v6ok and _r.get("outcome") == "ok"
+        else:
+            _e = _r.get("error")
+            _code = _e.get("code") if isinstance(_e, dict) else _e
+            v6ok = v6ok and (_code == "PEP_TOOL_VALUE_DEPTH"
+                             or "PEP_TOOL_VALUE_DEPTH" in str(_e))
+    results.append(("V6-depth16-17", PASS if v6ok else FAIL,
+                    "boundary-16/17"))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
