@@ -951,6 +951,65 @@ def main():
             and _fi2.get("result") == _HIV(22))
     results.append(("H2-failedswap", PASS if _ok2 else FAIL,
                     "invoke=%s" % _fi2.get("result")))
+    # Semantic snapshot content (set 17)
+    _snt = ("fn nfuncs() -> Int { let p = semantic_snapshot() return length(p.functions) }\n"
+            "fn nroots() -> Int { let p = semantic_snapshot() return length(p.roots) }\n"
+            "fn nedges() -> Int { let p = semantic_snapshot() return length(p.calls) }\n"
+            "fn main() -> Int { return 0 }\n")
+    _sng = ("fn a() -> Int { return 1 }\n"
+            "fn main() -> Int { return a() }\n")
+    def _sness(reqs):
+        _rr = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                    inp="\n".join(json.dumps(_x) for _x in reqs) + "\n")
+        return [json.loads(_ln) for _ln in (_rr.stdout or "").splitlines()
+                if _ln.strip()]
+    _so = _sness([{"schemaVersion": 3, "op": "open", "name": "t",
+                    "source": _snt},
+                   {"schemaVersion": 3, "op": "open", "name": "g",
+                    "source": _sng}])
+    _std, _str = _so[0]["document"], _so[0]["revision"]
+    _sgd, _sgr = _so[1]["document"], _so[1]["revision"]
+    _sst = {"document": _sgd, "revision": _sgr,
+            "entryFunctions": ["main"]}
+    def _snv(tool, fn, exp):
+        _B = {"schemaVersion": 3, "toolProtocolVersion": 2,
+              "tool": tool, "document": _std, "revision": _str}
+        return _sness([
+            {"schemaVersion": 3, "op": "open", "name": "t",
+             "source": _snt},
+            {"schemaVersion": 3, "op": "open", "name": "g",
+             "source": _sng},
+            dict(_B, op="tool_register", function=fn),
+            dict(_B, op="tool_validate",
+                 testVectors=[{"arguments": [], "expect": exp,
+                               "semanticTarget": _sst}]),
+        ])[3]
+    _IV0 = lambda v: {"type": "Int", "value": str(v)}
+    _r1 = _snv("nf", "nfuncs", _IV0(2))
+    _r2 = _snv("nr", "nroots", _IV0(1))
+    _r3 = _snv("ne", "nedges", _IV0(1))
+    ok = (_r1.get("status") == "Validated" and _r2.get("status") == "Validated" and _r3.get("status") == "Validated")
+    results.append(("SN-contents", PASS if ok else FAIL,
+                    "validated=%s" % [ _r1.get("status"), _r2.get("status"), _r3.get("status") ]))
+    _sB = {"schemaVersion": 3, "toolProtocolVersion": 2,
+           "tool": "nr", "document": _std, "revision": _str}
+    _sBbad = {"document": _sgd, "revision": _sgr,
+              "entryFunctions": ["nope"]}
+    _rb = _sness([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _snt},
+        {"schemaVersion": 3, "op": "open", "name": "g",
+         "source": _sng},
+        dict(_sB, op="tool_register", function="nroots"),
+        dict(_sB, op="tool_validate",
+             testVectors=[{"arguments": [], "expect": _IV0(1),
+                           "semanticTarget": _sBbad}]),
+    ])[3]
+    _eb = _rb.get("error")
+    ok = (_rb.get("outcome") == "rejected" and
+          ((isinstance(_eb, dict) and _eb.get("code") == "PEP_SEMANTIC_ROOT_NOT_FOUND") or "SEMANTIC_ROOT" in str(_eb)))
+    results.append(("SN-badentry", PASS if ok else FAIL,
+                    "outcome=%s" % _rb.get("outcome")))
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
           % (len(results) - len(fails), len(results)))
