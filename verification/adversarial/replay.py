@@ -247,6 +247,17 @@ def main():
                  " x = x + 1\n }\n return x\n}\n"
                  "say(int_text(count()))\n", exp_rc=1,
         exp_err_contains=("PEP_RUNTIME_STEP_LIMIT",))
+    _deep = ("fn down(n: Int) -> Int {\n if n == 0 { return 0 } else { }\n"
+             " return down(n - 1)\n}\n")
+    run("S5-depth-ok", _deep + "say(int_text(down(100)))\n",
+        exp_out="0\n")
+    run("S5-depth-trip", _deep + "say(int_text(down(100000)))\n",
+        exp_rc=1, exp_err_contains=("PEP_RUNTIME_CALL_DEPTH",))
+    _mut = ("fn a(n: Int) -> Int {\n if n == 0 { return 0 } else { }\n"
+            " return b(n - 1)\n}\n"
+            "fn b(n: Int) -> Int {\n return a(n - 1)\n}\n")
+    run("S5-mutual", _mut + "say(int_text(a(100000)))\n",
+        exp_rc=1, exp_err_contains=("PEP_RUNTIME_CALL_DEPTH",))
     # Records + unions
     hdr = "type Point { x: Int y: Int }\ntype Expr = Number(Int) | Add(Expr, Expr)\n"
     run("REC-access", hdr + 'say(int_text(Point { x: 1, y: 2 }.x))\n',

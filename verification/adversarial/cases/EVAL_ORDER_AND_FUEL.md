@@ -68,6 +68,20 @@ fn main() -> Unit { say("from-main") }
 | observed | `TESTED` — `run` exits 0 silently. The interpreter executes **top-level statements only** (cf. `examples/hello.pep` = one top-level `say`); `fn main` is never invoked. By contrast the C23 lane compiles `fn main() -> Int` as the native entry (`run-c23` executes it). |
 | status | No doc states `run` must call `main`, and the final draft allows top-level statements "in selected entry source" — so no defect is claimed. But this is an observable interpreter/native divergence that self-hosting must resolve explicitly: a Pep-written compiler compiled by either backend must agree on what a program's entry is. Filed as bridge question Q1 for Agent 1/2 (see outbox). Supersedes the weaker E1 note in `NEGATIVE_AND_EDGE.md` (which framed it as an unobserved return value). |
 
+## S5 — call-depth budget is independent of the step budget
+
+`fn down(n: Int) -> Int { if n == 0 { return 0 } else { } return down(n - 1) }`:
+
+| probe | observed |
+|---|---|
+| `down(100)` via `say` | `TESTED` PASS — prints `0`, rc 0 |
+| `down(100000)`, self-recursive | `TESTED` — rc 1, `PEP_RUNTIME_CALL_DEPTH` ("Maximum function call depth exceeded") with span, returned fast (depth trips long before the 1M-step budget) |
+| mutual `a↔b` at 100000 | `TESTED` — same `PEP_RUNTIME_CALL_DEPTH` with span |
+
+Depth and steps are separately policed budgets with distinct codes
+(`PEP_RUNTIME_CALL_DEPTH` vs `PEP_RUNTIME_STEP_LIMIT`), both with byte
+spans and nonzero exit. No runaway recursion is possible, silent or otherwise.
+
 ## Coverage boundary
 
 Interpreter layer only. Short-circuit/fuel/error-priority through the
