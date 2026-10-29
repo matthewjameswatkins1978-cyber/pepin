@@ -748,11 +748,11 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
           let thirdPayloadType = pep_c23_child(nodes, variant.id, "field_type", 2)
           if !patternArgument.found || !secondPatternArgument.found ||
              thirdPayloadType.found || thirdPatternArgument.found ||
-             patternArgument.node.kind != "binding_pattern" ||
-             secondPatternArgument.node.kind != "binding_pattern" ||
+             (patternArgument.node.kind != "binding_pattern" && patternArgument.node.kind != "wildcard_pattern") ||
+             (secondPatternArgument.node.kind != "binding_pattern" && secondPatternArgument.node.kind != "wildcard_pattern") ||
              !pep_c23_union_payload_type_supported(nodes, payloadType.node) ||
              !pep_c23_union_payload_type_supported(nodes, secondPayloadType.node) {
-            return pep_c23_unsupported("Pep C23 payload patterns require bindings matching a supported constructor layout")
+            return pep_c23_unsupported("Pep C23 payload patterns require bindings or wildcards matching a supported constructor layout")
           } else {}
           var bindingIndex = -1
           if result.node.kind == "name" && result.node.text == patternArgument.node.text {
@@ -796,8 +796,8 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
         } else {
           let extraPatternArgument = pep_c23_child(nodes, pattern.node.id, "argument", 1)
           if !patternArgument.found || extraPatternArgument.found ||
-             patternArgument.node.kind != "binding_pattern" {
-            return pep_c23_unsupported("Pep C23 payload patterns require one binding identifier")
+             patternArgument.node.kind != "binding_pattern" && patternArgument.node.kind != "wildcard_pattern" {
+            return pep_c23_unsupported("Pep C23 payload patterns require one binding or wildcard")
           } else {}
           if result.node.kind == "name" && result.node.text == patternArgument.node.text {
             for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }

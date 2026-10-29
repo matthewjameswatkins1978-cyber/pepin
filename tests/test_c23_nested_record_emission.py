@@ -133,7 +133,7 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             "fn unwrap(value: MaybeInt) -> Int {\n"
             "  return match value {\n"
             "    None() => 0\n"
-            "    Some(item) => item\n"
+            "    Some(_) => 42\n"
             "  }\n"
             "}\n"
             "fn main() -> Int {\n"
@@ -254,8 +254,8 @@ fn main() -> Int {
             "fn main() -> Int { let value = relay(")
         suffix = (
             ")\n  return match value {\n"
-            "    AstInteger(number, span) => span.end\n"
-            "    AstBoolean(flag, span) => 0\n"
+            "    AstInteger(_, span) => span.end\n"
+            "    AstBoolean(flag, _) => 0\n"
             "  }\n}\n")
         cases = (
             ("AstInteger(9, AstSpan { end: 23 })", "23\n", "payload_0", "field_0 = 9"),
