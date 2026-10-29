@@ -219,6 +219,22 @@ can relay them.
   Everything new is implemented-but-untested: the 19-test suite must
   be re-run green after the hold before any behavior-dependent commit.
 
+## 2026-10-29 -- probe/tool audit under hold (no execution)
+
+- Read all six file-reading probes plus demo/neg/utf8check end to
+  end: every fopen has a matching fclose on all paths, every malloc
+  a matching free, `ftell < 0` and short-read cases fail closed,
+  offsets/slices validated before use (`span`/`file` clamp via the
+  library; `fragn` rejects out-of-range up front). No defects found.
+- Two observations, no action taken: (a) the demo resets the sticky
+  `err` field directly (`out.err = ...`) — sound in that one place
+  (reserve failed before mutating) but white-box; the library
+  deliberately offers no clear-error API. (b) Six probes now share
+  the same read-plus-binary-stdout prelude verbatim; the
+  REVIEW_SLICE12 "fourth probe" threshold for factoring a shared
+  prelude is passed — queued as a post-hold refactor, verified by
+  the suite re-run, not before.
+
 ## 2026-10-29 -- slice 12: join_n probe + third hold review
 
 - New: `fragn_probe.c` joining explicit `[OFF, LEN)` file slices in

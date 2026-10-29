@@ -11,7 +11,7 @@ here invents language semantics.
 - `pep_textbuf.{h,c}` — growable byte builder: checked doubling growth,
   `append_bytes/cstr/i64/u64`, fragment join (`join` for C strings,
   `join_n` length-tagged, see INTEGRATION.md for the NUL contract),
-  file read/write, sticky-error cleanup, length-tagged join.
+  file read/write, sticky-error cleanup.
 - `pep_textbuf_core.pep` — saturating-double step + self-test `main`,
   lowered through the Pep-written C23 emitter (282 bytes; the v2
   tool-host front end fits only ~450 bytes per invocation).
@@ -24,14 +24,14 @@ here invents language semantics.
 - `pep_json.{h,c}` — string escaping mirroring the seed `json_string`.
 - `pep_jsonval.{h,c}` — explicit-shape JSON value writer (compact,
   no spaces, no DOM).
-- `pep_num.{h,c}` + `pep_utf8_core.pep`-style coverage — signed
-  decimal parse mirroring the tool-protocol Int format, round-trip
-  half of `append_i64`.
+- `pep_num.{h,c}` — signed decimal parse mirroring the tool-protocol
+  Int format (the round-trip half of `append_i64`).
 - `pep_cstr.{h,c}` — C string-literal emission (unconditional `\?`,
   fixed 3-digit octal, no trigraphs or octal-merge hazards).
 - `*_probe.c`, `demo_textbuf.c`, `utf8check.c` — test drivers and the
-  first real tools on the library (`frag_probe` joins argv fragments, `fragn_probe` joins explicit file slices NUL-safely; probes print deterministic output;
-  `utf8check FILE...` validates UTF-8).
+  first real tools on the library: `frag_probe` joins argv fragments,
+  `fragn_probe` joins explicit file slices NUL-safely; probes print
+  deterministic output; `utf8check FILE...` validates UTF-8.
 - `INTEGRATION.md` — smallest Agent-2 handoff for the fragment join,
   including the NUL-fragment contract and the differential gate.
 - `REVIEW_SLICE{3,6,9,12}.md` — cumulative review notes with openly
@@ -57,7 +57,9 @@ corrupt byte-exact assertions. Library code never touches modes.
 
 `tests/test_textbuf_native.py`: 19/19 green on both toolchains before
 the 2026-10-29 security hold (byte-identical outputs, OCaml
-differentials, compiler-oracle round-trips). While the hold stands:
+differentials, compiler-oracle round-trips), plus 1 unexecuted
+fragn test added under the hold (20 total, pending re-run).
+While the hold stands:
 no native builds, no execution, no new test runs. Source edits made
 under the hold are syntax-checked only (`clang -fsyntax-only`,
 `python -m py_compile`) and marked implemented-but-untested; the

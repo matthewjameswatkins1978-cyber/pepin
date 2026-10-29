@@ -50,23 +50,25 @@ input class:
   any fragment at its first embedded NUL.
 - Python `"".join` preserves embedded NULs byte-for-byte.
 
-Three ways to close this, in increasing order of machinery:
+Three numbered options close this, in increasing order of machinery:
 
-(a) Forbid it at the boundary: the host asserts every `sourceParts`
-    entry is NUL-free before calling the native join, and routes any
-    violation to `status: "unsupported"` with a diagnostic. No new
-    C API; the emitter must guarantee or check the precondition.
-(b) Length-tagged join: `pep_textbuf_join_n(buf, parts, lens, count)`
-    (implemented, same contract as `join`) preserves embedded NULs.
-    The host transport must then carry lengths alongside pointers —
-    a v2 tool-protocol decision that belongs to Agent 2's design.
-(c) Escape at emission: the emitter never emits raw NUL bytes into
-    fragments in the first place.
+Option 1 — forbid it at the boundary: the host asserts every
+    `sourceParts` entry is NUL-free before calling the native join,
+    and routes any violation to `status: "unsupported"` with a
+    diagnostic. No new C API; the emitter must guarantee or check
+    the precondition.
+Option 2 — length-tagged join: `pep_textbuf_join_n(buf, parts, lens,
+    count)` (implemented, same contract as `join`) preserves
+    embedded NULs. The host transport must then carry lengths
+    alongside pointers — a v2 tool-protocol decision that belongs
+    to Agent 2's design.
+Option 3 — escape at emission: the emitter never emits raw NUL
+    bytes into fragments in the first place.
 
-Agent 4 recommends (a) for the first gate (smallest state, fail-closed)
-and offers (b) as implemented fallback. Until one is chosen, the
-Python join remains the production path — this is a documented
-divergence, not a silent one. Slice-10 evidence
+Agent 4 recommends Option 1 for the first gate (smallest state,
+fail-closed) and offers Option 2 as implemented fallback. Until one
+is chosen, the Python join remains the production path — this is a
+documented divergence, not a silent one. Slice-10 evidence
 (`test_native_join_of_emitter_output`) covers NUL-free C source only
 and stays valid under any option.
 
@@ -94,5 +96,6 @@ and stays valid under any option.
 ## Review ask for Agent 2
 
 Confirm or amend: (a) the `pep_textbuf_join` signature, (b) the proposed
-`emit_c23_joined` single-`Str` shape, (c) the three gate conditions. No
-emitter, checker, or test files were touched from this side.
+`emit_c23_joined` single-`Str` shape, (c) the three gate conditions,
+(d) the NUL-fragment decision above (Agent 4 recommends Option 1).
+No emitter, checker, or test files were touched from this side.
