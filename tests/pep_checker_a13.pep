@@ -11,7 +11,7 @@ type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDia
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
-type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact], report: CheckerReport }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
 type StatementMarker { parentId: Int, role: Str, childIndex: Int }
@@ -1403,7 +1403,7 @@ fn first_unreachable_statement(nodes: List[FlatAstNode]) -> UnreachableLookup {
   }
   return result
 }
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startNode: Int, endNode: Int) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   let returnCoverage = return_covered_scopes(nodes)
@@ -1412,6 +1412,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for node in nodes {
+    if startNode <= node.id && node.id + 1 <= endNode {
 
     if sequentialFunctionOwner && node.parentId == -1 && node.kind == "function" {
       let activeLookup = find_function_by_syntax(functions, node.id)
@@ -2119,8 +2120,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         }
       } else {}
     } else {}
+    } else {}
   }
-  let orderedDiagnostics = reverse(reversedDiagnostics)
+  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(reversedDiagnostics), unreachable: unreachable }
+}
+fn select_type_diagnostics(orderedDiagnostics: List[CheckDiagnostic]) -> List[CheckDiagnostic] {
   var selectedMismatch: CheckDiagnostic = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
   var firstMismatchFound = false
   for candidate in orderedDiagnostics {
@@ -2145,7 +2149,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
-  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
+  return reverse(selectedDiagnosticsReversed)
+}
+fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+  let raw = type_analysis_chunk(nodes, functions, bindings, references, 0, length(nodes))
+  return TypeAnalysis { expressionTypes: raw.expressionTypes, diagnostics: select_type_diagnostics(raw.diagnostics), unreachable: raw.unreachable }
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
@@ -2174,7 +2182,10 @@ fn empty_type_analysis() -> TypeAnalysis {
   return TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
 }
 fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
-  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, holes: holes, report: report }
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: 0, holes: holes, report: report }
+}
+fn make_checker_cursor_at_offset(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report }
 }
 // CheckerCursor is cooperative caller-carried state, not proof that prior phases ran. Only checker_start followed by checker_step until done yields a meaningful complete report; each step still binds document and revision to the host authority.
 fn checker_start(parsed: ParserProgress) -> CheckerCursor {
@@ -2195,6 +2206,20 @@ fn checker_start(parsed: ParserProgress) -> CheckerCursor {
     return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, nodes, [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
   } else {}
   return make_checker_cursor(authority.document, authority.revision, "functions", false, parsed, nodes, [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], emptyReport)
+}
+fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
+  var rootsInChunk = 0
+  for node in nodes {
+    if startNode <= node.id {
+      if node.parentId == -1 {
+        if 8 <= rootsInChunk {
+          return node.id
+        } else {}
+        rootsInChunk = rootsInChunk + 1
+      } else {}
+    } else {}
+  }
+  return length(nodes)
 }
 fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
   let authority = semantic_snapshot()
@@ -2219,8 +2244,20 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
     return make_checker_cursor(cursor.document, cursor.revision, "type_analysis", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, bindings, cursor.typeResult, cursor.holes, cursor.report)
   } else {}
   if cursor.phase == "type_analysis" {
-    let result = type_analysis(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
-    return make_checker_cursor(cursor.document, cursor.revision, "holes", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, result, cursor.holes, cursor.report)
+    let chunkEnd = checker_type_chunk_end(cursor.nodes, cursor.typeOffset)
+    let result = type_analysis_chunk(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
+    var reversedFacts = cursor.typeResult.expressionTypes
+    for fact in result.expressionTypes { reversedFacts = prepend(reversedFacts, fact) }
+    var reversedDiagnostics = cursor.typeResult.diagnostics
+    for item in result.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
+    let unreachable = if cursor.typeResult.unreachable.found { cursor.typeResult.unreachable } else { result.unreachable }
+    if length(cursor.nodes) <= chunkEnd {
+      let finalTypeResult = TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: select_type_diagnostics(reverse(reversedDiagnostics)), unreachable: unreachable }
+      return make_checker_cursor(cursor.document, cursor.revision, "holes", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypeResult, cursor.holes, cursor.report)
+    } else {
+      let partialTypeResult = TypeAnalysis { expressionTypes: reversedFacts, diagnostics: reversedDiagnostics, unreachable: unreachable }
+      return make_checker_cursor_at_offset(cursor.document, cursor.revision, "type_analysis", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, partialTypeResult, chunkEnd, cursor.holes, cursor.report)
+    }
   } else {}
   if cursor.phase == "holes" {
     let holes = hole_facts(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)

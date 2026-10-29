@@ -87,6 +87,7 @@ def checker_cursor_value(document, source, phase, done, parsed):
         ("functions", typed_list("CheckedFunction", [])),
         ("bindingResult", binding_result), ("nameResult", name_result),
         ("typedBindings", typed_list("BindingFact", [])), ("typeResult", type_result),
+        ("typeOffset", typed("Int", "0")),
         ("holes", typed_list("HoleFact", [])), ("report", checker_report(document, source)),
     ])
 
@@ -564,7 +565,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
   }
   return foundAt
 }"""
-        scale_names = [f"scale_helper_{index:02d}" for index in range(30)]
+        scale_names = [f"scale_helper_{index:02d}" for index in range(60)]
         scale_helpers = [
             f"fn {name}() -> Int {{ return {index} }}"
             for index, name in enumerate(scale_names)
@@ -576,7 +577,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("index-of-helpers-composed", first_helper + NL + second_helper + NL +
              "fn main() -> Int { return list_int_index_of([4, 2, 4], 4) + "
              "list_int_last_index_of([4, 2, 4], 4) }", "valid"),
-            ("thirty-helper-declarations", NL.join(scale_helpers + [scale_main]), "valid"),
+            ("sixty-helper-declarations", NL.join(scale_helpers + [scale_main]), "valid"),
             ("return-type-mismatch", 'fn bad() -> Int { return "text" }', "invalid"),
         ]
         for name, source, expected_status in cases:
@@ -631,7 +632,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(started_check.get("outcome"), "ok", started_check)
                 checker_cursor = started_check["result"]
                 phases = []
-                for _ in range(8):
+                for _ in range(len(nodes) + 8):
                     current = fields(checker_cursor)
                     if scalar(current["done"]):
                         break
@@ -646,9 +647,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     checker_cursor = stepped_check["result"]
                 current = fields(checker_cursor)
                 self.assertTrue(scalar(current["done"]), phases)
+                root_count = sum(1 for node in nodes if scalar(fields(node)["parentId"]) == -1)
+                expected_type_steps = max(1, (root_count + 7) // 8)
                 self.assertEqual(phases, [
                     "functions", "bindings", "names", "binding_types",
-                    "type_analysis", "holes", "report",
+                    *("type_analysis" for _ in range(expected_type_steps)),
+                    "holes", "report",
                 ])
                 report = fields(current["report"])
                 reference = self._reference_check(name, source)
@@ -668,11 +672,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
                         ("main", "list_int_index_of"),
                         ("main", "list_int_last_index_of"),
                     ]
-                elif name == "thirty-helper-declarations":
+                elif name == "sixty-helper-declarations":
                     expected_calls = []
                 else:
                     expected_calls = []
                 self.assertEqual(actual_calls, expected_calls, report)
+                if name == "sixty-helper-declarations":
+                    self.assertEqual(len(report["functions"]["value"]), len(scale_names) + 1)
+                    self.assertGreaterEqual(len(report["expressionTypes"]["value"]), len(scale_names))
                 expected_diagnostics = [
                     (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
                     for item in reference["diagnostics"]
