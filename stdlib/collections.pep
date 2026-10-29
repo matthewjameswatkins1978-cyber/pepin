@@ -194,6 +194,18 @@ fn list_int_is_strictly_increasing(values: List[Int]) -> Bool {
   return increasing
 }
 
+fn list_int_is_strictly_decreasing(values: List[Int]) -> Bool {
+  var decreasing = true
+  var hasPrevious = false
+  var previous = 0
+  for item in values {
+    decreasing = if hasPrevious && previous <= item { false } else { decreasing }
+    previous = item
+    hasPrevious = true
+  }
+  return decreasing
+}
+
 fn list_int_count_rises(values: List[Int]) -> Int {
   var rises = 0
   var hasPrevious = false
