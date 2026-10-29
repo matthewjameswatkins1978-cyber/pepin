@@ -295,6 +295,31 @@ def main():
         exp_err_contains=("PEP_PARSE_ELSE",))
     run("L-if-empty-else", b'if true { say("s") } else { }',
         exp_out="s\n")
+    # Calls and scope (set 7)
+    check("C-unknown-fn",
+          "fn main() -> Int { return nosuchfn() }",
+          "invalid", ("PEP_UNKNOWN_FUNCTION",))
+    check("C-arity-many",
+          "fn one() -> Int { return 1 }\n"
+          "fn main() -> Int { return one(1, 2) }",
+          "invalid", ("PEP_ARGUMENT_COUNT",))
+    check("C-arity-few",
+          "fn two(a: Int, b: Int) -> Int { return a }\n"
+          "fn main() -> Int { return two(1) }",
+          "invalid", ("PEP_ARGUMENT_COUNT",))
+    check("C-dup-fn",
+          "fn f() -> Int { return 1 }\nfn f() -> Int { return 2 }\n"
+          "fn main() -> Int { return 0 }",
+          "invalid", ("PEP_DUPLICATE_FUNCTION",))
+    check("C-dup-let", "let x = 1\nlet x = 2\nsay(int_text(x))",
+          "invalid", ("PEP_DUPLICATE_BINDING",))
+    check("C-top-return", "return 1", "invalid",
+          ("PEP_RETURN_OUTSIDE_FUNCTION",))
+    check("C-say-int", 'say(42)', "invalid", ("PEP_TYPE_MISMATCH",))
+    check("C-arg-type",
+          "fn id(x: Int) -> Int { return x }\n"
+          "fn main() -> Int { return id(true) }",
+          "invalid", ("PEP_TYPE_MISMATCH",))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
