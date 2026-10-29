@@ -549,3 +549,77 @@ six shims were removed, the app directory and every cache entry are gone, and
 `scoop list` no longer shows it. The `libharfbuzz-0` libraries and headers that
 remain on this host are unrelated copies bundled inside other official
 packages (`fontforge`, `gimp`) and were deliberately left alone.
+## 16. Reproducibility test — the detection reproduces (2026-10-29T22:47Z)
+
+Raising this because analysis of the lane showed the skip at
+`tests/test_textbuf_native.py:617-624`: the test does **not** build the
+empty-literal runner, on the belief that Defender "persistently blocks that
+exact binary". That skip was the last unverified vector in the native lane, so
+it was executed once, deliberately, in an isolated worktree.
+
+Setup: RTP and tamper protection on, no exclusions, signatures 1.463.30.0. The
+source was regenerated from the committed template with the `""` literal and
+verified **byte-identical** to the quarantined source before building
+(`725A933BC6D79AFD016D0D6787BFD8B5CAC37F4C3870D638D7D9DD8D330323A2`, 303
+bytes). Committed flags, clang 23.1.4 (MSVC target) and MinGW GCC 16.2.0.
+
+| build | binary | outcome |
+| --- | --- | --- |
+| clang | 128,000 B `0C383A7472E3DCC28EDB705C5E17BF2D7CE999B7868890858ED0646C08727E56` | **blocked at launch** ("the file contains a virus", the same class as the original WinError 225), `1116 Trojan:Win64/LummaC.NFD!MTB` at 22:47:37Z, re-detected on read at 22:47:53Z and **quarantined** |
+| gcc | 55,101 B `1428556B57CF4C70A618BE7EDC4658C83889E9511A1C1F21B3DA8F7D3D715D98` | **ran clean**, exit 0, wrote the expected zero-byte file, not flagged |
+
+### What this changes
+
+1. **The detection is reproducible.** Same source, same documented compiler,
+   fresh binary, current definitions, on demand. That is the opposite of
+   compromise evidence: a trojaned toolchain would not faithfully rebuild a
+   benign program into a flagging artefact, whereas a heuristic keyed to that
+   artefact shape does exactly this. §7s paired non-detections are explained by
+   the same mechanism — the trigger is the artefact, not the toolchain.
+2. **§15 must be narrowed.** It recorded "no detection of any file under
+   `D:\Projects`", which was true because the empty-literal runner was never
+   built in that scan. The accurate statement is: hello/tricky/all256 runners
+   under both compilers, and all 435 other build artefacts, are unflagged; the
+   **clang** empty-literal runner is still detected and quarantined. The gcc
+   build of the same program is not. The original asymmetry, therefore,
+   reproduces exactly.
+3. **The lane skip stays**, but its justification can be sharpened from
+   folklore to measurement: this shape is detected reproducibly under
+   1.463.30.0, and an exclusion would hide it rather than fix it.
+4. **A false-positive submission is now genuinely worth making.** For the first
+   time the package is complete: reproducible source, exact compiler and flags,
+   and the binary SHA-256 above. The binary itself now sits in the Defender
+   quarantine store, so submission would be Matthew action via Windows
+   Security. Nothing was uploaded by this review.
+5. **§1 confidence rises to ~90%** that the binary is benign and this is a
+   persistent Defender heuristic problem, demonstrated from two independent
+   builds seven hours apart. The heuristic trigger remains unidentified and is
+   the one thing worth reporting upstream.
+
+## 17. Native-lane clearance (recommendation, 2026-10-29T22:50Z)
+
+Evidence base: §15 full scan clean with no detections in the repository;
+`tests/test_a14_c23.py` 11/11 pass; `tests/test_textbuf_native.py` 21/22 pass;
+the one failure is a CRLF expectation bug (§17 note); no exclusion in force;
+toolchain hash-pinned to official upstream assets.
+
+**Recommendation: clear the native lane.** Clang and GCC build-and-execute work
+in `runtime/pep_text`, `runtime/pep_arena` and the A14 C23 emission path. Two
+small items remain, and neither is security:
+
+- `test_arena_demo_builds_and_runs` compares `b"42\r\n6\r\n"` against
+  `b"42\n6\n"`. This is Windows CRT stdout text-mode translation, not a compiler
+  or runtime fault, and it is a property of that one test — the other native
+  tests compare bytes written through `fopen(..., "wb")` and are unaffected. It
+  should be fixed by the lane owner. Do **not** fix it by normalising the
+  comparison if byte-exactness is the invariant being protected; fix the
+  expectation or write through a binary handle.
+- The comment at `tests/test_textbuf_native.py:617-624` says a workspace
+  exclusion "would re-enable" the skipped vector. Measurement now says that is
+  the wrong trade: the exclusion hides a reproducible detection, and every other
+  vector runs fine without one. The comment should carry the measured facts and
+  the binary hash instead.
+
+Status lines asserting an active hold (`runtime/pep_text/README.md:48`,
+`runtime/pep_arena/README.md:39-40`) are now false and should be updated by the
+lane owner. This review did not edit another lane files.
