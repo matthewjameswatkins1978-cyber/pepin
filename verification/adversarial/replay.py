@@ -320,6 +320,37 @@ def main():
           "fn id(x: Int) -> Int { return x }\n"
           "fn main() -> Int { return id(true) }",
           "invalid", ("PEP_TYPE_MISMATCH",))
+    # Control flow (set 8)
+    run("F-for-sum",
+        "var total = 0\nfor v in [1, 2, 3] {\n total = total + v\n}\n"
+        'say(int_text(total))\n', exp_out="6\n")
+    run("F-for-empty",
+        "let e: List[Int] = []\nvar total = 99\nfor v in e {\n total = v\n}\n"
+        'say(int_text(total))\n', exp_out="99\n")
+    run("F-for-nested",
+        "var n = 0\nfor row in [[1], [2, 3]] {\n for v in row {\n"
+        " n = n + v\n }\n}\nsay(int_text(n))\n", exp_out="6\n")
+    run("F-break",
+        "var i = 0\nwhile i != 3 {\n i = i + 1\n"
+        " if i == 2 { break } else { }\n}\nsay(int_text(i))\n",
+        exp_rc=1, exp_err_contains=("PEP_UNKNOWN_VARIABLE",))
+    run("F-continue",
+        "var i = 0\nvar s = 0\nwhile i != 4 {\n i = i + 1\n"
+        " if i == 2 { continue } else { }\n s = s + i\n}\n"
+        'say(int_text(s))\n',
+        exp_rc=1, exp_err_contains=("PEP_UNKNOWN_VARIABLE",))
+    run("F-not", 'say(int_text(if !true { 1 } else { 2 }))\n',
+        exp_out="2\n")
+    run("F-wildcard",
+        "type E = A(Int) | B()\n"
+        'say(int_text(match B() { A(v) => v _ => 7 }))\n',
+        exp_out="7\n")
+    run("F-wild-only",
+        "type E = A(Int) | B()\n"
+        "fn f(e: E) -> Int { return match e { _ => 0 } }\n"
+        'say(int_text(f(A(5))))\n', exp_out="0\n")
+    check("F-bare-B-decl", "type E = A(Int) | B\nsay(int_text(1))",
+          "invalid", ("PEP_PARSE_EXPECTED",))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
