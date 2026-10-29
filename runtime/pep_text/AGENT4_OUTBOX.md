@@ -131,3 +131,19 @@ can relay them.
   bytes asserted on both toolchains plus Python `json.loads` value
   assertions. 17/17 suite green.
 - No Pep files, same rule. No review this slice (next at slice 9).
+
+## 2026-10-29 -- slice 9: C literals + third review
+- New: `pep_cstr.h/.c` (`pep_cstr_escape`) rendering any bytes as a
+  safe C23 literal: unconditional `\?` (no trigraphs on any flags),
+  fixed 3-digit octal for NUL and non-printables (no digit-merge),
+  short escapes otherwise, printable ASCII raw.
+- New: `cstr_probe.c`; the test round-trips vectors through Clang and
+  GCC themselves (literal -> compiled program -> byte comparison):
+  hello, tricky (quotes/backslash/NUL+digit/DEL/0xFF/`??(`),
+  empty, and all 256 byte values. 18/18 suite green.
+- Incident: Defender persistently blocks the empty-vector runner
+  (WinError 225, not a race — bounded retry failed). Execution scoped
+  to non-empty vectors; probe still pins `""`. Workspace exclusion is
+  a human decision, not taken here; suite is green either way.
+- `REVIEW_SLICE9.md` holds the slices 7–9 cumulative review; no
+  independent reviewer available in-session.

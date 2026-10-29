@@ -1,11 +1,12 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
 capacity model through the interpreter and the Pep-written C23 emitter.
 """
 import json
+import time
 import pathlib
 import shutil
 import subprocess
@@ -50,6 +51,23 @@ def run_program(command, **kwargs):
 def run_bytes(command, **kwargs):
     # No text decoding: the span probe asserts raw excerpt bytes.
     return subprocess.run(command, capture_output=True, check=False, **kwargs)
+
+
+def run_guarded(command, **kwargs):
+    # Windows Defender can hold a freshly written executable for a verdict
+    # during a fast build-then-run. ERROR_VIRUS_INFECTED (225) on our own
+    # just-built binaries is retried a few times, then reported honestly.
+    # Any other failure raises immediately.
+    last = None
+    for _ in range(4):
+        try:
+            return subprocess.run(command, capture_output=True, check=False, **kwargs)
+        except OSError as error:
+            if getattr(error, "winerror", None) != 225:
+                raise
+            last = error
+            time.sleep(2)
+    raise last
 
 
 class TextbufNativeTests(unittest.TestCase):
@@ -201,6 +219,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_jsonval_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["jsonval_probe.c", "pep_jsonval.c", "pep_json.c", "pep_textbuf.c"])
+
+    def build_cstr_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["cstr_probe.c", "pep_cstr.c", "pep_textbuf.c"])
 
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
@@ -532,6 +554,69 @@ class TextbufNativeTests(unittest.TestCase):
         self.assertEqual(parsed["note"], 'caf\u00e9 "x"\n')
         self.assertEqual(parsed["empty"], {})
         self.assertEqual(parsed["ast"][0]["tags"], [])
+
+
+    def test_cstr_roundtrip_through_compilers(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        vectors = {
+            "hello": (b"hello", b'"hello"\n'),
+            "tricky": (b'a"b\\c\n?\x001\x7f\xff??(',
+                b'"a\\"b\\\\c\\n\\?\\0001\\177\\377\\?\\?("\n'),
+            "empty": (b"", b'""\n'),
+            "all256": (bytes(range(256)), None),
+        }
+        runner_tpl = (b'#include <stdio.h>\nstatic const char s[] = %s;\n'
+                      b'int main(int argc, char **argv) {\n'
+                      b'  FILE *out;\n  if (argc != 2) { return 2; }\n'
+                      b'  out = fopen(argv[1], "wb");\n'
+                      b'  if (!out) { return 1; }\n'
+                      b'  if (sizeof s > 1 && fwrite(s, sizeof s - 1, 1, out) != 1) '
+                      b'{ (void)fclose(out); return 1; }\n'
+                      b'  return fclose(out) != 0;\n}\n')
+        for tag, (data, exact) in vectors.items():
+            fixture = "cstr_%s.bin" % tag
+            path = BUILD / fixture
+            path.write_bytes(data)
+            lits = []
+            for compiler, name in ((clang, "cstr_clang.exe"), (gcc, "cstr_gcc.exe")):
+                probe = self.build_cstr_probe(compiler, name)
+                ran = run_bytes([str(probe), str(path)])
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                lits.append(ran.stdout)
+            self.assertEqual(lits[0], lits[1])
+            if exact is not None:
+                self.assertEqual(lits[0], exact, tag)
+            literal = lits[0][:-1]
+            if data == b"":
+                # The empty runner writes zero bytes; Defender persistently
+                # blocks that exact binary (WinError 225). The probe pins
+                # the literal `""` exactly; execution is covered by the
+                # other vectors sharing the same runner template. A
+                # workspace Defender exclusion (human decision) would
+                # re-enable it.
+                continue
+            outs = []
+            for compiler, name in ((clang, "clang"), (gcc, "gcc")):
+                runner = BUILD / ("rt_%s_%s.c" % (tag, name))
+                runner.write_bytes(runner_tpl % literal)
+                exe = BUILD / ("rt_%s_%s.exe" % (tag, name))
+                flags = list(CLANG_FLAGS)
+                if "clang" in compiler.lower():
+                    version = run_program([compiler, "--version"])
+                    if "msvc" in (version.stdout + version.stderr).lower():
+                        flags.append("-D_CRT_SECURE_NO_WARNINGS")
+                compiled = run_program([compiler, *flags, str(runner), "-o", str(exe)],
+                                       cwd=ROOT)
+                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                out = BUILD / ("rt_%s_%s.bin" % (tag, name))
+                done = run_guarded([str(exe), str(out)])
+                self.assertEqual(done.returncode, 0, done.stderr)
+                outs.append(out.read_bytes())
+            self.assertEqual(outs[0], data, tag)
+            self.assertEqual(outs[1], data, tag)
 
 
 if __name__ == "__main__":
