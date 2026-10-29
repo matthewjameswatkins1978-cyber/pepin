@@ -657,6 +657,14 @@ def main():
           "invalid", ("PEP_EMPTY_LIST_NEEDS_TYPE",))
     check("X-unterm-eof", b'say("abc',
           "invalid", ("PEP_UNTERMINATED_STRING",))
+    run("X-lead-zero", "say(int_text(007))\n", exp_out="7\n")
+    run("X-neg-zero", "say(int_text(-0))\n", exp_out="0\n")
+    check("X-neg-big",
+          "fn main() -> Int { return -(9223372036854775808) }",
+          "invalid", ("PEP_INT_LITERAL_RANGE",))
+    check("X-pattern-arity",
+          "type E = Number(Int) | B()\nfn main() -> Int { return match Number(1) { Number(a, b) => a B() => 0 } }",
+          "invalid", ("PEP_PATTERN_ARITY",))
     _ht = sess([
         {"schemaVersion": 3, "op": "open", "name": "t",
          "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},

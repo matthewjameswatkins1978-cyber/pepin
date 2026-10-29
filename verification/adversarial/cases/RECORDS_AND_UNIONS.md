@@ -22,6 +22,7 @@ seed, interpreter only). Header used below:
 | dup-arm | two `Number` arms | `TESTED` — `invalid`, `PEP_DUPLICATE_MATCH_ARM` at the second arm. |
 | match-int | `match 1 { Number(v) => v }` | `TESTED` — `invalid`, `PEP_MATCH_NON_UNION` "subject type 'Int' is not a tagged union". |
 | arity | `Number(1, 2)` | `TESTED` — `invalid`, `PEP_ARGUMENT_COUNT` "expects 1, found 2" (constructors share call-arity wording). |
+| pattern arity | `match Number(1) { Number(a, b) => a ... }` | `TESTED` — `invalid`, `PEP_PATTERN_ARITY`: patterns have their own dedicated arity code, distinct from call-site `PEP_ARGUMENT_COUNT`. |
 | fwd-ref | `type Box { p: Point }` with `Point` undeclared | `TESTED` — `invalid`, `PEP_UNKNOWN_TYPE` at the reference span. Type names must be declared before use; no forward type references at this scope. |
 
 ## Position

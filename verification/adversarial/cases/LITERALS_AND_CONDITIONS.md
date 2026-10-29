@@ -45,6 +45,12 @@ absent): accepted design earmarked, seed grammar narrower. No defect
 claimed; recorded so a future grammar change is differential-tested
 rather than assumed.
 
+## Misc numeric edges
+
+- Leading zeros (`007`) → TESTED: `valid`, prints `7` — plain decimal, no octal interpretation, no rejection.
+- Negating the out-of-range literal (`-(9223372036854775808)`) → TESTED: `invalid`, `PEP_INT_LITERAL_RANGE`. The literal is range-checked before unary negation applies — no wrap-around trick.
+- Negative zero (`-0`) → TESTED: prints `0`.
+
 ## Status
 
 No findings. A13 differential parity for these codes and any native
