@@ -89,8 +89,10 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             "fn make_box() -> Box {\n"
             "  return Box { point: Point { x: 19, y: 23 } }\n"
             "}\n"
+            "fn relay(box: Box) -> Box { return box }\n"
             "fn main() -> Int {\n"
-            "  let box = make_box()\n"
+            "  let original = make_box()\n"
+            "  let box = relay(original)\n"
             "  return box.point.x + 23\n"
             "}\n")
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
@@ -110,6 +112,12 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             self.assertRegex(
                 generated,
                 r"pep_record_\d+ pep_fn_\d+\(void\);")
+            self.assertRegex(
+                generated,
+                r"pep_record_\d+ pep_fn_\d+\(pep_record_\d+ pep_arg_\d+\);")
+            self.assertRegex(
+                generated,
+                r"pep_record_\d+ pep_result = pep_arg_\d+")
             self.assertRegex(
                 generated,
                 r"pep_record_\d+ pep_result = \(pep_record_\d+\)")
