@@ -258,6 +258,12 @@ def main():
             "fn b(n: Int) -> Int {\n return a(n - 1)\n}\n")
     run("S5-mutual", _mut + "say(int_text(a(100000)))\n",
         exp_rc=1, exp_err_contains=("PEP_RUNTIME_CALL_DEPTH",))
+    run("S6-prec", "say(int_text(2 + 3 * 4))\n", exp_out="14\n")
+    run("S6-paren", "say(int_text((2 + 3) * 4))\n", exp_out="20\n")
+    run("S6-assoc-sub", "say(int_text(10 - 3 - 2))\n", exp_out="5\n")
+    run("S6-assoc-div", "say(int_text(100 / 10 / 2))\n", exp_out="5\n")
+    check("S6-str-plus", 'say("a" + "b")',
+          "invalid", ("PEP_TYPE_MISMATCH",))
     # Records + unions
     hdr = "type Point { x: Int y: Int }\ntype Expr = Number(Int) | Add(Expr, Expr)\n"
     run("REC-access", hdr + 'say(int_text(Point { x: 1, y: 2 }.x))\n',

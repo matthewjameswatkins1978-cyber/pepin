@@ -82,6 +82,18 @@ Depth and steps are separately policed budgets with distinct codes
 (`PEP_RUNTIME_CALL_DEPTH` vs `PEP_RUNTIME_STEP_LIMIT`), both with byte
 spans and nonzero exit. No runaway recursion is possible, silent or otherwise.
 
+## S6 — arithmetic precedence and associativity are conventional
+
+| probe | observed |
+|---|---|
+| `2 + 3 * 4` | `TESTED` PASS — prints `14` (`*` binds tighter) |
+| `(2 + 3) * 4` | `TESTED` PASS — prints `20` (parens override) |
+| `10 - 3 - 2` | `TESTED` PASS — prints `5` (left-associative) |
+| `100 / 10 / 2` | `TESTED` PASS — prints `5` (left-associative; right-assoc would give 20) |
+| `"a" + "b"` | `TESTED` — `invalid`, `PEP_TYPE_MISMATCH` (binary `+` requires `Int` operands; no string concatenation, consistent with A2's emitter note) |
+
+Operator precedence/associativity (an open detail-register item) behaves conventionally in the seed for the tested shapes; no precedence table is asserted beyond these instances.
+
 ## Coverage boundary
 
 Interpreter layer only. Short-circuit/fuel/error-priority through the
