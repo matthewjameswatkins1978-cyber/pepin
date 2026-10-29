@@ -27,6 +27,22 @@ binary generation, no AV interaction) and are marked `TESTED` with exact
 commands; everything else stays `NOT_RUN`/`BLOCKED_SECURITY`, never
 green by assumption.
 
+## Reproducible replay lab
+
+`replay.py` re-executes every base-tree probe in this corpus
+(P/N/U/R/S/REC sets, 37 assertions) and asserts each receipted outcome.
+Run from the agent3 worktree root:
+
+```powershell
+python verification/adversarial/replay.py   # exit 0 iff 37/37 PASS
+```
+
+Verified 37/37 PASS at base `805062b` on 2026-10-29. Only `pep.ps1
+check/run/query/session` (OCaml seed, in-process) plus temp files — no
+C toolchain, no binaries, hold-safe. Pin-specific suites
+(`str_contains` @ A1 tip, A2 emit re-runs) are NOT replayed here;
+their receipts state exact detached-worktree commands.
+
 ## Cases
 
 - `cases/VALUE_COPY_DEC001.md` — V1-linked positive probes: list/record
