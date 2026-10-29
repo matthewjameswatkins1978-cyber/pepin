@@ -891,6 +891,54 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 
+fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int) -> PepC23Emission {
+  if depth == 8 { return pep_c23_unsupported("Pep C23 loop condition nesting exceeds the supported depth") } else {}
+  let indent = if depth == 0 { "    " } else { "      " }
+  if statement.kind == "assignment" {
+    let value = pep_c23_child(nodes, statement.id, "value", 0)
+    if !value.found { return pep_c23_unsupported("Pep C23 loop assignment has no value") } else {}
+    let lowered = pep_c23_expression(nodes, function, value.node)
+    if lowered.status != "emitted" { return lowered } else {}
+    var targetId = -1
+    var targetFound = false
+    for local in nodes {
+      if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
+        targetId = local.id
+        targetFound = true
+      } else {}
+    }
+    if !targetFound { return pep_c23_unsupported("Pep C23 loop assignments must target a direct mutable local") } else {}
+    var parts: List[Str] = [indent, "pep_local_", int_text(targetId), " = "]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ";\n")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {
+    if statement.kind == "if_statement" {
+      let condition = pep_c23_child(nodes, statement.id, "condition", 0)
+      let thenStatement = pep_c23_child(nodes, statement.id, "then", 0)
+      let elseStatement = pep_c23_child(nodes, statement.id, "else", 0)
+      if !condition.found || !thenStatement.found || !elseStatement.found || count_children(nodes, statement.id, "then") != 1 || count_children(nodes, statement.id, "else") != 1 {
+        return pep_c23_unsupported("Pep C23 loop conditionals require one condition and one statement in each branch")
+      } else {}
+      let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+      if loweredCondition.status != "emitted" { return loweredCondition } else {}
+      let loweredThen = pep_c23_loop_statement(nodes, function, thenStatement.node, depth + 1)
+      if loweredThen.status != "emitted" { return loweredThen } else {}
+      let loweredElse = pep_c23_loop_statement(nodes, function, elseStatement.node, depth + 1)
+      if loweredElse.status != "emitted" { return loweredElse } else {}
+      var parts: List[Str] = [indent, "if (!!("]
+      for part in loweredCondition.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")) {\n")
+      for part in loweredThen.sourceParts { parts = append(parts, part) }
+      parts = append(parts, indent)
+      parts = append(parts, "} else {\n")
+      for part in loweredElse.sourceParts { parts = append(parts, part) }
+      parts = append(parts, indent)
+      parts = append(parts, "}\n")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments and conditionals with assignment branches") }
+  }
+}
 fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode) -> PepC23Emission {
   let condition = pep_c23_child(nodes, loop.id, "condition", 0)
   if !condition.found || count_children(nodes, loop.id, "body") == 0 {
@@ -1026,15 +1074,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           for bodyStatement in nodes {
             if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
-              if bodyStatement.kind != "assignment" { return pep_c23_unsupported("Pep C23 for-in bodies currently require assignments to mutable integer locals") } else {}
-              var mutableTargetFound = false
-              for local in nodes {
-                if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == bodyStatement.text { mutableTargetFound = true } else {}
-              }
-              let assignedValue = pep_c23_child(nodes, bodyStatement.id, "value", 0)
-              if !mutableTargetFound || !assignedValue.found { return pep_c23_unsupported("Pep C23 for-in assignments must target a direct mutable local") } else {}
-              let assigned = pep_c23_expression(nodes, function, assignedValue.node)
-              if assigned.status != "emitted" { return assigned } else {}
+              let loweredBody = pep_c23_loop_statement(nodes, function, bodyStatement, 0)
+              if loweredBody.status != "emitted" { return loweredBody } else {}
             } else {}
           }
         } else {
@@ -1311,23 +1352,9 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
             for loopStatement in parsed.nodes {
               if loopStatement.parentId == statement.id && loopStatement.role == "body" {
-                if loopStatement.kind != "assignment" { return pep_c23_unsupported("Pep C23 for-in bodies currently require mutable local assignments") } else {}
-                let assignedValue = pep_c23_child(parsed.nodes, loopStatement.id, "value", 0)
-                if !assignedValue.found { return pep_c23_unsupported("Pep C23 assignment has no value") } else {}
-                let assigned = pep_c23_expression(parsed.nodes, node, assignedValue.node)
-                if assigned.status != "emitted" { return assigned } else {}
-                var targetId = -1
-                var targetFound = false
-                for local in parsed.nodes {
-                  if local.parentId == node.id && local.role == "statement" && local.kind == "var" && local.text == loopStatement.text {
-                    targetId = local.id
-                    targetFound = true
-                  } else {}
-                }
-                if !targetFound { return pep_c23_unsupported("Pep C23 assignment target must be a direct mutable local") } else {}
-                for part in ["    pep_local_", int_text(targetId), " = "] { bodyParts = append(bodyParts, part) }
-                for part in assigned.sourceParts { bodyParts = append(bodyParts, part) }
-                bodyParts = append(bodyParts, ";\n")
+                let loweredBody = pep_c23_loop_statement(parsed.nodes, node, loopStatement, 0)
+                if loweredBody.status != "emitted" { return loweredBody } else {}
+                for part in loweredBody.sourceParts { bodyParts = append(bodyParts, part) }
               } else {}
             }
             bodyParts = append(bodyParts, "  }\n")

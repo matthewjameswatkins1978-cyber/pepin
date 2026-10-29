@@ -1292,6 +1292,57 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(native.stderr.strip().splitlines()[-1],
                                      "PEP_RUNTIME_OVERFLOW")
 
+    def test_for_in_conditionals_selectively_update_accumulator(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "fn main() -> Int {\n"
+            "  var total = 0\n"
+            "  for item in [-3, 0, 2, 5] {\n"
+            "    if item == 0 { total = total + 10 } else {\n"
+            "      if item == 2 { total = total + 20 } else { total = total + item }\n"
+            "    }\n"
+            "  }\n"
+            "  return total\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "conditional-for-in.pep"
+            reference_source = folder / "reference.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "32\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    generated_c = folder / f"conditional-for-in-{compiler.stem}.c"
+                    result = self.invoke("run-c23", source, "--compiler", compiler,
+                                         "--emit-c", generated_c)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+                    c_source = generated_c.read_text(encoding="utf-8")
+                    self.assertIn("if (!!(", c_source)
+            unsupported_source = (
+                "fn main() -> Int {\n"
+                "  var total = 0\n"
+                "  for item in [1] {\n"
+                "    if item == 0 {\n"
+                "      total = total + 1\n"
+                "      total = total + 2\n"
+                "    } else { total = total + 3 }\n"
+                "  }\n"
+                "  return total\n"
+                "}\n"
+            )
+            unsupported = folder / "multi-statement-branch.pep"
+            unsupported.write_text(unsupported_source, encoding="utf-8", newline="\n")
+            rejected = self.invoke("run-c23", unsupported, "--compiler", CLANG)
+            self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+            self.assertIn("Pep C23 unsupported:", rejected.stderr)
+
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
