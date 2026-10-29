@@ -177,6 +177,56 @@ COMPOSITION_CASES = [
      ' judge(EqualsMode(1), AbsentExit("step did not execute"))])',
      "INCONCLUSIVE"),
 ]
+# The reference records one ConditionOutcome per leaf, labelled by `describe(cond)`.
+# Those labels are the receipt's judgement trail, so the trail is comparable data
+# rather than presentation: the Pep engine must produce the same leaf labels and the
+# same per-leaf results, not merely the same composed verdict.
+RESULT_LABEL = {
+    "Falsified": "PROVEN",
+    "NotFalsified": "NOT OBSERVED",
+    "Undetermined": "INCONCLUSIVE",
+}
+
+# (id, Rust oracle body, equivalent Pep expression over the same labelled leaves)
+TRAIL_CASES = [
+    ("trail-all-mixed",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 0",
+     'evaluate_all([outcome("exit_code run:0 equals 1",'
+     ' judge(EqualsMode(1), ObservedExit(1))),'
+     ' outcome("exit_code run:0 equals 0",'
+     ' judge(EqualsMode(0), ObservedExit(1)))])'),
+    ("trail-all-proven",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1",
+     'evaluate_all([outcome("exit_code run:0 equals 1",'
+     ' judge(EqualsMode(1), ObservedExit(1))),'
+     ' outcome("exit_code run:0 equals 1",'
+     ' judge(EqualsMode(1), ObservedExit(1)))])'),
+    ("trail-any",
+     "  any:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 0\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1",
+     'evaluate_any([outcome("exit_code run:0 equals 0",'
+     ' judge(EqualsMode(0), ObservedExit(1))),'
+     ' outcome("exit_code run:0 equals 1",'
+     ' judge(EqualsMode(1), ObservedExit(1)))])'),
+    ("trail-not",
+     "  not:\n    type: exit_code\n    step: run:0\n    equals: 0",
+     'evaluate_not(outcome("exit_code run:0 equals 0",'
+     ' judge(EqualsMode(0), ObservedExit(1))))'),
+    ("trail-all-empty", "  all: []", "evaluate_all([])"),
+    ("trail-all-absent-step",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: exit_code\n      step: run:9\n      equals: 1",
+     'evaluate_all([outcome("exit_code run:0 equals 1",'
+     ' judge(EqualsMode(1), ObservedExit(1))),'
+     ' outcome("exit_code run:9 equals 1",'
+     ' judge(EqualsMode(1), AbsentExit("step did not execute")))])'),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -245,6 +295,48 @@ def pep_expression(composed, expr):
     proc = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "run", str(composed)],
                           text=True, capture_output=True, timeout=600)
     return (proc.stdout or "").strip()
+
+def pep_trail(composed, expr):
+    """Return (result label, [(condition, label), ...]) from the Pep evaluation."""
+    source = ORACLE.read_text(encoding="utf-8") + "\nsay_trail(%s)\n" % expr
+    composed.write_text(source, encoding="utf-8", newline="\n")
+    proc = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "run", str(composed)],
+                          text=True, capture_output=True, timeout=600)
+    lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+    result, trail, i = "?", [], 0
+    while i < len(lines):
+        if lines[i] == "RESULT":
+            result = lines[i + 1]
+            i += 2
+        elif lines[i] == "LEAF":
+            trail.append((lines[i + 1], lines[i + 2]))
+            i += 3
+        else:
+            i += 1
+    return result, trail
+
+
+def rust_trail(tb, repo, workdir, ident, oracle_body):
+    """Return (result label, [(condition, label), ...]) from the reference receipt.
+
+    The receipt's `oracle.conditions` is the reference's own judgement trail, so it
+    is read as data. An INVALID spec is never evaluated and therefore has no trail.
+    """
+    body = SPEC_TEMPLATE.format(ident=ident, oracle_body=oracle_body)
+    bat = workdir / ("%s.yaml" % ident)
+    bat.write_text(body, encoding="utf-8")
+    proc = subprocess.run([str(tb), "run", "--repo", str(repo), str(bat), "--json"],
+                          text=True, capture_output=True, timeout=600)
+    try:
+        doc = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return ("HARNESS-ERROR", []), (proc.stdout or proc.stderr)[:200]
+    oracle = doc.get("oracle")
+    if not oracle:
+        return ("NO-TRAIL", []), doc.get("receipt_id", "")
+    trail = [(c.get("condition", ""), RESULT_LABEL.get(c.get("result"), "?"))
+             for c in oracle.get("conditions", [])]
+    return (RESULT_LABEL.get(oracle.get("result"), "?"), trail), doc.get("receipt_id", "")
 
 
 def main():
@@ -323,7 +415,25 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
-    total = len(CASES) + 3 + len(COMPOSITION_CASES)
+        # Judgement-trail differential: the receipt's per-leaf conditions are the
+        # reference's own trail, so both sides must report the same leaf labels, the
+        # same per-leaf results, and the same composed result.
+        for ident, oracle_body, pep_expr in TRAIL_CASES:
+            (rust_result, rust_rows), receipt = rust_trail(
+                tb, repo, workdir, ident, oracle_body)
+            pep_result, pep_rows = pep_trail(composed, pep_expr)
+            agree = rust_result == pep_result and rust_rows == pep_rows
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s leaves=%d %s" % (
+                ident, rust_result, pep_result, len(rust_rows),
+                "AGREE" if agree else "DISAGREE"))
+            if not agree:
+                print("     rust_leaves=%r" % (rust_rows,))
+                print("     pep_leaves =%r" % (pep_rows,))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
+    total = len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

@@ -86,3 +86,23 @@ show(compose_not(Invalid("both equals and not_equals were specified")))
 
 // Composition over the real exit_code engine, not over hand-written verdicts.
 show(compose_all([judge(EqualsMode(1), ObservedExit(1)), judge(NotEqualsMode(0), ObservedExit(0))]))
+
+// --- Judgement trail (Rust ConditionOutcome / OracleEvaluation) ---
+//
+// 30 trail-all-proven      evaluate_all over two Proven leaves       -> PROVEN
+// 31 trail-all-mixed       Proven + NotObserved                     -> NOT OBSERVED
+// 32 trail-any-proven      NotObserved + Proven                     -> PROVEN
+// 33 trail-all-empty       evaluate_all([])                         -> INCONCLUSIVE
+// 34 trail-not             evaluate_not(Proven leaf)                -> NOT OBSERVED
+// 35 trail-invalid-child   Proven + Invalid child                   -> INVALID//
+// Then the trail sizes (2 for a two-leaf evaluation, 1 for the synthetic empty
+// combinator outcome) and one full explanation, so the trail itself is visible.
+show(result_of(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))), outcome("exit_code run:0 equals 1 again", judge(EqualsMode(1), ObservedExit(1)))])))
+show(result_of(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))), outcome("exit_code run:0 equals 2", judge(EqualsMode(2), ObservedExit(1)))])))
+show(result_of(evaluate_any([outcome("exit_code run:0 equals 2", judge(EqualsMode(2), ObservedExit(1))), outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1)))])))
+show(result_of(evaluate_all([])))
+show(result_of(evaluate_not(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))))
+show(result_of(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))), outcome("exit_code run:0 both modes", judge(BothModes(1, 0), ObservedExit(1)))])))
+say(int_text(trail_size(evaluate_all([outcome("a", judge(EqualsMode(1), ObservedExit(1))), outcome("b", judge(EqualsMode(1), ObservedExit(1)))]))))
+say(int_text(trail_size(evaluate_all([]))))
+explain(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))), outcome("exit_code run:0 equals 2", judge(EqualsMode(2), ObservedExit(1)))]))

@@ -227,3 +227,108 @@ fn compose_not(verdict: Verdict) -> Verdict {
     Invalid(why) => Invalid(why)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Judgement trail
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//   struct ConditionOutcome { condition: String, result: OracleResult, note: Option<String> }
+//   struct OracleEvaluation { result: OracleResult, conditions: Vec<ConditionOutcome> }
+//
+// `eval` records one outcome per LEAF it actually evaluated. A combinator does not
+// record itself, with one exception: an empty `all`/`any` records a synthetic
+// outcome ("all: []", Undetermined, "empty combinator: nothing to judge"), because
+// otherwise no leaf exists to explain the verdict. This mirrors that exactly, so a
+// result can show its own reasoning instead of only asserting a label.
+
+// One judged leaf: what was looked at, and what that leaf said.
+type ConditionOutcome { label: Str, verdict: Verdict }
+
+// A composed result together with the trail that produced it.
+type Evaluation { result: Verdict, trail: List[ConditionOutcome] }
+
+fn outcome(label: Str, verdict: Verdict) -> ConditionOutcome {
+  return ConditionOutcome { label: label, verdict: verdict }
+}
+
+// The leaf verdicts of a trail, in order, so composition reads exactly the
+// evidence the trail reports rather than a parallel copy of it.
+fn verdicts_of(trail: List[ConditionOutcome]) -> List[Verdict] {
+  var verdicts: List[Verdict] = []
+  for entry in trail {
+    verdicts = append(verdicts, entry.verdict)
+  }
+  return verdicts
+}
+
+// The reference's synthetic outcome for a combinator with no children.
+fn empty_combinator(label: Str) -> ConditionOutcome {
+  return outcome(label, Inconclusive("empty combinator: nothing to judge"))
+}
+
+fn evaluate_all(trail: List[ConditionOutcome]) -> Evaluation {
+  var recorded = trail
+  var result = compose_all(verdicts_of(trail))
+  if length(trail) == 0 {
+    recorded = [empty_combinator("all: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: recorded }
+}
+
+fn evaluate_any(trail: List[ConditionOutcome]) -> Evaluation {
+  var recorded = trail
+  var result = compose_any(verdicts_of(trail))
+  if length(trail) == 0 {
+    recorded = [empty_combinator("any: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: recorded }
+}
+
+// `not` negates a judgement. The leaf it negates is still the recorded evidence,
+// so the trail keeps the leaf's own verdict and only the composed result inverts —
+// the same split the reference makes between what was seen and what was concluded.
+fn evaluate_not(negated: ConditionOutcome) -> Evaluation {
+  return Evaluation { result: compose_not(negated.verdict), trail: [negated] }
+}
+
+fn result_of(evaluation: Evaluation) -> Verdict {
+  return evaluation.result
+}
+
+fn trail_size(evaluation: Evaluation) -> Int {
+  return length(evaluation.trail)
+}
+
+// Human-readable explanation: the composed verdict, then every leaf in order.
+fn explain(evaluation: Evaluation) -> Unit {
+  say(verdict_label(evaluation.result))
+  say(verdict_reason(evaluation.result))
+  for entry in evaluation.trail {
+    say(entry.label)
+    say(verdict_label(entry.verdict))
+    say(verdict_reason(entry.verdict))
+  }
+}
+
+// Machine-readable trail, one record per line so a differential can consume it
+// positionally without string formatting (Pep has no Str concatenation).
+//
+//   RESULT <verdict label>
+//   LEAF <condition label> <verdict label>   (repeated, in order)
+//
+// The labels use the reference's own `describe(cond)` wording, so a Pep trail and
+// a Rust receipt trail are directly comparable rather than merely similar.
+fn say_trail(evaluation: Evaluation) -> Unit {
+  say("RESULT")
+  say(verdict_label(evaluation.result))
+  for entry in evaluation.trail {
+    say("LEAF")
+    say(entry.label)
+    say(verdict_label(entry.verdict))
+  }
+}

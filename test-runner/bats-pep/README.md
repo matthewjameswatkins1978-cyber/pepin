@@ -81,6 +81,42 @@ must never be composed into a judgement, the same principle as case 9.
 Because each component is an ordinary function, composition composes: `compose_not`
 of `compose_all` of any list of `judge(...)` results is just a call.
 
+## Judgement trail
+
+A verdict that only prints a label cannot be audited. The reference records one
+`ConditionOutcome { condition, result, note }` per leaf and an `OracleEvaluation
+{ result, conditions }` around them, so the Pep engine now does the same:
+
+```pep
+type ConditionOutcome { label: Str, verdict: Verdict }
+type Evaluation { result: Verdict, trail: List[ConditionOutcome] }
+
+fn outcome(label: Str, verdict: Verdict) -> ConditionOutcome
+fn evaluate_all(trail: List[ConditionOutcome]) -> Evaluation
+fn evaluate_any(trail: List[ConditionOutcome]) -> Evaluation
+fn evaluate_not(negated: ConditionOutcome) -> Evaluation
+fn explain(evaluation: Evaluation) -> Unit        // human-readable
+fn say_trail(evaluation: Evaluation) -> Unit      // machine-readable
+```
+
+Two details are copied deliberately rather than invented:
+
+- **A combinator does not record itself.** Only leaves appear in the trail. The one
+  exception is a childless `all`/`any`, which records the synthetic outcome
+  `("all: []", Undetermined, "empty combinator: nothing to judge")` because
+  otherwise nothing in the trail would explain the verdict.
+- **`not` records the leaf, not the negation.** The leaf keeps the verdict it
+  actually reached and only the composed result inverts, because "what was seen"
+  and "what was concluded" are different facts.
+
+Leaf labels use the reference's own `describe(cond)` wording — `exit_code run:0
+equals 1` — so a Pep trail and a Rust receipt trail are directly comparable. The
+differential exploits exactly that.
+
+`say_trail` emits one record per line (`RESULT <label>`, then repeated `LEAF
+<condition> <label>`) because Pep has no `Str` concatenation, so a positional
+format is the honest one.
+
 ## Run it
 
 ```powershell
@@ -93,7 +129,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (29 cases; each prints its verdict label then its reason):
+Observed (35 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -126,6 +162,16 @@ Observed (29 cases; each prints its verdict label then its reason):
 | 27 | `compose_not(Inconclusive)` | INCONCLUSIVE |
 | 28 | `compose_not(Invalid)` | INVALID |
 | 29 | `compose_all` over two real `judge(...)` verdicts | NOT OBSERVED |
+| 30 | `evaluate_all` over two Proven leaves | PROVEN |
+| 31 | `evaluate_all` over Proven + NotObserved | NOT OBSERVED |
+| 32 | `evaluate_any` over NotObserved + Proven | PROVEN |
+| 33 | `evaluate_all([])` | INCONCLUSIVE |
+| 34 | `evaluate_not(Proven leaf)` | NOT OBSERVED |
+| 35 | `evaluate_all` over Proven + Invalid child | INVALID |
+
+Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of `evaluate_all([])`
+is `1` (the synthetic empty-combinator outcome), and `explain` prints the composed
+verdict followed by every leaf: label, verdict, reason.
 
 Case 9 is the vacuity guard: a malformed experiment must never be reported as
 merely inconclusive, and case 5/6 are the infrastructure guard: missing evidence
@@ -234,7 +280,21 @@ Pep's interpreter. Run with `--repo <clean clone>` (default
 | `any` with an unparseable child | INVALID | INVALID | INVALID |
 | `all` with an unexecuted step (`run:9`) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 
-`SUMMARY cases=17 mismatches=0`.
+Composition is one claim; the trail is a stronger one. For six more specs the
+differential compares Rust's own `oracle.conditions` against the Pep `Evaluation`
+trail — the same leaf labels and the same per-leaf verdicts, not just the same
+composed result:
+
+| Trail case | Leaves | Rust trail | Pep trail |
+| --- | --- | --- | --- |
+| `all` fired + not fired | 2 | `Falsified`, `NotFalsified` | PROVEN, NOT OBSERVED |
+| `all` fired + fired | 2 | `Falsified`, `Falsified` | PROVEN, PROVEN |
+| `any` not fired + fired | 2 | `NotFalsified`, `Falsified` | NOT OBSERVED, PROVEN |
+| `not` not fired | 1 | `NotFalsified` | NOT OBSERVED |
+| `all: []` | 1 | `all: []` Undetermined | INCONCLUSIVE (synthetic) |
+| `all` fired + unexecuted step | 2 | `Falsified`, `Undetermined` | PROVEN, INCONCLUSIVE |
+
+`SUMMARY cases=23 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict
