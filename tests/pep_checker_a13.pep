@@ -1327,7 +1327,7 @@ fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, fun
   return false
 }
 
-fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis_over_nodes_raw(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var activeFunctionFound = false
@@ -2046,7 +2046,9 @@ fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstN
       } else {}
     } else {}
   }
-  let orderedDiagnostics = reverse(reversedDiagnostics)
+  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(reversedDiagnostics), unreachable: unreachable }
+}
+fn select_type_diagnostics(orderedDiagnostics: List[CheckDiagnostic]) -> List[CheckDiagnostic] {
   var selectedMismatch: CheckDiagnostic = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
   var firstMismatchFound = false
   for candidate in orderedDiagnostics {
@@ -2071,7 +2073,11 @@ fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstN
       selectedDiagnosticsReversed = prepend(selectedDiagnosticsReversed, candidate)
     } else {}
   }
-  return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
+  return reverse(selectedDiagnosticsReversed)
+}
+fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+  let raw = type_analysis_over_nodes_raw(nodes, activeNodes, functions, bindings, references)
+  return TypeAnalysis { expressionTypes: raw.expressionTypes, diagnostics: select_type_diagnostics(raw.diagnostics), unreachable: raw.unreachable }
 }
 fn type_analysis_nodes_in_range(nodes: List[FlatAstNode], startNode: Int, endNode: Int) -> List[FlatAstNode] {
   var reversedNodes: List[FlatAstNode] = []
@@ -2082,7 +2088,7 @@ fn type_analysis_nodes_in_range(nodes: List[FlatAstNode], startNode: Int, endNod
 }
 fn type_analysis_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startNode: Int, endNode: Int) -> TypeAnalysis {
   let activeNodes = type_analysis_nodes_in_range(nodes, startNode, endNode)
-  return type_analysis_over_nodes(nodes, activeNodes, functions, bindings, references)
+  return type_analysis_over_nodes_raw(nodes, activeNodes, functions, bindings, references)
 }
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   return type_analysis_over_nodes(nodes, nodes, functions, bindings, references)
