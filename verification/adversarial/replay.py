@@ -567,12 +567,56 @@ def main():
           and ts[1].get("status") == "Rejected")
     results.append(("T5-say-blocked", PASS if ok else FAIL,
                     "validate=%s" % ts[1].get("status")))
-    # Session edges (set 11)
     def sess(reqs):
         r = _pwsh(["./pep.ps1", "session", "--jsonl"],
                   inp="\n".join(json.dumps(x) for x in reqs) + "\n")
         return [json.loads(ln) for ln in (r.stdout or "").splitlines()
                 if ln.strip()]
+    _LIB = "fn double(n: Int) -> Int { return n + 1 }\nfn main() -> Int { return 0 }\n"
+    _BADLIB = "fn bad(n: Int) -> Int { return nosuch + n }\nfn main() -> Int { return 0 }\n"
+    _to = sess([{"schemaVersion": 3, "op": "open", "name": "t",
+                  "source": _LIB}])[0]
+    _td2, _tr2 = _to["document"], _to["revision"]
+    _B2 = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 1,
+                       "tool": nm, "document": _td2, "revision": _tr2}
+    _IV2 = lambda v: {"type": "Int", "value": str(v)}
+    _tr = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _LIB},
+        dict(_B2("dt"), op="tool_register", function="double"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dt",
+         "arguments": [_IV2(21)]},
+    ])
+    _e6 = _tr[2].get("error") or {}
+    ok = (_tr[2].get("outcome") == "error"
+          and (_e6.get("code") if isinstance(_e6, dict) else _e6) == "PEP_TOOL_NOT_ACTIVE")
+    results.append(("T6-invoke-reg", PASS if ok else FAIL,
+                    "invoke=%s" % _tr[2].get("outcome")))
+    _bo = sess([{"schemaVersion": 3, "op": "open", "name": "b",
+                  "source": _BADLIB}])[0]
+    _bd, _br = _bo["document"], _bo["revision"]
+    _BB = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 1,
+                       "tool": nm, "document": _bd, "revision": _br}
+    _br = sess([
+        {"schemaVersion": 3, "op": "open", "name": "b",
+         "source": _BADLIB},
+        dict(_BB("bad"), op="tool_register", function="bad"),
+        dict(_BB("bad"), op="tool_validate",
+             testVectors=[{"arguments": [_IV2(21)],
+                           "expect": _IV2(42)}]),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "bad",
+         "arguments": [_IV2(21)]},
+    ])
+    _ok7 = (_br[1].get("outcome") == "rejected"
+            and _br[2].get("outcome") == "rejected"
+            and (_br[3].get("error") or {}).get("code") == "PEP_TOOL_NOT_ACTIVE"
+            if isinstance(_br[3].get("error"), dict)
+            else _br[3].get("outcome") == "error")
+    results.append(("T7-invoke-rejected", PASS if _ok7 else FAIL,
+                    "invoke=%s" % _br[3].get("outcome")))
+    # Session edges (set 11)
     _om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
     ok = _om.get("outcome") == "ok" and "metrics" in _om
     results.append(("O3-metrics", PASS if ok else FAIL,

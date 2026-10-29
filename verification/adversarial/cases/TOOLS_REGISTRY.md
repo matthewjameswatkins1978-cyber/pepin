@@ -34,6 +34,11 @@ interpreter runtime check per the protocol doc), typed scalar boundary
 only, revision-bound invocation. Tool execution runs under the 100,000
 step / 128 depth tool budget (not separately stressed here).
 
+## Invoke requires Active — Registered and Rejected are not enough
+
+- Registered-but-never-validated tool invoked → `TESTED`: `error`, `PEP_TOOL_NOT_ACTIVE`. The middle state is not callable either; only `Active` executes (completing the T-set's callable-only-when-Active ladder).
+- Broken-source tool: register → `rejected` ("Source is invalid and has no checked function signature"); validate → `rejected` ("Source is invalid and cannot be validated"); invoke → `TESTED`: `error`, `PEP_TOOL_NOT_ACTIVE`. An invalid bundle yields no activatable tool at any step.
+
 ## Status
 
 No findings. This closes the A5 tool-registry surface at the v1
