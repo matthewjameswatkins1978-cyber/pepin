@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -223,6 +223,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_cstr_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["cstr_probe.c", "pep_cstr.c", "pep_textbuf.c"])
+
+    def build_frag_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["frag_probe.c", "pep_textbuf.c"])
 
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
@@ -617,6 +621,56 @@ class TextbufNativeTests(unittest.TestCase):
                 outs.append(out.read_bytes())
             self.assertEqual(outs[0], data, tag)
             self.assertEqual(outs[1], data, tag)
+
+
+    def test_native_join_of_emitter_output(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        # Ground truth through the production Python path.
+        reference = BUILD / "join_rt.exe"
+        built = run_program(
+            ["python", str(ROOT / "pep_c23.py"), "build-c23",
+             str(TEXT / "pep_textbuf_core.pep"), "-o", str(reference)],
+            cwd=ROOT,
+        )
+        self.assertEqual(built.returncode, 0, built.stderr)
+        source = (BUILD / "join_rt.c").read_bytes()
+        self.assertTrue(len(source) > 1000, len(source))
+        # Odd boundaries: empty head, single chars, mid-line splits.
+        cuts = sorted(set(min(c, len(source)) for c in
+                            (0, 0, 1, 2, 39, 40, 200, 201, 1000, 1500, len(source))))
+        fragments = [source[cuts[i]:cuts[i + 1]].decode("ascii")
+                     for i in range(len(cuts) - 1)]
+        fragments.insert(2, "")
+        self.assertTrue(any(len(part) == 0 for part in fragments))
+        self.assertTrue(any(len(part) == 1 for part in fragments))
+        self.assertEqual("".join(fragments).encode("ascii"), source)
+        joined = []
+        for compiler, name in ((clang, "frag_clang.exe"), (gcc, "frag_gcc.exe")):
+            probe = self.build_frag_probe(compiler, name)
+            ran = run_bytes([str(probe), *fragments])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            joined.append(ran.stdout)
+        self.assertEqual(joined[0], joined[1])
+        self.assertEqual(joined[0], source)
+        # The natively joined source must compile and pass its self-test.
+        native = BUILD / "join_native.c"
+        native.write_bytes(joined[0])
+        for compiler, name in ((clang, "join_clang.exe"), (gcc, "join_gcc.exe")):
+            exe = BUILD / name
+            flags = list(CLANG_FLAGS)
+            if "clang" in compiler.lower():
+                version = run_program([compiler, "--version"])
+                if "msvc" in (version.stdout + version.stderr).lower():
+                    flags.append("-D_CRT_SECURE_NO_WARNINGS")
+            compiled = run_program([compiler, *flags, str(native), "-o", str(exe)],
+                                   cwd=ROOT)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            ran = run_program([str(exe)])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout.strip(), "0")
 
 
 if __name__ == "__main__":

@@ -147,3 +147,14 @@ can relay them.
   a human decision, not taken here; suite is green either way.
 - `REVIEW_SLICE9.md` holds the slices 7–9 cumulative review; no
   independent reviewer available in-session.
+
+## 2026-10-29 -- slice 10: native join over real emitter output
+- New: `frag_probe.c` joining argv fragments with `pep_textbuf_join`.
+  The test emits real C from `pep_textbuf_core.pep` through the
+  production Python path, splits it at odd boundaries (empty,
+  single-char, mid-line), and proves the native join byte-identical
+  to `"".join` — then compiles the natively joined source with both
+  compilers and runs its self-test (`0`). 19/19 suite green.
+- This is the complete pre-integration evidence for the Agent-2
+  `emit_c23_joined` proposal, assembled without touching Agent 2's
+  code or changing authority. No review this slice (next at slice 12).
