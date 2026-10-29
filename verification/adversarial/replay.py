@@ -545,6 +545,24 @@ def main():
     ok = _om.get("outcome") == "ok" and "metrics" in _om
     results.append(("O3-metrics", PASS if ok else FAIL,
                     "outcome=%s" % _om.get("outcome")))
+    # Lexical edges (set 15)
+    run("X-esc-all", b'say("a\\tb\\\\c")\n',
+        exp_out="a\tb\\c\n")
+    for _ename, _eb in (("esc-bs", b'say("a\\bb")\n'),
+                        ("esc-ff", b'say("a\\fb")\n'),
+                        ("esc-sq", b'say("a\\\'b")\n'),
+                        ("esc-u", b'say("caf\\u00e9")\n'),
+                        ("esc-x", b'say("a\\xb")\n')):
+        run("X-" + _ename, _eb, exp_rc=1,
+            exp_err_contains=("PEP_INVALID_ESCAPE",))
+    check("X-hex", b"fn main() -> Int { return 0x10 }",
+          "invalid", ("PEP_UNREACHABLE",))
+    check("X-hex-let", b"let v = 0x10\nsay(int_text(0))",
+          "invalid", ("PEP_UNKNOWN_VARIABLE",))
+    check("X-bin-let", b"let v = 0b101\nsay(int_text(0))",
+          "invalid", ("PEP_UNKNOWN_VARIABLE",))
+    check("X-uscore-let", b"let v = 1_000\nsay(int_text(0))",
+          "invalid", ("PEP_UNKNOWN_VARIABLE",))
     _mc = sess([
         {"schemaVersion": 3, "op": "open", "name": "m",
          "source": "fn main() -> Int { return 1 }\n"},
