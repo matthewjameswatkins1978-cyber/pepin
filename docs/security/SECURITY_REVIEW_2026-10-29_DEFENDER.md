@@ -531,3 +531,14 @@ heuristic guess, and a keygen distributed inside a repack is a recognised
 delivery vector for real malware. That is an owner risk decision rather than a
 finding of this review; it is recorded because it belongs to the host security
 picture, alongside the June/July `PUABundler` record.
+
+**Cleanup — 2026-10-29T22:40Z, on owner instruction.** The downloaded repack
+folder was removed in full: 2,217 files, 8.01 GB, permanent deletion rather
+than recycle bin, verified absent afterwards with free space on `E:` rising by
+8.02 GB. Confirmed beforehand that nothing depended on it — no installed
+plugin, no SAGE library, no VST binary and no registry entry existed anywhere
+on the host — so the deletion destroyed no working installation. The two
+flagged files (`keygen.exe`, `keygen.rar`) had already been quarantined at
+22:31:53Z, and the June/July `PUABundler` keygen was already absent, so this
+removed the surrounding unused repack rather than any file this review treated
+as evidence. Both threats remain `IsActive: False`.
