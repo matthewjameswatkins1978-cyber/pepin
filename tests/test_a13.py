@@ -1181,6 +1181,34 @@ class A13FunctionResolutionTests(unittest.TestCase):
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
 
+    def test_str_contains_checker_contract_matches_ocaml(self):
+        cases = [
+            ("valid", "fn has(haystack: Str, needle: Str) -> Bool { return str_contains(haystack, needle) }", "valid"),
+            ("wrong-haystack", "fn bad() -> Bool { return str_contains(1, \"x\") }", "invalid"),
+            ("wrong-needle", "fn bad() -> Bool { return str_contains(\"x\", 1) }", "invalid"),
+            ("wrong-arity", "fn bad() -> Bool { return str_contains(\"x\") }", "invalid"),
+            ("first-hole", "fn search() -> Bool { return str_contains(?haystack, \"x\") }", "incomplete"),
+            ("second-hole", "fn search() -> Bool { return str_contains(\"x\", ?needle) }", "incomplete"),
+        ]
+        for name, source, status in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("str-contains-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], status, reference)
+                self.assertEqual(scalar(report["status"]), status, report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, report)
+                if name in {"first-hole", "second-hole"}:
+                    self.assertEqual(len(report["holes"]["value"]), 1, report)
+                    self.assertEqual(scalar(fields(report["holes"]["value"][0])["expectedType"]), "Str")
+
     def test_list_builtin_signatures_and_element_holes(self):
         cases = [
             ("fn size(values: List[Int]) -> Int { return length(values) }", "Int"),

@@ -1,0 +1,8 @@
+say(int_text(if str_contains("Aλ雪Z", "λ雪") { 1 } else { 0 }))
+say(int_text(if str_contains("Pepin", "compiler") { 1 } else { 0 }))
+say(int_text(if str_contains("abc", "") { 1 } else { 0 }))
+say(int_text(if str_contains("a\0b", "\0") { 1 } else { 0 }))
+say(int_text(if str_contains("é", "é") { 1 } else { 0 }))
+say(int_text(if str_contains("", "x") { 1 } else { 0 }))
+say(int_text(if str_contains("ababababac", "ababac") { 1 } else { 0 }))
+say(int_text(if str_contains("aaaaaaaaaaaaaaaaab", "aaaaac") { 1 } else { 0 }))

@@ -29,6 +29,11 @@ class A6CollectionsAndControlTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), ["42", "0", "1", "17", "22", "10", "0", "1", "42"])
 
+    def test_str_contains_example_covers_unicode_empty_and_nul(self):
+        result = invoke("run", ROOT / "examples" / "str_contains.pep")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["1", "0", "1", "1", "0", "0", "1", "0"])
+
     def test_describe_reports_implemented_collections_and_control_flow(self):
         result = invoke("describe", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -37,7 +42,7 @@ class A6CollectionsAndControlTests(unittest.TestCase):
         self.assertEqual(description["runtime"], {"maxSteps": 1000000, "maxCallDepth": 512})
         for feature in ("typed_lists", "mutable_bindings", "for_in", "while", "short_circuit_boolean_logic", "scalar_equality"):
             self.assertIn(feature, description["features"])
-        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "prepend", "reverse", "byte_length", "byte_at", "byte_slice", "utf8_slice", "source_bytes", "contains"])
+        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "prepend", "reverse", "byte_length", "byte_at", "byte_slice", "utf8_slice", "source_bytes", "contains", "str_contains"])
 
     def test_list_and_binding_diagnostics(self):
         cases = {
@@ -70,6 +75,19 @@ class A6CollectionsAndControlTests(unittest.TestCase):
         hole = response["holes"][0]
         self.assertEqual(hole["expectedType"], "Int")
         self.assertIn("revision", hole["identity"])
+
+    def test_str_contains_rejects_wrong_types_and_arity(self):
+        cases = {
+            'let found = str_contains(1, "x")': "PEP_TYPE_MISMATCH",
+            'let found = str_contains("x", 1)': "PEP_TYPE_MISMATCH",
+            'let found = str_contains("x")': "PEP_ARGUMENT_COUNT",
+        }
+        for source, code in cases.items():
+            with self.subTest(source=source):
+                result, response = self.check_source(source)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(response["status"], "invalid")
+                self.assertEqual(response["diagnostics"][0]["code"], code)
 
     def test_short_circuit_and_mutable_loop_execution(self):
         source = """fn count_down(value: Int) -> Int {

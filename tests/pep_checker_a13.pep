@@ -158,7 +158,7 @@ fn sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
   return quick_sort_nodes(nodes)
 }
 fn known_builtin(name: Str) -> Bool {
-  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains"
+  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains" || name == "str_contains"
 }
 fn is_constructor(nodes: List[FlatAstNode], name: Str) -> Bool {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return true } else {} }
@@ -593,7 +593,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if node.text == "say" { return "Unit" } else {}
     if node.text == "length" || node.text == "byte_length" || node.text == "byte_at" { return "Int" } else {}
     if node.text == "byte_slice" { return "SourceBytes" } else {}
-    if node.text == "contains" { return "Bool" } else {}
+    if node.text == "contains" || node.text == "str_contains" { return "Bool" } else {}
     if node.text == "append" || node.text == "prepend" || node.text == "reverse" {
       let collection = child_at(nodes, node.id, "argument", 0)
       if collection.found { return infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { return "" }
@@ -720,7 +720,7 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       if collection.found { return expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { return empty_type_shape() }
     } else {}
     if found.node.text == "length" || found.node.text == "byte_length" || found.node.text == "byte_at" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
-    if found.node.text == "contains" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
+    if found.node.text == "contains" || found.node.text == "str_contains" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
     let inferredName = infer_expression_type(nodes, id, functions, bindings, references)
     return legacy_type_shape(nodes, inferredName)
   } else {}
@@ -1165,6 +1165,7 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
     let target = find_function(functions, parent.node.text)
     if target.found { return function_parameter_type(nodes, target.function.syntaxId, hole.childIndex) } else {}
     if is_constructor(nodes, parent.node.text) { return variant_payload_type(nodes, parent.node.text, hole.childIndex) } else {}
+    if parent.node.text == "str_contains" && (hole.childIndex == 0 || hole.childIndex == 1) { return "Str" } else {}
     if (parent.node.text == "append" || parent.node.text == "prepend" || parent.node.text == "contains") && hole.childIndex == 1 {
       let collection = child_at(nodes, parent.node.id, "argument", 0)
       if collection.found { return list_element_type(infer_expression_type(nodes, collection.node.id, functions, bindings, references)) } else { return "" }
@@ -1228,7 +1229,7 @@ fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindin
 }
 fn fixed_builtin_arity(name: Str) -> Int {
   if name == "say" || name == "int_text" || name == "byte_length" || name == "length" || name == "reverse" { return 1 } else {}
-  if name == "append" || name == "prepend" || name == "contains" { return 2 } else {}
+  if name == "append" || name == "prepend" || name == "contains" || name == "str_contains" { return 2 } else {}
   if name == "byte_at" { return 2 } else {}
   if name == "byte_slice" || name == "utf8_slice" { return 3 } else {}
   if name == "source_bytes" { return 0 } else {}
@@ -1237,6 +1238,7 @@ fn fixed_builtin_arity(name: Str) -> Int {
 fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if name == "say" && index == 0 { return "Str" } else {}
   if name == "int_text" && index == 0 { return "Int" } else {}
+  if name == "str_contains" && (index == 0 || index == 1) { return "Str" } else {}
   if name == "byte_length" && index == 0 { return "SourceBytes" } else {}
   if name == "byte_at" && index == 0 { return "SourceBytes" } else {}
   if (name == "byte_slice" || name == "utf8_slice") && index == 0 { return "SourceBytes" } else {}
