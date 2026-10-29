@@ -22,7 +22,8 @@ source only, syntax-checked but not executed (see below).
   length-tagged `join_n`, NUL-fragment analysis with three options
   for Agent 2, subsystem README, test flag-dedup. Syntax-checked
   only — implemented but untested, pending a post-hold suite re-run.
-- Slice 12 (this commit): `fragn_probe`, the length-tagged companion
+- Slice 12 (shipped as `057b56c`): `fragn_probe`, the length-tagged
+  companion
   that joins explicit `[OFF, LEN)` file slices in one `join_n` call
   (NUL-preserving; argv cannot carry NULs, so slices address the file
   directly). Out-of-range slices fail closed before anything is
@@ -51,7 +52,8 @@ source only, syntax-checked but not executed (see below).
   and type-checks under strict flags, nothing more. The 19-test
   suite plus new `fragn_probe` vectors must run green post-hold
   before any of it counts as verified.
-- The NUL-fragment decision (a/b/c) still belongs to Agent 2; both
+- The NUL-fragment decision (Options 1/2/3, see INTEGRATION.md)
+  still belongs to Agent 2; both
   native joins are implemented and probed on the C side only.
 - The Defender incident (see SECURITY file) remains open; nothing
   here presumes its outcome.
