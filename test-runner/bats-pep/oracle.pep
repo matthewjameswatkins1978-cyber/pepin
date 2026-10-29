@@ -104,3 +104,126 @@ fn judge(mode: Mode, observed: ExitObservation) -> Verdict {
 fn judge_step(mode: Mode, step: EvidenceStep) -> Verdict {
   return judge(mode, step.exit)
 }
+
+// ---------------------------------------------------------------------------
+// Condition composition
+// ---------------------------------------------------------------------------
+//
+// Reference contract, read from The-Terror-Bats @ d5e6404 (src/oracle.rs),
+// `eval` over OracleResult (Falsified | NotFalsified | Undetermined):
+//   * `all: []` and `any: []` are Undetermined ("empty combinator: nothing to
+//     judge"). An empty conjunction is NOT vacuously true here.
+//   * `all` is Kleene AND: NotFalsified wins, then Undetermined, then Falsified.
+//   * `any` is Kleene OR: Falsified wins, then Undetermined, then NotFalsified.
+//   * `not` swaps Falsified/NotFalsified and leaves Undetermined alone.
+//   * `parse` validates every node before `evaluate` runs, so one malformed
+//     sub-condition makes the whole spec invalid and nothing is evaluated.
+//     Composition therefore propagates Invalid and never composes it into a
+//     judgement. A malformed experiment stays malformed inside an `all`.
+
+// A found reason, so "absent" is a case instead of an empty-string sentinel.
+type Found = NotFound() | FoundReason(Str)
+
+fn found_absent(found: Found) -> Bool {
+  return match found {
+    NotFound() => true
+    FoundReason(why) => false
+  }
+}
+
+fn found_present(found: Found) -> Bool {
+  return match found {
+    NotFound() => false
+    FoundReason(why) => true
+  }
+}
+
+fn found_reason(found: Found) -> Str {
+  return match found {
+    NotFound() => "none"
+    FoundReason(why) => why
+  }
+}
+
+// Decision rank inside one combinator, lowest first. `all` resolves by
+// 0 = Invalid, 1 = NotObserved, 2 = Inconclusive, 3 = Proven. `any` resolves by
+// 0 = Invalid, 3 = Proven, 2 = Inconclusive, 1 = NotObserved. The ranks are one
+// shared encoding; each composer queries only the ranks it must distinguish.
+fn rank(verdict: Verdict) -> Int {
+  return match verdict {
+    Invalid(why) => 0
+    NotObserved(why) => 1
+    Inconclusive(why) => 2
+    Proven(why) => 3
+  }
+}
+
+// The first verdict carrying `wanted` rank, so a composed verdict can quote the
+// reason of the child that actually decided it. First-wins keeps the result
+// deterministic and order-describing rather than order-inventing.
+fn first_of_rank(verdicts: List[Verdict], wanted: Int) -> Found {
+  var found = NotFound()
+  for verdict in verdicts {
+    if found_absent(found) && rank(verdict) == wanted {
+      found = FoundReason(verdict_reason(verdict))
+    } else {
+    }
+  }
+  return found
+}
+
+// Kleene AND. Assignment order is priority order: least decisive first, so the
+// most decisive finding is the one that survives.
+fn compose_all(verdicts: List[Verdict]) -> Verdict {
+  var verdict = Proven("every condition was falsified")
+  if length(verdicts) == 0 {
+    verdict = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 2)) {
+    verdict = Inconclusive("at least one condition was undetermined")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 1)) {
+    verdict = NotObserved("at least one condition was not falsified")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 0)) {
+    verdict = Invalid(found_reason(first_of_rank(verdicts, 0)))
+  } else {
+  }
+  return verdict
+}
+
+// Kleene OR, same construction with the OR precedence.
+fn compose_any(verdicts: List[Verdict]) -> Verdict {
+  var verdict = NotObserved("no condition was falsified")
+  if length(verdicts) == 0 {
+    verdict = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 2)) {
+    verdict = Inconclusive("no condition was falsified and at least one was undetermined")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 3)) {
+    verdict = Proven("at least one condition was falsified")
+  } else {
+  }
+  if found_present(first_of_rank(verdicts, 0)) {
+    verdict = Invalid(found_reason(first_of_rank(verdicts, 0)))
+  } else {
+  }
+  return verdict
+}
+
+// Negation: only a judgement flips. Missing evidence stays missing, and a
+// malformed sub-spec stays malformed — negation is not a way to rescue either.
+fn compose_not(verdict: Verdict) -> Verdict {
+  return match verdict {
+    Proven(why) => NotObserved("the negated condition was falsified")
+    NotObserved(why) => Proven("the negated condition was not falsified")
+    Inconclusive(why) => Inconclusive(why)
+    Invalid(why) => Invalid(why)
+  }
+}
