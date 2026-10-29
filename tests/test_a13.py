@@ -1131,6 +1131,33 @@ class A13FunctionResolutionTests(unittest.TestCase):
         hole = fields(report["holes"]["value"][0])
         self.assertEqual(scalar(hole["expectedType"]), "Int")
 
+    def test_str_chars_builtin_signature_and_list_shape_match_ocaml(self):
+        valid = [
+            "fn main() -> List[Str] { return str_chars(\"Aé🙂\") }",
+            "fn main() -> Int { for scalar in str_chars(\"Aé🙂\") { say(scalar) } return length(str_chars(\"\")) }",
+        ]
+        for source in valid:
+            reference = self._reference_check("str-chars-valid", source)
+            _, report = self._analyze(source)
+            self.assertEqual(reference["status"], "valid", reference)
+            self.assertEqual(scalar(report["status"]), "valid", report)
+            types_by_start = {scalar(fields(item)["startByte"]): scalar(fields(item)["typeName"]) for item in report["expressionTypes"]["value"]}
+            self.assertEqual(types_by_start[source.index("str_chars")], "List[Str]")
+
+        invalid = [
+            ("fn main() -> List[Str] { return str_chars(1) }", "PEP_TYPE_MISMATCH"),
+            ("fn main() -> List[Str] { return str_chars(source_bytes()) }", "PEP_TYPE_MISMATCH"),
+            ("fn main() -> List[Str] { return str_chars() }", "PEP_ARGUMENT_COUNT"),
+        ]
+        for source, expected_code in invalid:
+            reference = self._reference_check("str-chars-invalid", source)
+            _, report = self._analyze(source)
+            self.assertEqual(reference["status"], "invalid", reference)
+            expected = [(item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"]) for item in reference["diagnostics"]]
+            actual = [(scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"])) for item in report["diagnostics"]["value"]]
+            self.assertEqual(actual, expected, (source, expected, actual))
+            self.assertIn(expected_code, [item[0] for item in actual])
+
     def test_source_byte_builtin_signatures_are_checked(self):
         valid_cases = [
             ("fn main() -> SourceBytes { return source_bytes() }", "source_bytes()", "SourceBytes"),

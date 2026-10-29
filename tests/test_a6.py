@@ -27,7 +27,7 @@ class A6CollectionsAndControlTests(unittest.TestCase):
     def test_required_and_additional_examples_run(self):
         result = invoke("run", ROOT / "examples" / "a6_collections_control.pep")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["42", "0", "1", "17", "22", "10", "0", "1", "42", "1", "1", "1", "0"])
+        self.assertEqual(result.stdout.splitlines(), ["42", "0", "1", "17", "22", "10", "0", "1", "42", "1", "1", "1", "0", "0", "1", "3", "1", "1"])
 
     def test_describe_reports_implemented_collections_and_control_flow(self):
         result = invoke("describe", "--json")
@@ -35,9 +35,9 @@ class A6CollectionsAndControlTests(unittest.TestCase):
         description = json.loads(result.stdout)
         self.assertIn("List[T]", description["parametricTypes"])
         self.assertEqual(description["runtime"], {"maxSteps": 1000000, "maxCallDepth": 512})
-        for feature in ("typed_lists", "mutable_bindings", "for_in", "while", "short_circuit_boolean_logic", "scalar_equality"):
+        for feature in ("typed_lists", "mutable_bindings", "for_in", "while", "short_circuit_boolean_logic", "scalar_equality", "string_unicode_scalar_iteration"):
             self.assertIn(feature, description["features"])
-        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "prepend", "reverse", "byte_length", "byte_at", "byte_slice", "utf8_slice", "source_bytes", "contains", "str_contains"])
+        self.assertEqual([builtin["name"] for builtin in description["builtins"]], ["say", "int_text", "length", "append", "prepend", "reverse", "byte_length", "byte_at", "byte_slice", "utf8_slice", "source_bytes", "contains", "str_contains", "str_chars"])
 
     def test_str_contains_searches_utf8_strings(self):
         source = """say(int_text(if str_contains("café au lait", "é au") { 1 } else { 0 }))
@@ -60,6 +60,36 @@ say(int_text(if str_contains("café", "́") { 1 } else { 0 }))
         for invalid_source, expected in (
             ('let found = str_contains("text", 1)', "PEP_TYPE_MISMATCH"),
             ('let found = str_contains("text")', "PEP_ARGUMENT_COUNT"),
+        ):
+            with self.subTest(source=invalid_source):
+                checked, response = self.check_source(invalid_source)
+                self.assertEqual(checked.returncode, 1)
+                self.assertEqual(response["diagnostics"][0]["code"], expected)
+
+    def test_str_chars_splits_valid_utf8_into_unicode_scalars(self):
+        source = """fn count_chars(text: Str) -> Int {
+  var count = 0
+  for scalar in str_chars(text) { count = count + 1 }
+  return count
+}
+say(int_text(count_chars("")))
+say(int_text(count_chars("€")))
+say(int_text(count_chars("Aé🙂")))
+say(int_text(count_chars("é")))
+say(int_text(if contains(str_chars("é"), "́") { 1 } else { 0 }))
+say(int_text(if contains(str_chars("a\\0b"), "\\0") { 1 } else { 0 }))
+"""
+        BUILD.mkdir(parents=True, exist_ok=True)
+        path = BUILD / "str_chars.pep"
+        path.write_text(source, encoding="utf-8", newline="")
+        result = invoke("run", path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["0", "1", "3", "2", "1", "1"])
+
+        for invalid_source, expected in (
+            ('let chars = str_chars(1)', "PEP_TYPE_MISMATCH"),
+            ('let chars = str_chars(source_bytes())', "PEP_TYPE_MISMATCH"),
+            ('let chars = str_chars()', "PEP_ARGUMENT_COUNT"),
         ):
             with self.subTest(source=invalid_source):
                 checked, response = self.check_source(invalid_source)
