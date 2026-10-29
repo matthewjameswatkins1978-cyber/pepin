@@ -352,7 +352,7 @@ fn main() -> Int {
   let chain = relay(initial)
   return match chain {
     End(_) => 0
-    Link(_) => 42
+    Link(items) => length(items)
   }
 }
 """
@@ -367,7 +367,7 @@ fn main() -> Int {
             interpreted = self.invoke("run", reference)
             self.assertEqual(interpreted.returncode, 0,
                              interpreted.stdout + interpreted.stderr)
-            self.assertEqual(interpreted.stdout, "42\n")
+            self.assertEqual(interpreted.stdout, "1\n")
 
             generated = emit(source.read_bytes())
             self.assertRegex(
@@ -381,6 +381,7 @@ fn main() -> Int {
             self.assertIn("pep_arena_alloc(pep_arena, pep_ctor_arg_0.length * sizeof(pep_union_", generated)
             self.assertIn("pep_recursive_list_0[pep_i] = pep_ctor_arg_0.data[pep_i]", generated)
             self.assertIn(".length = 1", generated)
+            self.assertRegex(generated, r"\.payload\.payload_\d+\.field_0\.length")
 
 
     def test_recursive_union_list_rejects_computed_constructor_payloads(self):

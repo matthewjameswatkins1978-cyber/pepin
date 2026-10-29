@@ -1112,35 +1112,50 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
              patternArgument.node.kind != "binding_pattern" && patternArgument.node.kind != "wildcard_pattern" {
             return pep_c23_unsupported("Pep C23 payload patterns require one binding or wildcard")
           } else {}
-          if result.node.kind == "name" && result.node.text == patternArgument.node.text {
-            let recursiveBinding = payloadType.node.kind == "type_named" && payloadType.node.text == declaration.node.text
+          if result.node.kind == "call" && result.node.text == "length" {
+            let lengthArgument = pep_c23_child(nodes, result.node.id, "argument", 0)
+            let extraLengthArgument = pep_c23_child(nodes, result.node.id, "argument", 1)
+            if payloadType.node.kind != "type_list" ||
+               !pep_c23_union_payload_is_recursive(nodes, declaration.node, payloadType.node) ||
+               patternArgument.node.kind != "binding_pattern" ||
+               !lengthArgument.found || lengthArgument.node.kind != "name" ||
+               lengthArgument.node.text != patternArgument.node.text || extraLengthArgument.found {
+              return pep_c23_unsupported("Pep C23 match length extraction requires its recursive list payload binding")
+            } else {}
             resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 1, 0,
-              PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
+              PepC23NodeLookup { found: false, node: empty_node() }, false)
+            resultParts = append(resultParts, ".length")
           } else {
-            if result.node.kind == "field_access" && payloadType.node.kind == "type_named" {
-              let base = pep_c23_child(nodes, result.node.id, "value", 0)
-              if base.found && base.node.kind == "name" && base.node.text == patternArgument.node.text {
-                let record = pep_c23_record_declaration(nodes, payloadType.node.text)
-                let field = if record.found {
-                  pep_c23_record_field_declaration(nodes, record.node, result.node.text)
-                } else { PepC23NodeLookup { found: false, node: empty_node() } }
-                if !record.found || !field.found {
-                  return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
-                } else {}
-                for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }
-                resultParts = append(resultParts, ".payload.payload_")
-                resultParts = append(resultParts, int_text(variant.childIndex))
-                resultParts = append(resultParts, ".field_0.pep_field_")
-                resultParts = append(resultParts, int_text(field.node.childIndex))
+            if result.node.kind == "name" && result.node.text == patternArgument.node.text {
+              let recursiveBinding = payloadType.node.kind == "type_named" && payloadType.node.text == declaration.node.text
+              resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 1, 0,
+                PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
+            } else {
+              if result.node.kind == "field_access" && payloadType.node.kind == "type_named" {
+                let base = pep_c23_child(nodes, result.node.id, "value", 0)
+                if base.found && base.node.kind == "name" && base.node.text == patternArgument.node.text {
+                  let record = pep_c23_record_declaration(nodes, payloadType.node.text)
+                  let field = if record.found {
+                    pep_c23_record_field_declaration(nodes, record.node, result.node.text)
+                  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                  if !record.found || !field.found {
+                    return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
+                  } else {}
+                  for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }
+                  resultParts = append(resultParts, ".payload.payload_")
+                  resultParts = append(resultParts, int_text(variant.childIndex))
+                  resultParts = append(resultParts, ".field_0.pep_field_")
+                  resultParts = append(resultParts, int_text(field.node.childIndex))
+                } else {
+                  let loweredResult = pep_c23_expression(nodes, function, result.node)
+                  if loweredResult.status != "emitted" { return loweredResult } else {}
+                  resultParts = loweredResult.sourceParts
+                }
               } else {
                 let loweredResult = pep_c23_expression(nodes, function, result.node)
                 if loweredResult.status != "emitted" { return loweredResult } else {}
                 resultParts = loweredResult.sourceParts
               }
-            } else {
-              let loweredResult = pep_c23_expression(nodes, function, result.node)
-              if loweredResult.status != "emitted" { return loweredResult } else {}
-              resultParts = loweredResult.sourceParts
             }
           }
         }
