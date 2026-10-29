@@ -1,4 +1,26 @@
-# Landing `text_contains` — verified, waiting on one primitive
+# Landing `text_contains` — LANDED on `pep/text-contains-utf8`
+
+**Status: done, on a separate branch.** `pep/text-contains-utf8` (based on
+`codex/continuation-03-nested-helper@4d8ddef`, which carries `str_contains`) implements
+`text_contains` fully, with an explicit UTF-8 / arbitrary-bytes distinction. Final
+revision: see that branch's head.
+
+This carrier lane (`pep/native-differential-v1`) still does **not** use `str_contains`,
+because its compiler does not have the builtin and using it here would break this lane's
+own `pep check`. Everything else in this lane is unchanged and green.
+
+Evidence on the landing branch: `pep check` valid; 201 output lines / 95 self-test verdict
+cases; differential **65/65 mismatches=0** against The-Terror-Bats `@ d5e6404`, including
+six non-empty needle cases that were uncomparable before; mutation check **11/11
+detected, 0 survived**. The non-UTF-8 boundary is measured, not assumed: the reference
+byte-searches a `FF FE 41 42` capture and answers PROVEN / PROVEN / NOT OBSERVED for
+needles `AB` / `A` / `ZZ`, while Pep correctly reports INCONCLUSIVE because `str_contains`
+needs a `Str`.
+
+The rest of this file is the historical record of how the patch was prepared and verified
+before the primitive reached a branch this lane could build on.
+
+---
 
 Status: **implementation verified and ready; not committed to this branch** because this
 branch's compiler does not have the builtin it needs. Applying it here today would make
