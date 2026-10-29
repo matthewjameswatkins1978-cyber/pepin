@@ -570,6 +570,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             f"fn {name}() -> Int {{ return {index} }}"
             for index, name in enumerate(scale_names)
         ]
+        scale_late_mismatch = scale_helpers[-1].replace("return 59", 'return "text"')
         scale_main = "fn main() -> Int { return 0 }"
         cases = [
             ("index-of-helper-alone", first_helper, "valid"),
@@ -578,6 +579,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
              "fn main() -> Int { return list_int_index_of([4, 2, 4], 4) + "
              "list_int_last_index_of([4, 2, 4], 4) }", "valid"),
             ("sixty-helper-declarations", NL.join(scale_helpers + [scale_main]), "valid"),
+            ("sixty-helper-late-mismatch", NL.join(scale_helpers[:-1] + [scale_late_mismatch, scale_main]), "invalid"),
             ("return-type-mismatch", 'fn bad() -> Int { return "text" }', "invalid"),
         ]
         for name, source, expected_status in cases:
@@ -672,12 +674,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
                         ("main", "list_int_index_of"),
                         ("main", "list_int_last_index_of"),
                     ]
-                elif name == "sixty-helper-declarations":
+                elif name in ("sixty-helper-declarations", "sixty-helper-late-mismatch"):
                     expected_calls = []
                 else:
                     expected_calls = []
                 self.assertEqual(actual_calls, expected_calls, report)
-                if name == "sixty-helper-declarations":
+                if name in ("sixty-helper-declarations", "sixty-helper-late-mismatch"):
                     self.assertEqual(len(report["functions"]["value"]), len(scale_names) + 1)
                     self.assertGreaterEqual(len(report["expressionTypes"]["value"]), len(scale_names))
                 expected_diagnostics = [
