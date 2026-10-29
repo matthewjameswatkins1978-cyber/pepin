@@ -1,4 +1,4 @@
-type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | TypeVar of string | List of ty
+type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | Applied of string*ty list | TypeVar of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int; file:string option }
 let current_source_file = ref None
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
@@ -12,7 +12,7 @@ type expr =
   | EQualifiedCall of string*string*expr list*span*span
 and pattern = PWildcard of span | PBind of string*span | PConstructor of string*pattern list*span
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
-type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
+type type_decl = RecordDecl of string*string list*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
 type func = { fname:string; type_params:string list; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span; public:bool }
 type import_decl = { module_name:string; alias:string; import_span:span }
@@ -31,7 +31,7 @@ let internal_name_display marker name =
   in find 0
 let internal_type_display_name name = internal_name_display "$type$" name
 let internal_constructor_display_name name = internal_name_display "$ctor$" name
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->internal_type_display_name n | TypeVar name->name | List t->"List["^type_name t^"]"
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->internal_type_display_name n | Applied(n,args)->internal_type_display_name n^"["^String.concat "," (List.map type_name args)^"]" | TypeVar name->name | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan ?(file = !current_source_file) lo hi line column = {lo;hi;line;column;file}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -168,10 +168,33 @@ let keyword p s = match (peek p).kind with Id x when x=s->true|_->false
 let accept_sym p s = if symbol p s then (ignore(take p);true) else false
 let expect_sym p s = if not(accept_sym p s) then fail "PEP_PARSE_EXPECTED" ("Expected '"^s^"'") (at p) ()
 let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "Expected a name" t.at ()
+let parse_type_parameters p =
+  if not(accept_sym p "[") then [] else
+  let parameters=ref [] and seen=Hashtbl.create 4 in
+  let add_parameter () =
+    let name=expect_id p in
+    let span=p.ts.(p.p-1).at in
+    if Hashtbl.mem seen name then fail "PEP_DUPLICATE_TYPE_PARAMETER" ("Duplicate type parameter '"^name^"'") span ();
+    if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] then
+      fail "PEP_RESERVED_TYPE_PARAMETER" ("Type parameter '"^name^"' conflicts with a built-in type") span ();
+    Hashtbl.add seen name ();
+    parameters:= !parameters@[name]
+  in
+  add_parameter();while accept_sym p "," do add_parameter() done;
+  expect_sym p "]";
+  !parameters
 let rec parse_type p = match take p with
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
-  |{kind=Id name;_}->if List.mem name p.type_variables then TypeVar name else if accept_sym p "." then Named(name^"."^expect_id p) else Named name
+  |{kind=Id name;_}->
+      if List.mem name p.type_variables then TypeVar name else
+      let type_name=if accept_sym p "." then name^"."^expect_id p else name in
+      if accept_sym p "[" then (
+        let arguments=ref [parse_type p] in
+        while accept_sym p "," do arguments:= !arguments@[parse_type p] done;
+        expect_sym p "]";
+        Applied(type_name,!arguments)
+      ) else Named type_name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
 let combine a b = mkspan ~file:a.file a.lo b.hi a.line a.column
 let rec parse_pattern p =
@@ -188,7 +211,10 @@ let rec parse_pattern p =
 let parse_type_decl p =
   let start = (take p).at in
   let name = expect_id p in
+  let type_parameters=parse_type_parameters p in
   if accept_sym p "=" then (
+    if type_parameters<>[] then
+      fail "PEP_GENERIC_UNION_UNSUPPORTED" "Generic tagged unions are not implemented yet" start ();
     let variants = ref [] in
     let rec variant () =
       let ctor_token = peek p in
@@ -202,6 +228,8 @@ let parse_type_decl p =
     let last = match !variants with (_,_,s)::_ -> s | [] -> at p in
     UnionDecl (name, List.rev !variants, combine start last)
   ) else (
+    let previous_type_variables=p.type_variables in
+    p.type_variables<-type_parameters@previous_type_variables;
     expect_sym p "{";
     let fields = ref [] in
     while not (symbol p "}") && (peek p).kind <> Eof do
@@ -211,7 +239,8 @@ let parse_type_decl p =
       ignore (accept_sym p ","); ignore (accept_sym p ";")
     done;
     let ending = at p in expect_sym p "}";
-    RecordDecl (name, List.rev !fields, combine start ending)
+    p.type_variables<-previous_type_variables;
+    RecordDecl (name, type_parameters, List.rev !fields, combine start ending)
   )
 let rec parse_expr p min_prec =
   let first=take p in
@@ -382,12 +411,12 @@ and tmatch_arm = { tpattern:tpattern; tresult:texpr }
 type tstmt = TLet of binding*texpr|TVar of binding*texpr|TAssign of binding*texpr*span|TReturn of texpr|TBlock of tstmt list|TIf of texpr*tstmt list*tstmt list*span|TFor of binding*texpr*tstmt list*span|TWhile of texpr*tstmt list*span|TExpr of texpr
 type tfunc = { sig_:signature; tparams:binding list; tbody:tstmt list }
 type hole = { hid:string option; hscope:string; hty:ty option; hspan:span; hbindings:binding list }
-type record_info = { record_id:int; record_name:string; record_fields:(int*string*ty*span) list; record_span:span }
+type record_info = { record_id:int; record_name:string; record_type_params:string list; record_fields:(int*string*ty*span) list; record_span:span }
 type union_info = { union_id:int; union_name:string; union_variants:(int*string*ty list*span) list; union_span:span }
 type checked = { functions:tfunc list; tops:tstmt list; holes:hole list; records:record_info list; unions:union_info list }
 
 let semantic_record_info id name base fields =
-  { record_id=id; record_name=name;
+  { record_id=id; record_name=name; record_type_params=[];
     record_fields=List.mapi (fun index (field,field_type) -> base-index,field,field_type,mkspan 0 0 1 1) fields;
     record_span=mkspan 0 0 1 1 }
 
@@ -438,8 +467,8 @@ let ast_json tops = "["^String.concat ","(List.map(function
  |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"typeParameters\":["^String.concat ","(List.map json_string f.type_params)^"],\"visibility\":"^json_string(if f.public then "public" else "private")^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
  |TopStmt s->ast_stmt_json s
  |TopImport i->"{\"kind\":\"import\",\"module\":"^json_string i.module_name^",\"alias\":"^json_string i.alias^",\"span\":"^span_json i.import_span^"}"
- |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
- |TopPublicType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"visibility\":\"public\",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
+ |TopType (RecordDecl(n,type_parameters,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"typeParameters\":["^String.concat "," (List.map json_string type_parameters)^"] ,\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
+ |TopPublicType (RecordDecl(n,type_parameters,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"visibility\":\"public\",\"typeParameters\":["^String.concat "," (List.map json_string type_parameters)^"] ,\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
  |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}"
  |TopPublicType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"visibility\":\"public\",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
 
@@ -454,11 +483,11 @@ let check tops =
   let records=ref [] and unions=ref [] in
   List.iter (fun info -> Hashtbl.add type_table info.record_name (`Record info)) semantic_record_infos;
   List.iter(function
-    |TopType (RecordDecl(name,fields,sp))|TopPublicType (RecordDecl(name,fields,sp))->
+    |TopType (RecordDecl(name,type_parameters,fields,sp))|TopPublicType (RecordDecl(name,type_parameters,fields,sp))->
         if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
         let ids=Hashtbl.create 8 in
         let resolved=List.map(fun(field,ty,fsp)->if Hashtbl.mem ids field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add ids field ();fresh_field(),field,ty,fsp) fields in
-        let info={record_id=fresh_type();record_name=name;record_fields=resolved;record_span=sp} in
+        let info={record_id=fresh_type();record_name=name;record_type_params=type_parameters;record_fields=resolved;record_span=sp} in
         Hashtbl.add type_table name (`Record info); records:=info::!records
     |TopType (UnionDecl(name,variants,sp))|TopPublicType (UnionDecl(name,variants,sp))->
         if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then fail "PEP_DUPLICATE_TYPE" ("Duplicate or reserved type '"^name^"'") sp ();
@@ -472,12 +501,21 @@ let check tops =
         Hashtbl.add type_table name (`Union info); unions:=info::!unions
     |_->()) tops;
   let rec valid_type ?(type_params=[]) ty sp = match ty with
-    |Named name when not (Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
+    |Named name -> (match Hashtbl.find_opt type_table name with
+       |None -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
+       |Some (`Record info) when info.record_type_params<>[] -> fail "PEP_TYPE_ARGUMENT_COUNT" ("Type '"^name^"' requires "^string_of_int(List.length info.record_type_params)^" type argument(s)") sp ()
+       |_ -> ())
+    |Applied(name,args) -> (match Hashtbl.find_opt type_table name with
+       |Some (`Record info) ->
+          if List.length args<>List.length info.record_type_params then fail "PEP_TYPE_ARGUMENT_COUNT" ("Type '"^name^"' expects "^string_of_int(List.length info.record_type_params)^" type argument(s)") sp ();
+          List.iter(fun arg->valid_type ~type_params arg sp)args
+       |Some (`Union _) -> fail "PEP_TYPE_ARGUMENT_COUNT" ("Tagged union '"^name^"' is not generic") sp ()
+       |None -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ())
     |TypeVar name when not(List.mem name type_params) -> fail "PEP_UNKNOWN_TYPE_PARAMETER" ("Unknown type parameter '"^name^"'") sp ()
     |List element -> valid_type ~type_params element sp
     |_ -> () in
   List.iter (function
-    |TopType (RecordDecl(_,fields,_))|TopPublicType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
+    |TopType (RecordDecl(_,type_parameters,fields,_))|TopPublicType (RecordDecl(_,type_parameters,fields,_))->List.iter(fun(_,ty,sp)->valid_type ~type_params:type_parameters ty sp) fields
     |TopType (UnionDecl(_,variants,_))|TopPublicType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
     |TopFun f->List.iter(fun(_,ty,sp)->valid_type ~type_params:f.type_params ty sp)f.params;valid_type ~type_params:f.type_params f.result f.fspan
     |TopStmt _|TopImport _->()) tops;
@@ -487,10 +525,11 @@ let check tops =
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;type_params=f.type_params;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
-  let rec type_contains_parameter ty = match ty with TypeVar _->true|List element->type_contains_parameter element|_->false in
+  let rec type_contains_parameter ty = match ty with TypeVar _->true|List element->type_contains_parameter element|Applied(_,args)->List.exists type_contains_parameter args|_->false in
   let rec substitute_type substitutions = function
     |TypeVar name as ty->Option.value(Hashtbl.find_opt substitutions name)~default:ty
     |List element->List(substitute_type substitutions element)
+    |Applied(name,args)->Applied(name,List.map(substitute_type substitutions)args)
     |ty->ty
   in
   let rec pattern_covers expected pat = match pat with
@@ -531,23 +570,21 @@ let check tops =
         |Some t->{node=XVar b.bid;ety=Some t;espan=s}))
    |ECall(n,args,s)->call env scope None n args s
    |EQualifiedCall(_,_,_,s,_)->fail "PEP_PROJECT_REQUIRED" "Qualified module calls require the explicit project command mode" s ()
-   |ERecord(name,fields,s)->
-      let info=match Hashtbl.find_opt type_table name with Some (`Record info)->info |Some (`Union _)->fail "PEP_NOT_A_RECORD" ("Type '"^name^"' is not a record") s () |None->fail "PEP_UNKNOWN_TYPE" ("Unknown record type '"^name^"'") s () in
-      let supplied=Hashtbl.create 8 in
-      List.iter(fun(field,_,fsp)->if Hashtbl.mem supplied field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") fsp ();Hashtbl.add supplied field ()) fields;
-      List.iter(fun(_,field,_,fsp)->if not(Hashtbl.mem supplied field) then fail "PEP_MISSING_FIELD" ("Missing field '"^field^"'") fsp ()) info.record_fields;
-      List.iter(fun(field,_,fsp)->if not(List.exists(fun(_,known,_,_)->known=field)info.record_fields) then fail "PEP_UNKNOWN_FIELD" ("Unknown field '"^field^"' on "^name) fsp ()) fields;
-      let checked=List.map(fun(field,value,_)->let fid,_,ty,_=List.find(fun(_,known,_,_)->known=field)info.record_fields in fid,check_expr env scope (Some ty) value)fields in
-      {node=XRecord(info.record_id,checked);ety=Some(Named name);espan=s}
+   |ERecord(name,fields,s)->record_expr env scope None name fields s
    |EField(target,name,s)->
       let checked=synth env scope target in
       (match checked.ety with
-       |Some (Named type_name)->(match Hashtbl.find_opt type_table type_name with
-          |Some (`Record info)->(match List.find_opt(fun(_,field,_,_)->field=name)info.record_fields with
-            |Some(fid,_,ty,_)->{node=XField(fid,checked);ety=Some ty;espan=s}
-            |None->fail "PEP_UNKNOWN_FIELD" ("Record '"^type_name^"' has no field '"^name^"'") s ())
-          |_->fail "PEP_FIELD_ON_NON_RECORD" ("Type '"^type_name^"' has no fields") s ())
-       |Some ty->fail "PEP_FIELD_ON_NON_RECORD" ("Type '"^type_name ty^"' has no fields") s ()
+       |Some record_type->
+          let type_name,type_args=match record_type with Named n->n,[]|Applied(n,args)->n,args|_->"",[] in
+          (match Hashtbl.find_opt type_table type_name with
+           |Some (`Record info)->
+              if List.length type_args<>List.length info.record_type_params then fail "PEP_TYPE_ARGUMENT_COUNT" ("Type '"^type_name^"' has an invalid type argument count") s ();
+              let substitutions=Hashtbl.create 4 in
+              List.iter2(fun parameter argument->Hashtbl.add substitutions parameter argument)info.record_type_params type_args;
+              (match List.find_opt(fun(_,field,_,_)->field=name)info.record_fields with
+               |Some(fid,_,ty,_)->{node=XField(fid,checked);ety=Some(substitute_type substitutions ty);espan=s}
+               |None->fail "PEP_UNKNOWN_FIELD" ("Record '"^type_name^"' has no field '"^name^"'") s ())
+           |_->fail "PEP_FIELD_ON_NON_RECORD" ("Value of type '"^(match record_type with Named n|Applied(n,_)->n|_->"unknown")^"' has no fields") s ())
        |None->fail "PEP_FIELD_ON_UNTYPED_VALUE" "Cannot access a field on an expression without a known type" s ())
    |EMatch(subject,arms,s)->match_expr env scope None subject arms s
    |EBin("<=",a,b,s)->let ta=check_expr env scope (Some Int) a and tb=check_expr env scope (Some Int) b in
@@ -596,11 +633,53 @@ let check tops =
       (match ty.ety,en.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,ty,en);ety=(match expected with Some _ as t->t|None->(match ty.ety with Some _ as t->t|None->en.ety));espan=s}
    |EMatch(subject,arms,s)->match_expr env scope expected subject arms s
+   |ERecord(name,fields,s)->record_expr env scope expected name fields s
    |ECall(name,args,s)->
       let checked=call env scope expected name args s in
       (match expected,checked.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) checked.espan ~expected:want ()|_->());
       checked
    |_->let t=synth env scope e in (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
+  and record_expr env scope expected name fields s =
+    let info=match Hashtbl.find_opt type_table name with
+      |Some (`Record info)->info
+      |Some (`Union _)->fail "PEP_NOT_A_RECORD" ("Type '"^name^"' is not a record") s ()
+      |None->fail "PEP_UNKNOWN_TYPE" ("Unknown record type '"^name^"'") s () in
+    let substitutions=Hashtbl.create 4 in
+    let supplied_args=match expected with
+      |None->None
+      |Some (Named expected_name) when expected_name=name->Some []
+      |Some (Applied(expected_name,args)) when expected_name=name->Some args
+      |Some wanted->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name wanted^" but found record '"^name^"'") s ~expected:wanted ()
+    in
+    (match supplied_args with
+     |Some args when List.length args<>List.length info.record_type_params->fail "PEP_TYPE_ARGUMENT_COUNT" ("Type '"^name^"' expects "^string_of_int(List.length info.record_type_params)^" type argument(s)") s ()
+     |Some args->List.iter2(fun parameter argument->Hashtbl.add substitutions parameter argument)info.record_type_params args
+     |None->());
+    let rec infer_type pattern actual at = match pattern,actual with
+      |TypeVar variable,actual when List.mem variable info.record_type_params->
+        (match Hashtbl.find_opt substitutions variable with
+         |None->Hashtbl.add substitutions variable actual
+         |Some previous when previous=actual->()
+         |Some previous->fail "PEP_GENERIC_ARGUMENT_MISMATCH" ("Type parameter '"^variable^"' is inferred as both "^type_name previous^" and "^type_name actual) at ())
+      |List pattern_element,List actual_element->infer_type pattern_element actual_element at
+      |Applied(pattern_name,patterns),Applied(actual_name,actuals) when pattern_name=actual_name && List.length patterns=List.length actuals->List.iter2(fun p a->infer_type p a at)patterns actuals
+      |pattern,actual when type_contains_parameter pattern->fail "PEP_GENERIC_ARGUMENT_MISMATCH" ("Cannot infer a consistent type from "^type_name pattern^" and "^type_name actual) at ()
+      |_ -> ()
+    in
+    let rec infer_expression_type expression = match expression with
+      |EList(items,_) when items<>[]->let inferred=List.filter_map infer_expression_type items in (match inferred with first::rest when List.for_all((=)first)rest->Some(List first)|_->None)
+      |_->(try (synth env scope expression).ety with Error diagnostic when diagnostic.code="PEP_EMPTY_LIST_NEEDS_TYPE"->None)
+    in
+    (match supplied_args with Some _->()|None->List.iter(fun(field,value,field_span)->match List.find_opt(fun(_,known,_,_)->known=field)info.record_fields with Some(_,_,template,_)->Option.iter(fun actual->infer_type template actual field_span)(infer_expression_type value)|None->())fields);
+    List.iter(fun parameter->if not(Hashtbl.mem substitutions parameter) then fail "PEP_GENERIC_INFERENCE" ("Cannot infer type parameter '"^parameter^"' for record '"^name^"'") s ())info.record_type_params;
+    let args=List.map(fun parameter->Hashtbl.find substitutions parameter)info.record_type_params in
+    let supplied=Hashtbl.create 8 in
+    List.iter(fun(field,_,field_span)->if Hashtbl.mem supplied field then fail "PEP_DUPLICATE_FIELD" ("Duplicate field '"^field^"'") field_span ();Hashtbl.add supplied field ()) fields;
+    List.iter(fun(_,field,_,field_span)->if not(Hashtbl.mem supplied field) then fail "PEP_MISSING_FIELD" ("Missing field '"^field^"'") field_span ()) info.record_fields;
+    List.iter(fun(field,_,field_span)->if not(List.exists(fun(_,known,_,_)->known=field)info.record_fields) then fail "PEP_UNKNOWN_FIELD" ("Unknown field '"^field^"' on "^name) field_span ()) fields;
+    let checked=List.map(fun(field,value,_)->let field_id,_,template,_=List.find(fun(_,known,_,_)->known=field)info.record_fields in field_id,check_expr env scope (Some(substitute_type substitutions template)) value)fields in
+    let record_type=if args=[] then Named name else Applied(name,args) in
+    {node=XRecord(info.record_id,checked);ety=Some record_type;espan=s}
   and call env scope expected name args s =
     match Hashtbl.find_opt constructor_table name with
     |Some (owner,(cid,_,params,_))->
@@ -680,6 +759,8 @@ let check tops =
               |Some previous when previous=actual->()
               |Some previous->fail "PEP_GENERIC_ARGUMENT_MISMATCH" (Printf.sprintf "Type parameter '%s' is inferred as both %s and %s" variable (type_name previous) (type_name actual)) span ())
            |List pattern_element,List actual_element->infer_type pattern_element actual_element span
+           |Applied(pattern_name,patterns),Applied(actual_name,actuals) when pattern_name=actual_name && List.length patterns=List.length actuals->List.iter2(fun pattern_arg actual_arg->infer_type pattern_arg actual_arg span)patterns actuals
+           |_,actual when type_contains_parameter pattern && pattern<>actual->fail "PEP_GENERIC_ARGUMENT_MISMATCH" ("Expected "^type_name pattern^" but found "^type_name actual) span ()
            |List _,actual when type_contains_parameter pattern->
              fail "PEP_TYPE_MISMATCH" ("Expected a list argument but found "^type_name actual) span ()
            |_ -> ()
@@ -852,7 +933,7 @@ let rec typed_stmt_json = function
 let typed_json_base c =
  "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"typeParameters\":["^String.concat ","(List.map json_string f.sig_.type_params)^"],\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
 let typed_json c =
- let record_json r = "{\"kind\":\"record\",\"typeId\":"^string_of_int r.record_id^",\"name\":"^json_string r.record_name^",\"fields\":["^String.concat "," (List.map(fun(id,name,ty,sp)->"{\"fieldId\":"^string_of_int id^",\"name\":"^json_string name^",\"type\":"^json_string(type_name ty)^",\"span\":"^span_json sp^"}")r.record_fields)^"]}" in
+ let record_json r = "{\"kind\":\"record\",\"typeId\":"^string_of_int r.record_id^",\"name\":"^json_string r.record_name^",\"typeParameters\":["^String.concat "," (List.map json_string r.record_type_params)^"] ,\"fields\":["^String.concat "," (List.map(fun(id,name,ty,sp)->"{\"fieldId\":"^string_of_int id^",\"name\":"^json_string name^",\"type\":"^json_string(type_name ty)^",\"span\":"^span_json sp^"}")r.record_fields)^"]}" in
  let union_json u = "{\"kind\":\"union\",\"typeId\":"^string_of_int u.union_id^",\"name\":"^json_string u.union_name^",\"variants\":["^String.concat "," (List.map(fun(id,name,args,sp)->"{\"constructorId\":"^string_of_int id^",\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun ty->json_string(type_name ty))args)^"],\"span\":"^span_json sp^"}")u.union_variants)^"]}" in
  let declarations=String.concat "," (List.map record_json c.records @ List.map union_json c.unions) in
  let base=typed_json_base c in
@@ -1433,7 +1514,7 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ | TypeVar _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ | Applied _ | TypeVar _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
@@ -1479,7 +1560,7 @@ let session_record_by_name checked name =
 let session_tool_transport_supported checked ty =
   let rec supports seen = function
     |Int|Bool|Str|Unit->true
-    |SourceBytes|TypeVar _->false
+    |SourceBytes|Applied _|TypeVar _->false
     |List element->supports seen element
     |Named name->
         (match session_record_by_name checked name with
@@ -1543,6 +1624,7 @@ let session_tool_value_v2 checked expected payload =
        if actual<>type_name ty then raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
        (match ty with
         |TypeVar _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "Unresolved generic types cannot cross the v2 tool boundary"))
+        |Applied _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "Generic record types cannot cross the v2 tool boundary"))
         |SourceBytes -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "SourceBytes cannot cross the v2 tool boundary"))
         |Int|Bool|Str|Unit ->
            session_exact_fields fields ["type";"value"] "PEP_TOOL_VALUE_FIELDS";
@@ -2117,11 +2199,11 @@ type project_analysis = {
 let module_internal_name module_name function_name = module_name ^ "$" ^ function_name
 let module_type_names unit =
   List.filter_map(function
-    |TopType (RecordDecl(name,_,_))|TopType (UnionDecl(name,_,_))|TopPublicType (RecordDecl(name,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
+    |TopType (RecordDecl(name,_,_,_))|TopType (UnionDecl(name,_,_))|TopPublicType (RecordDecl(name,_,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
     |_->None)unit.unit_tops
 let module_public_type_names unit =
   List.filter_map(function
-    |TopPublicType (RecordDecl(name,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
+    |TopPublicType (RecordDecl(name,_,_,_))|TopPublicType (UnionDecl(name,_,_))->Some name
     |_->None)unit.unit_tops
 let module_type_is_public unit name = List.mem name (module_public_type_names unit)
 let module_constructor_names unit =
@@ -2158,12 +2240,13 @@ let module_map_type unit units span ty =
          Named(module_internal_type_name target type_name)
        |_ -> fail "PEP_MODULE_TYPE_NAME" ("Qualified type name '"^name^"' must contain one module alias and one type name") span ())
     |Named name when List.mem name local_type_names->Named(module_internal_type_name unit name)
+    |Applied(name,args)->(match map (Named name) with Named mapped_name->Applied(mapped_name,List.map map args)|_->assert false)
     |List element->List(map element)
     |other->other
   in map ty
 let module_map_type_decl unit units = function
-  |RecordDecl(name,fields,span)->
-    RecordDecl(module_internal_type_name unit name,
+  |RecordDecl(name,type_parameters,fields,span)->
+    RecordDecl(module_internal_type_name unit name,type_parameters,
       List.map(fun(field,ty,field_span)->field,module_map_type unit units field_span ty,field_span)fields,span)
   |UnionDecl(name,variants,span)->
     UnionDecl(module_internal_type_name unit name,
@@ -2174,6 +2257,7 @@ let module_validate_public_signature unit function_ =
   let rec validate=function
     |Named name when List.mem name local_types && not(List.mem name public_types)->
       fail "PEP_PRIVATE_MODULE_TYPE" ("Public function '"^function_.fname^"' exposes private type '"^name^"'") function_.fspan ()
+    |Applied(name,args)->validate (Named name);List.iter validate args
     |List element->validate element
     |_ -> ()
   in

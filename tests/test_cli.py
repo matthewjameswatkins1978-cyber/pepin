@@ -1101,11 +1101,83 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(result.stdout, "42\n")
 
 
+    def test_generic_record_fields_compose_with_generic_function_inference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "type Box[T] { value: T }\n"
+                "fn unbox[T](box: Box[T]) -> T { return box.value }\n"
+                "let box: Box[Int] = Box { value: 42 }\n"
+                "say(int_text(unbox(box)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-record.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            record = json.loads(checked.stdout)["typedTree"]["types"][0]
+            self.assertEqual(record["fields"][0]["type"], "T")
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
+
+    def test_generic_record_infers_nested_list_field_type(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "type Box[T] { value: T }\n"
+                "fn unbox[T](box: Box[T]) -> T { return box.value }\n"
+                "let box = Box { value: [20, 22] }\n"
+                "let values: List[Int] = unbox(box)\n"
+                "say(int_text(length(values)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-record-list.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "2\n")
+
+    def test_generic_record_arity_and_field_mismatch_are_diagnostics(self):
+        cases = [
+            ("type Box[T] { value: T }\nlet value: Box = Box { value: 1 }\n", "PEP_TYPE_ARGUMENT_COUNT"),
+            ("type Box[T] { value: T }\nlet value: Box[Int, Bool] = Box { value: 1 }\n", "PEP_TYPE_ARGUMENT_COUNT"),
+            ("type Box[T] { value: T }\nlet value: Box[Int] = Box { value: true }\n", "PEP_TYPE_MISMATCH"),
+            ("type Box[T] { value: T }\nlet value = Box { value: [] }\n", "PEP_GENERIC_INFERENCE"),
+        ]
+        for source, code in cases:
+            with self.subTest(code=code, source=source):
+                with tempfile.TemporaryDirectory() as temporary:
+                    path = pathlib.Path(temporary) / "invalid-generic-record.pep"
+                    path.write_text(source, encoding="utf-8", newline="")
+                    result = invoke("check", path, "--json")
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], code)
+
 class PepModuleCliTests(unittest.TestCase):
     @staticmethod
     def _write_project(directory, files):
         for name, source in files.items():
             (directory / name).write_bytes(source.encode("utf-8"))
+
+    def test_imported_generic_record_round_trips_through_public_generic_functions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            self._write_project(project, {
+                "main.pep": (
+                    "import library as l\n"
+                    "let box: l.Box[Int] = l.wrap(42)\n"
+                    "say(int_text(l.unwrap(box)))\n"
+                ),
+                "library.pep": (
+                    "pub type Box[T] { value: T }\n"
+                    "pub fn wrap[T](value: T) -> Box[T] { return Box { value: value } }\n"
+                    "pub fn unwrap[T](box: Box[T]) -> T { return box.value }\n"
+                ),
+            })
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            result = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
 
     def test_imported_public_function_runs_and_reports_resolved_declaration(self):
         with tempfile.TemporaryDirectory() as temporary:
