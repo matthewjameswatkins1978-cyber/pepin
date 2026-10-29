@@ -276,6 +276,16 @@ fn list_int_last_index_of_between(values: List[Int], lower: Int, upper: Int) -> 
   return foundAt
 }
 
+fn list_int_prefix_length_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var active = true
+  var length = 0
+  for item in values {
+    length = if active && lower <= item && item <= upper { length + 1 } else { length }
+    active = active && lower <= item && item <= upper
+  }
+  return length
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
