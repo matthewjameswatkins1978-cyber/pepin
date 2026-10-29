@@ -712,6 +712,16 @@ fn list_int_max_between(values: List[Int], lower: Int, upper: Int, fallback: Int
   return maximum
 }
 
+fn list_int_min_outside(values: List[Int], lower: Int, upper: Int, fallback: Int) -> Int {
+  var found = false
+  var minimum = fallback
+  for item in values {
+    minimum = if !(lower <= item && item <= upper) && (!found || item <= minimum) { item } else { minimum }
+    found = found || !(lower <= item && item <= upper)
+  }
+  return minimum
+}
+
 fn list_int_min_or(values: List[Int], fallback: Int) -> Int {
   var found = false
   var minimum = fallback
