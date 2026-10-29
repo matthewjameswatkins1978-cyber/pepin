@@ -280,6 +280,18 @@ fn list_bool_count_false_runs(values: List[Bool]) -> Int {
   return runs
 }
 
+fn list_bool_count_runs_of(values: List[Bool], expected: Bool) -> Int {
+  var runs = 0
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    runs = if item == expected && (!hasPrevious || previous != expected) { runs + 1 } else { runs }
+    previous = item
+    hasPrevious = true
+  }
+  return runs
+}
+
 fn list_bool_count_true_runs(values: List[Bool]) -> Int {
   var runs = 0
   var previous = false
