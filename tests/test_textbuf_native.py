@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -194,6 +194,10 @@ class TextbufNativeTests(unittest.TestCase):
         return self._build_c(compiler, exe_name,
             ["file_probe.c", "pep_textbuf.c", "pep_span.c", "pep_utf8.c"])
 
+    def build_json_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["json_probe.c", "pep_json.c", "pep_textbuf.c"])
+
     @staticmethod
     def parse_span_blocks(output):
         lines = output.split(b"\n")
@@ -344,6 +348,60 @@ class TextbufNativeTests(unittest.TestCase):
             self.assertEqual(missing.stdout, b"n 2 1 1 3\nr io\n")
             outputs.append(ran.stdout)
         self.assertEqual(outputs[0], outputs[1])
+
+
+    def test_json_matches_ocaml_inspect(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        programs = {
+            "json_esc.pep": b'fn main() -> Int {\n  say("a\\"b\\\\c\\nd\\te\\rf\\tg\\0h")\n  return 0\n}\n',
+            "json_raw.pep": (b'fn main() -> Int {\n  say("A\x01B")\n  say("A\x08\x0c\x7fB")\n'
+                             b'  say("A\tB")\n  return 0\n}\n'),
+            "json_uni.pep": ('fn main() -> Int {\n  say("")\n  say("caf\u00e9 \U0001F600")\n'
+                             '  say("\\"\\\\")\n  return 0\n}\n').encode("utf-8"),
+        }
+        for fixture, data in programs.items():
+            path = BUILD / fixture
+            path.write_bytes(data)
+            inspected = self.pep("inspect", str(path), "--json")
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            values = []
+
+            def collect(node):
+                if isinstance(node, dict):
+                    if node.get("kind") == "string":
+                        values.append(node["value"])
+                    for entry in node.values():
+                        collect(entry)
+                elif isinstance(node, list):
+                    for entry in node:
+                        collect(entry)
+
+            collect(json.loads(inspected.stdout)["ast"])
+            self.assertTrue(values, fixture)
+            for index, value in enumerate(values):
+                token = json.dumps(value, ensure_ascii=False)
+                self.assertIn(token, inspected.stdout, (fixture, value))
+                content = BUILD / ("json_%s_%d.bin" % (fixture, index))
+                content.write_bytes(value.encode("utf-8"))
+                outputs = []
+                for compiler, name in ((clang, "json_clang.exe"), (gcc, "json_gcc.exe")):
+                    probe = self.build_json_probe(compiler, name)
+                    ran = run_bytes([str(probe), str(content)])
+                    self.assertEqual(ran.returncode, 0, ran.stderr)
+                    outputs.append(ran.stdout)
+                self.assertEqual(outputs[0], outputs[1])
+                self.assertEqual(outputs[0], (token + "\n").encode("utf-8"))
+        raw = BUILD / "json_rawbytes.bin"
+        raw.write_bytes(b"\xff\xfe\"\x01")
+        expected = b'"\xff\xfe\\"\\u0001"\n'
+        for compiler, name in ((clang, "json_clang.exe"), (gcc, "json_gcc.exe")):
+            probe = self.build_json_probe(compiler, name)
+            ran = run_bytes([str(probe), str(raw)])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected)
 
 
 if __name__ == "__main__":

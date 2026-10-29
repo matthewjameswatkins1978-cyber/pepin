@@ -88,3 +88,8 @@ can relay them.
   strict portable C23). `file_probe` needed the same binary-stdout
   treatment as `span_probe`. No Pep files this slice: host file I/O is
   not expressible in Pep by design (OCaml host owns effects).
+
+## 2026-10-29 -- slice 5: JSON string escaping
+- New: `pep_json.h/.c` (`pep_json_escape`), a byte-exact mirror of the OCaml seed `json_string`, plus `json_probe.c`. Short escapes, `\b`, `\f`, lowercase `\u00xx`, raw passthrough for DEL/UTF-8/invalid bytes — no validation, exactly like the authority.
+- Evidence: differential loop per string literal — OCaml `inspect` raw token, Python `json.dumps` agreement assert, both C probes reproduce the token byte-for-byte. Covers `\" \\ \n \t \r \0`, raw controls (0x01 raw tab 0x08 0x0C 0x7F), empty string, quote/backslash-only, unicode, emoji, embedded NUL (length-delimited, no `strlen`), and raw invalid bytes. 13/13 suite green on both toolchains.
+- No Pep files: Str has no byte access or concatenation in the language, so this primitive is inexpressible in Pep; the OCaml differential is the execution evidence. Escaping changes rendering only, never semantics — offered as the future native machine-interface primitive.
