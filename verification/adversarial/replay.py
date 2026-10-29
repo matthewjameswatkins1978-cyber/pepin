@@ -272,6 +272,29 @@ def main():
           "invalid", ("PEP_ARGUMENT_COUNT",))
     check("REC-fwdref", "type Box { p: Point }\nfn f() -> Int { return 0 }",
           "invalid", ("PEP_UNKNOWN_TYPE",))
+    # Literals, escapes, conditions (set 6)
+    run("L-esc-n", b'say("a\\nb")\n', exp_out="a\nb\n")
+    run("L-esc-quote", b'say("a\\"b")\n', exp_out='a"b\n')
+    run("L-esc-bad", b'say("a\\qb")\n', exp_rc=1,
+        exp_err_contains=("PEP_INVALID_ESCAPE",))
+    run("L-int-max", b"say(int_text(9223372036854775807))\n",
+        exp_out="9223372036854775807\n")
+    check("L-int-over",
+          b"fn main() -> Int { return 9223372036854775808 }",
+          "invalid", ("PEP_INT_LITERAL_RANGE",))
+    run("L-add-overflow", b"say(int_text(9223372036854775807 + 1))\n",
+        exp_rc=1, exp_err_contains=("PEP_RUNTIME_OVERFLOW",))
+    run("L-to-min", b"say(int_text(0 - 9223372036854775807 - 1))\n",
+        exp_out="-9223372036854775808\n")
+    run("L-unary", b"say(int_text(-1))\n", exp_out="-1\n")
+    check("L-while-int", b"fn main() -> Int { while 1 { } return 0 }",
+          "invalid", ("PEP_TYPE_MISMATCH",))
+    check("L-for-int", b"fn main() -> Int { for x in 5 { } return x }",
+          "invalid", ("PEP_FOR_REQUIRES_LIST",))
+    run("L-if-noelse", b'if true { say("s") }', exp_rc=1,
+        exp_err_contains=("PEP_PARSE_ELSE",))
+    run("L-if-empty-else", b'if true { say("s") } else { }',
+        exp_out="s\n")
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
