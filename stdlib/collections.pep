@@ -189,6 +189,11 @@ fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }
 
+fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
+  for item in values { return item }
+  return fallback
+}
+
 fn list_bool_contains(values: List[Bool], needle: Bool) -> Bool {
   return contains(values, needle)
 }
