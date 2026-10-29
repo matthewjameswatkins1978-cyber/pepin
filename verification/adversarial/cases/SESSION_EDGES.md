@@ -37,8 +37,12 @@ Sequence: `open` + two identical `query` calls on the same retained revision, th
 
 `inspect --json` on a valid file → `TESTED`: status `parsed` with a spanned AST and no `typedTree`; `check` adds the typed tree. The CLI stages (parse vs check) are distinct artifacts, consistent with the pipeline's stage separation.
 
+## Session `inspect` carries the typed tree
+
+Session `inspect` on an open revision → `TESTED`: `outcome: ok`, with both `ast` (list) and `typedTree` present. Unlike the file-based `inspect` (parse stage only, no typed tree — see above), the session variant serves the retained analysis. Same op name, different layers; both observed, not assumed.
+
 ## Status
 
 No findings. These close the session-transport loop left open by the
 R-set (which covered rejection) and the H-set (which covered holes):
-retention, repairability, and observability all behave per spec.
+retention, repairability, observability, and staged inspection all behave per spec.

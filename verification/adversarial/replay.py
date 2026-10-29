@@ -1055,6 +1055,48 @@ def main():
           ((isinstance(_eb, dict) and _eb.get("code") == "PEP_SEMANTIC_ROOT_NOT_FOUND") or "SEMANTIC_ROOT" in str(_eb)))
     results.append(("SN-badentry", PASS if ok else FAIL,
                     "outcome=%s" % _rb.get("outcome")))
+    # Hole E2E + offset selection + session inspect
+    _hs = "fn double(n: Int) -> Int { return ?calc }\nfn main() -> Int { return 0 }\n"
+    _hdone = _hs[:34] + "n + n" + _hs[39:]
+    _pe = TMP / "a3_he2e.pep"
+    _pe.write_bytes(_hdone.encode("utf-8"))
+    try:
+        _re = _pwsh(["./pep.ps1", "run", str(_pe)])
+        ok = _re.returncode == 0 and "incomplete" not in (_re.stderr or "")
+        results.append(("H-e2e", PASS if ok else FAIL,
+                        "rc=%d" % _re.returncode))
+    finally:
+        _pe.unlink(missing_ok=True)
+    _po = TMP / "a3_off.pep"
+    _po.write_bytes(("fn f(a: Int) -> Int { return ?one }\n"
+                      "fn g(b: Int) -> Int { return ?two }\n"
+                      "fn main() -> Int { return 0 }\n").encode("utf-8"))
+    try:
+        for _off, _nm in ((29, "one"), (65, "two")):
+            _rq = _pwsh(["./pep.ps1", "query", str(_po), "--holes",
+                         "--json", "--offset", str(_off)])
+            try:
+                _dq = json.loads((_rq.stdout or "{}"))
+                _hh = _dq.get("holes", [])
+                _okq = (len(_hh) == 1 and _hh[0].get("identity") == _nm)
+            except Exception:
+                _okq = False
+            results.append(("H-off-%s" % _nm, PASS if _okq else FAIL,
+                            "offset=%d" % _off))
+    finally:
+        _po.unlink(missing_ok=True)
+    _so = sess([{"schemaVersion": 3, "op": "open", "name": "s",
+                    "source": _hs}])
+    _sd, _sr = _so[0]["document"], _so[0]["revision"]
+    _si = sess([{"schemaVersion": 3, "op": "open", "name": "s",
+                  "source": _hs},
+                 {"schemaVersion": 3, "op": "inspect",
+                  "document": _sd, "revision": _sr}])[1]
+    ok = (_si.get("outcome") == "ok"
+          and isinstance(_si.get("ast"), list)
+          and "typedTree" in _si)
+    results.append(("O-inspect", PASS if ok else FAIL,
+                    "outcome=%s" % _si.get("outcome")))
     # v2 transport exclusions: unions + SourceBytes (set 18)
     _xlib = ("type E = A(Int) | B()\n"
              "fn first(x: E) -> Int { return match x { A(v) => v B() => 1 } }\n"

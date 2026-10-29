@@ -52,6 +52,31 @@ other than the document's current revision"). Same guard family as R1
 name"). Hole identity is document+revision+scope+name; names do not
 resolve globally or across revisions.
 
+## H6 — closing the loop: fill, apply, then run the completed bytes
+
+The session never hands back full source text, but the `sourceDiff`
+(`removed "?calc" at [34,39)`, `inserted "n + n"`) makes the
+completed bytes deterministic. Running exactly those bytes → TESTED:
+rc 0, no output, no `incomplete` refusal (contrast N1, which refuses to
+run with the hole still present). The full hole lifecycle is now
+covered end to end: refuse while incomplete → query → preview → apply
+→ execute.
+
+## H7 — byte-offset hole selection (file CLI)
+
+With two holes (`?one` at byte 29, `?two` at byte 65 in LF bytes):
+`query --holes --json --offset 29` → TESTED: exactly the `one` hole
+(scope `f`, bindings `[a]`, `fill_hole` candidate `a`, exact span);
+`--offset 65` → TESTED: exactly the `two` hole (scope `g`, bindings
+`[b]`). Offsets with no hole beginning there return an empty list
+(`--offset 0`). Note the representation split, both observed: the
+*file* CLI reports `identity` as the plain name string (`"one"`),
+while the *session* `query` wraps it in an identity object
+(`{document, revision, scope, name}`). Consumers must handle both
+shapes. (An earlier CRLF probe file shifted every offset by one — a
+test-harness artifact, not a product issue; LF ground truth confirmed
+against session spans.)
+
 ## Status
 
 No findings: the hole lifecycle is fail-closed at every transition
