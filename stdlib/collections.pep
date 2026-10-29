@@ -146,6 +146,18 @@ fn list_bool_longest_true_run(values: List[Bool]) -> Int {
   return longest
 }
 
+fn list_bool_count_transitions(values: List[Bool]) -> Int {
+  var transitions = 0
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    transitions = if hasPrevious && !(item == previous) { transitions + 1 } else { transitions }
+    previous = item
+    hasPrevious = true
+  }
+  return transitions
+}
+
 fn list_bool_count_runs(values: List[Bool]) -> Int {
   var runs = 0
   var hasPrevious = false
