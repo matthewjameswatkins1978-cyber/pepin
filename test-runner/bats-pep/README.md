@@ -12,8 +12,8 @@ semantics as the Rust reference.
 
 ## Coverage at a glance
 
-The reference at `@ d5e6404` has twelve `Condition` variants. Six are decided in
-full in Pep, one is decided as far as validation reaches, and five are blocked by two
+The reference at `@ d5e6404` has twelve `Condition` variants. Six are decided in full, one
+is decided for every input except a single search branch, and five are blocked by two
 missing primitives rather than by design choices. Stated up front so prioritisation
 does not depend on reading
 this document end to end.
@@ -26,7 +26,7 @@ this document end to end.
 | `file_absent` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `path_changed` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `path_unchanged` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
-| `text_contains` | validation only | byte search needs `str_bytes(Str) -> SourceBytes` or `str_contains(Str, Str) -> Bool`; the source selector is already validated exactly as the reference does |
+| `text_contains` | **decided except the search** | empty-needle rule, source validation and load ordering all decided; a non-empty needle needs `str_bytes(Str) -> SourceBytes` |
 | `text_matches` | blocked | same, plus a regex engine |
 | `git_diff_contains` | blocked | same as `text_contains` (the diff capture itself is available) |
 | `git_diff_matches` | blocked | same as `text_matches` |
@@ -453,6 +453,40 @@ a string; everything after the split is judged here. The `:` split and the
 non-numeric-index rejection remain an explicit host boundary, not an invented
 primitive.
 
+## Condition: `text_contains`, decided as far as it can be
+
+The reference loads the source, *then* tests the needle, and an empty needle matches
+any text. Measured in exactly that order:
+
+| Source | Needle | Verdict |
+| --- | --- | --- |
+| readable path | `""` | PROVEN |
+| readable path | `"zzz-no-such-text-zzz"` | NOT OBSERVED |
+| unreadable path | `""` | INCONCLUSIVE |
+| step source | `""` | PROVEN |
+
+The third row is the one that matters, and it is why this is not simply "empty needle
+always wins": **an unloadable source is Undetermined even for a needle that matches
+anything**, because the load happens before the test. A model that short-circuited on
+the needle would report PROVEN for a source it never read.
+
+```pep
+type SourceAvailability = SourceLoaded() | SourceUnavailable(Str)
+
+fn judge_text_contains(selector: SourceSelector, needle: Str,
+                       availability: SourceAvailability) -> Verdict
+```
+
+Precedence, highest first: malformed source → INVALID; unloadable source →
+INCONCLUSIVE; empty needle → PROVEN; non-empty needle over a loaded source →
+INCONCLUSIVE naming `str_bytes`.
+
+That leaves `text_contains` decided correctly for **every** input except a non-empty
+needle over a readable source — a single branch, which is exactly where
+`str_bytes(Str) -> SourceBytes` or `str_contains(Str, Str) -> Bool` slots in.
+`text_matches` and `json_value_equals` share the same validation and load ordering and
+would need regex or a JSON parser on top.
+
 ## Run it
 
 ```powershell
@@ -550,6 +584,12 @@ Observed (73 cases; each prints its verdict label then its reason):
 | 79 | `path` + `stream` | INVALID |
 | 80 | `step` + `stream: bogus` | INVALID |
 | 81 | `step` phase `bogus` | INVALID |
+| 82 | readable source, needle `""` | PROVEN |
+| 83 | readable source, needle `"ref"` | INCONCLUSIVE |
+| 84 | unloadable source, needle `""` | INCONCLUSIVE (ordering guard) |
+| 85 | step source, needle `""` | PROVEN |
+| 86 | malformed source, needle `""` | INVALID |
+| 87 | malformed source + failed load | INVALID (vacuity guard) |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -750,7 +790,18 @@ verdict.
 | `step` + `stream: bogus` | INVALID | INVALID | INVALID |
 | `step` phase `bogus` | INVALID | INVALID | INVALID |
 
-`SUMMARY cases=55 mismatches=0`.
+`text_contains` is compared only where Pep can actually decide it — an empty needle over
+a source whose load state is known. A non-empty needle is excluded on purpose: the
+reference performs the search while Pep reports the missing primitive, and comparing a
+capability gap to a verdict would be dishonest.
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| readable path, needle `""` | PROVEN | PROVEN | PROVEN |
+| missing path, needle `""` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| step source, needle `""` | PROVEN | PROVEN | PROVEN |
+
+`SUMMARY cases=58 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

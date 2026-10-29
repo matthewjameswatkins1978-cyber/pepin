@@ -309,3 +309,24 @@ show(judge_source_only(sel_two_sources()))
 show(judge_source_only(sel_stream_no_step()))
 show(judge_source_only(sel_bad_stream()))
 show(judge_source_only(sel_bad_phase()))
+
+// --- Condition: text_contains, decided as far as it can be ---
+//
+// 82 tc-empty-needle        readable source, needle ""      -> PROVEN
+// 83 tc-nonempty-needle     readable source, needle "ref"   -> INCONCLUSIVE
+// 84 tc-empty-unloadable    unloadable source, needle ""    -> INCONCLUSIVE
+// 85 tc-step-empty          step source, needle ""          -> PROVEN
+// 86 tc-invalid-source      malformed source, needle ""     -> INVALID
+// 87 tc-vacuity             malformed source + failed load  -> INVALID
+//
+// Case 84 is the ordering guard and the reason this is not simply "empty needle always
+// wins": the reference loads the source before it tests the needle, so an unloadable
+// source is Undetermined even for a needle that matches anything. Case 87 is the
+// vacuity guard: a malformed specification outranks both the needle rule and the load
+// failure.
+show(judge_text_contains(sel_path_only(), "", SourceLoaded()))
+show(judge_text_contains(sel_path_only(), "ref", SourceLoaded()))
+show(judge_text_contains(sel_path_only(), "", SourceUnavailable("cannot read the source")))
+show(judge_text_contains(sel_step_only(), "", SourceLoaded()))
+show(judge_text_contains(sel_two_sources(), "", SourceLoaded()))
+show(judge_text_contains(sel_none(), "ref", SourceUnavailable("cannot read the source")))

@@ -19,7 +19,8 @@ note, not a status report on anyone else's work.
 | `ad42343` | `file_exists` / `file_absent` over a recorded worktree view, file differential (40/40) |
 | `35a5d00` | Evidence-driven trees composing all four condition types, mixed-tree trail differential (44/44) |
 | `bec1aab` | `path_changed` / `path_unchanged` over recorded changes, path differential (49/49) |
-| (this commit) | Coverage-at-a-glance table + source-selector validation (the decidable half of `text_contains`), source differential (55/55) |
+| `f4817a5` | Coverage-at-a-glance table + source-selector validation (the decidable half of `text_contains`), source differential (55/55) |
+| (this commit) | text_contains decided except the non-empty search: empty-needle rule + load ordering (58/58) |
 
 Starting point of the first four was `749edb2`. The fifth slice began from `c953e43`
 after recovering state, not from a reset.
@@ -29,8 +30,8 @@ after recovering state, not from a reset.
 | Check | Result |
 | --- | --- |
 | `.\pep.ps1 check test-runner\bats-pep\oracle.pep --json` | `status valid`, 0 diagnostics |
-| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 172 lines, 81 verdict cases plus trail sizes and a full `explain` |
-| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=55 mismatches=0` |
+| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 184 lines, 87 verdict cases plus trail sizes and a full `explain` |
+| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=58 mismatches=0` |
 | `git ls-files --eol test-runner/bats-pep/` | all five files `i/lf w/lf` |
 | every file edit | Threadmoth `preview` → `mutate`, budget PASS, `unrelated_bytes_changed=false` |
 
@@ -140,8 +141,8 @@ Committed in the same commit as this outbox; verify with
 `Get-FileHash -Algorithm SHA256`.
 
 ```
-3654fb2d61c64dbb3ed02819c5e0837a796e178f1f8d328a63c047d3b8957d26  oracle.pep
-4f0371611d3173de3b617303097e871ab9761616b6669b36355340a0dfa294a6  selftest.pep
-9918d8e9be1e706fe4721c45f7f8f458eda30b32df0d348ceb7f7f0a6365ab07  differential.py
-4dd8698121fc98d122a7b3ec067d2d67761ea8cc824aca483b0ce4c812cddc8b  README.md
+ee1f7e532d97e05b9dd14fa911abc9c21dc52d4f228831d0342f3756d2d4abbd  oracle.pep
+7c7b44aaa61eed3720907b25f47d787bf6057552d5ad8307f006a433cce61275  selftest.pep
+0954330d59c1059e86325d9e51f953496019c6c0c9e2fcbf8f88ab677bc144e2  differential.py
+a0ebe1fb07d50b7e5b15c33b74fcd539ae68bd06a801672c60e357e2ccf9a682  README.md
 ```

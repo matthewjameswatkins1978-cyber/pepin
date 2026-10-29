@@ -463,6 +463,21 @@ SOURCE_CASES = [
      "      step: \"bogus:0\"",
      selector(step='StepAt("bogus", 0)')),
 ]
+# text_contains is comparable only where Pep can actually decide it: an empty needle
+# over a source whose load state is known. A non-empty needle is excluded on purpose --
+# the reference performs the search and answers NOT OBSERVED while Pep reports the
+# missing primitive, and comparing a capability gap to a verdict would be dishonest.
+TEXT_CONTAINS_CASES = [
+    ("tc-empty-readable",
+     "      path: \"README.md\"", "", "SourceLoaded()",
+     selector(path='FieldPresent("README.md")'), "PROVEN"),
+    ("tc-empty-missing-path",
+     "      path: \"nope.txt\"", "", 'SourceUnavailable("cannot read `nope.txt`")',
+     selector(path='FieldPresent("nope.txt")'), "INCONCLUSIVE"),
+    ("tc-empty-step",
+     "      step: \"run:0\"", "", "SourceLoaded()",
+     selector(step='StepAt("run", 0)'), "PROVEN"),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -794,9 +809,28 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
+        # text_contains: only the branches Pep can actually decide.
+        for ident, source_block, needle, availability, pep_selector, expected in TEXT_CONTAINS_CASES:
+            body = TEXT_CONTAINS_TEMPLATE.format(ident=ident,
+                                                source_block=source_block)
+            if needle != "ref":
+                body = body.replace('substring: "ref"',
+                                    'substring: "%s"' % needle)
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(
+                composed, 'judge_text_contains(%s, "%s", %s)'
+                % (pep_selector, needle, availability))
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
              + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES)
-             + len(EVIDENCE_TREE_CASES) + len(PATH_CASES) + len(SOURCE_CASES))
+             + len(EVIDENCE_TREE_CASES) + len(PATH_CASES) + len(SOURCE_CASES)
+             + len(TEXT_CONTAINS_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

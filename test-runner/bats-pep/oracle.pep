@@ -993,3 +993,52 @@ fn judge_source_only(selector: SourceSelector) -> Verdict {
     SourceShapeValid() => Inconclusive("substring search needs str_bytes(Str) -> SourceBytes")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Condition: text_contains, decided as far as it can be
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//   eval_condition for TextContains:
+//     1. load_source(source)  — a load failure is Undetermined, note carries the error
+//     2. contains_substring(bytes, needle) — and an EMPTY needle returns true
+//
+// Measured, in exactly that order:
+//
+//   readable path,    needle ""          -> PROVEN       (empty needle always present)
+//   readable path,    needle "zzz-..."   -> NOT OBSERVED (the search itself)
+//   unreadable path,  needle ""          -> INCONCLUSIVE (load fails BEFORE the test)
+//   step source,      needle ""          -> PROVEN
+//
+// The third row is the ordering that matters. An empty needle does not rescue an
+// unloadable source, because the reference loads before it searches — so "always true"
+// is a fact about a needle, never a licence to skip a failed load.
+//
+// With this, text_contains is decided correctly for every input except a non-empty
+// needle over a readable source, which is the single branch that needs
+// `str_bytes(Str) -> SourceBytes`.
+
+// Whether the selected source could be loaded at all.
+type SourceAvailability = SourceLoaded() | SourceUnavailable(Str)
+
+fn judge_loaded_needle(needle: Str, availability: SourceAvailability) -> Verdict {
+  return match availability {
+    SourceUnavailable(why) => Inconclusive(why)
+    SourceLoaded() => if needle == "" {
+      Proven("the empty needle is present in every text")
+    } else {
+      Inconclusive("substring search needs str_bytes(Str) -> SourceBytes")
+    }
+  }
+}
+
+fn judge_text_contains(
+  selector: SourceSelector,
+  needle: Str,
+  availability: SourceAvailability
+) -> Verdict {
+  return match validate_source(selector) {
+    SourceRejected(reason) => Invalid(reason)
+    SourceShapeValid() => judge_loaded_needle(needle, availability)
+  }
+}
