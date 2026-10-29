@@ -136,9 +136,29 @@
       "scope": "ordinary Pep execution; separate from tool limits; source-advertised, not measured"
     }
   },
+  "peerEvidence": [
+    {
+      "source": "Agent 2 outbox message BOOT-A2-20261029-002; GitHub issue #16 comment 6501091889",
+      "classification": "builder-reported; not independently reproduced by Agent 1",
+      "branch": "codex/bootstrap-agent2-b0",
+      "sourceCommit": "805062bcda23b9ceab1c21f9a1ce31bc1c6b7969",
+      "method": "Source inspection and pep_c23.emit(bytes) only; no C compiler/artifact/native executable.",
+      "observations": [
+        "A tiny fn main() -> Int { return 42 } target emitted 1529 C characters.",
+        "A valid list-length target passed to the C23 emitter was rejected because the builtin has no C lowering.",
+        "Emitter and lexer sources used as target programs opened within the 65536-byte cap, then parser tool execution failed with PEP_RUNTIME_STEP_LIMIT at 154:6.",
+        "Parser and checker source targets failed earlier at open_bytes with PEP_SOURCE_BYTE_LIMIT because they exceed 65536 bytes."
+      ],
+      "reportedEmitterClosure": [
+        "Scalar Int/Bool function signatures; direct immutable lets; calls of at most two parameters; scalar expressions; conditional-return bodies; checked Int64/division/call-depth helpers.",
+        "No C lowering for records, tagged unions, List, Str/Bytes, or file/argv host I/O."
+      ],
+      "security": "Native compile/run tests remain unexecuted under the Defender hold."
+    }
+  ],
   "baselineAndLimits": {
     "dynamicTestsRun": 0,
-    "reason": "Native test suites may compile and execute generated C23 binaries; no tests or compiler session were launched.",
+    "reason": "Agent 1 ran no tests or compiler session. Agent 2 separately reports source-only Pep pipeline probes in peerEvidence; native test suites may compile and execute generated C23 binaries and remain held.",
     "fuelOrRuntimeMeasured": false,
     "largestAcceptedProgramBytesObserved": null,
     "likelyEarlierCeilings": [
