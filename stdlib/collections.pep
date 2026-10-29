@@ -130,6 +130,16 @@ fn list_bool_count_not_equal(values: List[Bool], expected: Bool) -> Int {
   return total
 }
 
+fn list_bool_longest_run_of(values: List[Bool], expected: Bool) -> Int {
+  var current = 0
+  var longest = 0
+  for item in values {
+    current = if item == expected { current + 1 } else { 0 }
+    longest = if current <= longest { longest } else { current }
+  }
+  return longest
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
