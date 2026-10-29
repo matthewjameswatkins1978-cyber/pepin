@@ -535,6 +535,49 @@ def main():
           and ts[1].get("status") == "Rejected")
     results.append(("T5-say-blocked", PASS if ok else FAIL,
                     "validate=%s" % ts[1].get("status")))
+    # Session edges (set 11)
+    def sess(reqs):
+        r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                  inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(ln) for ln in (r.stdout or "").splitlines()
+                if ln.strip()]
+    o = sess([{"schemaVersion": 3, "op": "open_bytes", "name": "bad",
+                "bytes": [102, 110, 32, 255, 254]}])[0]
+    ok = (o.get("status") == "invalid" and "PEP_INVALID_UTF8" in [
+        x.get("code") for x in o.get("diagnostics", [])])
+    results.append(("O1-badbytes", PASS if ok else FAIL,
+                    "status=%s" % o.get("status")))
+    e0 = sess([{"schemaVersion": 3, "op": "open", "name": "e",
+                 "source": "fn main() -> Int { return 1 }\n"}])[0]
+    edoc, erev = e0["document"], e0["revision"]
+    eb = sess([
+        {"schemaVersion": 3, "op": "open", "name": "e",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": edoc,
+         "expected_revision": erev, "start_byte": 26, "end_byte": 27,
+         "replacement": "@@@"},
+    ])[1]
+    enew = eb.get("revision")
+    oq = sess([
+        {"schemaVersion": 3, "op": "open", "name": "e",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": edoc,
+         "expected_revision": erev, "start_byte": 26, "end_byte": 27,
+         "replacement": "@@@"},
+        {"schemaVersion": 3, "op": "query", "document": edoc,
+         "revision": enew},
+    ])[2]
+    ok = (eb.get("outcome") == "ok" and eb.get("status") == "invalid"
+          and enew != erev and oq.get("outcome") == "ok"
+          and "PEP_UNEXPECTED_CHARACTER" in [
+              x.get("code") for x in oq.get("diagnostics", [])])
+    results.append(("O2-repairable", PASS if ok else FAIL,
+                    "edit=%s query=%s" % (eb.get("status"),
+                                           oq.get("status"))))
+    om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
+    ok = om.get("outcome") == "ok" and "metrics" in om
+    results.append(("O3-metrics", PASS if ok else FAIL,
+                    "outcome=%s" % om.get("outcome")))
 
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
