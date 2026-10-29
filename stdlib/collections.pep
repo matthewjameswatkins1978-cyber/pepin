@@ -112,6 +112,12 @@ fn list_bool_is_constant(values: List[Bool]) -> Bool {
   return constant
 }
 
+fn list_bool_all_equal(values: List[Bool], expected: Bool) -> Bool {
+  var all = true
+  for item in values { all = all && item == expected }
+  return all
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
