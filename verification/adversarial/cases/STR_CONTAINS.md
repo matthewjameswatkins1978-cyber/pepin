@@ -31,6 +31,14 @@ demonstrates no-normalization, and it passes.
 | nul-only | `str_contains("\0","\0")` | `1` | `\0` escape denotes U+0000; NUL searchable |
 | type fail-closed | `str_contains("a", 1)` via `check` | `invalid`, `PEP_TYPE_MISMATCH` ("Expected Str but found Int") at bytes 64–65 | static rejection, no runtime coercion |
 
+## Source read of the OCaml implementation (narrow no-finding)
+
+Reviewed diff `c55e501` (`pep_ocaml.ml`, +28/−3) read-only; no files modified.
+
+- Checker: `str_contains` arity 2, both args checked as `Str`, result `Bool`; name added to both reserved lists (constructors + functions); `describe` advertises params/returns, `complexity: O(n*m)`, `emptyNeedle: true`, plus feature flag `string_substring_search`. Registration complete and consistent.
+- Runtime: naive byte scan. Empty needle returns true before any indexing. Loop guard `start > haystack_length - needle_length` keeps `start+offset ≤ haystack_length-1` (OCaml signed ints; longer-needle case yields false without indexing). `Char` equality on bytes = exact UTF-8, no normalization; OCaml strings hold embedded NUL so `\0` works. Both helpers tail-recursive (constant stack); per-compared-byte `tick` charges O(n·m) fuel, so pathological inputs hit the controlled step budget instead of hanging — consistent with S4.
+- Verdict: no bug found. Combined with the 8/8 behavioral probes above, the contract is covered black-box and white-box at the reviewed pin.
+
 ## Position
 
 No finding filed. A1's contract holds on all 8 points at the reviewed
