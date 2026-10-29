@@ -542,3 +542,10 @@ flagged files (`keygen.exe`, `keygen.rar`) had already been quarantined at
 22:31:53Z, and the June/July `PUABundler` keygen was already absent, so this
 removed the surrounding unused repack rather than any file this review treated
 as evidence. Both threats remain `IsActive: False`.
+
+The `harfbuzz` package itself was also uninstalled on owner instruction
+(`scoop uninstall harfbuzz`, exit 0). No installed package depended on it, its
+six shims were removed, the app directory and every cache entry are gone, and
+`scoop list` no longer shows it. The `libharfbuzz-0` libraries and headers that
+remain on this host are unrelated copies bundled inside other official
+packages (`fontforge`, `gimp`) and were deliberately left alone.
