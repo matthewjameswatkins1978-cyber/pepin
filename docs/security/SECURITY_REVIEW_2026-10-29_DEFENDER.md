@@ -34,6 +34,10 @@ checked.
 - Residual possibility of credible compromise evidence in the pinned toolchain
   can only be retired by the clean-environment smoke test in §11, not by
   argument.
+- **Raised by later evidence:** a completed three-hour full scan under current
+  definitions with every exclusion removed found nothing in the build tree
+  (§15). That moves confidence to the upper end of the band, ~85%, without
+  relaxing any limit in §10.
 
 Recommendation in one line: **treat as probable FP, remove the newly added
 `D:\Projects` exclusion, and require one bounded native smoke test on a clean
@@ -465,3 +469,65 @@ This repository is public. Host name, account identifiers beyond the username
 already published in the incident record, and the name of the unrelated
 third-party product implicated in the June/July detection are omitted here, on
 the same principle the incident record applied.
+
+## 15. Full-scan outcome — 2026-10-29T19:28–22:31Z (added after the review)
+
+Executed on the owner instruction, following the recommendation in §11 and with
+every path exclusion removed first (verified from the Defender config log:
+`RustRover2026.2`, `RustroverProjects\untitled` and `D:\Projects` all removed
+19:27:27Z–19:27:35Z, ~40 s before the scan started).
+
+**The scan.** One on-demand full scan, `MpCmdRun -Scan -ScanType 2`, PID 30596,
+scan ID `{53D18399-634F-4099-A538-DD05EEDD76D1}`: started 2026-10-29T19:28:16Z,
+finished 2026-10-29T22:31:31Z, `Scan Time: 3:03:15`. `FullScanAge` is now 0 —
+the first full scan this host has ever completed. RTP and tamper protection
+enabled throughout; signatures 1.463.28.0 at start, 1.463.30.0 at completion.
+
+**Result for this repository: clean.** No detection of any file under
+`D:\Projects`, and specifically none of the 44 artefacts in `_build\textbuf`
+or the surviving same-template runners. Verified against the pre-scan hash
+inventory captured at 20:55Z: **435 of 435 native binaries under `_build`
+present and hash-identical, 0 missing, 0 changed**; textbuf is 44 of 44.
+Toolchain installers re-verified afterwards and still hash-match the upstream
+asset digests (§8).
+
+**Two detections did occur**, 2–4 s before the scan completed, both outside this
+repository and both quarantined at 22:31:53Z with `DidThreatExecute: False`:
+
+| Threat | Severity | Path |
+| --- | --- | --- |
+| `Trojan:Win32/Suschil!rfn` (2147927547) | Severe | `...\scoop\cache\harfbuzz#14.5.1#ae19982.zip` |
+| `HackTool:Win32/Keygen` (2147593794) | High | `E:\...\<third-party pack>\keygen.exe` and the same file inside `keygen.rar` |
+
+**What this settles.** Under active protection, current definitions and no
+exclusions, the same compiler, template and directory now produce
+same-shaped artefacts that are not flagged, and a full-disk walk found nothing
+in the build tree. That is the strongest available support for the §1
+probable-false-positive grade, and it is the evidence the native lane was
+missing. Nothing in §10 is relaxed: the two quarantined binaries remain
+destroyed and unrebuilt, and the empty-literal variant in particular remains
+untested. I did not change that.
+
+**On the harfbuzz detection** (a text-shaping library, not copy-protection
+grayware): `!rfn` is an internal Microsoft category, and `Suschil` is described
+in published removal guides as a *heuristic/generic* Trojan detection with a
+long public record of flagging legitimate release archives (WhyNotWin11,
+OF-Scraper, fluux-messenger, tidal-dl-ng, PhotoMigrator). Three facts point the
+same way: the *extracted* harfbuzz 14.5.1 binaries had been on disk for weeks
+under RTP and were walked by this same scan without a hit — only the archive
+was flagged; the Scoop main bucket pinned `cdd2f68…` for that version, so the
+Scoop install-time hash check would have had to pass; and the archive is now
+quarantined, so it could not be re-verified after the fact.
+
+Correction to an intermediate reading of mine, recorded because it was wrong:
+the `#ae19982` suffix in the Scoop cache filename is **not** a SHA-256 prefix.
+Checked against other cached packages, the convention does not encode the file
+digest, so that suffix carries no implication either way. My earlier suspicion
+that it mismatched the pinned hash rested on a false assumption about Scoop
+caching, not on evidence.
+
+**On the keygen**: `HackTool:Win32/Keygen` is a taxonomy statement, not a
+heuristic guess, and a keygen distributed inside a repack is a recognised
+delivery vector for real malware. That is an owner risk decision rather than a
+finding of this review; it is recorded because it belongs to the host security
+picture, alongside the June/July `PUABundler` record.
