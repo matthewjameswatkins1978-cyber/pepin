@@ -294,6 +294,20 @@ fn list_int_suffix_length_between(values: List[Int], lower: Int, upper: Int) -> 
   return length
 }
 
+fn list_int_min_index_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var index = 0
+  var minimumIndex = -1
+  var minimum = 0
+  var found = false
+  for item in values {
+    minimumIndex = if lower <= item && item <= upper && (!found || !(minimum <= item)) { index } else { minimumIndex }
+    minimum = if lower <= item && item <= upper && (!found || !(minimum <= item)) { item } else { minimum }
+    found = found || (lower <= item && item <= upper)
+    index = index + 1
+  }
+  return minimumIndex
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
