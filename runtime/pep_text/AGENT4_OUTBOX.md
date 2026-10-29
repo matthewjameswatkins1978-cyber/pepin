@@ -158,3 +158,43 @@ can relay them.
 - This is the complete pre-integration evidence for the Agent-2
   `emit_c23_joined` proposal, assembled without touching Agent 2's
   code or changing authority. No review this slice (next at slice 12).
+
+## Hold-time re-reads (no execution)
+- All four `.pep` models re-derived by hand against their recorded
+  expected outputs (14 capacity + 20 UTF-8 values); every boundary
+  matches, headers accurate. Test-file audit done earlier stands.
+  Nothing left unexamined in the lane except generated `_build`
+  artifacts, which stay untouched.
+
+## 2026-10-29 -- test-file audit under hold (no execution)
+- Read `tests/test_textbuf_native.py` end to end and re-derived every
+  hand-computed expectation independently (span line/col/excerpts,
+  file-pipeline blocks, JSON/number/cstr vectors). All match; no
+  assertion bugs. The earlier `!(K <= x)`-class risk does not recur:
+  no boundary literals left to misread that the differentials do
+  not already pin.
+- Resolved open puzzle from slice 7: `utf8_probe.c` needs no MSVC
+  define because it never calls `fopen` (vectors are static arrays).
+  Every TU that does call `fopen` already routes through `_build_c`.
+- Three uniformity cleanups queued for post-hold (no behavior
+  change): module docstring still describes only slice 1; MSVC-flag
+  logic is inline-duplicated in the cstr/join tests instead of
+  reusing `_build_c`; the utf8-probe and demo-gen builds predate
+  the helper and bypass it. None affect correctness; all green.
+
+## 2026-10-29 -- static audit under security hold (no execution)
+- Read all seven runtime components end to end (builder, UTF-8,
+  spans, JSON str/values, numbers, C literals). No correctness
+  defects in any executed path; boundary tables match their
+  authorities exactly as the differentials already prove.
+- Four doc-level findings, sources untouched (fixes need test runs,
+  which are paused): (1) `next_capacity` comment claims a `false`
+  return it never produces; (2) `pep_utf8_validate(nullptr, 0)`
+  returns OK against the header's BADARG promise — recommend code
+  follows header; (3) `pep_parse_i64` header says `*end` is
+  untouched on OVERFLOW but the code zeroes it first (behavior is
+  good, doc is wrong); (4) BADARG numeric values differ per
+  component (1/2/3) — namespaced and workable, but callers should
+  be told codes are component-local.
+- No changes made: audit only, zero bytes modified, nothing built
+  or run. Residual `_build/spanprobe` scripts kept as evidence.
