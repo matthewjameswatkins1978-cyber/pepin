@@ -121,3 +121,13 @@ can relay them.
   both toolchains, outputs byte-identical.
 - No Pep files, same standing rule: host I/O and byte-level C work
   stay in minimal runtime primitives; the compiler keeps semantics.
+
+## 2026-10-29 -- slice 8: JSON value writer
+- New: `pep_jsonval.h/.c` — explicit-shape streaming writer (objects,
+  arrays, comma/colon, str/int/bool/null, `"key":`), compact
+  seed-style with no spaces, O(1) per call, no DOM, no parsing.
+- New: `jsonval_probe.c` emitting a compiler-report-shaped document
+  (nesting, empty object/array, escapes, unicode, INT64_MIN); exact
+  bytes asserted on both toolchains plus Python `json.loads` value
+  assertions. 17/17 suite green.
+- No Pep files, same rule. No review this slice (next at slice 9).

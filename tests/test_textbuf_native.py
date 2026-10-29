@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -197,6 +197,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_json_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["json_probe.c", "pep_json.c", "pep_textbuf.c"])
+
+    def build_jsonval_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["jsonval_probe.c", "pep_jsonval.c", "pep_json.c", "pep_textbuf.c"])
 
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
@@ -503,6 +507,31 @@ class TextbufNativeTests(unittest.TestCase):
             clean = run_bytes([str(tool), str(ok_path)])
             self.assertEqual(clean.returncode, 0, clean.stderr)
             self.assertEqual(clean.stdout, expected_ok)
+
+
+    def test_jsonval_probe_builds_seed_style_report(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        expected = (
+            b'{"schemaVersion":2,"status":"parsed","ast":[{"kind":"function",'
+            b'"name":"main","ok":true,"value":42,"big":-9223372036854775808,'
+            b'"missing":null,"tags":[]}],"empty":{},"note":"caf\xc3\xa9 \\"x\\"\\n"}\n'
+        )
+        outputs = []
+        for compiler, name in ((clang, "jsonval_clang.exe"), (gcc, "jsonval_gcc.exe")):
+            probe = self.build_jsonval_probe(compiler, name)
+            ran = run_bytes([str(probe)])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            outputs.append(ran.stdout)
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[0], expected)
+        parsed = json.loads(outputs[0].decode("utf-8"))
+        self.assertEqual(parsed["ast"][0]["big"], -9223372036854775808)
+        self.assertEqual(parsed["note"], 'caf\u00e9 "x"\n')
+        self.assertEqual(parsed["empty"], {})
+        self.assertEqual(parsed["ast"][0]["tags"], [])
 
 
 if __name__ == "__main__":
