@@ -503,6 +503,11 @@ can only search a capture that decoded as UTF-8. The three cases are therefore k
 | present, not UTF-8 | **INCONCLUSIVE** | byte-searches and answers |
 | absent or unreadable | INCONCLUSIVE (load precedes search) | same |
 
+Measured on the framework, with a step whose stdout is the four bytes `FF FE 41 42` (not
+valid UTF-8): needle `"AB"` → PROVEN, `"A"` → PROVEN, `"ZZ"` → NOT OBSERVED. So the
+reference really does answer for arbitrary bytes, which is what makes the middle row a
+capability limit rather than a disagreement.
+
 A lossy decode was rejected deliberately. `from_utf8_lossy`-style substitution would
 manufacture a `Str` the reference never saw, so an empty needle would fire on a capture
 that was never read as text — turning a capability limit into a confident PROVEN. The
