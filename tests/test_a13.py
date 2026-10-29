@@ -564,12 +564,19 @@ class A13FunctionResolutionTests(unittest.TestCase):
   }
   return foundAt
 }"""
+        scale_names = [f"scale_helper_{index:02d}" for index in range(30)]
+        scale_helpers = [
+            f"fn {name}() -> Int {{ return {index} }}"
+            for index, name in enumerate(scale_names)
+        ]
+        scale_main = "fn main() -> Int { return 0 }"
         cases = [
             ("index-of-helper-alone", first_helper, "valid"),
             ("last-index-of-helper-alone", second_helper, "valid"),
             ("index-of-helpers-composed", first_helper + NL + second_helper + NL +
              "fn main() -> Int { return list_int_index_of([4, 2, 4], 4) + "
              "list_int_last_index_of([4, 2, 4], 4) }", "valid"),
+            ("thirty-helper-declarations", NL.join(scale_helpers + [scale_main]), "valid"),
             ("return-type-mismatch", 'fn bad() -> Int { return "text" }', "invalid"),
         ]
         for name, source, expected_status in cases:
@@ -634,7 +641,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                         "tool": "pep-a13-checker-step", "arguments": [checker_cursor],
                         "semanticTarget": target,
                     })
-                    self.assertEqual(stepped_check.get("outcome"), "ok", stepped_check)
+                    self.assertEqual(stepped_check.get("outcome"), "ok", f"{phases[-1]}: {stepped_check}")
                     self.assertNotEqual(stepped_check["result"], checker_cursor)
                     checker_cursor = stepped_check["result"]
                 current = fields(checker_cursor)
@@ -656,10 +663,15 @@ class A13FunctionResolutionTests(unittest.TestCase):
                      function_names[scalar(fields(item)["calleeId"])])
                     for item in report["calls"]["value"]
                 ]
-                expected_calls = [
-                    ("main", "list_int_index_of"),
-                    ("main", "list_int_last_index_of"),
-                ] if name == "index-of-helpers-composed" else []
+                if name == "index-of-helpers-composed":
+                    expected_calls = [
+                        ("main", "list_int_index_of"),
+                        ("main", "list_int_last_index_of"),
+                    ]
+                elif name == "thirty-helper-declarations":
+                    expected_calls = []
+                else:
+                    expected_calls = []
                 self.assertEqual(actual_calls, expected_calls, report)
                 expected_diagnostics = [
                     (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])

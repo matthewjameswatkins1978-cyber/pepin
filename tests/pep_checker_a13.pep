@@ -14,6 +14,7 @@ type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount:
 type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact], report: CheckerReport }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
+type StatementMarker { parentId: Int, role: Str, childIndex: Int }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
@@ -375,19 +376,58 @@ fn declared_binding_shape(nodes: List[FlatAstNode], node: FlatAstNode) -> PepTyp
   let declared = child_at(nodes, node.id, role, 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
+fn make_checked_function(node: FlatAstNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
+  let resultType = legacy_type_name(resultShape)
+  let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
+  return CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: arity, returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte }
+}
 fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
+  var active = false
+  var activeNode = empty_node()
+  var activeArity = 0
+  var activeResultShape = empty_type_shape()
+  var readingReturnType = false
+  var nextReturnTypeId = -1
+  var returnTypeDepth = 0
   for node in nodes {
     if node.parentId == -1 && node.kind == "function" {
-      let declaredResult = child_at(nodes, node.id, "return_type", 0)
-      let resultShape = if declaredResult.found { type_shape_at(nodes, declaredResult.node.id) } else { empty_type_shape() }
-      let resultType = if declaredResult.found { legacy_type_name(resultShape) } else { "" }
-      let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
-      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte })
-      ordinal = ordinal + 1
+      if active {
+        reversed = prepend(reversed, make_checked_function(activeNode, ordinal, activeArity, activeResultShape))
+        ordinal = ordinal + 1
+      } else {}
+      active = true
+      activeNode = node
+      activeArity = 0
+      activeResultShape = empty_type_shape()
+      readingReturnType = false
+      nextReturnTypeId = -1
+      returnTypeDepth = 0
+    } else {
+      if active && node.parentId == activeNode.id {
+        if node.kind == "parameter" { activeArity = activeArity + 1 } else {}
+        if node.role == "return_type" {
+          readingReturnType = true
+          nextReturnTypeId = node.id
+          returnTypeDepth = 0
+        } else {}
+      } else {}
+    }
+    if readingReturnType && node.id == nextReturnTypeId {
+      if node.kind == "type_list" {
+        returnTypeDepth = returnTypeDepth + 1
+        nextReturnTypeId = node.id + 1
+      } else {
+        if node.kind == "type_scalar" || node.kind == "type_named" {
+          let kind = if node.kind == "type_scalar" { "builtin" } else { "nominal" }
+          activeResultShape = PepTypeShape { kind: kind, name: node.text, listDepth: returnTypeDepth }
+        } else {}
+        readingReturnType = false
+      }
     } else {}
   }
+  if active { reversed = prepend(reversed, make_checked_function(activeNode, ordinal, activeArity, activeResultShape)) } else {}
   return reverse(reversed)
 }
 fn scope_key(node: FlatAstNode, role: Str) -> Int {
@@ -1336,47 +1376,72 @@ fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, fun
   return false
 }
 
+fn return_covered_scopes(nodes: List[FlatAstNode]) -> List[Int] {
+  var covered: List[Int] = []
+  for statement in nodes {
+    if statement.role == "statement" && (statement.kind == "return" || statement.kind == "block" || statement.kind == "if_statement") && statement_always_returns(nodes, statement) {
+      covered = prepend(covered, statement.parentId)
+    } else {}
+  }
+  return covered
+}
+fn first_unreachable_statement(nodes: List[FlatAstNode]) -> UnreachableLookup {
+  var returning: List[StatementMarker] = []
+  var result = UnreachableLookup { found: false, node: empty_node() }
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "function" { returning = [] } else {}
+    if !result.found {
+      for prior in returning {
+        if prior.parentId == node.parentId && prior.role == node.role && prior.childIndex + 1 == node.childIndex {
+          result = UnreachableLookup { found: true, node: node }
+        } else {}
+      }
+    } else {}
+    if (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
+      returning = prepend(returning, StatementMarker { parentId: node.parentId, role: node.role, childIndex: node.childIndex })
+    } else {}
+  }
+  return result
+}
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
+  let returnCoverage = return_covered_scopes(nodes)
+  let unreachable = first_unreachable_statement(nodes)
   var activeFunctionFound = false
   var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
-  var unreachable = UnreachableLookup { found: false, node: empty_node() }
   for node in nodes {
-    if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
-      let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
-      if nextStatement.found { unreachable = UnreachableLookup { found: true, node: nextStatement.node } } else {}
-    } else {}
+
     if sequentialFunctionOwner && node.parentId == -1 && node.kind == "function" {
       let activeLookup = find_function_by_syntax(functions, node.id)
       activeFunction = activeLookup.function
       activeFunctionFound = activeLookup.found
     } else {}
     if node.kind == "function" {
-      let returnType = child_at(nodes, node.id, "return_type", 0)
-      if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
-        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, returnType.node.id, declared_return_type(nodes, node.id)), "Function result type is outside the implemented primitive checker subset", node))
+      let resultTypeName = if sequentialFunctionOwner { activeFunction.returnType } else { declared_return_type(nodes, node.id) }
+      let resultTypeShape = if sequentialFunctionOwner { activeFunction.returnShape } else { declared_return_shape(nodes, node.id) }
+      var resultSupported = activeFunctionFound || !sequentialFunctionOwner
+      if resultSupported {
+        resultSupported = supported_type(nodes, resultTypeName) || (resultTypeShape.kind != "" && supported_type(nodes, resultTypeShape.name))
+      } else {}
+      if !resultSupported {
+        let resultTypeNode = child_at(nodes, node.id, "return_type", 0)
+        let code = if resultTypeNode.found { unsupported_type_code(nodes, resultTypeNode.node.id, resultTypeName) } else { "PEP_A13_TYPE_UNSUPPORTED" }
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Function result type is outside the implemented primitive checker subset", node))
       } else {}
       if (known_builtin(node.text) || is_constructor(nodes, node.text)) && is_first_function_declaration(functions, node.text, node.id) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_RESERVED_FUNCTION", "Function name is reserved for a builtin or constructor", node))
       } else {}
-      for parameter in nodes {
-        if parameter.parentId == node.id && parameter.kind == "parameter" {
-          let parameterType = child_at(nodes, parameter.id, "type", 0)
-          if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)) {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)), "Parameter type is outside the implemented primitive checker subset", parameter))
-          } else {}
-        } else {}
-      }
-      if declared_return_type(nodes, node.id) != "Unit" {
-        var returnsOnAllPaths = false
-        for statement in nodes {
-          if statement.parentId == node.id && statement.role == "statement" && statement_always_returns(nodes, statement) { returnsOnAllPaths = true } else {}
-        }
-        if !returnsOnAllPaths {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_RETURN", "Non-Unit function does not return a value on every path", node))
-        } else {}
+
+      if resultTypeName != "Unit" && !contains(returnCoverage, node.id) {
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_RETURN", "Non-Unit function does not return a value on every path", node))
+      } else {}
+    } else {}
+    if node.kind == "parameter" {
+      let parameterType = child_at(nodes, node.id, "type", 0)
+      if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, declared_binding_type(nodes, node)) {
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, parameterType.node.id, declared_binding_type(nodes, node)), "Parameter type is outside the implemented primitive checker subset", node))
       } else {}
     } else {}
     if (node.kind == "let" || node.kind == "var") {
