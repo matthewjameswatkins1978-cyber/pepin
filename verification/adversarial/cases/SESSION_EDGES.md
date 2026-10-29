@@ -29,6 +29,14 @@ not just documented.
 (`parse_count`/`typecheck_count`/`cache_hits` shape per prior receipts).
 Diagnostic instrumentation is queryable; it is not language semantics.
 
+## Same-revision analysis reuse is real (metrics evidence)
+
+Sequence: `open` + two identical `query` calls on the same retained revision, then `metrics` → `TESTED`: `parse_count: 1, typecheck_count: 1, cache_hits: 2`. The analysis ran once; both re-queries were served from the same-revision cache. This is the documented in-process cache behaving as specified (reuse within a revision; full re-analysis across revisions per the protocol's no-cross-revision-reuse rule).
+
+## `inspect` is the untyped stage
+
+`inspect --json` on a valid file → `TESTED`: status `parsed` with a spanned AST and no `typedTree`; `check` adds the typed tree. The CLI stages (parse vs check) are distinct artifacts, consistent with the pipeline's stage separation.
+
 ## Status
 
 No findings. These close the session-transport loop left open by the

@@ -545,6 +545,37 @@ def main():
     ok = _om.get("outcome") == "ok" and "metrics" in _om
     results.append(("O3-metrics", PASS if ok else FAIL,
                     "outcome=%s" % _om.get("outcome")))
+    _mc = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+    ])[0]
+    _md, _mr = _mc["document"], _mc["revision"]
+    _mq = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "query", "document": _md,
+         "revision": _mr},
+        {"schemaVersion": 3, "op": "query", "document": _md,
+         "revision": _mr},
+        {"schemaVersion": 3, "op": "metrics"},
+    ])[-1]
+    _mm = _mq.get("metrics", {})
+    ok = (_mm.get("parse_count") == 1 and _mm.get("typecheck_count") == 1
+          and _mm.get("cache_hits") == 2)
+    results.append(("O4-cachereuse", PASS if ok else FAIL,
+                    "metrics=%s" % _mm))
+    _ip = TMP / "a3_inspect.pep"
+    _ip.write_bytes(b"fn main() -> Int { return 1 }\n")
+    try:
+        _ir = _pwsh(["./pep.ps1", "inspect", str(_ip), "--json"])
+        _id = json.loads((_ir.stdout or "{}"))
+        ok = (_id.get("status") == "parsed"
+              and len(_id.get("ast", [])) == 1
+              and "typedTree" not in _id)
+        results.append(("O5-inspect", PASS if ok else FAIL,
+                        "status=%s" % _id.get("status")))
+    finally:
+        _ip.unlink(missing_ok=True)
     # SourceBytes + byte builtins via host grant (set 13)
     o = sess([{"schemaVersion": 3, "op": "open_bytes", "name": "bad",
                 "bytes": [102, 110, 32, 255, 254]}])[0]
