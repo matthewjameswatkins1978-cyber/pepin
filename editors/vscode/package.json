@@ -1,0 +1,25 @@
+{
+  "name": "pep-language",
+  "displayName": "Pep Language Support",
+  "description": "Syntax highlighting and compiler-backed diagnostics for Pep source files.",
+  "version": "0.1.0",
+  "publisher": "matthew-way",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:pep"],
+  "scripts": { "test": "node --test" },
+  "contributes": {
+    "languages": [{ "id": "pep", "aliases": ["Pep", "pep"], "extensions": [".pep"], "configuration": "./language-configuration.json" }],
+    "grammars": [{ "language": "pep", "scopeName": "source.pep", "path": "./syntaxes/pep.tmLanguage.json" }],
+    "configuration": {
+      "title": "Pep",
+      "properties": {
+        "pep.cliPath": { "type": "string", "default": "", "description": "Path to pep.ps1. Empty searches upward from the Pep file inside the workspace." },
+        "pep.powershellPath": { "type": "string", "default": "pwsh", "description": "PowerShell 7 executable used to run pep.ps1." },
+        "pep.lintOnOpen": { "type": "boolean", "default": true, "description": "Check a saved Pep file when it opens." },
+        "pep.checkTimeoutMs": { "type": "number", "default": 20000, "minimum": 1000, "maximum": 120000, "description": "Maximum time allowed for one compiler check." }
+      }
+    }
+  }
+}

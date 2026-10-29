@@ -1,0 +1,109 @@
+{
+  "scopeName": "source.pep",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#functionDeclaration"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#typeNames"
+    },
+    {
+      "include": "#holes"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.pep",
+          "match": "#.*$"
+        },
+        {
+          "name": "comment.line.double-slash.pep",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.pep",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.pep"
+        }
+      },
+      "end": "\"|$",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.pep"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.pep",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "functionDeclaration": {
+      "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.pep"
+        },
+        "2": {
+          "name": "entity.name.function.pep"
+        }
+      }
+    },
+    "keywords": {
+      "name": "keyword.control.pep",
+      "match": "\\b(fn|type|let|var|return|if|else|match|for|in|while|true|false)\\b"
+    },
+    "types": {
+      "name": "storage.type.pep",
+      "match": "\\b(Int|Bool|Str|Unit|SourceBytes|List)\\b"
+    },
+    "typeNames": {
+      "name": "entity.name.type.pep",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "holes": {
+      "name": "keyword.operator.hole.pep",
+      "match": "\\?[A-Za-z_][A-Za-z0-9_]*|\\?|\\b_\\b"
+    },
+    "numbers": {
+      "name": "constant.numeric.integer.pep",
+      "match": "\\b[0-9]+\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.pep",
+      "match": "->|=>|==|!=|<=|&&|\\|\\||[+*/=!<>|&.-]"
+    },
+    "punctuation": {
+      "name": "punctuation.pep",
+      "match": "[(){}\\[\\],:;]"
+    }
+  }
+}
