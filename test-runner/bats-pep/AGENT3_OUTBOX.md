@@ -17,7 +17,8 @@ note, not a status report on anyone else's work.
 | `fbd4a6c` | Multi-step evidence and step-reference resolution, step-reference differential (31/31) |
 | `654a362` | `evidence_present` leaf condition, evidence differential (35/35) |
 | `ad42343` | `file_exists` / `file_absent` over a recorded worktree view, file differential (40/40) |
-| (this commit) | Evidence-driven trees composing all four condition types, mixed-tree trail differential (44/44) |
+| `35a5d00` | Evidence-driven trees composing all four condition types, mixed-tree trail differential (44/44) |
+| (this commit) | `path_changed` / `path_unchanged` over recorded changes, path differential (49/49) |
 
 Starting point of the first four was `749edb2`. The fifth slice began from `c953e43`
 after recovering state, not from a reset.
@@ -27,8 +28,8 @@ after recovering state, not from a reset.
 | Check | Result |
 | --- | --- |
 | `.\pep.ps1 check test-runner\bats-pep\oracle.pep --json` | `status valid`, 0 diagnostics |
-| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 144 lines, 67 verdict cases plus trail sizes and a full `explain` |
-| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=44 mismatches=0` |
+| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 156 lines, 73 verdict cases plus trail sizes and a full `explain` |
+| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=49 mismatches=0` |
 | `git ls-files --eol test-runner/bats-pep/` | all five files `i/lf w/lf` |
 | every file edit | Threadmoth `preview` → `mutate`, budget PASS, `unrelated_bytes_changed=false` |
 
@@ -138,8 +139,8 @@ Committed in the same commit as this outbox; verify with
 `Get-FileHash -Algorithm SHA256`.
 
 ```
-b95605a728b1e34a66bd3216b1b19db8eb2a97410d66b218aa5a3f35731f4eea  oracle.pep
-0caa514505f78bca7025009b0495112ea686b379b2fd7466b84c0dae8d686a0b  selftest.pep
-755fff41a321c096da25825b8d68fbef9f098e8a6e970ad601a27c78265b230f  differential.py
-53784da0420f798513acfa772687338aa58a9982064531d0f063dbd5fa559f22  README.md
+03512d5bf3a11d0d5fec346483ba1352323d48c521cd78999da2dbb3e4e00ad0  oracle.pep
+f3d5b21d8e1c59a79915b4e45e21c94459c3177a3fdbfbfea697a350ae94b84d  selftest.pep
+1ee5701aa1ff5c1dfe5a50b1c10a3f8fa948fa9b423b45a1f1276c0659bd9e22  differential.py
+e231416d8106cd78683efa2e2330979aedf5358f2ef6db9598f6b26108715839  README.md
 ```

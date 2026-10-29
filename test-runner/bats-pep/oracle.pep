@@ -726,15 +726,59 @@ type Condition =
   ExitCodeCondition(Mode, Str, Int) |
   EvidencePresentCondition(Str) |
   FileExistsCondition(Str) |
-  FileAbsentCondition(Str)
+  FileAbsentCondition(Str) |
+  PathChangedCondition(Str) |
+  PathUnchangedCondition(Str)
+
+// What a run recorded about worktree changes. The reference derives this from
+// `git status --porcelain` plus its untracked list, matching a path against the
+// column-3 entry, rename targets ("old -> new"), and untracked paths. The status-line
+// parsing is string slicing Pep cannot do, so a driver supplies the already-extracted
+// path sets and Pep decides the verdict.
+type WorktreeChanges { changed_paths: List[Str], untracked_paths: List[Str] }
+
+// A missing `git_status` capture is Undetermined, not a negative result: the
+// reference returns "git status capture missing" rather than pretending the path did
+// not change.
+type ChangeEvidence = ChangeStatusMissing() | ChangeStatusRecorded(WorktreeChanges)
+
+fn path_is_changed(changes: WorktreeChanges, path: Str) -> Bool {
+  if contains(changes.changed_paths, path) {
+    return true
+  } else {
+  }
+  return contains(changes.untracked_paths, path)
+}
+
+fn judge_path_changed(path: Str, evidence: ChangeEvidence) -> Verdict {
+  return match evidence {
+    ChangeStatusMissing() => Inconclusive("git status capture missing")
+    ChangeStatusRecorded(changes) => if path_is_changed(changes, path) {
+      Proven("the path changed")
+    } else {
+      NotObserved("the path did not change")
+    }
+  }
+}
+
+fn judge_path_unchanged(path: Str, evidence: ChangeEvidence) -> Verdict {
+  return match evidence {
+    ChangeStatusMissing() => Inconclusive("git status capture missing")
+    ChangeStatusRecorded(changes) => if path_is_changed(changes, path) {
+      NotObserved("the path changed")
+    } else {
+      Proven("the path did not change")
+    }
+  }
+}
 
 // Everything an evidence-driven tree may read.
 type RunEvidence {
   steps: List[EvidenceStep],
   captures: Captures,
-  worktree: WorktreeView
+  worktree: WorktreeView,
+  changes: ChangeEvidence
 }
-
 // The condition's own name. The reference's `describe(cond)` also renders the
 // arguments ("exit_code run:0 equals 1"), which needs string concatenation Pep does
 // not have; a caller that wants that label supplies it to `ConditionLeaf`.
@@ -744,6 +788,8 @@ fn condition_name(condition: Condition) -> Str {
     EvidencePresentCondition(kind) => "evidence_present"
     FileExistsCondition(path) => "file_exists"
     FileAbsentCondition(path) => "file_absent"
+    PathChangedCondition(path) => "path_changed"
+    PathUnchangedCondition(path) => "path_unchanged"
   }
 }
 
@@ -754,6 +800,8 @@ fn evaluate_condition(condition: Condition, evidence: RunEvidence) -> Verdict {
     EvidencePresentCondition(kind) => judge_evidence_present(kind, evidence.captures)
     FileExistsCondition(path) => judge_file_exists(path, evidence.worktree)
     FileAbsentCondition(path) => judge_file_absent(path, evidence.worktree)
+    PathChangedCondition(path) => judge_path_changed(path, evidence.changes)
+    PathUnchangedCondition(path) => judge_path_unchanged(path, evidence.changes)
   }
 }
 

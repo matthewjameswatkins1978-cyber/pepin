@@ -335,6 +335,45 @@ The label is descriptive text; every verdict is still decided in Pep.
 `condition_name(condition)` gives the bare kind name for callers that do not need the
 arguments.
 
+## Conditions: `path_changed` and `path_unchanged`
+
+```pep
+type WorktreeChanges { changed_paths: List[Str], untracked_paths: List[Str] }
+type ChangeEvidence = ChangeStatusMissing() | ChangeStatusRecorded(WorktreeChanges)
+
+fn judge_path_changed(path: Str, evidence: ChangeEvidence) -> Verdict
+fn judge_path_unchanged(path: Str, evidence: ChangeEvidence) -> Verdict
+```
+
+The reference derives "changed" from `git status --porcelain` plus its untracked
+list: a path matches the column-3 entry, a rename target (`old -> new`), any
+`" -> "` segment, or the untracked list. That parsing is string slicing Pep cannot
+do, so a driver supplies the already-extracted path sets and Pep decides.
+
+Measured with a throwaway repo whose working tree the *attack step* modifies (the
+runner refuses to start on an already-dirty target):
+
+| Case | Verdict |
+| --- | --- |
+| `path_changed "tracked.txt"` (modified by the attack) | PROVEN |
+| `path_changed "wrote.txt"` (left untracked by the attack) | PROVEN |
+| `path_changed "untouched.txt"` | NOT OBSERVED |
+| `path_unchanged "untouched.txt"` | PROVEN |
+| `path_unchanged "tracked.txt"` | NOT OBSERVED |
+| no `git_status` capture | INCONCLUSIVE |
+
+The untracked row is the one worth naming: the reference merges untracked paths into
+the same judgement, so a model that only read tracked modifications would answer
+NOT OBSERVED for a file the bat had just created.
+
+A missing `git_status` capture is INCONCLUSIVE, not a negative result — the
+reference says `git status capture missing` rather than pretending the path did not
+change. That branch is representable here but unreachable through an ordinary run,
+because the runner always captures git state.
+
+Both conditions are also available as tree leaves: `PathChangedCondition(path)` and
+`PathUnchangedCondition(path)`.
+
 ## Run it
 
 ```powershell
@@ -347,7 +386,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (67 cases; each prints its verdict label then its reason):
+Observed (73 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -417,8 +456,13 @@ Observed (67 cases; each prints its verdict label then its reason):
 | 64 | `any` of `file_exists` missing + present | PROVEN |
 | 65 | `not` of `file_exists .git` | NOT OBSERVED |
 | 66 | `all` with no children | INCONCLUSIVE |
-
-Then `trail_size` of the case-62 tree is `4`.
+| 67 | `trail_size` of the case-62 tree | `4` |
+| 68 | `path_changed "tracked.txt"` | PROVEN |
+| 69 | `path_changed "fresh.txt"` (untracked counts) | PROVEN |
+| 70 | `path_changed "nothing.txt"` | NOT OBSERVED |
+| 71 | `path_unchanged "nothing.txt"` | PROVEN |
+| 72 | `path_unchanged "tracked.txt"` | NOT OBSERVED |
+| 73 | no `git_status` capture | INCONCLUSIVE |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -594,7 +638,18 @@ is judged correctly but recorded in the wrong order still shows up:
 | `any` of `file_exists` missing + present | PROVEN | PROVEN | 2 |
 | `not` of `file_exists .git` | NOT OBSERVED | NOT OBSERVED | 1 |
 
-`SUMMARY cases=44 mismatches=0`.
+`path_changed` / `path_unchanged` run against a throwaway repo whose working tree the
+Bat's own attack step modifies, because the runner refuses to start on a dirty target:
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `path_changed` tracked file | PROVEN | PROVEN | PROVEN |
+| `path_changed` untracked file | PROVEN | PROVEN | PROVEN |
+| `path_changed` untouched path | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `path_unchanged` untouched path | PROVEN | PROVEN | PROVEN |
+| `path_unchanged` changed file | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+
+`SUMMARY cases=49 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

@@ -207,11 +207,15 @@ show(judge_file_absent("C:/Windows/system.ini", repo_view()))
 //
 // Labels are the reference describe(cond) wording, supplied because Pep has no string
 // concatenation; the verdicts are decided in Pep from the evidence record.
+fn sample_changes() -> WorktreeChanges {
+  return WorktreeChanges { changed_paths: ["tracked.txt"], untracked_paths: ["fresh.txt"] }
+}
 fn sample_evidence() -> RunEvidence {
   return RunEvidence {
     steps: [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }],
     captures: all_captures(),
-    worktree: WorktreeView { present_paths: [".git", "README.md"], rejected_paths: ["../outside.txt"] }
+    worktree: WorktreeView { present_paths: [".git", "README.md"], rejected_paths: ["../outside.txt"] },
+    changes: ChangeStatusRecorded(sample_changes())
   }
 }
 fn leaf_exit() -> EvidenceExpr {
@@ -238,3 +242,22 @@ show(result_of(evaluate_evidence_tree(AnyOf([leaf_exists_missing(), leaf_exists(
 show(result_of(evaluate_evidence_tree(NotOf(leaf_exists()), sample_evidence())))
 show(result_of(evaluate_evidence_tree(AllOf([]), sample_evidence())))
 say(int_text(trail_size(evaluate_evidence_tree(mixed_tree(), sample_evidence()))))
+
+// --- Conditions: path_changed and path_unchanged ---
+//
+// 68 path-changed-tracked    path_changed "tracked.txt"   -> PROVEN
+// 69 path-changed-untracked  path_changed "fresh.txt"     -> PROVEN
+// 70 path-changed-clean      path_changed "nothing.txt"   -> NOT OBSERVED
+// 71 path-unchanged-clean    path_unchanged "nothing.txt" -> PROVEN
+// 72 path-unchanged-changed  path_unchanged "tracked.txt" -> NOT OBSERVED
+// 73 path-missing-status     no git status capture       -> INCONCLUSIVE
+//
+// Case 69 is the one worth naming: an untracked file counts as changed in the
+// reference (it merges the untracked list into the same judgement), so a model that
+// only read tracked modifications would answer NOT OBSERVED there.
+show(judge_path_changed("tracked.txt", ChangeStatusRecorded(sample_changes())))
+show(judge_path_changed("fresh.txt", ChangeStatusRecorded(sample_changes())))
+show(judge_path_changed("nothing.txt", ChangeStatusRecorded(sample_changes())))
+show(judge_path_unchanged("nothing.txt", ChangeStatusRecorded(sample_changes())))
+show(judge_path_unchanged("tracked.txt", ChangeStatusRecorded(sample_changes())))
+show(judge_path_changed("anything.txt", ChangeStatusMissing()))

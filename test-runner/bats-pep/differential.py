@@ -328,7 +328,9 @@ FILE_CASES = [
 RUN_EVIDENCE = ('RunEvidence { steps: [EvidenceStep { phase: "run", index: 0, '
                 'exit: ObservedExit(1) }], captures: all_captures(), '
                 'worktree: WorktreeView { present_paths: [".git", "README.md"], '
-                'rejected_paths: ["../outside.txt"] } }')
+                'rejected_paths: ["../outside.txt"] }, '
+                'changes: ChangeStatusRecorded(WorktreeChanges { '
+                'changed_paths: [], untracked_paths: [] }) }')
 
 
 def condition_leaf(label, condition):
@@ -372,6 +374,41 @@ EVIDENCE_TREE_CASES = [
     ("evtree-not",
      "  not:\n    type: file_exists\n    path: \".git\"",
      "evaluate_evidence_tree(NotOf(%s), %s)" % (EXISTS_LEAF, RUN_EVIDENCE)),
+]
+# The path conditions need a target whose working tree the Bat itself changes: the
+# runner refuses to start on an already-dirty repository, so the modification has to
+# come from the attack step. A throwaway repo inside the harness temp directory keeps
+# the shared clean clone pristine.
+PATH_SPEC_TEMPLATE = """version: terrorbat/v1
+id: {ident}
+claim:
+  text: Path change differential probe.
+requires: [process.spawn]
+attack:
+  run:
+    - adapter: command
+      action: run
+      program: pwsh
+      args: ["-NoProfile", "-Command", "Set-Content -NoNewline -Path wrote.txt -Value hi; Add-Content -NoNewline -Path tracked.txt -Value more"]
+oracle:
+{oracle_body}
+evidence:
+  capture: [stdout, stderr]
+timeout:
+  run: 60s
+  total: 120s
+"""
+
+# What the attack above produces: tracked.txt modified, wrote.txt newly untracked.
+PATH_CHANGES = ('ChangeStatusRecorded(WorktreeChanges { '
+                'changed_paths: ["tracked.txt"], untracked_paths: ["wrote.txt"] })')
+
+PATH_CASES = [
+    ("path-changed-tracked", "path_changed", "tracked.txt", "PROVEN"),
+    ("path-changed-untracked", "path_changed", "wrote.txt", "PROVEN"),
+    ("path-changed-clean", "path_changed", "untouched.txt", "NOT OBSERVED"),
+    ("path-unchanged-clean", "path_unchanged", "untouched.txt", "PROVEN"),
+    ("path-unchanged-changed", "path_unchanged", "tracked.txt", "NOT OBSERVED"),
 ]
 
 
@@ -650,9 +687,50 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
+        # path_changed / path_unchanged differential.
+        path_repo = workdir / "pathrepo"
+        path_repo.mkdir()
+        git = ["git", "-C", str(path_repo)]
+
+        def git_do(*args):
+            return subprocess.run(git + list(args), text=True,
+                                  capture_output=True, timeout=120)
+
+        git_do("init", "-q")
+        (path_repo / "tracked.txt").write_text("one\n", encoding="utf-8")
+        git_do("add", "-A")
+        git_do("-c", "user.name=pep", "-c", "user.email=pep@local", "commit", "-qm", "init")
+
+        for ident, kind, path, expected in PATH_CASES:
+            # Each case starts from a clean tree, because the attack dirties it.
+            git_do("checkout", "--", ".")
+            wrote = path_repo / "wrote.txt"
+            if wrote.exists():
+                wrote.unlink()
+            body = PATH_SPEC_TEMPLATE.format(
+                ident=ident,
+                oracle_body="  all:\n"
+                            "    - type: %s\n"
+                            "      path: \"%s\"" % (kind, path))
+            bat = workdir / ("%s.yaml" % ident)
+            bat.write_text(body, encoding="utf-8")
+            proc = subprocess.run([str(tb), "run", "--repo", str(path_repo),
+                                   str(bat), "--json"],
+                                  text=True, capture_output=True, timeout=600)
+            try:
+                rust = json.loads(proc.stdout).get("verdict", "?")
+            except json.JSONDecodeError:
+                rust = "HARNESS-ERROR"
+            pep = pep_expression(
+                composed, 'judge_%s("%s", %s)' % (kind, path, PATH_CHANGES))
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
              + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES)
-             + len(EVIDENCE_TREE_CASES))
+             + len(EVIDENCE_TREE_CASES) + len(PATH_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 
