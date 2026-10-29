@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 env:
-  PROOF_SHA: 0814480bebaf5bfb593dcaf8d3b5ef4854f30d2d
+  PROOF_SHA: d88089683c000a0b7713996f3b5ca97ebda3c87b
   PROOF_BRANCH: codex/bootstrap-agent3-verification
 
 jobs:
