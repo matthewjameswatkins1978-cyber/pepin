@@ -1,0 +1,113 @@
+# Agent 3 Lean 4 proof check — narrowly scoped, manually triggered only.
+#
+# Ownership: Agent 3 (verification lane). Relocatable by the integrator;
+# no other workflow exists in this repository, so there is no collision.
+# Authority: Matthew's approval on issue #16 + mission boundary at
+# planning commit 8090689 (pinned Lean-only check on a clean
+# GitHub-hosted ubuntu-24.04 runner). Triggers: workflow_dispatch ONLY
+# (no push/pull_request/schedule triggers — never a broad CI run).
+#
+# Enforced limits (all visible below):
+# - runs-on: ubuntu-24.04 only (fresh GitHub VM per job, decommissioned after)
+# - permissions: contents: read, everything else none; no secrets referenced
+# - ZERO third-party actions (raw git + shell only; nothing to pin)
+# - sparse read-only checkout of verification/lean4/** at the EXACT pinned
+#   Agent 3 branch SHA below (PROOF_SHA); unrelated/quarantined artifacts excluded
+# - Lean from the official install guide (elan-init.sh, non-interactive -y
+#   flag is the only deviation from the manual's interactive default) plus
+#   the committed lean-toolchain pin (v4.35.0); no Mathlib, no caches
+# - Lean/Lake proof + kernel/axiom checks ONLY under verification/lean4/**;
+#   no Pep/OCaml binaries, no emitted C, no Clang/GCC, no native execution
+# - no artifact uploads, no caches, no deployment, no secrets
+#
+# To re-verify newer Lean sources: bump PROOF_SHA to the exact new commit
+# (proof .lean files), push, re-run. Never point PROOF_SHA at a branch name.
+
+name: agent3-lean4-proof-check
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  PROOF_SHA: 0814480bebaf5bfb593dcaf8d3b5ef4854f30d2d
+  PROOF_BRANCH: codex/bootstrap-agent3-verification
+
+jobs:
+  lean-proof-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Sparse read-only checkout of proof sources at pinned SHA
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/matthewjameswatkins1978-cyber/pepin.git proof
+          cd proof
+          git sparse-checkout set verification/lean4
+          git checkout "${PROOF_SHA}"
+          git rev-parse HEAD
+          test "$(git rev-parse HEAD)" = "${PROOF_SHA}"
+          echo "--- proof tree ---"
+          find verification/lean4 -type f | sort
+          echo "--- lean-toolchain pin ---"
+          cat verification/lean4/lean-toolchain
+
+      - name: Install elan (official Lean install guide, Ubuntu path)
+        run: |
+          set -euo pipefail
+          curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y
+          source "$HOME/.elan/env"
+          elan --version
+
+      - name: Build proof library and report toolchain
+        run: |
+          set -euo pipefail
+          source "$HOME/.elan/env"
+          cd proof/verification/lean4
+          elan --version
+          lean --version
+          lake --version
+          elan toolchain list
+          lake build
+
+      - name: Kernel-check each model module
+        run: |
+          set -euo pipefail
+          source "$HOME/.elan/env"
+          cd proof/verification/lean4
+          lake env lean Verification/ValueCopy.lean
+          lake env lean Verification/AliasedCounterexample.lean
+
+      - name: Axiom audit (must show no sorryAx / no native_decide escape)
+        run: |
+          set -euo pipefail
+          source "$HOME/.elan/env"
+          cd proof/verification/lean4
+          cat > /tmp/AxiomsCheck.lean <<'EOF'
+          import Verification.ValueCopy
+          import Verification.AliasedCounterexample
+          #print axioms edit_takes_effect
+          #print axioms copy_preserved
+          #print axioms editOrig_copy
+          #print axioms idx_upd_same
+          #print axioms idx_upd_other
+          EOF
+          lake env lean /tmp/AxiomsCheck.lean 2>&1 | tee /tmp/axioms.txt
+          if grep -E "sorryAx|ofReduceBool" /tmp/axioms.txt; then
+            echo "FORBIDDEN AXIOM ESCAPE PRESENT"
+            exit 1
+          fi
+          echo "axiom audit clean (no sorryAx, no ofReduceBool)"
+
+      - name: Broken variant must be REJECTED by the kernel
+        run: |
+          set -euo pipefail
+          source "$HOME/.elan/env"
+          cd proof/verification/lean4
+          if lake env lean BrokenVariant.lean; then
+            echo "BROKEN VARIANT WAS ACCEPTED - toolchain check invalid"
+            exit 1
+          fi
+          echo "broken variant rejected as required"
