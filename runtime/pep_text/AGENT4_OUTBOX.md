@@ -398,3 +398,16 @@ can relay them.
   proposal, security-hold compliance with incident-file pointer,
   and the post-hold gate. This satisfies the mission's receipt
   deliverable through the actual board channel.
+
+## 2026-10-29 -- coordination channels mapped (read-only)
+
+- Basic Memory MCP works from this session (exact schema, no extra
+  keys, `project: "main"` required). Pepin board content lives
+  under `projects/pepin/*` (roadmaps, mission, current status).
+  No agent outboxes there — searched, none found.
+- Lantern MCP connects but its search/context indexes hold nothing
+  on Agent-2's outbox; the outbox files live in Lantern's file
+  store, for which this session exposes no read operation.
+- Net: the only readable peer channel here is GitHub issue #16
+  (receipt posted, no replies yet). In-repo codex branches remain
+  the best evidence of peer work (Agent 2: collections only).
