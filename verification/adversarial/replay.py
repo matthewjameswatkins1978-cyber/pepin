@@ -541,6 +541,11 @@ def main():
                   inp="\n".join(json.dumps(x) for x in reqs) + "\n")
         return [json.loads(ln) for ln in (r.stdout or "").splitlines()
                 if ln.strip()]
+    _om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
+    ok = _om.get("outcome") == "ok" and "metrics" in _om
+    results.append(("O3-metrics", PASS if ok else FAIL,
+                    "outcome=%s" % _om.get("outcome")))
+    # SourceBytes + byte builtins via host grant (set 13)
     o = sess([{"schemaVersion": 3, "op": "open_bytes", "name": "bad",
                 "bytes": [102, 110, 32, 255, 254]}])[0]
     ok = (o.get("status") == "invalid" and "PEP_INVALID_UTF8" in [
@@ -574,10 +579,89 @@ def main():
     results.append(("O2-repairable", PASS if ok else FAIL,
                     "edit=%s query=%s" % (eb.get("status"),
                                            oq.get("status"))))
-    om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
-    ok = om.get("outcome") == "ok" and "metrics" in om
-    results.append(("O3-metrics", PASS if ok else FAIL,
-                    "outcome=%s" % om.get("outcome")))
+    # SourceBytes + byte builtins via host grant (set 13)
+    _tlib = ("fn blen() -> Int { return byte_length(source_bytes()) }\n"
+             "fn bat(i: Int) -> Int { return byte_at(source_bytes(), i) }\n"
+             "fn us(a: Int, b: Int) -> Str { return utf8_slice(source_bytes(), a, b) }\n"
+             "fn bsl(a: Int, b: Int) -> Int { return byte_length(byte_slice(source_bytes(), a, b)) }\n"
+             "fn main() -> Int { return 0 }\n")
+    _tgt = 'fn main() -> Int { say("h\u00e9llo") return 0 }\n'
+    def _sess(reqs):
+        r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                  inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(ln) for ln in (r.stdout or "").splitlines()
+                if ln.strip()]
+    _o = _sess([{"schemaVersion": 3, "op": "open", "name": "t",
+                  "source": _tlib},
+                 {"schemaVersion": 3, "op": "open", "name": "g",
+                  "source": _tgt}])
+    _td, _tr = _o[0]["document"], _o[0]["revision"]
+    _gd, _gr = _o[1]["document"], _o[1]["revision"]
+    _st = {"document": _gd, "revision": _gr,
+           "entryFunctions": ["main"]}
+    def _IV(v):
+        return {"type": "Int", "value": str(v)}
+    def _SV(v):
+        return {"type": "Str", "value": v}
+    def _trial(tool, fn, args, expect):
+        _B = {"schemaVersion": 3, "toolProtocolVersion": 2,
+              "tool": tool, "document": _td, "revision": _tr}
+        _r = _sess([
+            {"schemaVersion": 3, "op": "open", "name": "t",
+             "source": _tlib},
+            {"schemaVersion": 3, "op": "open", "name": "g",
+             "source": _tgt},
+            dict(_B, op="tool_register", function=fn),
+            dict(_B, op="tool_validate",
+                 testVectors=[{"arguments": args, "expect": expect,
+                               "semanticTarget": _st}]),
+            dict(_B, op="tool_activate"),
+            {"schemaVersion": 3, "toolProtocolVersion": 2,
+             "op": "tool_invoke", "tool": tool, "arguments": args,
+             "semanticTarget": _st},
+        ])
+        return _r[2], _r[3], _r[4], _r[5]
+    _tgt_len = str(len(_tgt.encode("utf-8")))
+    _rb = _trial("blen", "blen", [], {"type": "Int", "value": _tgt_len})
+    ok = (_rb[3].get("result") == {"type": "Int", "value": _tgt_len})
+    results.append(("G1-bytelen", PASS if ok else FAIL,
+                    "invoke=%s" % _rb[3].get("result")))
+    _ok = True
+    for _args, _exp in [([_IV(25)], _IV(195)), ([_IV(26)], _IV(169))]:
+        _rr = _trial("bat", "bat", _args, _exp)
+        _ok = _ok and _rr[3].get("result") == _exp
+    _ro = _trial("bat", "bat", [_IV(9999)], _IV(0))
+    _e = _ro[1].get("error")
+    _ok = (_ok and _ro[1].get("outcome") == "rejected"
+           and (isinstance(_e, str) and "BYTE_RANGE" in _e
+                or (isinstance(_e, dict)
+                    and _e.get("code") == "PEP_RUNTIME_BYTE_RANGE")))
+    results.append(("G2-byteat", PASS if _ok else FAIL, "byte-at"))
+    _ru = _trial("us", "us", [_IV(25), _IV(27)], _SV("\u00e9"))
+    _rs = _trial("us", "us", [_IV(25), _IV(26)], _SV("\u00e9"))
+    _es = _rs[1].get("error")
+    ok = (_ru[3].get("result") == _SV("\u00e9")
+          and _rs[1].get("outcome") == "rejected"
+          and ((isinstance(_es, str) and "BYTE_BOUNDARY" in _es)
+               or (isinstance(_es, dict)
+                   and _es.get("code") == "PEP_RUNTIME_BYTE_BOUNDARY")))
+    results.append(("G3-utf8", PASS if ok else FAIL,
+                    "slice+split"))
+    _rl = _trial("bsl", "bsl", [_IV(25), _IV(26)], _IV(1))
+    ok = _rl[3].get("result") == _IV(1)
+    results.append(("G4-byteslice", PASS if ok else FAIL,
+                    "invoke=%s" % _rl[3].get("result")))
+    _pv = TMP / "a3_grant.pep"
+    _pv.write_bytes(b"fn probe() -> Int {\n semantic_snapshot()\n return 0\n}\n"
+                    b'say(int_text(probe()))\n')
+    try:
+        _rr = _pwsh(["./pep.ps1", "run", str(_pv)])
+        ok = (_rr.returncode == 1
+              and "PEP_RUNTIME_SEMANTIC_CONTEXT" in (_rr.stderr or ""))
+        results.append(("G5-nogrant", PASS if ok else FAIL,
+                        "rc=%d" % _rr.returncode))
+    finally:
+        _pv.unlink(missing_ok=True)
     # v2 typed transport + host grants (set 12)
     vlib = ("type Point { x: Int y: Int }\n"
             "fn total(xs: List[Int]) -> Int {\n var s = 0\n"
