@@ -40,6 +40,12 @@ fn list_bool_true_prefix_length(values: List[Bool]) -> Int {
   return prefix
 }
 
+fn list_bool_suffix_length_of(values: List[Bool], expected: Bool) -> Int {
+  var suffix = 0
+  for item in values { suffix = if item == expected { suffix + 1 } else { 0 } }
+  return suffix
+}
+
 fn list_bool_true_suffix_length(values: List[Bool]) -> Int {
   var suffix = 0
   for item in values { suffix = if item { suffix + 1 } else { 0 } }
