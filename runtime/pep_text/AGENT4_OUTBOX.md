@@ -389,3 +389,12 @@ can relay them.
   (incl. invalid UTF-8 and embedded NULs the `Str` type cannot
   carry). Complementary layers, zero overlap, no shared files.
   `str_chars` answers Agent 3's request, not mine.
+
+## 2026-10-29 -- Workshop Board receipt posted (issue #16)
+
+- Posted Agent-4 status receipt as issue comment
+  `6489730151`: branch/SHA, runtime deliverables through slice 14,
+  no-duplication statement vs Agent 1 builtins, Agent-2 join
+  proposal, security-hold compliance with incident-file pointer,
+  and the post-hold gate. This satisfies the mission's receipt
+  deliverable through the actual board channel.
