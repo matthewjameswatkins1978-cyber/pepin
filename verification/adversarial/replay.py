@@ -614,6 +614,33 @@ def main():
           and _mm.get("cache_hits") == 2)
     results.append(("O4-cachereuse", PASS if ok else FAIL,
                     "metrics=%s" % _mm))
+    _mx = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _md,
+         "expected_revision": _mr, "start_byte": 26, "end_byte": 27,
+         "replacement": "2"},
+    ])
+    _mnew = _mx[1]["revision"]
+    _my = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _md,
+         "expected_revision": _mr, "start_byte": 26, "end_byte": 27,
+         "replacement": "2"},
+        {"schemaVersion": 3, "op": "query", "document": _md,
+         "revision": _mnew},
+        {"schemaVersion": 3, "op": "query", "document": _md,
+         "revision": _mr},
+        {"schemaVersion": 3, "op": "query", "document": _md,
+         "revision": _mnew},
+        {"schemaVersion": 3, "op": "metrics"},
+    ])
+    _mz = _my[-1].get("metrics", {})
+    ok = (_mz.get("parse_count") == 2 and _mz.get("typecheck_count") == 2
+          and _mz.get("cache_hits") == 3)
+    results.append(("O5-xrev", PASS if ok else FAIL,
+                    "metrics=%s" % _mz))
     _ip = TMP / "a3_inspect.pep"
     _ip.write_bytes(b"fn main() -> Int { return 1 }\n")
     try:

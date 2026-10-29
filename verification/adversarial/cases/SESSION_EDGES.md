@@ -29,9 +29,9 @@ not just documented.
 (`parse_count`/`typecheck_count`/`cache_hits` shape per prior receipts).
 Diagnostic instrumentation is queryable; it is not language semantics.
 
-## Same-revision analysis reuse is real (metrics evidence)
+## Same revision reuses; changed revisions fully re-analyse
 
-Sequence: `open` + two identical `query` calls on the same retained revision, then `metrics` → `TESTED`: `parse_count: 1, typecheck_count: 1, cache_hits: 2`. The analysis ran once; both re-queries were served from the same-revision cache. This is the documented in-process cache behaving as specified (reuse within a revision; full re-analysis across revisions per the protocol's no-cross-revision-reuse rule).
+Sequence: `open` → `query` → `query` (same rev) → `apply_edit` (1→2) → `query` (new rev) → `metrics` → `TESTED`: `parse_count: 2, typecheck_count: 2, cache_hits: 3`. Reading: the open analyses once; both same-revision queries hit the cache (+2); the edit forces full re-analysis (+1/+1, no cross-revision reuse); querying the fresh revision hits the just-computed analysis (+1). This is the documented incremental boundary behaving exactly as specified — reuse within a revision, never across one.
 
 ## `inspect` is the untyped stage
 
