@@ -34,6 +34,39 @@ CASES = [
     ("equals-7-exit-3", True, 7, False, 0, True, 3, "NOT OBSERVED"),
 ]
 
+# A supervised process killed before it exits produces no exit code. The reference
+# must then answer Undetermined for an exit_code condition -- a crash or kill is
+# never a falsification -- and the Pep oracle must answer INCONCLUSIVE for the same
+# recorded inputs (executed, no exit code).
+PROCESS_TEMPLATE = """version: terrorbat/v1
+id: pep-diff-process-no-exit-code
+claim:
+  text: A killed supervised process yields no exit code, so the claim is undetermined.
+requires: [process.start, process.kill]
+attack:
+  run:
+    - adapter: process
+      action: start
+      handle: sleeper
+      program: pwsh
+      args: ["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]
+      stdin: piped
+    - adapter: process
+      action: kill
+      handle: sleeper
+      timeout_ms: 5000
+oracle:
+  all:
+    - type: exit_code
+      step: run:0
+      equals: 1
+evidence:
+  capture: [stdout, stderr]
+timeout:
+  run: 120s
+  total: 180s
+"""
+
 BAT_TEMPLATE = """version: terrorbat/v1
 id: pep-diff-{ident}
 claim:
@@ -154,7 +187,20 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
-    print("SUMMARY cases=%d mismatches=%d" % (len(CASES) + 2, mismatches))
+        # No-exit-code path: the step is killed before it exits, so it has no exit
+        # code. Both sides must answer "undetermined", never a falsification.
+        rust, receipt = rust_run_verdict(tb, repo, workdir,
+                                         "process-no-exit-code", PROCESS_TEMPLATE)
+        pep = pep_verdict(composed, True, 1, False, 0, True, "pep_no_exit_code()")
+        agree = rust == pep == "INCONCLUSIVE"
+        mismatches += 0 if agree else 1
+        print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+            "process-no-exit-code", rust, pep, "INCONCLUSIVE",
+            "AGREE" if agree else "DISAGREE"))
+        if receipt:
+            print("     rust_receipt=%s" % receipt)
+
+    print("SUMMARY cases=%d mismatches=%d" % (len(CASES) + 3, mismatches))
     return 0 if mismatches == 0 else 1
 
 

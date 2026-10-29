@@ -106,8 +106,9 @@ Pep's interpreter. Run with `--repo <clean clone>` (default
 | `equals 7`, exit 3 | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
 | both modes set | INVALID | INVALID | INVALID |
 | neither mode set | INVALID | INVALID | INVALID |
+| supervised process killed before exit | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 
-`SUMMARY cases=7 mismatches=0`.
+`SUMMARY cases=8 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict
@@ -115,9 +116,11 @@ One measurement worth recording: `terrorbats spec check` **accepts** a spec whos
 compared the wrong phase and reported a false disagreement. Validating the
 validation-phase assumption is part of the work.
 
-Not yet compared at runtime: the "step produced no exit code" path (reference:
-Undetermined). Forcing it needs a supervised process killed before it exits, which
-is why the Pep side covers it with recorded inputs while the Rust side does not yet.
+The "step produced no exit code" path is now compared at runtime too: the Bat
+starts a supervised `Start-Sleep` process and kills it before it exits, so the step
+has no exit code. The reference answers Undetermined and the Pep oracle answers
+INCONCLUSIVE for the same recorded inputs (executed, no exit code). A kill or crash
+is never a falsification on either side.
 
 ## Not claimed
 
