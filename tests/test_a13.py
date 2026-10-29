@@ -106,6 +106,55 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["revision"]), opened["revision"])
         return opened, report
 
+    def test_type_analysis_node_ranges_partition_flat_ast(self):
+        source = ""
+        opened = self._open(source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        empty_nodes = typed_list("FlatAstNode", [])
+        empty_result = typed_list("FlatAstNode", [])
+        registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                       "op": "tool_register", "tool": "pep-a13-node-range",
+                                       "document": self.tool_document, "revision": self.tool_revision,
+                                       "function": "type_analysis_nodes_in_range"})
+        self.assertEqual(registered.get("status"), "Registered", registered)
+        validated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_validate", "tool": "pep-a13-node-range",
+                                      "document": self.tool_document, "revision": self.tool_revision,
+                                      "testVectors": [{"arguments": [empty_nodes, typed("Int", "0"), typed("Int", "0")],
+                                                       "expect": empty_result, "semanticTarget": target}]})
+        self.assertEqual(validated.get("status"), "Validated", validated)
+        activated = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_activate", "tool": "pep-a13-node-range",
+                                      "document": self.tool_document, "revision": self.tool_revision})
+        self.assertEqual(activated.get("status"), "Active", activated)
+
+        nodes = []
+        for node_id in range(3):
+            nodes.append(typed_record("FlatAstNode", [
+                ("id", typed("Int", str(node_id))), ("parentId", typed("Int", "-1")),
+                ("childIndex", typed("Int", "-1")), ("role", typed("Str", "")),
+                ("kind", typed("Str", "synthetic")), ("text", typed("Str", "")),
+                ("integerValue", typed("Int", "0")), ("booleanValue", typed("Bool", False)),
+                ("stringParts", typed_list("Str", [])), ("startByte", typed("Int", "0")),
+                ("endByte", typed("Int", "0")), ("line", typed("Int", "1")),
+                ("column", typed("Int", "1")),
+            ]))
+        def run_range(start, end):
+            result = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                      "tool": "pep-a13-node-range",
+                                      "arguments": [typed_list("FlatAstNode", nodes), typed("Int", str(start)), typed("Int", str(end))],
+                                      "semanticTarget": target})
+            self.assertEqual(result.get("outcome"), "ok", result)
+            return [scalar(fields(item)["id"]) for item in result["result"]["value"]]
+
+        first = run_range(0, 2)
+        second = run_range(2, 3)
+        whole = run_range(0, 3)
+        self.assertEqual(first, [0, 1])
+        self.assertEqual(second, [2])
+        self.assertEqual(first + second, whole)
+        self.assertEqual(len(set(first + second)), 3)
+
     def test_staged_parser_checker_preserves_diagnostics_within_budget(self):
         empty = self._open("")
         empty_parsed = typed_record("ParserProgress", [

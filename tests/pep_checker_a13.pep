@@ -2073,6 +2073,17 @@ fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstN
   }
   return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
 }
+fn type_analysis_nodes_in_range(nodes: List[FlatAstNode], startNode: Int, endNode: Int) -> List[FlatAstNode] {
+  var reversedNodes: List[FlatAstNode] = []
+  for node in nodes {
+    if startNode <= node.id && node.id + 1 <= endNode { reversedNodes = prepend(reversedNodes, node) } else {}
+  }
+  return reverse(reversedNodes)
+}
+fn type_analysis_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startNode: Int, endNode: Int) -> TypeAnalysis {
+  let activeNodes = type_analysis_nodes_in_range(nodes, startNode, endNode)
+  return type_analysis_over_nodes(nodes, activeNodes, functions, bindings, references)
+}
 fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   return type_analysis_over_nodes(nodes, nodes, functions, bindings, references)
 }
