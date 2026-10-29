@@ -951,6 +951,31 @@ def main():
             and _fi2.get("result") == _HIV(22))
     results.append(("H2-failedswap", PASS if _ok2 else FAIL,
                     "invoke=%s" % _fi2.get("result")))
+    # Declaration edges (set 19)
+    check("D-nested-fn",
+          "fn outer() -> Int {\n fn inner() -> Int { return 1 }\n return inner()\n}\nfn main() -> Int { return 0 }",
+          "invalid", ("PEP_PARSE_EXPRESSION",))
+    check("D-if-int",
+          "fn main() -> Int { return if 1 { 1 } else { 0 } }",
+          "invalid", ("PEP_TYPE_MISMATCH",))
+    check("D-dup-field",
+          "type P { x: Int }\nfn main() -> Int { let v = P { x: 1, x: 2 } return v.x }",
+          "invalid", ("PEP_DUPLICATE_FIELD",))
+    check("D-param-builtin",
+          "fn f(say: Int) -> Int { return say }\nfn main() -> Int { return 0 }",
+          "valid")
+    check("D-ctor-arg",
+          'type E = Number(Int) | B()\nfn main() -> Int { return match Number("x") { Number(v) => v B() => 0 } }',
+          "invalid", ("PEP_TYPE_MISMATCH",))
+    check("D-dup-main",
+          "fn main() -> Int { return 1 }\nfn main() -> Int { return 2 }",
+          "invalid", ("PEP_DUPLICATE_FUNCTION",))
+    run("D-shadow-value",
+        "fn f(say: Int) -> Int { return say }\nsay(int_text(f(41)))",
+        exp_out="41\n")
+    run("D-shadow-call",
+        'fn f(say: Int) -> Unit { say("x") }\nf(1)',
+        exp_out="x\n")
     # Semantic snapshot content (set 17)
     _snt = ("fn nfuncs() -> Int { let p = semantic_snapshot() return length(p.functions) }\n"
             "fn nroots() -> Int { let p = semantic_snapshot() return length(p.roots) }\n"
