@@ -478,6 +478,12 @@ fn list_int_sum_at_most(values: List[Int], upper: Int) -> Int {
   return total
 }
 
+fn list_int_sum_at_least(values: List[Int], lower: Int) -> Int {
+  var total = 0
+  for item in values { total = if lower <= item { total + item } else { total } }
+  return total
+}
+
 fn list_int_count_at_most(values: List[Int], upper: Int) -> Int {
   var total = 0
   for item in values { total = if item <= upper { total + 1 } else { total } }
