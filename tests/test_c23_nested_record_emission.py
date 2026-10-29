@@ -158,14 +158,14 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             generated = emit(source.read_bytes())
             self.assertRegex(
                 generated,
-                r"typedef struct \{ uint32_t tag; union \{ int64_t payload_1; \} payload; \} pep_union_\d+;")
+                r"typedef struct \{ uint32_t tag; union \{ struct \{ int64_t field_0; \} payload_1; \} payload; \} pep_union_\d+;")
             self.assertRegex(
                 generated,
                 r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
             self.assertRegex(generated, r"\.tag = 0")
             self.assertRegex(
                 generated,
-                r"\.tag = 1, \.payload\.payload_1 = 42")
+                r"\.tag = 1, \.payload\.payload_1 = \{ \.field_0 = 42 \}")
             self.assertRegex(generated, r"\.tag == 0")
             self.assertRegex(generated, r"\.tag == 1")
             self.assertRegex(generated, r"\.payload")
@@ -200,17 +200,17 @@ fn main() -> Int {
             generated = emit(source.read_bytes())
             self.assertRegex(
                 generated,
-                r"typedef struct \{ uint32_t tag; union \{ int64_t payload_0; "
-                r"pep_record_\d+ payload_1; \} payload; \} pep_union_\d+;")
+                r"typedef struct \{ uint32_t tag; union \{ struct \{ int64_t field_0; \} payload_0; "
+                r"struct \{ pep_record_\d+ field_0; \} payload_1; \} payload; \} pep_union_\d+;")
             self.assertRegex(
                 generated,
                 r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
-            self.assertRegex(generated, r"\.tag = 0, \.payload\.payload_0 = 11")
+            self.assertRegex(generated, r"\.tag = 0, \.payload\.payload_0 = \{ \.field_0 = 11 \}")
             self.assertRegex(
                 generated,
-                r"\.tag = 1, \.payload\.payload_1 = \(pep_record_\d+\)")
+                r"\.tag = 1, \.payload\.payload_1 = \{ \.field_0 = \(pep_record_\d+\)")
             self.assertRegex(generated, r"\.tag == 1")
-            self.assertIn(".payload.payload_1.pep_field_0", generated)
+            self.assertIn(".payload.payload_1.field_0.pep_field_0", generated)
             self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
 
     def test_tagged_union_rejects_non_int_payload_layout(self):
@@ -245,6 +245,58 @@ fn main() -> Int {
             self.assertEqual(interpreted.stdout, "7\n")
             with self.assertRaisesRegex(ValueError, "cover every constructor"):
                 emit(source.read_bytes())
+
+    def test_ast_integer_and_boolean_variants_with_record_payloads_emit_c(self):
+        prefix = (
+            "type AstSpan { end: Int }\n"
+            "type AstValue = AstInteger(Int, AstSpan) | AstBoolean(Bool, AstSpan)\n"
+            "fn relay(value: AstValue) -> AstValue { return value }\n"
+            "fn main() -> Int { let value = relay(")
+        suffix = (
+            ")\n  return match value {\n"
+            "    AstInteger(number, span) => span.end\n"
+            "    AstBoolean(flag, span) => 0\n"
+            "  }\n}\n")
+        cases = (
+            ("AstInteger(9, AstSpan { end: 23 })", "23\n", "payload_0", "field_0 = 9"),
+            ("AstBoolean(true, AstSpan { end: 42 })", "0\n", "payload_1", "field_0 = 1"),
+        )
+        for index, (constructor, expected, payload, initializer) in enumerate(cases):
+            with self.subTest(constructor=constructor), tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+                source_text = prefix + constructor + suffix
+                source = pathlib.Path(temp_dir) / f"ast-value-{index}.pep"
+                source.write_text(source_text, encoding="utf-8", newline="\n")
+                reference = pathlib.Path(temp_dir) / "reference.pep"
+                reference.write_text(
+                    source_text + "say(int_text(main()))\n",
+                    encoding="utf-8", newline="\n")
+
+                interpreted = self.invoke("run", reference)
+                self.assertEqual(interpreted.returncode, 0,
+                                 interpreted.stdout + interpreted.stderr)
+                self.assertEqual(interpreted.stdout, expected)
+
+                generated = emit(source.read_bytes())
+                if payload == "payload_0":
+                    self.assertRegex(
+                        generated,
+                        r"struct \{ int64_t field_0; pep_record_\d+ field_1; \} payload_0;")
+                else:
+                    self.assertRegex(
+                        generated,
+                        r"struct \{ _Bool field_0; pep_record_\d+ field_1; \} payload_1;")
+                self.assertIn(f".payload.{payload} = {{ .{initializer}", generated)
+                if payload == "payload_0":
+                    self.assertIn(".payload.payload_0.field_1.pep_field_0", generated)
+                self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
+
+    def test_tagged_union_more_than_two_payload_fields_fails_closed(self):
+        source_text = (
+            "type Many = Empty() | Full(Int, Int, Int)\n"
+            "fn main() -> Int { let value = Full(1, 2, 3); return 0 }\n")
+        with self.assertRaisesRegex(ValueError, "unsupported layout"):
+            emit(source_text.encode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()
