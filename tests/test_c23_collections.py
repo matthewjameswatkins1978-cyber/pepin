@@ -1402,6 +1402,13 @@ class PepC23CollectionLoopTests(unittest.TestCase):
              "  return -1\n"
              "}\n",
              "42\n"),
+            ("while-direct-return",
+             "fn main() -> Int {\n"
+             "  var index = 6\n"
+             "  while index != 10 { return index }\n"
+             "  return -1\n"
+             "}\n",
+             "6\n"),
         )
         for label, source_text, expected in cases:
             with self.subTest(loop=label):

@@ -980,12 +980,12 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   parts = append(parts, ")) {\n")
   for statement in nodes {
     if statement.parentId == loop.id && statement.role == "body" {
-      if statement.kind == "if_statement" {
+      if statement.kind == "if_statement" || statement.kind == "return" {
         let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings)
         if loweredConditional.status != "emitted" { return loweredConditional } else {}
         for part in loweredConditional.sourceParts { parts = append(parts, part) }
       } else {
-        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support assignments and assignment-only conditionals") } else {}
+        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support assignments, returns, and assignment-only conditionals") } else {}
         let value = pep_c23_child(nodes, statement.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
         let loweredValue = pep_c23_expression(nodes, function, value.node)
