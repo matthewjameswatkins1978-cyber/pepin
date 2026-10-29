@@ -21,7 +21,8 @@ note, not a status report on anyone else's work.
 | `bec1aab` | `path_changed` / `path_unchanged` over recorded changes, path differential (49/49) |
 | `f4817a5` | Coverage-at-a-glance table + source-selector validation (the decidable half of `text_contains`), source differential (55/55) |
 | `4c3c48b` | text_contains decided except the non-empty search: empty-needle rule + load ordering (58/58) |
-| (this commit) | text_contains as a composable tree leaf (7th Condition variant), tree integration differential (59/59) |
+| `d3e9e57` | text_contains as a composable tree leaf (7th Condition variant), tree integration differential (59/59) |
+| (this commit) | `mutation_check.py`: 9 semantic mutations, all detected, 0 survived |
 
 Starting point of the first four was `749edb2`. The fifth slice began from `c953e43`
 after recovering state, not from a reset.
@@ -33,6 +34,7 @@ after recovering state, not from a reset.
 | `.\pep.ps1 check test-runner\bats-pep\oracle.pep --json` | `status valid`, 0 diagnostics |
 | `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 193 lines, 91 verdict cases plus trail sizes and a full `explain` |
 | `python test-runner/bats-pep\differential.py` | `SUMMARY cases=59 mismatches=0` |
+| `python test-runner/bats-pep/mutation_check.py` | `SUMMARY mutations=9 survived=0 stale=0` |
 | `git ls-files --eol test-runner/bats-pep/` | all five files `i/lf w/lf` |
 | every file edit | Threadmoth `preview` → `mutate`, budget PASS, `unrelated_bytes_changed=false` |
 
@@ -159,5 +161,5 @@ Committed in the same commit as this outbox; verify with
 2556ce5ec9e288f9ede032ea8dd28d24599383d41c67eebf92198215a031f724  oracle.pep
 70f12a9f11391a2caafc5c4b238c30a6e8124e25f52bc7106e945c2beecd6908  selftest.pep
 2e779df6e878b940bfe38d3b1aa663529f595b29fde925e0afff5ebc59033fc8  differential.py
-42c8550c5ac69321d72a8095b29eea9840cfd30a6954d6ef695e90fd98d04fb3  README.md
+35c03aaa6483b4906d425f51bd7884443cb478a0e6c298a9d3f5ad8cbcff9d79  README.md
 ```

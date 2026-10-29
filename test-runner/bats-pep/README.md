@@ -822,6 +822,33 @@ has no exit code. The reference answers Undetermined and the Pep oracle answers
 INCONCLUSIVE for the same recorded inputs (executed, no exit code). A kill or crash
 is never a falsification on either side.
 
+## Does the suite detect bugs?
+
+Agreeing with the reference is one claim; being *sensitive to defects* is another. A
+suite of ninety-odd cases that still passes after `all` and `any` have their precedence
+swapped is not evidence, however long it looks.
+
+`mutation_check.py` applies nine single-defect mutations to `oracle.pep` and fails if any
+of them leaves the self-test output unchanged. Each mutation is a plausible mistake
+rather than a random character flip: an inverted comparison, a dropped guard, an ignored
+input field, or a confident verdict returned where the reference demands a cautious one.
+
+| Mutation | Detected at |
+| --- | --- |
+| `equals` comparison inverted | output line 0 |
+| `not` stops inverting | line 50 |
+| `run` phase name misspelled | line 93 |
+| untracked paths ignored by `path_changed` | line 146 |
+| unloadable source fires | line 176 |
+| `find_step` ignores the phase | line 101 |
+| empty `all` fires | line 22 |
+| both modes no longer INVALID | line 10 |
+| bad `stream` accepted | line 168 |
+
+`SUMMARY mutations=9 survived=0 stale=0`.
+
+A mutation whose anchor no longer matches is reported as **stale** rather than counted as
+a pass, so refactoring `oracle.pep` cannot quietly retire a guard.
 ## Not claimed
 
 - No process/Git host adapters, no receipts, no `pep bats` CLI, no native C23
