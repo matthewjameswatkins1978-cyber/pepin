@@ -496,12 +496,8 @@ fn list_int_last_index_of(values: List[Int], needle: Int) -> Int {
   var index = 0
   var foundAt = -1
   for item in values {
-    if item == needle {
-      foundAt = index
-      index = index + 1
-    } else {
-      index = index + 1
-    }
+    foundAt = if item == needle { index } else { foundAt }
+    index = index + 1
   }
   return foundAt
 }
