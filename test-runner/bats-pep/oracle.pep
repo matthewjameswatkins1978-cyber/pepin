@@ -39,9 +39,12 @@ type Mode = EqualsMode(Int) | NotEqualsMode(Int) | BothModes(Int, Int) | NoMode(
 // reason says which, but it is never evidence about the claim.
 type ExitObservation = ObservedExit(Int) | AbsentExit(Str)
 
-// One recorded evidence step, so the oracle reads an evidence record rather than a
-// loose argument list.
-type EvidenceStep { index: Int, exit: ExitObservation }
+// One recorded evidence step, addressed the way the reference addresses it: a phase
+// name plus a zero-based index within that phase. The phase is a plain `Str` whose
+// accepted values are checked by `is_known_phase` rather than a closed union,
+// because a recorded step may legitimately carry a phase name this engine does not
+// recognise — and that must be judgeable, not unrepresentable.
+type EvidenceStep { phase: Str, index: Int, exit: ExitObservation }
 
 type Verdict = Proven(Str) | NotObserved(Str) | Inconclusive(Str) | Invalid(Str)
 
@@ -103,6 +106,133 @@ fn judge(mode: Mode, observed: ExitObservation) -> Verdict {
 // The same judgement over a recorded evidence step.
 fn judge_step(mode: Mode, step: EvidenceStep) -> Verdict {
   return judge(mode, step.exit)
+}
+
+// ---------------------------------------------------------------------------
+// Multi-step evidence and step-reference resolution
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs), `eval_condition`
+// for `Condition::ExitCode`, in this exact order:
+//   1. `parse_step_ref(step)`  — phase must be setup/run/oracle, index numeric
+//   2. `find_step(steps, ...)` — first record with that phase and index
+//   3. `record.exit_code`      — a record may exist and still have no exit code
+//
+// Only steps 2 and 3 are reachable as *evidence* problems. Step 1 is validation:
+// measured against the framework, `step: bogus:0`, `step: run0` and `step: run:x`
+// all yield verdict INVALID, not INCONCLUSIVE. So a malformed reference is judged
+// Invalid alongside the other malformed-spec cases, and the defensive
+// "bad step reference" Undetermined branch inside `eval_condition` is unreachable
+// through ordinary spec parsing.
+//
+// The distinction this section adds is not cosmetic. `judge_step` takes a single
+// step, so it cannot tell "this step never executed" from "this step ran and
+// produced no exit code". Those are different facts about a run, and the reference
+// reports them with different notes.
+
+// The three phase names `parse_step_ref` accepts.
+fn is_known_phase(phase: Str) -> Bool {
+  var known = false
+  if phase == "setup" { known = true } else { }
+  if phase == "run" { known = true } else { }
+  if phase == "oracle" { known = true } else { }
+  return known
+}
+
+// A step that may or may not have been recorded.
+type HeldStep = NoStepHeld() | StepHeld(EvidenceStep)
+
+fn step_absent(held: HeldStep) -> Bool {
+  return match held {
+    NoStepHeld() => true
+    StepHeld(record) => false
+  }
+}
+
+// `find_step`: recorded steps are searched in order and the first match wins, which
+// is the reference's `steps.iter().find(...)`.
+fn find_step(steps: List[EvidenceStep], phase: Str, index: Int) -> HeldStep {
+  var held = NoStepHeld()
+  for step in steps {
+    if step_absent(held) && step.phase == phase && step.index == index {
+      held = StepHeld(step)
+    } else {
+    }
+  }
+  return held
+}
+
+// What reading a located step produced. A missing record and a record without an
+// exit code stay distinct, because they are distinct evidence about the run.
+type StepResolution =
+  ResolvedExit(Int) |
+  StepNotExecuted(Str) |
+  StepHasNoExitCode(Str)
+
+fn resolved_from_step(step: EvidenceStep) -> StepResolution {
+  return match step.exit {
+    ObservedExit(code) => ResolvedExit(code)
+    AbsentExit(why) => StepHasNoExitCode(why)
+  }
+}
+
+fn resolved_from(held: HeldStep) -> StepResolution {
+  return match held {
+    NoStepHeld() => StepNotExecuted("step did not execute")
+    StepHeld(record) => resolved_from_step(record)
+  }
+}
+
+// Steps 2 and 3 of the reference's order. Step 1 is judged as validation.
+fn resolve_step(steps: List[EvidenceStep], phase: Str, index: Int) -> StepResolution {
+  var held = find_step(steps, phase, index)
+  if step_absent(held) {
+    return StepNotExecuted("step did not execute")
+  } else {
+  }
+  return resolved_from(held)
+}
+
+fn judge_resolution(mode: Mode, resolution: StepResolution) -> Verdict {
+  if mode_is_valid(mode) {
+    return judge_resolved(mode, resolution)
+  } else {
+    // A malformed mode outranks every evidence problem, exactly as in `judge`. The
+    // observation is irrelevant on this path because the mode is rejected first.
+    return judge(mode, AbsentExit("mode is malformed; evidence is irrelevant"))
+  }
+}
+
+// Precondition: `mode` is a valid mode, so this only decides on evidence. The three
+// resolutions keep their own reasons instead of collapsing into one generic note:
+// "the step did not execute" and "the step produced no exit code" are different
+// facts about a run, and a verdict that cannot tell them apart is a weaker verdict.
+fn judge_resolved(mode: Mode, resolution: StepResolution) -> Verdict {
+  return match resolution {
+    ResolvedExit(code) => judge(mode, ObservedExit(code))
+    StepNotExecuted(why) => Inconclusive(why)
+    StepHasNoExitCode(why) => Inconclusive(why)
+  }
+}
+
+fn mode_is_valid(mode: Mode) -> Bool {
+  return match mode {
+    EqualsMode(value) => true
+    NotEqualsMode(value) => true
+    BothModes(equals_value, not_equals_value) => false
+    NoMode(why) => false
+  }
+}
+
+// The whole `exit_code` condition over a multi-step evidence record: spec validation
+// first (a malformed mode or a malformed reference is Invalid and is never rescued by
+// missing evidence), then resolution, then the fired/not-fired rule.
+fn judge_step_ref(mode: Mode, steps: List[EvidenceStep], phase: Str, index: Int) -> Verdict {
+  if is_known_phase(phase) {
+    return judge_resolution(mode, resolve_step(steps, phase, index))
+  } else {
+    return Invalid("bad step reference: unknown phase")
+  }
 }
 
 // ---------------------------------------------------------------------------

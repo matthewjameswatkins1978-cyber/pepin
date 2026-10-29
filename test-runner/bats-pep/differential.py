@@ -271,6 +271,30 @@ TRAIL_CASES += [
      "    - type: exit_code\n      step: run:0\n      equals: 0",
      "evaluate_tree(AnyNode([NotNode(%s), %s]))" % (pep_leaf(1), pep_leaf(0))),
 ]
+def step_oracle(step_ref, equals_value=1):
+    """An exit_code condition over an arbitrary step reference."""
+    return ("  all:\n"
+            "    - type: exit_code\n"
+            "      step: %s\n"
+            "      equals: %d" % (step_ref, equals_value))
+
+
+# The attack step always exits 1, so `equals: 1` fires on `run:0` and only the step
+# reference varies. These are verdict-only comparisons: an INVALID spec is never
+# evaluated, so it has no trail to compare.
+#
+# `step: bogus:0` is the interesting one. It is tempting to model an unknown phase as
+# the reference's defensive "bad step reference" Undetermined branch inside
+# `eval_condition`, but `validate_condition` calls `parse_step_ref` first, so the
+# spec is rejected as INVALID before evaluation. Measured, not assumed.
+PEP_RUN0 = 'EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }'
+
+STEPREF_CASES = [
+    ("stepref-resolves", "run:0", PEP_RUN0, "run", 0, "PROVEN"),
+    ("stepref-not-executed", "run:9", PEP_RUN0, "run", 9, "INCONCLUSIVE"),
+    ("stepref-wrong-phase", "setup:0", PEP_RUN0, "setup", 0, "INCONCLUSIVE"),
+    ("stepref-bad-phase", "bogus:0", PEP_RUN0, "bogus", 0, "INVALID"),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -477,7 +501,23 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
-    total = len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
+        # Step-reference differential: the three distinct ways a step yields no
+        # verdict, plus the one way it yields evidence.
+        for ident, step_ref, steps_expr, phase, index, expected in STEPREF_CASES:
+            body = SPEC_TEMPLATE.format(ident=ident,
+                                       oracle_body=step_oracle(step_ref))
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(composed, 'judge_step_ref(EqualsMode(1), [%s], "%s", %d)'
+                                 % (steps_expr, phase, index))
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
+    total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
+             + len(STEPREF_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

@@ -16,9 +16,9 @@
 //  7 no-mode               judge(NoMode("none set"), ObservedExit(1))   -> INVALID
 //  8 absent-evidence       judge(EqualsMode(1), AbsentExit("killed"))   -> INCONCLUSIVE
 //  9 invalid-beats-absence judge(BothModes(1, 0), AbsentExit("killed")) -> INVALID
-// 10 evidence-record       judge_step over EvidenceStep{exit: ObservedExit(1)}
+// 10 evidence-record       judge_step over EvidenceStep{phase:"run", exit: ObservedExit(1)}
 //                                                                       -> PROVEN
-// 11 evidence-record-absent judge_step over EvidenceStep{exit: AbsentExit(...)}
+// 11 evidence-record-absent judge_step over EvidenceStep{phase:"run", exit: AbsentExit(...)}
 //                                                                       -> INCONCLUSIVE
 //
 // Composition (Rust `OracleExpr::All` / `Any` / `Not`, Kleene three-valued logic):
@@ -61,8 +61,8 @@ show(judge(BothModes(1, 0), ObservedExit(1)))
 show(judge(NoMode("none set"), ObservedExit(1)))
 show(judge(EqualsMode(1), AbsentExit("process killed")))
 show(judge(BothModes(1, 0), AbsentExit("process killed")))
-show(judge_step(EqualsMode(1), EvidenceStep { index: 0, exit: ObservedExit(1) }))
-show(judge_step(EqualsMode(1), EvidenceStep { index: 0, exit: AbsentExit("process killed") }))
+show(judge_step(EqualsMode(1), EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }))
+show(judge_step(EqualsMode(1), EvidenceStep { phase: "run", index: 0, exit: AbsentExit("process killed") }))
 
 // Composition cases. An invalid child keeps its own validation message through the
 // composition, so cases 18 and 24 print the child's reason, not a generic one.
@@ -126,3 +126,30 @@ show(result_of(evaluate_tree(AllNode([AnyNode([LeafNode(outcome("exit_code run:0
 show(result_of(evaluate_tree(AnyNode([NotNode(LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))), LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1))))]))))
 show(result_of(evaluate_tree(AllNode([]))))
 say(int_text(trail_size(evaluate_tree(AllNode([AnyNode([LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1)))), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))]), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))])))))
+
+// --- Multi-step evidence and step-reference resolution ---
+//
+// The reference has three separate reasons a step yields no verdict, and only two of
+// them are evidence problems: a malformed reference is validation (INVALID, measured),
+// an unrecorded step is Undetermined, and a recorded step without an exit code is
+// Undetermined with a different note.
+//
+// 42 ref-resolved-fires       run:0 exit 1, equals 1              -> PROVEN
+// 43 ref-resolved-misses      run:0 exit 1, equals 0              -> NOT OBSERVED
+// 44 ref-not-executed         run:9 against [run:0]               -> INCONCLUSIVE
+// 45 ref-bad-phase            phase "bogus"                       -> INVALID
+// 46 ref-wrong-phase          setup:0 against [run:0]             -> INCONCLUSIVE
+// 47 ref-no-exit-code         run:0 present, AbsentExit           -> INCONCLUSIVE
+// 48 ref-selects-by-index     [run:0 exit 1, run:1 exit 2], run:1 -> PROVEN
+// 49 ref-invalid-beats-missing BothModes with an empty step list  -> INVALID
+//
+// Case 46 is the phase guard and case 48 the index guard: a resolver that matched on
+// index alone, or on presence alone, would answer PROVEN for one of them.
+show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }], "run", 0))
+show(judge_step_ref(EqualsMode(0), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }], "run", 0))
+show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }], "run", 9))
+show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }], "bogus", 0))
+show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }], "setup", 0))
+show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: AbsentExit("process killed") }], "run", 0))
+show(judge_step_ref(EqualsMode(2), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }, EvidenceStep { phase: "run", index: 1, exit: ObservedExit(2) }], "run", 1))
+show(judge_step_ref(BothModes(1, 0), [], "run", 9))

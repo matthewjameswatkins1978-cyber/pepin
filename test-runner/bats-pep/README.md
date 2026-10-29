@@ -37,7 +37,7 @@ imports, and no sentinel:
 ```pep
 type Mode = EqualsMode(Int) | NotEqualsMode(Int) | BothModes(Int, Int) | NoMode(Str)
 type ExitObservation = ObservedExit(Int) | AbsentExit(Str)
-type EvidenceStep { index: Int, exit: ExitObservation }
+type EvidenceStep { phase: Str, index: Int, exit: ExitObservation }
 type Verdict = Proven(Str) | NotObserved(Str) | Inconclusive(Str) | Invalid(Str)
 ```
 
@@ -150,6 +150,63 @@ So `evaluate_tree_all` accumulates two parallel things: each child's composed
 `Verdict` for the Kleene step, and each child's trail concatenated in evaluation
 order for the explanation. The two are deliberately not derived from each other.
 
+## Multi-step evidence and step references
+
+An `exit_code` condition names a step. Reading `eval_condition` closely shows the
+reference resolves that name in three ordered steps, and that only two of them are
+evidence problems:
+
+| Order | Reference step | On failure |
+| --- | --- | --- |
+| 1 | `parse_step_ref(step)` | **validation** — the spec is INVALID |
+| 2 | `find_step(steps, phase, index)` | Undetermined, `step ... did not execute` |
+| 3 | `record.exit_code` | Undetermined, `step ... produced no exit code` |
+
+Step 1 is the surprising one. It is tempting to model an unknown phase as the
+defensive `bad step reference` → Undetermined branch inside `eval_condition`, but
+`validate_condition` calls `parse_step_ref` first, so the spec never reaches
+evaluation. Measured against the framework:
+
+| Spec step | Verdict |
+| --- | --- |
+| `run:0` | PROVEN / NOT OBSERVED, depending on `equals` |
+| `run:9` (not executed) | INCONCLUSIVE |
+| `setup:0` (wrong phase, no such record) | INCONCLUSIVE |
+| `bogus:0` (unknown phase) | **INVALID** |
+| `run0` (no colon) | **INVALID** |
+| `run:x` (non-numeric index) | **INVALID** |
+
+So `judge_step_ref` validates the mode and the phase first and answers `Invalid` for
+either, matching the reference's validate-before-evaluate ordering and the same
+vacuity principle as self-test case 9.
+
+```pep
+type EvidenceStep { phase: Str, index: Int, exit: ExitObservation }
+
+type StepResolution =
+  ResolvedExit(Int) |
+  StepNotExecuted(Str) |
+  StepHasNoExitCode(Str)
+
+fn judge_step_ref(mode: Mode, steps: List[EvidenceStep], phase: Str, index: Int) -> Verdict
+```
+
+`EvidenceStep` gained a `phase` because a step record genuinely has one, and because
+without it `judge_step_ref` could not tell `run:0` from `setup:0`.
+
+The two evidence causes are kept apart on purpose. `judge_step(mode, step)` over a
+single step cannot distinguish "this step never executed" from "this step ran and
+produced no exit code", and those are different facts about a run:
+
+| Case | Verdict | Reason |
+| --- | --- | --- |
+| `run:9` against a record containing only `run:0` | INCONCLUSIVE | `step did not execute` |
+| `run:0` present with `AbsentExit("process killed")` | INCONCLUSIVE | `process killed` |
+
+`find_step` searches in record order and the first match wins, which is the
+reference's `steps.iter().find(...)`. Matching requires both phase **and** index, so
+a resolver that matched on index alone would wrongly resolve `setup:0`.
+
 ## Run it
 
 ```powershell
@@ -162,7 +219,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (41 cases; each prints its verdict label then its reason):
+Observed (49 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -207,6 +264,14 @@ Observed (41 cases; each prints its verdict label then its reason):
 | 39 | `all[any[equals 0, equals 1], equals 1]` | PROVEN |
 | 40 | `any[not(equals 1), equals 0]` | NOT OBSERVED |
 | 41 | `evaluate_tree(AllNode([]))` | INCONCLUSIVE |
+| 42 | `run:0` exit 1, `equals 1` | PROVEN |
+| 43 | `run:0` exit 1, `equals 0` | NOT OBSERVED |
+| 44 | `run:9` against `[run:0]` | INCONCLUSIVE (`step did not execute`) |
+| 45 | phase `bogus` | INVALID (`bad step reference: unknown phase`) |
+| 46 | `setup:0` against `[run:0]` | INCONCLUSIVE (phase guard) |
+| 47 | `run:0` present with `AbsentExit(...)` | INCONCLUSIVE (`process killed`) |
+| 48 | `[run:0 exit 1, run:1 exit 2]`, `run:1`, `equals 2` | PROVEN (index guard) |
+| 49 | `BothModes` with an empty step list | INVALID (vacuity guard) |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -342,7 +407,17 @@ Those four nested rows are what distinguish "combines child results" from "combi
 flattened leaves": in each one the flattened composition answers differently from
 the reference, and the Pep engine matches the reference.
 
-`SUMMARY cases=27 mismatches=0`.
+Step references are compared separately, as verdict-only cases, because an INVALID
+spec is never evaluated and therefore has no trail:
+
+| Step reference | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `step: run:0` | PROVEN | PROVEN | PROVEN |
+| `step: run:9` (not executed) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `step: setup:0` (wrong phase) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+| `step: bogus:0` (unknown phase) | INVALID | INVALID | INVALID |
+
+`SUMMARY cases=31 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict
