@@ -751,34 +751,34 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                                              native.stdout + native.stderr)
                             self.assertEqual(native.stdout, reference.stdout)
 
-    def test_pep_written_int_count_outside_matches_interpreter_on_clang_and_gcc(self):
+    def test_pep_written_int_first_outside_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
-        start = library.index("fn list_int_count_outside(")
+        start = library.index("fn list_int_first_outside(")
         end = library.index("\n}\n", start) + 3
         helper = library[start:end]
         cases = (
-            ("[]", 0, 3, 0),
-            ("[1, 2, 3]", 0, 4, 0),
-            ("[1, 2, 3]", 2, 2, 2),
-            ("[-3, 0, 4]", -2, 3, 2),
-            ("[-3, 0, 4]", -3, -3, 2),
-            ("[2, 2, 2]", 2, 2, 0),
-            ("[3, -2, 1]", 4, 0, 3),
+            ("[]", 0, 3, 9, 9),
+            ("[1, 2, 3]", 0, 4, 9, 9),
+            ("[1, 2, 3]", 2, 2, 9, 1),
+            ("[-3, 0, 4]", -2, 3, 9, -3),
+            ("[-3, 0, 4]", -3, -3, 9, 0),
+            ("[2, 2, 2]", 2, 2, 9, 9),
+            ("[3, -2, 1]", 4, 0, 9, 3),
         )
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
             folder = pathlib.Path(temp_dir)
-            for index, (values, lower, upper, expected) in enumerate(cases):
+            for index, (values, lower, upper, fallback, expected) in enumerate(cases):
                 with self.subTest(values=values, lower=lower, upper=upper):
-                    source = folder / f"int_count_outside_{index}.pep"
+                    source = folder / f"int_first_outside_{index}.pep"
                     source_text = (
                         helper
                         + "\nfn main() -> Int {\n"
-                        + f"  return list_int_count_outside({values}, {lower}, {upper})\n"
+                        + f"  return list_int_first_outside({values}, {lower}, {upper}, {fallback})\n"
                         + "}\n")
                     source.write_text(source_text, encoding="utf-8", newline="\n")
-                    reference_source = folder / f"int_count_outside_ref_{index}.pep"
+                    reference_source = folder / f"int_first_outside_ref_{index}.pep"
                     reference_source.write_text(
                         source_text + "say(int_text(main()))\n",
                         encoding="utf-8", newline="\n")
