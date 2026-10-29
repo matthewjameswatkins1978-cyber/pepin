@@ -39,6 +39,11 @@ Recommendation in one line: **treat as probable FP, remove the newly added
 `D:\Projects` exclusion, and require one bounded native smoke test on a clean
 host before the native lane resumes** (§12). All three are Matthew's calls.
 
+Two state changes flagged during this review — the `D:\Projects` exclusion and
+the 05:55–08:05Z real-time-protection window — were confirmed by Matthew as his
+own deliberate mitigation attempts against the suspected false positive (§4,
+§5). They are recorded as evidence about method, not as evidence of compromise.
+
 ## 2. Defender health and protection settings (observed)
 
 Host: Windows 11 Pro Insider Preview 10.0.26220, 64-bit, booted
@@ -131,14 +136,16 @@ detections since" is not evidence of anything for that path. An exclusion is
 worse than the false positive it was presumably added to suppress.
 
 The caller is not recorded by Defender (`5007` names the registry value, not
-the process), and adding an exclusion requires elevation. **Attribution is not
-established** — interactive admin action and an automated elevated agent run are
-both consistent with the evidence. Two concurrent agent branches were created
-within ~7 minutes of the change (`codex/bootstrap-agent2-b0` at 18:36:58Z),
-which is a correlation only, not an attribution. A scoped grep of the
-interactive PowerShell history found no Defender-related commands, but agents
-invoked via `pwsh -Command` do not write that history, so this is not
-dispositive.
+the process), and adding an exclusion requires elevation. Attribution is
+resolved: the owner. Matthew confirmed during this review that he added the
+`D:\Projects` exclusion himself, as a deliberate attempt to stop a suspected
+false positive from blocking the native lane. That replaces an unexplained
+elevation event with a recorded owner decision, and it withdraws the earlier
+possibility of an automated agent change: no evidence supported that reading,
+and the timeline correlation with `codex/bootstrap-agent2-b0` (18:36:58Z) must
+not be read as attribution. The security consequence rests on the paragraph
+above rather than on who did it — an excluded build tree cannot be verified,
+and the reason to remove the exclusion is that it removes evidence.
 
 ## 5. Protection-setting changes today (observed)
 
@@ -150,8 +157,15 @@ both reverted by Tamper Protection:
   Real-time protection was therefore **off for ~2 h 10 min** early today.
 - 17:02:47Z `5001` RTP disabled; 17:02:50Z `5000` re-enabled and `5013` reverted.
 
-Cause unattributed (same limits as §4). Tamper Protection demonstrably worked.
-The incident itself, at 01:28Z, happened with RTP on and no exclusion.
+Attribution is resolved: the owner. Matthew confirmed he disabled Real-time
+Protection himself for the 05:55–08:05Z window, again to let the suspected
+false positive pass over. It did not work, and could not have: disabling
+protection leaves the detection record unchanged and removes the only
+instrument able to distinguish a false positive from a real one. The
+17:02:47Z three-second toggle is consistent with the same action but is not
+separately confirmed here. Tamper Protection demonstrably worked and restored
+RTP at 08:05:27Z. The incident itself, at 01:28Z, happened with RTP on and no
+exclusion.
 
 ## 6. Scans (observed)
 
@@ -299,11 +313,14 @@ the selective behaviour actively disfavours it. It cannot be closed by argument
 **H3 — Independent compromise of the machine unrelated to the build (cannot be
 assessed here).** The `.exe.exe` double extension is a classic masquerade
 pattern, and in this case it is fully explained by a test-naming bug fixed in
-`bea69f9`. But two RTP-disable attempts and an unrecorded workspace exclusion
-were made **today by someone with elevation** (§4, §5). Those are hygiene and
-attribution questions, not evidence that the flagged binaries were malicious.
-They do deserve Matthew's attention: an unexplained RTP-off window 05:55–08:05Z
-is a real gap regardless of this incident's cause.
+`bea69f9`. Both were owner actions (§4, §5): pragmatic attempts to keep the
+native lane moving past a suspected false positive. That intent is reasonable —
+the detection has the classic shape of an ML false positive on a tiny unsigned
+build artefact — but the method cannot work, for a reason worth fixing in
+habits rather than repeating: disabling or excluding removes evidence instead
+of producing a verdict. The 05:55–08:05Z window still stands as a genuine
+unmonitored interval on this host, and the exclusion still blinds Defender to
+the build tree. Neither is evidence that the flagged binaries were malicious.
 
 **Grade: probable false positive, no credible compromise evidence, with three
 documented unresolved items** (§10). If H1 is wrong, the failure mode is
@@ -319,8 +336,10 @@ and the smoke test in §11 is worth its small cost.
 3. The live exclusion list could not be read (no elevation). §4's conclusion
    rests on the Defender config-change log, which is authoritative for changes
    but does not show whether any exclusion predates 2026-08-06.
-4. Attribution of the 18:29:45Z exclusion addition and the two RTP-disable
-   attempts is unknown. Defender does not record the caller.
+4. Attribution of the 18:29:45Z exclusion and the 05:55–08:05Z RTP window is
+   resolved: both are owner actions, confirmed by Matthew (§4, §5). Defender
+   still does not record the caller, so this rests on his account rather than
+   on telemetry.
 5. Whether the detection still reproduces today for the *empty-literal* binary
    is untested, deliberately: testing it means rebuilding a quarantined binary
    on the affected host, which this lane is forbidden to do.
@@ -385,10 +404,12 @@ of either flagged runner:
    it. It needs elevation, so it is his action either way.
 2. **Treat the incident as a probable false positive and keep the native lane
    formally held until §11 is approved and run.** Do not clear the binaries.
-3. **Account for the 05:55–08:05Z RTP-off window and the 17:02:47Z disable
-   attempt.** Tamper Protection caught the second; the first left ~2 h 10 min
-   unprotected. Whatever caused them, that interval is a genuine exposure gap
-   and worth a look independent of this incident.
+3. **Do not repeat the 05:55–08:05Z RTP-off window or the workspace**
+   **exclusion.** Both were owner actions rather than intruders, so the concern
+   is not attribution — it is that each one removes evidence and leaves the
+   native lane unverifiable. Tamper Protection reverted the 17:02:47Z attempt;
+   the earlier window left ~2 h 10 min unprotected and the exclusion is still
+   in place.
 4. **Optional false-positive submission — his action, his consent.** The two
    quarantined samples still exist in the Defender quarantine store, so the
    samples are available to submit *without* restoring or rebuilding them, via
