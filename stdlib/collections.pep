@@ -150,6 +150,16 @@ fn list_bool_is_non_decreasing(values: List[Bool]) -> Bool {
   return ordered
 }
 
+fn list_bool_is_non_increasing(values: List[Bool]) -> Bool {
+  var ordered = true
+  var seenFalse = false
+  for item in values {
+    ordered = if item && seenFalse { false } else { ordered }
+    seenFalse = seenFalse || !item
+  }
+  return ordered
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }
