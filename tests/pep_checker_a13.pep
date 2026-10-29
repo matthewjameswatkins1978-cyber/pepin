@@ -11,6 +11,7 @@ type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDia
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact], report: CheckerReport }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
 type ChildRoleCount { role: Str, count: Int }
@@ -574,7 +575,9 @@ fn function_parameter_shape(nodes: List[FlatAstNode], functionId: Int, index: In
 fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let found = lookup_node(nodes, id)
   if !found.found { return "" } else {}
-  let node = found.node
+  return infer_expression_type_for_node(nodes, found.node, functions, bindings, references)
+}
+fn infer_expression_type_for_node(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   if node.kind == "integer" { return "Int" } else {}
   if node.kind == "boolean" { return "Bool" } else {}
   if node.kind == "string" { return "Str" } else {}
@@ -1444,7 +1447,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if is_expression_kind(node.kind) {
-      let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
+      let actual = infer_expression_type_for_node(nodes, node, functions, bindings, references)
       if actual == "" {
         let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
         if shape.kind != "" { reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: "", typeShape: shape, startByte: node.startByte, endByte: node.endByte }) } else {}
@@ -2087,6 +2090,156 @@ fn unknown_call_diagnostic(node: FlatAstNode) -> CheckDiagnostic {
 fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: FlatAstNode) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [diagnostic(code, message, node)] }
 }
+fn empty_checker_report(document: Str, revision: Str) -> CheckerReport {
+  return CheckerReport { document: document, revision: revision, status: "valid", syntaxNodeCount: 0, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [] }
+}
+fn empty_binding_collection() -> BindingCollection {
+  return BindingCollection { bindings: [], diagnostics: [] }
+}
+fn empty_name_resolution() -> NameResolution {
+  return NameResolution { references: [], diagnostics: [] }
+}
+fn empty_type_analysis() -> TypeAnalysis {
+  return TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
+}
+fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, holes: holes, report: report }
+}
+// CheckerCursor is cooperative caller-carried state, not proof that prior phases ran. Only checker_start followed by checker_step until done yields a meaningful complete report; each step still binds document and revision to the host authority.
+fn checker_start(parsed: ParserProgress) -> CheckerCursor {
+  let authority = semantic_snapshot()
+  let emptyReport = empty_checker_report(authority.document, authority.revision)
+  if parsed.document != authority.document || parsed.revision != authority.revision {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node()))
+  } else {}
+  if !parsed.done {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()))
+  } else {}
+  if parsed.status != "complete" {
+    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode))
+  } else {}
+  let nodes = sort_nodes(parsed.nodes)
+  if !tree_is_valid(nodes, byte_length(source_bytes())) {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, nodes, [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
+  } else {}
+  return make_checker_cursor(authority.document, authority.revision, "functions", false, parsed, nodes, [], empty_binding_collection(), empty_name_resolution(), [], empty_type_analysis(), [], emptyReport)
+}
+fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
+  let authority = semantic_snapshot()
+  if cursor.document != authority.document || cursor.revision != authority.revision {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
+  } else {}
+  if cursor.done { return cursor } else {}
+  if cursor.phase == "functions" {
+    let functions = collect_functions(cursor.nodes)
+    return make_checker_cursor(cursor.document, cursor.revision, "bindings", false, cursor.parsed, cursor.nodes, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "bindings" {
+    let result = collect_bindings(cursor.nodes, cursor.functions)
+    return make_checker_cursor(cursor.document, cursor.revision, "names", false, cursor.parsed, cursor.nodes, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "names" {
+    let result = resolve_names(cursor.nodes, cursor.functions, cursor.bindingResult.bindings)
+    return make_checker_cursor(cursor.document, cursor.revision, "binding_types", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "binding_types" {
+    let bindings = infer_binding_types(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references)
+    return make_checker_cursor(cursor.document, cursor.revision, "type_analysis", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, bindings, cursor.typeResult, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "type_analysis" {
+    let result = type_analysis(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
+    return make_checker_cursor(cursor.document, cursor.revision, "holes", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, result, cursor.holes, cursor.report)
+  } else {}
+  if cursor.phase == "holes" {
+    let holes = hole_facts(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
+    return make_checker_cursor(cursor.document, cursor.revision, "report", false, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, holes, cursor.report)
+  } else {}
+  if cursor.phase == "report" {
+    let report = checker_report_from_parts(cursor.document, cursor.revision, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
+    return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes, report)
+  } else {}
+  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
+}
+fn checker_report_from_parts(document: Str, revision: Str, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact]) -> CheckerReport {
+  var reversedCalls: List[ResolvedCall] = []
+  var reversedDiagnostics: List[CheckDiagnostic] = []
+  for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
+  for item in nameResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
+  for item in typeResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
+  var currentCallerId = -1
+  var currentCallerSyntaxId = -1
+  var currentCallerStartByte = -1
+  var currentCallerEndByte = -1
+  var nextCallerId = 100000
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "function" {
+      currentCallerId = nextCallerId
+      currentCallerSyntaxId = node.id
+      currentCallerStartByte = node.startByte
+      currentCallerEndByte = node.endByte
+      nextCallerId = nextCallerId + 1
+    } else {}
+    if node.kind == "call" && currentCallerId != -1 && node.id != currentCallerSyntaxId && currentCallerStartByte <= node.startByte && node.endByte <= currentCallerEndByte {
+      let target = find_function(functions, node.text)
+      if target.found {
+        if count_children(nodes, node.id, "argument") == target.function.arity {
+          reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
+        } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
+      } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else { reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node)) } }
+    } else {}
+  }
+  for function in functions {
+    if is_first_duplicate_function(functions, function.name, function.syntaxId) && !known_builtin(function.name) && !is_constructor(nodes, function.name) {
+      let declaration = lookup_node(nodes, function.syntaxId)
+      if declaration.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
+    } else {}
+  }
+  let calls = reverse(reversedCalls)
+  let collectedDiagnostics = reverse(reversedDiagnostics)
+  var diagnostics = collectedDiagnostics
+  let typeTableDiagnostic = first_type_table_diagnostic(nodes, collectedDiagnostics)
+  if typeTableDiagnostic.found {
+    diagnostics = [typeTableDiagnostic.diagnostic]
+  } else {
+    if typeResult.unreachable.found {
+      var earlierFound = false
+      var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+      for candidate in collectedDiagnostics {
+        if candidate.code != "PEP_MISSING_RETURN" && candidate.startByte + 1 <= typeResult.unreachable.node.startByte && (!earlierFound || candidate.startByte + 1 <= earlier.startByte) {
+          earlierFound = true
+          earlier = candidate
+        } else {}
+      }
+      if earlierFound { diagnostics = [earlier] } else { diagnostics = [diagnostic("PEP_UNREACHABLE", "Statement follows an unconditional return", typeResult.unreachable.node)] }
+    } else {
+      if length(collectedDiagnostics) <= 1 { } else {
+        var firstFound = false
+        var unknownTypeFound = false
+        var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+        var firstOrderByte = 0
+        var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+        for candidate in collectedDiagnostics {
+          let orderByte = diagnostic_order_byte(nodes, candidate)
+          if candidate.code == "PEP_UNKNOWN_TYPE" {
+            if !unknownTypeFound || candidate.startByte + 1 <= unknownType.startByte { unknownTypeFound = true; unknownType = candidate } else {}
+          } else {
+            if candidate.code != "PEP_A13_TYPE_UNSUPPORTED" {
+              if !firstFound || orderByte + 1 <= firstOrderByte || (orderByte == firstOrderByte && candidate.startByte == first.startByte && candidate.endByte == first.endByte && candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
+                firstFound = true
+                first = candidate
+                firstOrderByte = orderByte
+              } else {}
+            } else {}
+          }
+        }
+        if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
+      }
+    }
+  }
+  let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
+  return CheckerReport { document: document, revision: revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
+}
 fn analyze() -> CheckerReport {
   let authority = semantic_snapshot()
   var cursor = parser_start()
@@ -2135,128 +2288,13 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
   return earlierMatches == 1
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
-  let authority = semantic_snapshot()
-  if parsed.document != authority.document || parsed.revision != authority.revision {
-    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
-  } else {}
-  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
-  if parsed.status != "complete" {
-    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
-    return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
-  } else {}
-  let sourceLength = byte_length(source_bytes())
-  let nodes = sort_nodes(parsed.nodes)
-  if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
-  let functions = collect_functions(nodes)
-  let bindingResult = collect_bindings(nodes, functions)
-  let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
-  let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
-  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
-  let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
-  var reversedCalls: List[ResolvedCall] = []
-  var reversedDiagnostics: List[CheckDiagnostic] = []
-  for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
-  for item in nameResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
-  for item in typeResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
-  if length(functions) <= 1 {
-    for function in functions {
-      for node in nodes {
-        if node.kind == "call" && inside_function(node, function) {
-          let target = find_function(functions, node.text)
-          if target.found {
-            if count_children(nodes, node.id, "argument") == target.function.arity {
-              reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
-            } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
-          } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-            reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
-          } }
-        } else {}
-      }
-    }
-  } else {
-    var currentCallerId = -1
-    var currentCallerSyntaxId = -1
-    var currentCallerStartByte = -1
-    var currentCallerEndByte = -1
-    var nextCallerId = 100000
-    for node in nodes {
-      if node.parentId == -1 && node.kind == "function" {
-        currentCallerId = nextCallerId
-        currentCallerSyntaxId = node.id
-        currentCallerStartByte = node.startByte
-        currentCallerEndByte = node.endByte
-        nextCallerId = nextCallerId + 1
-      } else {}
-      if node.kind == "call" && currentCallerId != -1 && node.id != currentCallerSyntaxId && currentCallerStartByte <= node.startByte && node.endByte <= currentCallerEndByte {
-        let target = find_function(functions, node.text)
-        if target.found {
-          if count_children(nodes, node.id, "argument") == target.function.arity {
-            reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
-          } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
-        } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-          reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
-        } }
-      } else {}
-    }
-  }
-  for function in functions {
-    if is_first_duplicate_function(functions, function.name, function.syntaxId) && !known_builtin(function.name) && !is_constructor(nodes, function.name) {
-      let declaration = lookup_node(nodes, function.syntaxId)
-      if declaration.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
-    } else {}
-  }
-  let calls = reverse(reversedCalls)
-  let collectedDiagnostics = reverse(reversedDiagnostics)
-  var diagnostics = collectedDiagnostics
-  let typeTableDiagnostic = first_type_table_diagnostic(nodes, collectedDiagnostics)
-  if typeTableDiagnostic.found {
-    diagnostics = [typeTableDiagnostic.diagnostic]
-  } else {
-  if typeResult.unreachable.found {
-    var earlierFound = false
-    var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
-    for candidate in collectedDiagnostics {
-      if candidate.code != "PEP_MISSING_RETURN" && candidate.startByte + 1 <= typeResult.unreachable.node.startByte && (!earlierFound || candidate.startByte + 1 <= earlier.startByte) {
-        earlierFound = true
-        earlier = candidate
-      } else {}
-    }
-    if earlierFound {
-      diagnostics = [earlier]
-    } else {
-      diagnostics = [diagnostic("PEP_UNREACHABLE", "Statement follows an unconditional return", typeResult.unreachable.node)]
-    }
-  } else {
-    if length(collectedDiagnostics) <= 1 {
-    } else {
-      var firstFound = false
-      var unknownTypeFound = false
-      var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
-      var firstOrderByte = 0
-      var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
-      for candidate in collectedDiagnostics {
-        let orderByte = diagnostic_order_byte(nodes, candidate)
-        if candidate.code == "PEP_UNKNOWN_TYPE" {
-          if !unknownTypeFound || candidate.startByte + 1 <= unknownType.startByte {
-            unknownTypeFound = true
-            unknownType = candidate
-          } else {}
-        } else {
-          if candidate.code != "PEP_A13_TYPE_UNSUPPORTED" {
-            if !firstFound || orderByte + 1 <= firstOrderByte ||
-                (orderByte == firstOrderByte && candidate.startByte == first.startByte && candidate.endByte == first.endByte &&
-                 candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" && first.code == "PEP_TYPE_MISMATCH") {
-              firstFound = true
-              first = candidate
-              firstOrderByte = orderByte
-            } else {}
-          } else {}
-        }
-      }
-      if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
-    }
-  }
-  }
-  let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
-  return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }
+  let cursor = checker_start(parsed)
+  if cursor.done { return cursor.report } else {}
+  let functions = collect_functions(cursor.nodes)
+  let bindingResult = collect_bindings(cursor.nodes, functions)
+  let nameResult = resolve_names(cursor.nodes, functions, bindingResult.bindings)
+  let typedBindings = infer_binding_types(cursor.nodes, functions, bindingResult.bindings, nameResult.references)
+  let typeResult = type_analysis(cursor.nodes, functions, typedBindings, nameResult.references)
+  let holes = hole_facts(cursor.nodes, functions, typedBindings, nameResult.references)
+  return checker_report_from_parts(cursor.document, cursor.revision, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, holes)
 }

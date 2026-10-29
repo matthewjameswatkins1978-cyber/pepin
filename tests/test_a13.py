@@ -5,6 +5,7 @@ import subprocess
 import unittest
 
 from tests.test_a11 import JsonLineClient, revision, typed, typed_list, typed_record
+from tests.test_a12 import parser_chunk_value, parser_cursor_value
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LEXER = ROOT / "examples" / "pep_lexer.pep"
@@ -49,6 +50,44 @@ def checker_report(document, source, *, status="valid", nodes=0, functions=(), c
         ("expressionTypes", typed_list("ExpressionTypeFact", [])),
         ("holes", typed_list("HoleFact", [])),
         ("diagnostics", typed_list("CheckDiagnostic", errors)),
+    ])
+
+
+def checker_cursor_value(document, source, phase, done, parsed):
+    node = typed_record("FlatAstNode", [
+        ("id", typed("Int", "-1")), ("parentId", typed("Int", "-1")),
+        ("childIndex", typed("Int", "-1")), ("role", typed("Str", "")),
+        ("kind", typed("Str", "")), ("text", typed("Str", "")),
+        ("integerValue", typed("Int", "0")), ("booleanValue", typed("Bool", False)),
+        ("stringParts", typed_list("Str", [])), ("startByte", typed("Int", "0")),
+        ("endByte", typed("Int", "0")), ("line", typed("Int", "1")),
+        ("column", typed("Int", "1")),
+    ])
+    binding_result = typed_record("BindingCollection", [
+        ("bindings", typed_list("BindingFact", [])),
+        ("diagnostics", typed_list("CheckDiagnostic", [])),
+    ])
+    name_result = typed_record("NameResolution", [
+        ("references", typed_list("ResolvedName", [])),
+        ("diagnostics", typed_list("CheckDiagnostic", [])),
+    ])
+    unreachable = typed_record("UnreachableLookup", [
+        ("found", typed("Bool", False)), ("node", node),
+    ])
+    type_result = typed_record("TypeAnalysis", [
+        ("expressionTypes", typed_list("ExpressionTypeFact", [])),
+        ("diagnostics", typed_list("CheckDiagnostic", [])),
+        ("unreachable", unreachable),
+    ])
+    return typed_record("CheckerCursor", [
+        ("document", typed("Str", document)),
+        ("revision", typed("Str", revision(source.encode("utf-8")))),
+        ("phase", typed("Str", phase)), ("done", typed("Bool", done)),
+        ("parsed", parsed), ("nodes", typed_list("FlatAstNode", [])),
+        ("functions", typed_list("CheckedFunction", [])),
+        ("bindingResult", binding_result), ("nameResult", name_result),
+        ("typedBindings", typed_list("BindingFact", [])), ("typeResult", type_result),
+        ("holes", typed_list("HoleFact", [])), ("report", checker_report(document, source)),
     ])
 
 
@@ -438,6 +477,200 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 [(scalar(fields(item)["name"]), scalar(fields(item)["expectedType"])) for item in one_shot_report["holes"]["value"]],
                 [("pending", "Int")],
             )
+
+    def test_composed_helpers_fit_checker_budget_through_parser_continuations(self):
+        empty = self._open("")
+        target_fixture = {"document": empty["document"], "revision": empty["revision"], "entryFunctions": []}
+        initial_cursor = parser_cursor_value(empty["document"], empty["revision"])
+        finished_cursor = parser_cursor_value(
+            empty["document"], empty["revision"], done=True, lex_done=True, lex_stage="done"
+        )
+        empty_progress = typed_record("ParserProgress", [
+            ("document", typed("Str", empty["document"])),
+            ("revision", typed("Str", empty["revision"])),
+            ("status", typed("Str", "complete")),
+            ("nodes", typed_list("FlatAstNode", [])),
+            ("done", typed("Bool", True)),
+            ("errorCode", typed("Str", "")),
+            ("message", typed("Str", "")),
+            ("errorStart", typed("Int", "0")),
+            ("errorEnd", typed("Int", "0")),
+            ("errorLine", typed("Int", "0")),
+            ("errorColumn", typed("Int", "0")),
+        ])
+        done_checker_cursor = checker_cursor_value(
+            empty["document"], "", "done", True, empty_progress
+        )
+        registrations = [
+            ("pep-a13-parser-start", "parser_start", [], initial_cursor),
+            ("pep-a13-parser-step", "parser_step", [finished_cursor],
+             parser_chunk_value(empty["document"], empty["revision"], finished_cursor)),
+            ("pep-a13-checker-start", "checker_start", [empty_progress],
+             checker_cursor_value(empty["document"], "", "functions", False, empty_progress)),
+            ("pep-a13-checker-step", "checker_step", [done_checker_cursor], done_checker_cursor),
+        ]
+        for tool, function, arguments, expected in registrations:
+            registered = self.client.send({
+                "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+                "tool": tool, "document": self.tool_document, "revision": self.tool_revision,
+                "function": function,
+            })
+            self.assertEqual(registered.get("status"), "Registered", registered)
+            validated = self.client.send({
+                "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+                "tool": tool, "document": self.tool_document, "revision": self.tool_revision,
+                "testVectors": [{"arguments": arguments, "expect": expected,
+                                 "semanticTarget": target_fixture}],
+            })
+            self.assertEqual(validated.get("status"), "Validated", validated)
+            activated = self.client.send({
+                "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+                "tool": tool, "document": self.tool_document, "revision": self.tool_revision,
+            })
+            self.assertEqual(activated.get("status"), "Active", activated)
+
+        forged_cursor = checker_cursor_value(
+            "doc-forged", "", "done", True, empty_progress
+        )
+        rejected = self.client.send({
+            "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+            "tool": "pep-a13-checker-step", "arguments": [forged_cursor],
+            "semanticTarget": target_fixture,
+        })
+        self.assertEqual(rejected.get("outcome"), "ok", rejected)
+        rejected_fields = fields(rejected["result"])
+        self.assertEqual(scalar(rejected_fields["document"]), empty["document"])
+        rejected_report = fields(rejected_fields["report"])
+        error = fields(rejected_report["diagnostics"]["value"][0])
+        self.assertEqual(scalar(error["code"]), "A13_PARSER_REVISION")
+
+        first_helper = """fn list_int_index_of(values: List[Int], needle: Int) -> Int {
+  var index = 0
+  for item in values {
+    if item == needle { return index } else { index = index + 1 }
+  }
+  return -1
+}"""
+        second_helper = """fn list_int_last_index_of(values: List[Int], needle: Int) -> Int {
+  var index = 0
+  var foundAt = -1
+  for item in values {
+    if item == needle {
+      foundAt = index
+      index = index + 1
+    } else {
+      index = index + 1
+    }
+  }
+  return foundAt
+}"""
+        cases = [
+            ("index-of-helper-alone", first_helper, "valid"),
+            ("last-index-of-helper-alone", second_helper, "valid"),
+            ("index-of-helpers-composed", first_helper + NL + second_helper + NL +
+             "fn main() -> Int { return list_int_index_of([4, 2, 4], 4) + "
+             "list_int_last_index_of([4, 2, 4], 4) }", "valid"),
+            ("return-type-mismatch", 'fn bad() -> Int { return "text" }', "invalid"),
+        ]
+        for name, source, expected_status in cases:
+            with self.subTest(name=name):
+                opened = self._open(source)
+                target = {"document": opened["document"], "revision": opened["revision"],
+                          "entryFunctions": []}
+                started = self.client.send({
+                    "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                    "tool": "pep-a13-parser-start", "arguments": [], "semanticTarget": target,
+                })
+                self.assertEqual(started.get("outcome"), "ok", started)
+                cursor = started["result"]
+                nodes = []
+                final = None
+                for _ in range(len(source.encode("utf-8")) + 2):
+                    stepped = self.client.send({
+                        "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                        "tool": "pep-a13-parser-step", "arguments": [cursor],
+                        "semanticTarget": target,
+                    })
+                    self.assertEqual(stepped.get("outcome"), "ok", stepped)
+                    chunk = fields(stepped["result"])
+                    if not scalar(chunk["done"]):
+                        self.assertNotEqual(chunk["cursor"], cursor)
+                    nodes.extend(chunk["nodes"]["value"])
+                    cursor = chunk["cursor"]
+                    final = chunk
+                    if scalar(chunk["done"]):
+                        break
+                self.assertIsNotNone(final)
+                self.assertTrue(scalar(final["done"]), name)
+                nodes.sort(key=lambda node: int(scalar(fields(node)["id"])))
+                progress = typed_record("ParserProgress", [
+                    ("document", typed("Str", opened["document"])),
+                    ("revision", typed("Str", opened["revision"])),
+                    ("status", final["status"]),
+                    ("nodes", typed_list("FlatAstNode", nodes)),
+                    ("done", final["done"]),
+                    ("errorCode", final["errorCode"]),
+                    ("message", final["message"]),
+                    ("errorStart", final["errorStart"]),
+                    ("errorEnd", final["errorEnd"]),
+                    ("errorLine", final["errorLine"]),
+                    ("errorColumn", final["errorColumn"]),
+                ])
+                started_check = self.client.send({
+                    "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                    "tool": "pep-a13-checker-start", "arguments": [progress],
+                    "semanticTarget": target,
+                })
+                self.assertEqual(started_check.get("outcome"), "ok", started_check)
+                checker_cursor = started_check["result"]
+                phases = []
+                for _ in range(8):
+                    current = fields(checker_cursor)
+                    if scalar(current["done"]):
+                        break
+                    phases.append(scalar(current["phase"]))
+                    stepped_check = self.client.send({
+                        "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                        "tool": "pep-a13-checker-step", "arguments": [checker_cursor],
+                        "semanticTarget": target,
+                    })
+                    self.assertEqual(stepped_check.get("outcome"), "ok", stepped_check)
+                    self.assertNotEqual(stepped_check["result"], checker_cursor)
+                    checker_cursor = stepped_check["result"]
+                current = fields(checker_cursor)
+                self.assertTrue(scalar(current["done"]), phases)
+                self.assertEqual(phases, [
+                    "functions", "bindings", "names", "binding_types",
+                    "type_analysis", "holes", "report",
+                ])
+                report = fields(current["report"])
+                reference = self._reference_check(name, source)
+                self.assertEqual(reference["status"], expected_status, reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                function_names = {
+                    scalar(fields(item)["semanticId"]): scalar(fields(item)["name"])
+                    for item in report["functions"]["value"]
+                }
+                actual_calls = [
+                    (function_names[scalar(fields(item)["callerId"])],
+                     function_names[scalar(fields(item)["calleeId"])])
+                    for item in report["calls"]["value"]
+                ]
+                expected_calls = [
+                    ("main", "list_int_index_of"),
+                    ("main", "list_int_last_index_of"),
+                ] if name == "index-of-helpers-composed" else []
+                self.assertEqual(actual_calls, expected_calls, report)
+                expected_diagnostics = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual_diagnostics = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]),
+                     scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual_diagnostics, expected_diagnostics, report)
 
     def test_empty_program_is_consumed_through_the_owned_parser_chain(self):
         _, report = self._analyze("")
