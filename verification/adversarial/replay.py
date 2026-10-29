@@ -595,6 +595,14 @@ def main():
           "invalid", ("PEP_UNKNOWN_VARIABLE",))
     check("X-uscore-let", b"let v = 1_000\nsay(int_text(0))",
           "invalid", ("PEP_UNKNOWN_VARIABLE",))
+    for _nm, _src, _exp in (
+            ("X-hash-str", b'say("a#b")\n', "a#b\n"),
+            ("X-slash-cmt", b'// line comment\nsay("x")\n', "x\n"),
+            ("X-hash-cmt", b'# hash comment\nsay("y")\n', "y\n"),
+            ("X-trail-cmt", b'say("a"); // trailing\n', "a\n")):
+        run(_nm, _src, exp_out=_exp)
+    check("X-unterm-str", b'say("unterminated)\n',
+          "invalid", ("PEP_NEWLINE_IN_STRING",))
     _mc = sess([
         {"schemaVersion": 3, "op": "open", "name": "m",
          "source": "fn main() -> Int { return 1 }\n"},

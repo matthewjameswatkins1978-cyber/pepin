@@ -41,6 +41,12 @@ position-dependent knock-ons. Fail-closed in all positions (never
 mis-parsed as a value), but a future diagnostic could name the actual
 issue. Recorded as a diagnostic-quality observation, not a defect.
 
+## Comments and trivia do not leak into strings (or vice versa)
+
+- `say("a#b")` → TESTED: prints `a#b`. A `#` inside a string literal is ordinary content; the comment lexer does not fire mid-string.
+- Full-line `//` and `#` comments, plus trailing `//` after code → TESTED: all ignored, programs run normally (backward `//` compatibility holds as the draft requires).
+- Unterminated string (`say("unterminated)` + newline) → TESTED: `invalid`, `PEP_NEWLINE_IN_STRING` — a dedicated code distinct from `PEP_INVALID_ESCAPE` and `PEP_UNTERMINATED_STRING`, failing at the newline with a span.
+
 ## Status
 
 No findings. The escape surface is fully mapped (6 in / rest out);
