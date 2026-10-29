@@ -161,5 +161,5 @@ Committed in the same commit as this outbox; verify with
 2556ce5ec9e288f9ede032ea8dd28d24599383d41c67eebf92198215a031f724  oracle.pep
 70f12a9f11391a2caafc5c4b238c30a6e8124e25f52bc7106e945c2beecd6908  selftest.pep
 2e779df6e878b940bfe38d3b1aa663529f595b29fde925e0afff5ebc59033fc8  differential.py
-35c03aaa6483b4906d425f51bd7884443cb478a0e6c298a9d3f5ad8cbcff9d79  README.md
+f48c5b551901a9e2c9ff5dd99d6fead19ce9b262a9bbe8967a29375f3f1ab71d  README.md
 ```

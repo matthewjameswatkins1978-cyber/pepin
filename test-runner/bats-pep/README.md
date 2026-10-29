@@ -849,6 +849,23 @@ input field, or a confident verdict returned where the reference demands a cauti
 
 A mutation whose anchor no longer matches is reported as **stale** rather than counted as
 a pass, so refactoring `oracle.pep` cannot quietly retire a guard.
+
+### Is the differential itself sensitive?
+
+A green differential could in principle be a vacuous harness. Checked directly: with a
+single deliberate defect (`equals` inverted) applied to `oracle.pep`, the differential
+reports `DISAGREE` across the leaf, composition, step-reference and trail families, then
+the file is restored byte-identically.
+
+The most useful line from that run:
+
+```
+CASE trail-all-mixed        rust=NOT OBSERVED  pep=NOT OBSERVED  leaves=2 DISAGREE
+```
+
+Both sides agree on the composed verdict and the case still fails, because a leaf verdict
+differs. That is the trail comparison doing work the verdict comparison cannot do — which
+is precisely why the trail is compared leaf by leaf rather than only as a final label.
 ## Not claimed
 
 - No process/Git host adapters, no receipts, no `pep bats` CLI, no native C23
