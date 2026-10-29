@@ -72,3 +72,19 @@ can relay them.
 - Gap logged openly: C `BADARG` paths uncovered (slice-4 micro-item).
 - `REVIEW_SLICE3.md` holds cumulative review materials; no independent
   reviewer was available in-session, so nothing here is self-certified.
+
+## 2026-10-29 -- slice 4: file pipeline + null-path coverage
+- New: `pep_textbuf_read_file` / `pep_textbuf_write_file` (binary,
+  chunked, sticky-error contract) and `file_probe.c`, which runs the
+  whole pipeline in one program: null-path codes (`n 2 1 1 3`),
+  read, UTF-8 validate, per-offset diag render, write-back.
+- The slice-3 `BADARG` gap is closed: null paths are executed and
+  asserted exactly. New hand vectors: UTF-8+CRLF mix with round-trip
+  byte identity, `0xFF` invalid input (`v err 0`), missing file
+  (`r io`, exit 1). 12/12 suite green on both toolchains.
+- Incidents: the library itself now uses `fopen`, so the MSVC
+  deprecation define moved from probe-only to every MSVC-target build
+  via the shared `_build_c` helper (vendor diagnostic only; code stays
+  strict portable C23). `file_probe` needed the same binary-stdout
+  treatment as `span_probe`. No Pep files this slice: host file I/O is
+  not expressible in Pep by design (OCaml host owns effects).

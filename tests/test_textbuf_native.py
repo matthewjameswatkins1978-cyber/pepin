@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3).
+spans and diagnostics (slice 3), file pipeline (slice 4).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -74,14 +74,8 @@ class TextbufNativeTests(unittest.TestCase):
         self.assertEqual(ran.stdout, MODEL_EXPECTED_OUTPUT)
 
     def compile_demo(self, compiler, exe_name):
-        exe = BUILD / exe_name
-        compiled = run_program(
-            [compiler, *CLANG_FLAGS, str(TEXT / "demo_textbuf.c"),
-             str(TEXT / "pep_textbuf.c"), "-o", str(exe)],
-            cwd=ROOT,
-        )
-        self.assertEqual(compiled.returncode, 0, compiled.stderr)
-        return exe
+        return self._build_c(compiler, exe_name,
+            ["demo_textbuf.c", "pep_textbuf.c"])
 
     def test_demo_clang_gcc_agree(self):
         clang = shutil.which("clang")
@@ -175,21 +169,30 @@ class TextbufNativeTests(unittest.TestCase):
             self.assertEqual(ran.stdout, "13\n")
 
 
-    def build_span_probe(self, compiler, exe_name):
-        sources = [str(TEXT / "span_probe.c"), str(TEXT / "pep_span.c"),
-                   str(TEXT / "pep_textbuf.c"), str(TEXT / "pep_utf8.c")]
+    def _build_c(self, compiler, exe_name, sources):
         flags = list(CLANG_FLAGS)
         if "clang" in compiler.lower():
             version = run_program([compiler, "--version"])
             if "msvc" in (version.stdout + version.stderr).lower():
                 # MSVC-target Clang deprecates fopen under -Werror. The
                 # runtime library itself stays warning-clean under identical
-                # flags; this define is probe-driver-only.
+                # flags; this define silences only that vendor diagnostic; the code stays strict portable C23.
                 flags.append("-D_CRT_SECURE_NO_WARNINGS")
         exe = BUILD / exe_name
-        compiled = run_program([compiler, *flags, *sources, "-o", str(exe)], cwd=ROOT)
+        compiled = run_program(
+            [compiler, *flags, *[str(TEXT / s) for s in sources], "-o", str(exe)],
+            cwd=ROOT,
+        )
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
         return exe
+
+    def build_span_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["span_probe.c", "pep_span.c", "pep_textbuf.c", "pep_utf8.c"])
+
+    def build_file_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["file_probe.c", "pep_textbuf.c", "pep_span.c", "pep_utf8.c"])
 
     @staticmethod
     def parse_span_blocks(output):
@@ -287,6 +290,60 @@ class TextbufNativeTests(unittest.TestCase):
             self.assertEqual(len(blocks), len(offsets))
             for off, (_, line, col, _, _, _) in zip(offsets, blocks):
                 self.assertEqual((line, col), wanted[off], (fixture, off))
+
+
+    def test_file_probe_pipeline(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        mixed = b"a\xc3\xa9\r\nb\n"
+        bad = b"\xff\n"
+        expected_mixed = (
+            b"n 2 1 1 3\n"
+            b"v ok\n"
+            b"f:1:2: E_FILE: file probe\n"
+            b"a\xc3\xa9\r\n"
+            b" ^\n"
+            b"f:1:5: E_FILE: file probe\n"
+            b"a\xc3\xa9\r\n"
+            b"    ^\n"
+            b"f:2:1: E_FILE: file probe\n"
+            b"b\n"
+            b"^\n"
+            b"w ok 7\n"
+        )
+        expected_bad = (
+            b"n 2 1 1 3\n"
+            b"v err 0\n"
+            b"f:1:1: E_FILE: file probe\n"
+            b"\xff\n"
+            b"^\n"
+            b"w ok 2\n"
+        )
+        outputs = []
+        for compiler, name in ((clang, "file_clang.exe"), (gcc, "file_gcc.exe")):
+            probe = self.build_file_probe(compiler, name)
+            in_path = BUILD / "mixed.pep"
+            out_path = BUILD / ("mixed_%s.out" % name)
+            in_path.write_bytes(mixed)
+            ran = run_bytes([str(probe), str(in_path), str(out_path), "f", "1", "4", "5"])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected_mixed)
+            self.assertEqual(out_path.read_bytes(), mixed)
+            bad_path = BUILD / "bad.pep"
+            bad_out = BUILD / ("bad_%s.out" % name)
+            bad_path.write_bytes(bad)
+            ran_bad = run_bytes([str(probe), str(bad_path), str(bad_out), "f", "0"])
+            self.assertEqual(ran_bad.returncode, 0, ran_bad.stderr)
+            self.assertEqual(ran_bad.stdout, expected_bad)
+            self.assertEqual(bad_out.read_bytes(), bad)
+            missing = run_bytes([str(probe), str(BUILD / "nope.pep"),
+                                 str(BUILD / "nope.out"), "f", "0"])
+            self.assertEqual(missing.returncode, 1)
+            self.assertEqual(missing.stdout, b"n 2 1 1 3\nr io\n")
+            outputs.append(ran.stdout)
+        self.assertEqual(outputs[0], outputs[1])
 
 
 if __name__ == "__main__":

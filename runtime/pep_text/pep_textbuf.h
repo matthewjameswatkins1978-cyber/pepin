@@ -60,6 +60,14 @@ size_t pep_textbuf_len(const pep_textbuf_t *buf);
 // Write the used bytes to `out`. Reports PEP_TEXTBUF_IO on stream errors.
 int pep_textbuf_write(const pep_textbuf_t *buf, FILE *out);
 
+// Read an entire file's bytes into the builder (binary, no translation).
+// Missing files and read/close errors report PEP_TEXTBUF_IO; bytes read
+// before a mid-stream failure stay in the builder with a sticky error.
+int pep_textbuf_read_file(pep_textbuf_t *buf, const char *path);
+
+// Write the used bytes to a file (binary, created or truncated).
+int pep_textbuf_write_file(const pep_textbuf_t *buf, const char *path);
+
 // Release ownership; safe on a zeroed, moved, or partially built buffer.
 void pep_textbuf_free(pep_textbuf_t *buf);
 

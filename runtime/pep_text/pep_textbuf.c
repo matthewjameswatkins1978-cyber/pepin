@@ -199,6 +199,61 @@ int pep_textbuf_write(const pep_textbuf_t *buf, FILE *out)
     return PEP_TEXTBUF_OK;
 }
 
+int pep_textbuf_read_file(pep_textbuf_t *buf, const char *path)
+{
+    FILE *in;
+    char chunk[8192];
+    size_t got;
+    if (buf == nullptr || path == nullptr) {
+        return PEP_TEXTBUF_BADARG;
+    }
+    if (buf->err != PEP_TEXTBUF_OK) {
+        return buf->err;
+    }
+    in = fopen(path, "rb");
+    if (in == nullptr) {
+        return note(buf, PEP_TEXTBUF_IO);
+    }
+    while ((got = fread(chunk, 1, sizeof chunk, in)) != 0) {
+        int status = pep_textbuf_append_bytes(buf, chunk, got);
+        if (status != PEP_TEXTBUF_OK) {
+            (void)fclose(in);
+            return status;
+        }
+    }
+    if (ferror(in)) {
+        (void)fclose(in);
+        return note(buf, PEP_TEXTBUF_IO);
+    }
+    if (fclose(in) != 0) {
+        return note(buf, PEP_TEXTBUF_IO);
+    }
+    return PEP_TEXTBUF_OK;
+}
+
+int pep_textbuf_write_file(const pep_textbuf_t *buf, const char *path)
+{
+    FILE *out;
+    if (buf == nullptr || path == nullptr) {
+        return PEP_TEXTBUF_BADARG;
+    }
+    if (buf->err != PEP_TEXTBUF_OK) {
+        return buf->err;
+    }
+    out = fopen(path, "wb");
+    if (out == nullptr) {
+        return PEP_TEXTBUF_IO;
+    }
+    if (buf->len != 0 && fwrite(buf->data, 1, buf->len, out) != buf->len) {
+        (void)fclose(out);
+        return PEP_TEXTBUF_IO;
+    }
+    if (fclose(out) != 0) {
+        return PEP_TEXTBUF_IO;
+    }
+    return PEP_TEXTBUF_OK;
+}
+
 void pep_textbuf_free(pep_textbuf_t *buf)
 {
     if (buf == nullptr) {
