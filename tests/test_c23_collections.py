@@ -1461,6 +1461,46 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                                              native.stdout + native.stderr)
                             self.assertEqual(native.stdout, reference.stdout)
 
+    def test_pep_written_last_or_helper_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_last_or(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (
+            ("[8, 2, 9]", 3, 9),
+            ("[-2, 4]", 10, 4),
+            ("[5]", 42, 5),
+            ("[]", 42, 42),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for index, (values, fallback, expected) in enumerate(cases):
+                with self.subTest(values=values, fallback=fallback):
+                    source = folder / f"last_or_{index}.pep"
+                    source_text = (
+                        helper
+                        + f"\nfn main() -> Int {{\n"
+                        + f"  return list_int_last_or({values}, {fallback})\n"
+                        + "}\n")
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source = folder / f"last_or_ref_{index}.pep"
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0,
+                                     reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, str(expected) + chr(10))
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            native = self.invoke("run-c23", source,
+                                                 "--compiler", compiler)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+
     def test_pep_written_first_or_helper_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")

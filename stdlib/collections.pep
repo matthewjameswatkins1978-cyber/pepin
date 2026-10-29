@@ -163,6 +163,12 @@ fn list_int_first_or(values: List[Int], fallback: Int) -> Int {
   return fallback
 }
 
+fn list_int_last_or(values: List[Int], fallback: Int) -> Int {
+  var last = fallback
+  for item in values { last = item }
+  return last
+}
+
 fn list_int_index_of(values: List[Int], needle: Int) -> Int {
   var index = 0
   for item in values {
