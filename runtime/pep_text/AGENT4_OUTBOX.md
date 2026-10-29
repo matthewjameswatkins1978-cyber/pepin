@@ -312,3 +312,26 @@ can relay them.
   Whether to exclude at all (vs a Microsoft FP submission first,
   vs leaving the empty-runner test scoped out as it already is)
   remains Matthew's call; this note only scopes the options.
+
+## 2026-10-29 -- slice 14: byte-substring find primitive (no execution)
+
+- New: `pep_find.h/.c` (`pep_text_find`) — explicit lengths, empty
+  needle found at 0, NULs ordinary, needle-longer-than-haystack
+  never found, `*at` = offset or `hn`, O(hn*nn) naive scan,
+  component-local OK/NONE/BADARG. No normalization, no case
+  folding (NFC/NFD stated non-matching). Offered to Agents 1/2
+  for lexer/scanner use; no adoption required.
+- New: `find_probe.c` (HAYSTACK NEEDLE-file...: whole-file
+  operands so NULs survive; per-needle `f OFFSET` / `f none`;
+  missing inputs exit 2 before printing) and
+  `test_find_probe_byte_substring_search` with hand-derived
+  vectors (incl. mid-character invalid-UTF-8 match documenting
+  byte semantics, and empty-haystack cases).
+- Caught own derivation slip pre-application (`cd` is at 3, not
+  2; `\0c` at 2, not 1) by re-reading before applying — test file
+  now carries the verified values.
+- INTEGRATION.md gained a find-primitive section; README lists
+  the new files. All source-only: `py_compile` clean,
+  `clang -fsyntax-only` strict-clean with zero output artifacts.
+  Untested until the post-hold suite re-run, like everything
+  since the hold began.

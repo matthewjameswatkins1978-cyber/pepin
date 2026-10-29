@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10), length-tagged fragment join (slice 12), fragn vectors, still unexecuted (slice 13).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10), length-tagged fragment join (slice 12), fragn vectors, still unexecuted (slice 13), byte-substring search, still unexecuted (slice 14).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -237,6 +237,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_fragn_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["fragn_probe.c", "pep_textbuf.c"])
+
+    def build_find_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["find_probe.c", "pep_find.c", "pep_textbuf.c"])
 
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
@@ -706,6 +710,54 @@ class TextbufNativeTests(unittest.TestCase):
             ran = run_bytes([str(probe), str(fixture), *bad])
             self.assertEqual(ran.returncode, 2, bad)
             self.assertEqual(ran.stdout, b"")
+
+
+    def test_find_probe_byte_substring_search(self):
+        # NOTE (security hold): implemented but never executed. Every
+        # expected byte below was hand-derived from the documented
+        # contract; the post-hold suite re-run is the real gate.
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        haystack = BUILD / "find_haystack.bin"
+        haystack.write_bytes(b"ab\x00cd\n\xc3\xa9\nxy")
+        needles = {
+            "find_cd.bin": b"cd",
+            "find_empty.bin": b"",
+            "find_whole.bin": b"ab\x00cd\n\xc3\xa9\nxy",
+            "find_xy.bin": b"xy",
+            "find_absent.bin": b"z",
+            "find_nul.bin": b"\x00c",
+            "find_long.bin": b"ab\x00cd\n\xc3\xa9\nxy!",
+            "find_utf8.bin": b"\xc3\xa9",
+            "find_midbyte.bin": b"\xa9\n",
+            "find_ab.bin": b"ab",
+        }
+        expected = (b"f 3\nf 0\nf 0\nf 9\nf none\n"
+                    b"f 2\nf none\nf 6\nf 7\nf 0\n")
+        for name, data in needles.items():
+            (BUILD / name).write_bytes(data)
+        empty_hay = BUILD / "find_empty_hay.bin"
+        empty_hay.write_bytes(b"")
+        outputs = []
+        for compiler, name in ((clang, "find_clang.exe"), (gcc, "find_gcc.exe")):
+            probe = self.build_find_probe(compiler, name)
+            ordered = [str(BUILD / n) for n in needles]
+            ran = run_bytes([str(probe), str(haystack), *ordered])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected)
+            outputs.append(ran.stdout)
+            ran_empty = run_bytes([str(probe), str(empty_hay),
+                                   str(BUILD / "find_xy.bin"),
+                                   str(BUILD / "find_empty.bin")])
+            self.assertEqual(ran_empty.returncode, 0, ran_empty.stderr)
+            self.assertEqual(ran_empty.stdout, b"f none\nf 0\n")
+            missing = run_bytes([str(probe), str(BUILD / "find_nope.bin"),
+                                 str(BUILD / "find_ab.bin")])
+            self.assertEqual(missing.returncode, 2)
+            self.assertEqual(missing.stdout, b"")
+        self.assertEqual(outputs[0], outputs[1])
 
 
 if __name__ == "__main__":

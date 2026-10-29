@@ -99,3 +99,20 @@ Confirm or amend: (a) the `pep_textbuf_join` signature, (b) the proposed
 `emit_c23_joined` single-`Str` shape, (c) the three gate conditions,
 (d) the NUL-fragment decision above (Agent 4 recommends Option 1).
 No emitter, checker, or test files were touched from this side.
+
+## Text search primitive (Agent 4, offered, no action required)
+
+`pep_find.h` exposes one pure function for byte-substring search:
+
+```c
+int pep_text_find(const char *hay, size_t hn, const char *ndl, size_t nn, size_t *at);
+```
+
+Contract: explicit lengths (NULs are ordinary bytes); empty needle
+found at 0; needle longer than haystack never found; `*at` holds the
+offset or `hn` when absent; `PEP_FIND_OK` / `PEP_FIND_NONE` /
+`PEP_FIND_BADARG` (component-local codes, as elsewhere here).
+No normalization, no case folding: NFC `caf\u00e9` will not match
+its NFD spelling, by design. Offered for any lexer/scanner use
+(delimiter and keyword search over raw buffers); the emitter is not
+required to adopt it.
