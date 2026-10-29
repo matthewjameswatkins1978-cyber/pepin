@@ -27,7 +27,7 @@ class A6CollectionsAndControlTests(unittest.TestCase):
     def test_required_and_additional_examples_run(self):
         result = invoke("run", ROOT / "examples" / "a6_collections_control.pep")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["42", "0", "1", "17", "22", "10", "0", "1", "42"])
+        self.assertEqual(result.stdout.splitlines(), ["42", "0", "1", "17", "22", "10", "0", "1", "42", "1", "1", "1", "0"])
 
     def test_describe_reports_implemented_collections_and_control_flow(self):
         result = invoke("describe", "--json")
@@ -45,13 +45,17 @@ say(int_text(if str_contains("cat", "") { 1 } else { 0 }))
 say(int_text(if str_contains("", "") { 1 } else { 0 }))
 say(int_text(if str_contains("cat", "dog") { 1 } else { 0 }))
 say(int_text(if str_contains("cat", "cats") { 1 } else { 0 }))
+say(int_text(if str_contains("a\\0b", "\\0") { 1 } else { 0 }))
+say(int_text(if str_contains("a\\0b", "a\\0b") { 1 } else { 0 }))
+say(int_text(if str_contains("a\\0b", "b\\0c") { 1 } else { 0 }))
+say(int_text(if str_contains("café", "́") { 1 } else { 0 }))
 """
         BUILD.mkdir(parents=True, exist_ok=True)
         path = BUILD / "str_contains.pep"
         path.write_text(source, encoding="utf-8", newline="")
         result = invoke("run", path)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.splitlines(), ["1", "1", "1", "0", "0"])
+        self.assertEqual(result.stdout.splitlines(), ["1", "1", "1", "0", "0", "1", "1", "0", "1"])
 
         for invalid_source, expected in (
             ('let found = str_contains("text", 1)', "PEP_TYPE_MISMATCH"),
