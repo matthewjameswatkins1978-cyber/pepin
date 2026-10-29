@@ -133,11 +133,18 @@ fn pep_c23_record_type(nodes: List[FlatAstNode], typeNode: FlatAstNode) -> PepC2
   if declaration.found && pep_c23_record_layout_supported(nodes, declaration.node) { return declaration } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_c_type_parts(nodes: List[FlatAstNode], typeNode: FlatAstNode) -> List[Str] {
+  let scalar = pep_c23_c_scalar_type(typeNode)
+  if scalar != "" { return [scalar] } else {}
+  let record = pep_c23_record_type(nodes, typeNode)
+  if record.found { return ["pep_record_", int_text(record.node.id)] } else {}
+  return []
+}
 fn pep_c23_c_type(nodes: List[FlatAstNode], typeNode: FlatAstNode) -> Str {
   let scalar = pep_c23_c_scalar_type(typeNode)
   if scalar != "" { return scalar } else {}
   let record = pep_c23_record_type(nodes, typeNode)
-  if record.found { return typeNode.text } else {}
+  if record.found { return "record" } else {}
   return ""
 }
 fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
@@ -203,8 +210,8 @@ fn pep_c23_record_declaration_source(nodes: List[FlatAstNode], declaration: Flat
       parts = append(parts, "; ")
     } else {}
   }
-  parts = append(parts, "} ")
-  parts = append(parts, declaration.text)
+  parts = append(parts, "} pep_record_")
+  parts = append(parts, int_text(declaration.id))
   parts = append(parts, ";\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
@@ -218,7 +225,7 @@ fn pep_c23_record_expression(nodes: List[FlatAstNode], function: FlatAstNode, va
   if expectedCount != suppliedCount {
     return pep_c23_unsupported("Pep C23 record construction must initialize every declared field exactly once")
   } else {}
-  var parts: List[Str] = ["(", value.text, "){ "]
+  var parts: List[Str] = ["(pep_record_", int_text(declaration.node.id), "){ "]
   var index = 0
   for supplied in nodes {
     if supplied.parentId == value.id && supplied.role == "field" && supplied.kind == "record_field" {
@@ -600,19 +607,19 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
-      reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, result.node))
+      for typePart in pep_c23_c_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, typePart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       if parameter.found {
         let parameterType = pep_c23_child(parsed.nodes, parameter.node.id, "type", 0)
         reversed = prepend(reversed, "(")
-        reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, parameterType.node))
+        for typePart in pep_c23_c_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
         reversed = prepend(reversed, " pep_arg_")
         reversed = prepend(reversed, int_text(parameter.node.id))
         if secondParameter.found {
           let secondParameterType = pep_c23_child(parsed.nodes, secondParameter.node.id, "type", 0)
           reversed = prepend(reversed, ", ")
-          reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, secondParameterType.node))
+          for typePart in pep_c23_c_type_parts(parsed.nodes, secondParameterType.node) { reversed = prepend(reversed, typePart) }
           reversed = prepend(reversed, " pep_arg_")
           reversed = prepend(reversed, int_text(secondParameter.node.id))
         } else {}
@@ -647,8 +654,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           let inferredType = pep_c23_c_expression_type(parsed.nodes, node, initialValue.node)
           let recordType = pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
           if recordType.found {
-            bodyParts = append(bodyParts, "  ")
-            bodyParts = append(bodyParts, recordType.node.text)
+            bodyParts = append(bodyParts, "  pep_record_")
+            bodyParts = append(bodyParts, int_text(recordType.node.id))
             bodyParts = append(bodyParts, " pep_local_")
             bodyParts = append(bodyParts, int_text(statement.id))
             bodyParts = append(bodyParts, " = ")
@@ -665,25 +672,25 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       } else {
         let functionResultType = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
         bodyParts = append(bodyParts, "  ")
-        bodyParts = append(bodyParts, pep_c23_c_type(parsed.nodes, functionResultType.node))
+        for typePart in pep_c23_c_type_parts(parsed.nodes, functionResultType.node) { bodyParts = append(bodyParts, typePart) }
         bodyParts = append(bodyParts, " pep_result = ")
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
         bodyParts = append(bodyParts, ";\n  pep_leave();\n  return pep_result;\n")
       }
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
-      reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, result.node))
+      for typePart in pep_c23_c_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, typePart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
       if parameter.found {
         let parameterType = pep_c23_child(parsed.nodes, parameter.node.id, "type", 0)
         reversed = prepend(reversed, "(")
-        reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, parameterType.node))
+        for typePart in pep_c23_c_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
         reversed = prepend(reversed, " pep_arg_")
         reversed = prepend(reversed, int_text(parameter.node.id))
         if secondParameter.found {
           let secondParameterType = pep_c23_child(parsed.nodes, secondParameter.node.id, "type", 0)
           reversed = prepend(reversed, ", ")
-          reversed = prepend(reversed, pep_c23_c_type(parsed.nodes, secondParameterType.node))
+          for typePart in pep_c23_c_type_parts(parsed.nodes, secondParameterType.node) { reversed = prepend(reversed, typePart) }
           reversed = prepend(reversed, " pep_arg_")
           reversed = prepend(reversed, int_text(secondParameter.node.id))
         } else {}
