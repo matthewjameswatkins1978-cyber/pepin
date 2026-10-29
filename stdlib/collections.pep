@@ -170,6 +170,18 @@ fn list_int_count_adjacent_equal_pairs(values: List[Int]) -> Int {
   return pairs
 }
 
+fn list_int_is_constant(values: List[Int]) -> Bool {
+  var constant = true
+  var hasPrevious = false
+  var previous = 0
+  for item in values {
+    constant = if hasPrevious && !(item == previous) { false } else { constant }
+    previous = item
+    hasPrevious = true
+  }
+  return constant
+}
+
 fn list_int_is_non_decreasing(values: List[Int]) -> Bool {
   var ordered = true
   var hasPrevious = false
