@@ -118,6 +118,12 @@ fn list_bool_all_equal(values: List[Bool], expected: Bool) -> Bool {
   return all
 }
 
+fn list_bool_count_equal(values: List[Bool], expected: Bool) -> Int {
+  var total = 0
+  for item in values { total = if item == expected { total + 1 } else { total } }
+  return total
+}
+
 fn list_bool_all_false(values: List[Bool]) -> Bool {
   var all = true
   for item in values { all = all && !item }

@@ -2764,6 +2764,49 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                                              native.stdout + native.stderr)
                             self.assertEqual(native.stdout, reference.stdout)
 
+    def test_pep_written_bool_count_equal_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_bool_count_equal(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (
+            ("[]", "true", 0),
+            ("[]", "false", 0),
+            ("[true]", "true", 1),
+            ("[false]", "true", 0),
+            ("[true, false, true]", "true", 2),
+            ("[true, false, false]", "false", 2),
+            ("[true, true, true]", "false", 0),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for index, (values, expected_value, expected_count) in enumerate(cases):
+                with self.subTest(values=values, expected_value=expected_value):
+                    source = folder / f"bool_count_equal_{index}.pep"
+                    source_text = (
+                        helper
+                        + "\nfn main() -> Int {\n"
+                        + f"  return list_bool_count_equal({values}, {expected_value})\n"
+                        + "}\n")
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source = folder / f"bool_count_equal_ref_{index}.pep"
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0,
+                                     reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, str(expected_count) + "\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            native = self.invoke("run-c23", source,
+                                                 "--compiler", compiler)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+
     def test_pep_written_bool_false_prefix_length_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
