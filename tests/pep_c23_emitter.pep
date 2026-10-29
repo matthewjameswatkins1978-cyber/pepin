@@ -459,8 +459,15 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
   if node.kind == "name" { return node.text == parameterName || node.text == secondParameterName } else {}
   if node.kind == "field_access" {
     let value = pep_c23_child(nodes, node.id, "value", 0)
-    return value.found && value.node.kind == "name" && value.node.text == parameterName &&
-      pep_c23_record_value_type(nodes, function, value.node).found
+    let parentRecord = if value.found {
+      pep_c23_record_value_type(nodes, function, value.node)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    let field = if parentRecord.found {
+      pep_c23_record_field_declaration(nodes, parentRecord.node, node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    return value.found &&
+      pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, value.node) &&
+      parentRecord.found && field.found
   } else {}
   if node.kind == "call" && node.text == "length" {
     let argument = pep_c23_child(nodes, node.id, "argument", 0)
