@@ -158,6 +158,11 @@ fn list_int_count_positive(values: List[Int]) -> Int {
   return total
 }
 
+fn list_int_first_or(values: List[Int], fallback: Int) -> Int {
+  for item in values { return item }
+  return fallback
+}
+
 fn list_int_index_of(values: List[Int], needle: Int) -> Int {
   var index = 0
   for item in values {
