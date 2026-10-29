@@ -752,6 +752,16 @@ fn list_int_index_of_outside(values: List[Int], lower: Int, upper: Int) -> Int {
   return foundAt
 }
 
+fn list_int_last_index_of_outside(values: List[Int], lower: Int, upper: Int) -> Int {
+  var index = 0
+  var foundAt = -1
+  for item in values {
+    foundAt = if !(lower <= item && item <= upper) { index } else { foundAt }
+    index = index + 1
+  }
+  return foundAt
+}
+
 fn list_int_min_or(values: List[Int], fallback: Int) -> Int {
   var found = false
   var minimum = fallback
