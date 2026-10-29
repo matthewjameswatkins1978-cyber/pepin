@@ -436,6 +436,23 @@ fn main() -> Int { return last_leaf([Leaf(42)]) }
             self.assertRegex(generated, r"\.tag == 0")
             self.assertIn("payload.payload_0.field_0", generated)
 
+    def test_recursive_union_list_loop_extracts_branch_payload_length(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn child_count(values: List[Tree]) -> Int {
+  for item in values {
+    return match item {
+      Leaf(_) => 0
+      Branch(children) => length(children)
+    }
+  }
+  return 0
+}
+fn main() -> Int { return 0 }
+"""
+        generated = emit(source_text.encode("utf-8"))
+        self.assertRegex(generated, r"\.payload\.payload_1\.field_0\.length")
+        self.assertRegex(generated, r"pep_union_\d+ pep_local_\d+ = pep_arg_\d+\.data\[pep_index_\d+\]")
+
 
     def test_recursive_union_list_rejects_computed_constructor_payloads(self):
         source_text = """type Chain = End(Int) | Link(List[Chain])
