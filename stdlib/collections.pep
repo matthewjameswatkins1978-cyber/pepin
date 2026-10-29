@@ -170,6 +170,18 @@ fn list_int_count_adjacent_equal_pairs(values: List[Int]) -> Int {
   return pairs
 }
 
+fn list_int_count_rises(values: List[Int]) -> Int {
+  var rises = 0
+  var hasPrevious = false
+  var previous = 0
+  for item in values {
+    rises = if hasPrevious && !(item <= previous) { rises + 1 } else { rises }
+    previous = item
+    hasPrevious = true
+  }
+  return rises
+}
+
 fn list_int_count_runs(values: List[Int]) -> Int {
   var runs = 0
   var hasPrevious = false
