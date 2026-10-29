@@ -234,12 +234,80 @@ fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
   parts = append(parts, " }")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
+fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: FlatAstNode,
+  element: FlatAstNode) -> Bool {
+  if element.kind != "call" { return false } else {}
+  let variant = pep_c23_union_variant(nodes, element.text)
+  if !variant.found { return false } else {}
+  let owner = pep_c23_union_of_variant(nodes, variant.node)
+  if !owner.found || owner.node.id != declaration.id ||
+     count_children(nodes, element.id, "argument") != count_children(nodes, variant.node.id, "field_type") {
+    return false
+  } else {}
+  for payload in nodes {
+    if payload.parentId == variant.node.id && payload.role == "field_type" {
+      let argument = pep_c23_child(nodes, element.id, "argument", payload.childIndex)
+      if !argument.found { return false } else {}
+      if payload.kind == "type_scalar" && payload.text == "Int" &&
+         argument.node.kind == "integer" {
+      } else {
+        if payload.kind == "type_scalar" && payload.text == "Bool" &&
+           argument.node.kind == "boolean" {
+        } else { return false }
+      }
+    } else {}
+  }
+  return true
+}
+fn pep_c23_union_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
+  node: FlatAstNode, declaration: FlatAstNode) -> PepC23Emission {
+  if node.kind != "list" {
+    return pep_c23_unsupported("Pep C23 recursive union lists currently require a direct list literal")
+  } else {}
+  let elementCount = count_children(nodes, node.id, "element")
+  var parts: List[Str] = ["(pep_list_union_", int_text(declaration.id), "){ .data = "]
+  if elementCount == 0 {
+    parts = append(parts, "NULL")
+  } else {
+    parts = append(parts, "(const pep_union_")
+    parts = append(parts, int_text(declaration.id))
+    parts = append(parts, "[]){")
+    var count = 0
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" {
+        let actual = pep_c23_union_value_type(nodes, function, element)
+        if !actual.found || actual.node.id != declaration.id ||
+           !pep_c23_union_list_element_supported(nodes, declaration, element) {
+          return pep_c23_unsupported("Pep C23 recursive union list literals require matching constructors with scalar literal payloads")
+        } else {}
+        let lowered = pep_c23_expression(nodes, function, element)
+        if lowered.status != "emitted" { return lowered } else {}
+        if count != 0 { parts = append(parts, ", ") } else {}
+        for part in lowered.sourceParts { parts = append(parts, part) }
+        count = count + 1
+      } else {}
+    }
+    parts = append(parts, "}")
+  }
+  parts = append(parts, ", .length = ")
+  parts = append(parts, int_text(elementCount))
+  parts = append(parts, " }")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_call_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode, parameterType: PepC23NodeLookup) -> PepC23Emission {
   if !parameterType.found { return pep_c23_expression(nodes, function, node) } else {}
   let cType = pep_c23_c_parameter_type(nodes, parameterType.node)
   if cType == "pep_list_record" { return pep_c23_record_list_argument(nodes, function, node, parameterType) } else {}
   if cType == "pep_list_int" { return pep_c23_int_list_argument(nodes, function, node) } else {}
   if cType == "pep_list_bool" { return pep_c23_bool_list_argument(nodes, function, node) } else {}
+  if cType == "pep_list_union" {
+    let elementType = pep_c23_child(nodes, parameterType.node.id, "element_type", 0)
+    if elementType.found {
+      let declaration = pep_c23_union_declaration(nodes, elementType.node.text)
+      if declaration.found { return pep_c23_union_list_argument(nodes, function, node, declaration.node) } else {}
+    } else {}
+    return pep_c23_unsupported("Pep C23 recursive union list parameter type is unresolved")
+  } else {}
   return pep_c23_expression(nodes, function, node)
 }
 fn pep_c23_unsupported(message: Str) -> PepC23Emission {
@@ -315,17 +383,42 @@ fn pep_c23_union_payload_type_supported(nodes: List[FlatAstNode], payload: FlatA
   } else {}
   return false
 }
-fn pep_c23_union_payload_type_supported_for(nodes: List[FlatAstNode], declaration: FlatAstNode,
+fn pep_c23_union_payload_is_recursive(nodes: List[FlatAstNode], declaration: FlatAstNode,
   payload: FlatAstNode) -> Bool {
   if payload.kind == "type_named" && payload.text == declaration.text { return true } else {}
+  if payload.kind == "type_list" {
+    let elementType = pep_c23_child(nodes, payload.id, "element_type", 0)
+    return elementType.found && elementType.node.kind == "type_named" &&
+      elementType.node.text == declaration.text
+  } else {}
+  return false
+}
+fn pep_c23_union_payload_type_supported_for(nodes: List[FlatAstNode], declaration: FlatAstNode,
+  payload: FlatAstNode) -> Bool {
+  if pep_c23_union_payload_is_recursive(nodes, declaration, payload) { return true } else {}
   return pep_c23_union_payload_type_supported(nodes, payload)
 }
 fn pep_c23_union_has_recursive_payload(nodes: List[FlatAstNode], declaration: FlatAstNode,
   variant: FlatAstNode) -> Bool {
   for payload in nodes {
     if payload.parentId == variant.id && payload.role == "field_type" &&
-       payload.kind == "type_named" && payload.text == declaration.text {
+       pep_c23_union_payload_is_recursive(nodes, declaration, payload) {
       return true
+    } else {}
+  }
+  return false
+}
+fn pep_c23_union_has_recursive_list_payload(nodes: List[FlatAstNode], declaration: FlatAstNode) -> Bool {
+  for variant in nodes {
+    if variant.parentId == declaration.id && variant.role == "variant" &&
+       variant.kind == "variant_declaration" {
+      for payload in nodes {
+        if payload.parentId == variant.id && payload.role == "field_type" &&
+           payload.kind == "type_list" &&
+           pep_c23_union_payload_is_recursive(nodes, declaration, payload) {
+          return true
+        } else {}
+      }
     } else {}
   }
   return false
@@ -348,11 +441,12 @@ fn pep_c23_node_by_id(nodes: List[FlatAstNode], wantedId: Int) -> PepC23NodeLook
 }
 fn pep_c23_requires_arena(nodes: List[FlatAstNode]) -> Bool {
   for payload in nodes {
-    if payload.role == "field_type" && payload.kind == "type_named" {
+    if payload.role == "field_type" {
       let variant = pep_c23_node_by_id(nodes, payload.parentId)
       if variant.found && variant.node.kind == "variant_declaration" {
         let declaration = pep_c23_node_by_id(nodes, variant.node.parentId)
-        if declaration.found && declaration.node.kind == "union_declaration" && declaration.node.text == payload.text {
+        if declaration.found && declaration.node.kind == "union_declaration" &&
+           pep_c23_union_payload_is_recursive(nodes, declaration.node, payload) {
           return true
         } else {}
       } else {}
@@ -535,6 +629,12 @@ fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str 
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" {
       return "pep_list_bool"
     } else {}
+    if elementType.found && elementType.node.kind == "type_named" {
+      let unionType = pep_c23_union_declaration(nodes, elementType.node.text)
+      if unionType.found && pep_c23_union_is_recursive(nodes, unionType.node) {
+        return "pep_list_union"
+      } else {}
+    } else {}
   } else {}
   return ""
 }
@@ -542,6 +642,13 @@ fn pep_c23_c_parameter_type_parts(nodes: List[FlatAstNode], node: FlatAstNode) -
   if node.kind == "type_list" {
     let declaration = pep_c23_record_list_declaration(nodes, node)
     if declaration.found { return ["pep_list_record_", int_text(declaration.node.id)] } else {}
+    let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
+    if elementType.found && elementType.node.kind == "type_named" {
+      let unionType = pep_c23_union_declaration(nodes, elementType.node.text)
+      if unionType.found && pep_c23_union_is_recursive(nodes, unionType.node) {
+        return ["pep_list_union_", int_text(unionType.node.id)]
+      } else {}
+    } else {}
   } else {}
   if node.kind == "type_named" {
     let declaration = pep_c23_record_declaration(nodes, node.text)
@@ -711,7 +818,8 @@ fn pep_c23_union_constructor(nodes: List[FlatAstNode], function: FlatAstNode,
         if recursiveFallibleCount == 2 {
           return pep_c23_unsupported("Pep C23 rejects multiple fallible recursive constructor arguments because C evaluation order is unspecified")
         } else {}
-        let value = pep_c23_expression(nodes, function, argument.node)
+        let value = pep_c23_call_argument(nodes, function, argument.node,
+          PepC23NodeLookup { found: true, node: payloadType })
         if value.status != "emitted" { return value } else {}
         if recursiveArgumentCount != 0 { recursiveParts = append(recursiveParts, ", ") } else {}
         for part in value.sourceParts { recursiveParts = append(recursiveParts, part) }
@@ -791,7 +899,45 @@ fn pep_c23_union_constructor_helper_source(nodes: List[FlatAstNode], declaration
       parts = append(parts, " = pep_ctor_arg_")
       parts = append(parts, int_text(payloadType.childIndex))
       parts = append(parts, ";\n")
-    } else {}
+    } else {
+      if payloadType.parentId == variant.id && payloadType.role == "field_type" &&
+         payloadType.kind == "type_list" &&
+         pep_c23_union_payload_is_recursive(nodes, declaration, payloadType) {
+        let fieldIndex = int_text(payloadType.childIndex)
+        let unionId = int_text(declaration.id)
+        parts = append(parts, "  pep_union_")
+        parts = append(parts, unionId)
+        parts = append(parts, " *pep_recursive_list_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, " = NULL;\n  if (pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".length != 0 && pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".length > SIZE_MAX / sizeof(pep_union_")
+        parts = append(parts, unionId)
+        parts = append(parts, ")) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  if (pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".length != 0) {\n    pep_recursive_list_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, " = pep_arena_alloc(pep_arena, pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".length * sizeof(pep_union_")
+        parts = append(parts, unionId)
+        parts = append(parts, "), _Alignof(pep_union_")
+        parts = append(parts, unionId)
+        parts = append(parts, "));\n    if (pep_recursive_list_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, " == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n    for (size_t pep_i = 0; pep_i < pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".length; ++pep_i) { pep_recursive_list_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, "[pep_i] = pep_ctor_arg_")
+        parts = append(parts, fieldIndex)
+        parts = append(parts, ".data[pep_i]; }\n  }\n")
+      } else {}
+    }
   }
   parts = append(parts, "  return (pep_union_")
   parts = append(parts, int_text(declaration.id))
@@ -811,8 +957,19 @@ fn pep_c23_union_constructor_helper_source(nodes: List[FlatAstNode], declaration
         parts = append(parts, "pep_recursive_")
         parts = append(parts, int_text(payloadType.childIndex))
       } else {
-        parts = append(parts, "pep_ctor_arg_")
-        parts = append(parts, int_text(payloadType.childIndex))
+        if payloadType.kind == "type_list" &&
+           pep_c23_union_payload_is_recursive(nodes, declaration, payloadType) {
+          parts = append(parts, "(pep_list_union_")
+          parts = append(parts, int_text(declaration.id))
+          parts = append(parts, "){ .data = pep_recursive_list_")
+          parts = append(parts, int_text(payloadType.childIndex))
+          parts = append(parts, ", .length = pep_ctor_arg_")
+          parts = append(parts, int_text(payloadType.childIndex))
+          parts = append(parts, ".length }")
+        } else {
+          parts = append(parts, "pep_ctor_arg_")
+          parts = append(parts, int_text(payloadType.childIndex))
+        }
       }
       fieldCount = fieldCount + 1
     } else {}
@@ -822,7 +979,7 @@ fn pep_c23_union_constructor_helper_source(nodes: List[FlatAstNode], declaration
 }
 fn pep_c23_recursive_union_guard_source(declaration: FlatAstNode) -> List[Str] {
   let id = int_text(declaration.id)
-  return ["static pep_union_", id, " pep_require_union_", id,
+  return ["[[maybe_unused]] static pep_union_", id, " pep_require_union_", id,
     "(const pep_union_", id, " *pep_value) {\n  if (pep_value == NULL) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n  return *pep_value;\n}\n"]
 }
 fn pep_c23_union_payload_parts(subject: List[Str], variant: FlatAstNode,
@@ -1809,6 +1966,12 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
         return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
       } else {}
       let recursiveUnion = pep_c23_union_is_recursive(parsed.nodes, declaration)
+      if pep_c23_union_has_recursive_list_payload(parsed.nodes, declaration) {
+        var listParts: List[Str] = ["typedef struct { const struct pep_union_",
+          int_text(declaration.id), " *data; size_t length; } pep_list_union_",
+          int_text(declaration.id), ";\n"]
+        for part in listParts { reversed = prepend(reversed, part) }
+      } else {}
       var parts: List[Str] = []
       if recursiveUnion {
         parts = ["typedef struct pep_union_", int_text(declaration.id), " { uint32_t tag; union { "]

@@ -266,9 +266,9 @@ fn main() -> Int {
             self.assertIn("pep_arena_free(&pep_arena)", generated)
             self.assertIn("pep_require_union_", generated)
 
-    def test_recursive_union_list_payload_fails_closed(self):
+    def test_nested_recursive_union_list_layout_fails_closed(self):
         source_text = (
-            "type Chain = End() | Link(List[Chain])\n"
+            "type Chain = End(Int) | Link(List[List[Chain]])\n"
             "fn main() -> Int { return 0 }\n")
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
@@ -341,6 +341,59 @@ fn main() -> Int {
             "type Many = Empty() | Full(Int, Int, Int)\n"
             "fn main() -> Int { let value = Full(1, 2, 3); return 0 }\n")
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
+            emit(source_text.encode("utf-8"))
+
+
+    def test_recursive_union_list_payload_is_copied_into_arena(self):
+        source_text = """type Chain = End(Int) | Link(List[Chain])
+fn relay(value: Chain) -> Chain { return value }
+fn main() -> Int {
+  let initial = Link([End(19)])
+  let chain = relay(initial)
+  return match chain {
+    End(_) => 0
+    Link(_) => 42
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-union-list.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "42\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(
+                generated,
+                r"typedef struct \{ const struct pep_union_\d+ \*data; size_t length; \} pep_list_union_\d+;")
+            self.assertRegex(
+                generated,
+                r"struct \{ pep_list_union_\d+ field_0; \} payload_\d+;")
+            self.assertIn("PEP_RUNTIME_INVALID_LIST", generated)
+            self.assertIn("SIZE_MAX / sizeof(pep_union_", generated)
+            self.assertIn("pep_arena_alloc(pep_arena, pep_ctor_arg_0.length * sizeof(pep_union_", generated)
+            self.assertIn("pep_recursive_list_0[pep_i] = pep_ctor_arg_0.data[pep_i]", generated)
+            self.assertIn(".length = 1", generated)
+
+
+    def test_recursive_union_list_rejects_computed_constructor_payloads(self):
+        source_text = """type Chain = End(Int) | Link(List[Chain])
+fn main() -> Int {
+  let initial = Link([End(19 + 23)])
+  return match initial {
+    End(_) => 0
+    Link(_) => 42
+  }
+}
+"""
+        with self.assertRaisesRegex(ValueError, "scalar literal payloads"):
             emit(source_text.encode("utf-8"))
 
 
