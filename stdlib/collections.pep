@@ -112,6 +112,16 @@ fn list_int_sum_outside(values: List[Int], lower: Int, upper: Int) -> Int {
   return total
 }
 
+fn list_bool_longest_true_run(values: List[Bool]) -> Int {
+  var current = 0
+  var longest = 0
+  for item in values {
+    current = if item { current + 1 } else { 0 }
+    longest = if current <= longest { longest } else { current }
+  }
+  return longest
+}
+
 fn list_bool_count_runs(values: List[Bool]) -> Int {
   var runs = 0
   var hasPrevious = false
