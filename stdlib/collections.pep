@@ -205,6 +205,16 @@ fn list_int_min_or(values: List[Int], fallback: Int) -> Int {
   return minimum
 }
 
+fn list_int_max_or(values: List[Int], fallback: Int) -> Int {
+  var found = false
+  var maximum = fallback
+  for item in values {
+    maximum = if !found || !(item <= maximum) { item } else { maximum }
+    found = true
+  }
+  return maximum
+}
+
 fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
   for item in values { return item }
   return fallback
