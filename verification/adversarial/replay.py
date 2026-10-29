@@ -503,6 +503,22 @@ def main():
           and tr[3].get("result") == IV(42))
     results.append(("T1-lifecycle", PASS if ok else FAIL,
                     "statuses=%s" % [x.get("status") for x in tr[:3]]))
+    _tl = tsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": tsrc},
+        dict(TB, op="tool_register", function="double"),
+        dict(TB, op="tool_validate",
+             testVectors=[{"arguments": [IV(21)],
+                           "expect": IV(42)}]),
+        dict(TB, op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_list"},
+    ])
+    _lt = _tl[4].get("tools", [])
+    ok = any(t.get("tool") == "dbl" and t.get("status") == "Active"
+             and t.get("callable") is True for t in _lt)
+    results.append(("T1b-list", PASS if ok else FAIL,
+                    "tools=%s" % [(t.get("tool"), t.get("status")) for t in _lt]))
     tf = tsess([
         {"schemaVersion": 3, "op": "open", "name": "t",
          "source": tsrc},
