@@ -420,6 +420,22 @@ can relay them.
   `proberaw.py`, `smokejson.py`) plus their transient fixtures are
   absent — most plausibly swept in a bulk `_build` cleanup, as
   newer files survive and nothing else is disturbed.
-- Nothing of record lost: every result they produced lives on in
-  committed tests, the incident report, or this outbox. No action;
-  future evidence scripts keep their key outputs recorded here.
+## 2026-10-29 -- Native AST Arena: first slice (no execution)
+
+- New: `runtime/pep_arena/pep_arena.{h,c}` — opaque handle,
+  `init`/`alloc`/`status`/`free`, checked sizes, power-of-two
+  alignment, chunked never-moved storage with saturating doubling,
+  sticky ALLOC/OVERFLOW/BADARG, whole-arena release, no globals.
+  New: `arena_demo.c` — recursive expr tree (`19 + 23` -> 42,
+  nested `1 + (2 + 3)` -> 6) built from arena nodes with linked
+  children, self-checking, small-chunk start to force growth.
+- INTEGRATION.md gained the Agent-2 AST-ABI section (arena owns
+  storage; semantics stay with Pep/checker; example tagged-node
+  sketch explicitly non-binding). Test file gained
+  `test_arena_demo_builds_and_runs` (expects `42\n6\n`) plus a
+  `base`-aware `_build_c` and `build_arena_demo` helper.
+- Hand-verified arena arithmetic and demo logic on paper
+  (overflow guards, invariants, free paths, expected outputs
+  42/6). Verified with `py_compile` + strict `-fsyntax-only`
+  only: zero output artifacts. Post-hold: run suite, then the
+  demo, then consider the growable node-collection follow-up.

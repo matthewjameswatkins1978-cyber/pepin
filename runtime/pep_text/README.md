@@ -33,6 +33,10 @@ here invents language semantics.
   normalization); `find_probe` searches file bytes;
   `pep_find_model.pep` mirrors the policy on `List[Int]`
   (interpreter-only, untested).
+- `runtime/pep_arena/` — explicit-lifetime chunked arena for one
+  compilation unit's temporary AST (opaque handle, checked aligned
+  allocation, never-moved chunks, whole-arena release, no globals);
+  `arena_demo.c` builds and evaluates `19 + 23` and a nested sum.
 - `*_probe.c`, `demo_textbuf.c`, `utf8check.c` — test drivers and the
   first real tools on the library: `frag_probe` joins argv fragments,
   `fragn_probe` joins explicit file slices NUL-safely; probes print

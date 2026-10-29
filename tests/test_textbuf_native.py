@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10), length-tagged fragment join (slice 12), fragn vectors, still unexecuted (slice 13), byte-substring search, still unexecuted (slice 14).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6), negative paths plus utf8check (slice 7), JSON values (slice 8), C literals (slice 9), native emitter-output join (slice 10), length-tagged fragment join (slice 12), fragn vectors, still unexecuted (slice 13), byte-substring search, still unexecuted (slice 14), AST arena plus its demo, still unexecuted (new mission).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -14,6 +14,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TEXT = ROOT / "runtime" / "pep_text"
+ARENA = ROOT / "runtime" / "pep_arena"
 BUILD = ROOT / "_build" / "textbuf"
 
 CLANG_FLAGS = ["-std=c23", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]
@@ -200,11 +201,12 @@ class TextbufNativeTests(unittest.TestCase):
             self.assertEqual(ran.stdout, "13\n")
 
 
-    def _build_c(self, compiler, exe_name, sources):
+    def _build_c(self, compiler, exe_name, sources, base=None):
         flags = msvc_flags(compiler)
+        home = base if base is not None else TEXT
         exe = BUILD / exe_name
         compiled = run_program(
-            [compiler, *flags, *[str(TEXT / s) for s in sources], "-o", str(exe)],
+            [compiler, *flags, *[str(home / s) for s in sources], "-o", str(exe)],
             cwd=ROOT,
         )
         self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -241,6 +243,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_find_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["find_probe.c", "pep_find.c", "pep_textbuf.c"])
+
+    def build_arena_demo(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["arena_demo.c", "pep_arena.c"], ARENA)
 
     def build_num_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
@@ -757,6 +763,25 @@ class TextbufNativeTests(unittest.TestCase):
                                  str(BUILD / "find_ab.bin")])
             self.assertEqual(missing.returncode, 2)
             self.assertEqual(missing.stdout, b"")
+        self.assertEqual(outputs[0], outputs[1])
+
+    def test_arena_demo_builds_and_runs(self):
+        # NOTE (security hold): implemented but never executed. The two
+        # expected lines are hand-derived: 19+23=42, 1+(2+3)=6, each
+        # printed by the demo's own self-checking main. The post-hold
+        # suite re-run below is the real gate.
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        expected = b"42\n6\n"
+        outputs = []
+        for compiler, name in ((clang, "arena_clang.exe"), (gcc, "arena_gcc.exe")):
+            demo = self.build_arena_demo(compiler, name)
+            ran = run_bytes([str(demo)])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected)
+            outputs.append(ran.stdout)
         self.assertEqual(outputs[0], outputs[1])
 
 
