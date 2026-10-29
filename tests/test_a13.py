@@ -2448,6 +2448,44 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("four-level-append-leaf-mismatch", "fn bad(value: List[List[List[List[Int]]]]) -> List[List[List[List[Int]]]] { return append(value, [[['text']]]) }", "invalid"),
         ])
 
+    def test_many_function_signatures_are_collected_in_source_order(self):
+        declarations = []
+        for index in range(24):
+            if index % 3 == 0:
+                declarations.append(
+                    f"fn helper_{index:02d}() -> Int {{ return {index} }}"
+                )
+            elif index % 3 == 1:
+                declarations.append(
+                    f"fn helper_{index:02d}(value: Int) -> Int {{ return value }}"
+                )
+            else:
+                declarations.append(
+                    f"fn helper_{index:02d}(value: Int, enabled: Bool) -> Int {{ return value }}"
+                )
+        source = NL.join(declarations + [
+            "fn main() -> Int { return helper_23(23, true) }"
+        ])
+        reference = self._reference_check("many-function-signatures", source)
+        self.assertEqual(reference["status"], "valid", reference)
+        _, report = self._analyze(source)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+
+        functions = [fields(item) for item in report["functions"]["value"]]
+        self.assertEqual(len(functions), 25, report)
+        self.assertEqual(
+            [scalar(item["name"]) for item in functions],
+            [f"helper_{index:02d}" for index in range(24)] + ["main"],
+        )
+        self.assertEqual(
+            [int(scalar(item["arity"])) for item in functions[:3]],
+            [0, 1, 2],
+        )
+        self.assertEqual(
+            [scalar(item["returnType"]) for item in functions],
+            ["Int"] * 25,
+        )
+
     def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
         source = (
             "fn identity(flag: Bool) -> Bool { return flag }\n"

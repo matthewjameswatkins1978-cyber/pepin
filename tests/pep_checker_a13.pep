@@ -374,19 +374,58 @@ fn declared_binding_shape(nodes: List[FlatAstNode], node: FlatAstNode) -> PepTyp
   let declared = child_at(nodes, node.id, role, 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
+fn make_checked_function(node: FlatAstNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
+  let resultType = legacy_type_name(resultShape)
+  let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
+  return CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: arity, returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte }
+}
 fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
+  var active = false
+  var activeNode = empty_node()
+  var activeArity = 0
+  var activeResultShape = empty_type_shape()
+  var readingReturnType = false
+  var nextReturnTypeId = -1
+  var returnTypeDepth = 0
   for node in nodes {
     if node.parentId == -1 && node.kind == "function" {
-      let declaredResult = child_at(nodes, node.id, "return_type", 0)
-      let resultShape = if declaredResult.found { type_shape_at(nodes, declaredResult.node.id) } else { empty_type_shape() }
-      let resultType = if declaredResult.found { legacy_type_name(resultShape) } else { "" }
-      let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
-      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte })
-      ordinal = ordinal + 1
+      if active {
+        reversed = prepend(reversed, make_checked_function(activeNode, ordinal, activeArity, activeResultShape))
+        ordinal = ordinal + 1
+      } else {}
+      active = true
+      activeNode = node
+      activeArity = 0
+      activeResultShape = empty_type_shape()
+      readingReturnType = false
+      nextReturnTypeId = -1
+      returnTypeDepth = 0
+    } else {
+      if active && node.parentId == activeNode.id {
+        if node.kind == "parameter" { activeArity = activeArity + 1 } else {}
+        if node.role == "return_type" {
+          readingReturnType = true
+          nextReturnTypeId = node.id
+          returnTypeDepth = 0
+        } else {}
+      } else {}
+    }
+    if readingReturnType && node.id == nextReturnTypeId {
+      if node.kind == "type_list" {
+        returnTypeDepth = returnTypeDepth + 1
+        nextReturnTypeId = node.id + 1
+      } else {
+        if node.kind == "type_scalar" || node.kind == "type_named" {
+          let kind = if node.kind == "type_scalar" { "builtin" } else { "nominal" }
+          activeResultShape = PepTypeShape { kind: kind, name: node.text, listDepth: returnTypeDepth }
+        } else {}
+        readingReturnType = false
+      }
     } else {}
   }
+  if active { reversed = prepend(reversed, make_checked_function(activeNode, ordinal, activeArity, activeResultShape)) } else {}
   return reverse(reversed)
 }
 fn scope_key(node: FlatAstNode, role: Str) -> Int {
