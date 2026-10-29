@@ -10,6 +10,12 @@ fn list_int_product(values: List[Int]) -> Int {
   return product
 }
 
+fn list_int_product_nonzero(values: List[Int]) -> Int {
+  var product = 1
+  for item in values { product = if item != 0 { product * item } else { product } }
+  return product
+}
+
 fn list_bool_prefix_length_of(values: List[Bool], expected: Bool) -> Int {
   var prefix = 0
   var ended = false
