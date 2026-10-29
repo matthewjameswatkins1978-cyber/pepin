@@ -26,7 +26,7 @@ this document end to end.
 | `file_absent` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `path_changed` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `path_unchanged` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
-| `text_contains` | **decided except the search** | empty-needle rule, source validation and load ordering all decided; a non-empty needle needs `str_bytes(Str) -> SourceBytes` |
+| `text_contains` | **decided except the search** | empty-needle rule, source validation and load ordering all decided; the verified landing patch for the non-empty search is in `TEXT_CONTAINS_LANDING.md`, waiting only on `str_contains` reaching this branch |
 | `text_matches` | blocked | same, plus a regex engine |
 | `git_diff_contains` | blocked | same as `text_contains` (the diff capture itself is available) |
 | `git_diff_matches` | blocked | same as `text_matches` |
@@ -826,8 +826,17 @@ is never a falsification on either side.
 
 - No process/Git host adapters, no receipts, no `pep bats` CLI, no native C23
   integration. Those are explicitly out of scope for this first kernel.
-- `text_contains` is **not** implemented, because Pep cannot yet read the bytes of
-  a `Str`. The precise missing primitive is recorded above rather than worked
-  around.
-- The differential covers the *expressible* slice. Process/Git host adapters,
+- `text_contains` is **not yet implemented on this branch**. Its source validation,
+  load ordering and empty-needle rule are decided; the non-empty search waits only on
+  `str_contains` reaching this branch, and `TEXT_CONTAINS_LANDING.md` holds the
+  verified landing patch.- The differential covers the *expressible* slice. Process/Git host adapters,
   receipt generation and a `pep bats` CLI remain out of scope for this mission.
+
+**Agent 1 has landed the primitive.** `str_contains(haystack: Str, needle: Str) -> Bool`
+exists at `codex/continuation-03-nested-helper@4d8ddef` with `emptyNeedle: true`, and its
+semantics were measured to agree with the reference on eight edge cases. The full
+implementation was verified against it — 91 self-test cases unchanged, and 6/6
+`text_contains` verdicts agreeing with the framework including the empty needle. It is not
+committed here because the compiler on this branch does not yet carry the builtin;
+`TEXT_CONTAINS_LANDING.md` holds the exact four-hunk patch, the fixture change and the
+evidence.

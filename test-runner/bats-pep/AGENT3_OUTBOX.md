@@ -91,26 +91,40 @@ Second measured caveat: the runner always captures git state, so `git_diff`,
 absent-capture branch is therefore modelled from the source's `is_some()` and is
 covered by the self-test but **not** claimed by the differential.
 
-## Blocked upstream: `text_contains`
+## Unblock status: `text_contains`
 
-Pep cannot read the bytes of a `Str`. Verified again on all three active branches
-(`campaign/pep-v01-sustained-build-20261027`, `codex/continuation-03-nested-helper`,
-`codex/c23-chunked-parser`) — none has `str_bytes` or `str_contains`; the reserved
-builtin list is unchanged. `Str` supports only `==` / `!=`; `contains` is list
-membership; `source_bytes()` is the program's own source under a host-authorised v2
-semanticTarget.
+**The primitive landed.** Agent 1 shipped `str_contains(haystack: Str, needle: Str) -> Bool`
+at `codex/continuation-03-nested-helper@4d8ddef` ("feat: add Pep string substring search"),
+described as `emptyNeedle: true`. Measured against the reference's `contains_substring` on
+eight edge cases — empty needle, whole-string, partial, absent, empty haystack,
+needle-longer-than-haystack, overlapping — **all eight agree**, so it is usable directly
+with no adaptation layer.
 
-**The unblock I want:** `str_bytes(s: Str) -> SourceBytes` (preferred) or
-`str_contains(haystack: Str, needle: Str) -> Bool`. With `str_bytes`, the existing
-`byte_length` / `byte_at` are enough to write the byte-window search myself and match
-`contains_substring`, including the empty-needle rule (an empty needle returns true,
-so it always fires).
+Verified in a detached worktree of `4d8ddef` (created under `_build/`, since removed), with
+this branch's `oracle.pep` + `selftest.pep` and a four-hunk patch applied:
 
-Also still missing, and recorded rather than invented: no string splitting or
-indexing, so the `:` split and non-numeric-index rejection of `parse_step_ref` cannot
-be done in Pep. Phase-name validation is done in Pep; the colon/numeric boundary is an
-explicit gap.
+- `pep check oracle.pep` → **valid**, 0 diagnostics, against the compiler that has
+  `str_contains`.
+- Full self-test → **193 lines, 91 verdict cases**, unchanged count. Only two expectations
+  change, both predictably: cases 83 and 89 move from INCONCLUSIVE to NOT OBSERVED once the
+  search actually runs.
+- `text_contains` verdicts vs the real framework, over a step source whose stdout is
+  `alpha beta gamma`: needles `""`, `"beta"`, `"alpha beta gamma"` → PROVEN; `"zzz"`,
+  `"gamma alpha"`, `"alpha beta gamma!"` → NOT OBSERVED. **6/6 agree**, including the
+  empty-needle rule.
 
+**Why it is not committed on this branch:** the compiler on `pep/native-differential-v1`
+does not carry the builtin, so using it here would make `pep check` fail and break this
+branch's own evidence chain. Rebasing onto another agent's branch would duplicate their
+work and hand the integrator a confusing merge, so it is not done unilaterally.
+
+`TEXT_CONTAINS_LANDING.md` in this directory holds the exact four-hunk patch, the fixture
+change, the evidence, and the four steps needed to land it. Landing is mechanical once
+`str_contains` reaches the branch this one is rebuilt on.
+
+Still missing, and recorded rather than invented: no string splitting or indexing, so the
+`:` split and the non-numeric-index rejection of `parse_step_ref` cannot be done in Pep.
+Phase-name validation is done in Pep; that boundary remains an explicit gap.
 ## Language findings for Agent 1
 
 Recorded with minimal repros in `README.md`.
@@ -145,5 +159,5 @@ Committed in the same commit as this outbox; verify with
 2556ce5ec9e288f9ede032ea8dd28d24599383d41c67eebf92198215a031f724  oracle.pep
 70f12a9f11391a2caafc5c4b238c30a6e8124e25f52bc7106e945c2beecd6908  selftest.pep
 2e779df6e878b940bfe38d3b1aa663529f595b29fde925e0afff5ebc59033fc8  differential.py
-7c904ddf3fcd148e2178275d8613675cd59ba6b9d69ede97de1d884b0e340638  README.md
+42c8550c5ac69321d72a8095b29eea9840cfd30a6954d6ef695e90fd98d04fb3  README.md
 ```
