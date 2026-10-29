@@ -240,6 +240,44 @@ Dispatch is on the kind name and therefore per-capture, not "is any capture pres
 Self-test case 55 exists to catch that specific shortcut: with only `git_status`
 present, asking for `git_diff` must answer NOT OBSERVED.
 
+## Conditions: `file_exists` and `file_absent`
+
+These judge a **recorded** view of the worktree rather than the live filesystem, for
+the same reason the exit-code condition judges recorded steps: this engine evaluates
+evidence, it does not perform the run. A driver supplies what it observed and Pep
+decides.
+
+```pep
+type WorktreeView { present_paths: List[Str], rejected_paths: List[Str] }
+
+fn judge_file_exists(path: Str, view: WorktreeView) -> Verdict
+fn judge_file_absent(path: Str, view: WorktreeView) -> Verdict
+```
+
+Measured against the framework:
+
+| Case | Verdict |
+| --- | --- |
+| `file_exists ".git"` | PROVEN |
+| `file_exists "no-such-file.txt"` | NOT OBSERVED |
+| `file_absent ".git"` | NOT OBSERVED |
+| `file_absent "no-such-file.txt"` | PROVEN |
+| `file_exists "../outside.txt"` | INCONCLUSIVE |
+| `file_exists "C:/Windows/system.ini"` | INCONCLUSIVE |
+
+`rejected_paths` exists because the reference distinguishes a path it refused
+(`resolve_in_worktree` error → Undetermined) from a path it checked and did not find
+(NotFalsified). Collapsing the two would let a broken experiment look like a clean
+negative result, which is the same error the vacuity guard exists to prevent.
+
+**Not attempted, deliberately:** `resolve_in_worktree` normalisation itself —
+rejecting `..` escapes, absolutising, symlink policy. Pep has no string manipulation,
+so a path either arrives worktree-relative or arrives in `rejected_paths` as a host
+fact. That boundary is recorded rather than faked.
+
+This is also the first condition to use `contains` over `List[Str]` (scalar list
+membership), which exists and works.
+
 ## Run it
 
 ```powershell
@@ -252,7 +290,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (55 cases; each prints its verdict label then its reason):
+Observed (61 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -311,6 +349,12 @@ Observed (55 cases; each prints its verdict label then its reason):
 | 53 | `base_snapshot`, nothing captured | NOT OBSERVED |
 | 54 | kind `bogus` | INCONCLUSIVE (`unknown evidence kind`) |
 | 55 | `git_diff` absent but others present | NOT OBSERVED (dispatch guard) |
+| 56 | `file_exists ".git"` | PROVEN |
+| 57 | `file_exists "no-such-file.txt"` | NOT OBSERVED |
+| 58 | `file_absent ".git"` | NOT OBSERVED |
+| 59 | `file_absent "no-such-file.txt"` | PROVEN |
+| 60 | `file_exists "../outside.txt"` (rejected path) | INCONCLUSIVE |
+| 61 | `file_absent` absolute path (rejected) | INCONCLUSIVE |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -465,7 +509,18 @@ spec is never evaluated and therefore has no trail:
 | `base_snapshot` | PROVEN | PROVEN | PROVEN |
 | `bogus` (unknown kind) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 
-`SUMMARY cases=35 mismatches=0`.
+`file_exists` / `file_absent` are compared against a clean clone, so `.git` is present
+and `no-such-file.txt` is not:
+
+| Case | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `file_exists ".git"` | PROVEN | PROVEN | PROVEN |
+| `file_exists "no-such-file.txt"` | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `file_absent ".git"` | NOT OBSERVED | NOT OBSERVED | NOT OBSERVED |
+| `file_absent "no-such-file.txt"` | PROVEN | PROVEN | PROVEN |
+| `file_exists "../outside.txt"` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+
+`SUMMARY cases=40 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

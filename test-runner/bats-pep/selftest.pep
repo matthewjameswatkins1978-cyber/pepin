@@ -173,3 +173,25 @@ show(judge_evidence_present("git_status", all_captures()))
 show(judge_evidence_present("base_snapshot", no_captures()))
 show(judge_evidence_present("bogus", all_captures()))
 show(judge_evidence_present("git_diff", Captures { git_diff: CaptureAbsent(), git_status: CapturePresent(), base_snapshot: CapturePresent() }))
+
+// --- Conditions: file_exists and file_absent ---
+//
+// 56 file-exists-present     file_exists ".git"             -> PROVEN
+// 57 file-exists-missing     file_exists "no-such-file.txt" -> NOT OBSERVED
+// 58 file-absent-present     file_absent ".git"             -> NOT OBSERVED
+// 59 file-absent-missing     file_absent "no-such-file.txt" -> PROVEN
+// 60 file-exists-rejected    file_exists "../outside.txt"   -> INCONCLUSIVE
+// 61 file-absent-rejected    file_absent absolute path      -> INCONCLUSIVE
+//
+// Cases 60-61 are the infrastructure guard for this condition: a path the resolver
+// refused is Undetermined, never a clean negative result. Measured on the framework,
+// where both a `..` escape and an absolute path answer INCONCLUSIVE.
+fn repo_view() -> WorktreeView {
+  return WorktreeView { present_paths: [".git", "README.md"], rejected_paths: ["../outside.txt", "C:/Windows/system.ini"] }
+}
+show(judge_file_exists(".git", repo_view()))
+show(judge_file_exists("no-such-file.txt", repo_view()))
+show(judge_file_absent(".git", repo_view()))
+show(judge_file_absent("no-such-file.txt", repo_view()))
+show(judge_file_exists("../outside.txt", repo_view()))
+show(judge_file_absent("C:/Windows/system.ini", repo_view()))

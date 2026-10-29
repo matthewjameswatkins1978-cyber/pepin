@@ -307,6 +307,21 @@ EVIDENCE_CASES = [
     ("ev-base-snapshot", "base_snapshot", "PROVEN"),
     ("ev-unknown-kind", "bogus", "INCONCLUSIVE"),
 ]
+# file_exists / file_absent. The worktree view is supplied as recorded evidence, the
+# same way steps are, because this engine judges records rather than touching disk. The
+# runner is pointed at a clean clone, so `.git` is present and `no-such-file.txt` is not;
+# `../outside.txt` is refused by `resolve_in_worktree` and is Undetermined, which is the
+# case that stops a broken path from looking like a clean negative result.
+WORKTREE_VIEW = ('WorktreeView { present_paths: [".git", "README.md"], '
+                 'rejected_paths: ["../outside.txt", "C:/Windows/system.ini"] }')
+
+FILE_CASES = [
+    ("fx-exists", "file_exists", ".git", "PROVEN"),
+    ("fx-missing", "file_exists", "no-such-file.txt", "NOT OBSERVED"),
+    ("fx-absent-exists", "file_absent", ".git", "NOT OBSERVED"),
+    ("fx-absent-missing", "file_absent", "no-such-file.txt", "PROVEN"),
+    ("fx-rejected", "file_exists", "../outside.txt", "INCONCLUSIVE"),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -545,8 +560,25 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
+        # file_exists / file_absent differential.
+        for ident, kind, path, expected in FILE_CASES:
+            body = SPEC_TEMPLATE.format(
+                ident=ident,
+                oracle_body="  all:\n"
+                            "    - type: %s\n"
+                            "      path: \"%s\"" % (kind, path))
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(
+                composed, 'judge_%s("%s", %s)' % (kind, path, WORKTREE_VIEW))
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
-             + len(STEPREF_CASES) + len(EVIDENCE_CASES))
+             + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

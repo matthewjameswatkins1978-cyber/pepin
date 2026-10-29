@@ -629,3 +629,73 @@ fn say_trail(evaluation: Evaluation) -> Unit {
     say(verdict_label(entry.verdict))
   }
 }
+
+// ---------------------------------------------------------------------------
+// Conditions: file_exists and file_absent
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//
+//   Condition::FileExists { path } => match resolve_in_worktree(ctx.worktree, path) {
+//       Ok(p) => if p.exists() { Falsified } else { NotFalsified },
+//       Err(e) => (Undetermined, Some(e.to_string())),
+//   }
+//   Condition::FileAbsent { path } => the inverse polarity, same resolve step.
+//
+// Three outcomes are reachable, measured against the framework:
+//
+//   file_exists ".git"              -> PROVEN
+//   file_exists "no-such-file.txt"  -> NOT OBSERVED
+//   file_absent ".git"              -> NOT OBSERVED
+//   file_absent "no-such-file.txt"  -> PROVEN
+//   file_exists "../outside.txt"    -> INCONCLUSIVE   (escapes the worktree)
+//   file_exists "C:/Windows/..."    -> INCONCLUSIVE   (absolute)
+//
+// The judgement runs over a RECORDED view of the worktree, not the live filesystem,
+// for the same reason the exit-code condition runs over recorded steps: this engine
+// judges evidence, it does not perform the run. A driver supplies what it observed —
+// which worktree-relative paths were present, and which paths its resolver refused —
+// and Pep decides the verdict from those facts alone.
+//
+// Explicitly not expressible, and therefore not attempted: `resolve_in_worktree`
+// normalisation itself (rejecting `..` escapes, absolutising, symlink policy). Pep has
+// no string manipulation, so a path is either worktree-relative already or it arrives
+// in `rejected_paths` as a host fact.
+
+// What a run recorded about the worktree. `rejected_paths` exists because a path the
+// resolver refused is a distinct outcome from a path that was checked and not found —
+// the reference reports the former as Undetermined and the latter as NotFalsified, and
+// collapsing them would turn a broken experiment into a clean negative result.
+type WorktreeView { present_paths: List[Str], rejected_paths: List[Str] }
+
+fn path_rejected(view: WorktreeView, path: Str) -> Bool {
+  return contains(view.rejected_paths, path)
+}
+
+fn path_present(view: WorktreeView, path: Str) -> Bool {
+  return contains(view.present_paths, path)
+}
+
+fn judge_file_exists(path: Str, view: WorktreeView) -> Verdict {
+  if path_rejected(view, path) {
+    return Inconclusive("the path is not representable inside the worktree")
+  } else {
+  }
+  if path_present(view, path) {
+    return Proven("the path exists in the worktree")
+  } else {
+    return NotObserved("the path does not exist in the worktree")
+  }
+}
+
+fn judge_file_absent(path: Str, view: WorktreeView) -> Verdict {
+  if path_rejected(view, path) {
+    return Inconclusive("the path is not representable inside the worktree")
+  } else {
+  }
+  if path_present(view, path) {
+    return NotObserved("the path exists in the worktree")
+  } else {
+    return Proven("the path does not exist in the worktree")
+  }
+}
