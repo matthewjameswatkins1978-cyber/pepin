@@ -447,3 +447,14 @@ can relay them.
   no-duplication statement vs Agent-2's branch content, INTEGRATION
   offer with NUL join already shipped, incident hold statement with
   file reference, post-hold gate. Verified the comment exists.
+
+## Packet NEXT item: growable node collections — deliberately deferred
+
+- The mission's stated next step (growable collections of arena-owned
+  node references *if a native parser genuinely requires it*) has no
+  consumer today: no native parser exists, Agent 2 has requested
+  nothing, and the demo's fixed-arity nodes cover the current need.
+  Building it now would be speculative inventory against standing
+  guidance ("let real dependencies determine the order").
+- Deferred, not dropped: revisit on the first demonstrated native
+  parser need or Agent-2 request. No code written for it on purpose.
