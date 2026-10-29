@@ -44,6 +44,18 @@ fn list_bool_all(values: List[Bool]) -> Bool {
   return all
 }
 
+fn list_bool_is_alternating(values: List[Bool]) -> Bool {
+  var alternating = true
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    alternating = if hasPrevious && item == previous { false } else { alternating }
+    previous = item
+    hasPrevious = true
+  }
+  return alternating
+}
+
 fn list_bool_is_constant(values: List[Bool]) -> Bool {
   var constant = true
   var hasPrevious = false
