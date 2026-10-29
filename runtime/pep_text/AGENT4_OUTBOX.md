@@ -57,3 +57,18 @@ can relay them.
 - Note for Agent 2/3: `INTEGRATION.md` unchanged in authority; the UTF-8
   table is offered as the future native-lexer reference. Findings here
   are SHA-bound on push.
+
+## 2026-10-29 -- slice 3: spans/diagnostics + third-slice review
+- New: `pep_span.h/.c` (`pep_span_locate`, `pep_diag_render`), `span_probe.c`.
+  Line/col byte-mirrors both span authorities (OCaml seed lexer and the
+  Pep `byte_position` model: only LF is a newline, CR is a column byte);
+  render matches the seed CLI form `file:line:col: CODE: message`.
+- Evidence: hand-computed excerpt/caret blocks (LF/CRLF/UTF-8/EOF-clamp)
+  plus OCaml-`inspect` differential over every AST span of three
+  programs. 11/11 suite green on both toolchains.
+- Incidents: Windows text-mode stdout corrupted byte assertions; probe
+  now sets binary stdout (`_WIN32`-guarded, driver-only). MSVC-target
+  Clang needs `-D_CRT_SECURE_NO_WARNINGS` for the probe `fopen` only.
+- Gap logged openly: C `BADARG` paths uncovered (slice-4 micro-item).
+- `REVIEW_SLICE3.md` holds cumulative review materials; no independent
+  reviewer was available in-session, so nothing here is self-certified.

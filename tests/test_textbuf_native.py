@@ -1,9 +1,11 @@
-"""Agent-4 slice 1: native text/byte-builder foundation checks.
+"""Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
+spans and diagnostics (slice 3).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
 capacity model through the interpreter and the Pep-written C23 emitter.
 """
+import json
 import pathlib
 import shutil
 import subprocess
@@ -43,6 +45,11 @@ DEMO_MARKERS = (
 
 def run_program(command, **kwargs):
     return subprocess.run(command, text=True, capture_output=True, check=False, **kwargs)
+
+
+def run_bytes(command, **kwargs):
+    # No text decoding: the span probe asserts raw excerpt bytes.
+    return subprocess.run(command, capture_output=True, check=False, **kwargs)
 
 
 class TextbufNativeTests(unittest.TestCase):
@@ -166,6 +173,120 @@ class TextbufNativeTests(unittest.TestCase):
             ran = run_program([str(exe)])
             self.assertEqual(ran.returncode, 0, ran.stderr)
             self.assertEqual(ran.stdout, "13\n")
+
+
+    def build_span_probe(self, compiler, exe_name):
+        sources = [str(TEXT / "span_probe.c"), str(TEXT / "pep_span.c"),
+                   str(TEXT / "pep_textbuf.c"), str(TEXT / "pep_utf8.c")]
+        flags = list(CLANG_FLAGS)
+        if "clang" in compiler.lower():
+            version = run_program([compiler, "--version"])
+            if "msvc" in (version.stdout + version.stderr).lower():
+                # MSVC-target Clang deprecates fopen under -Werror. The
+                # runtime library itself stays warning-clean under identical
+                # flags; this define is probe-driver-only.
+                flags.append("-D_CRT_SECURE_NO_WARNINGS")
+        exe = BUILD / exe_name
+        compiled = run_program([compiler, *flags, *sources, "-o", str(exe)], cwd=ROOT)
+        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+        return exe
+
+    @staticmethod
+    def parse_span_blocks(output):
+        lines = output.split(b"\n")
+        if len(lines) % 3 != 1 or lines[-1] != b"":
+            raise AssertionError("span probe output is not whole 3-line blocks")
+        blocks = []
+        for i in range(0, len(lines) - 1, 3):
+            header = lines[i].decode("ascii")
+            excerpt = lines[i + 1]
+            caret = lines[i + 2].decode("ascii")
+            first, _, rest = header.partition(": ")
+            label, line, col = first.split(":")
+            blocks.append((label, int(line), int(col), excerpt, caret, rest))
+        return blocks
+
+    def test_span_probe_clang_gcc_agree_and_render(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        fixtures = {
+            "loc_lf.pep": b"ab\ncd\nef\n",
+            "loc_crlf.pep": b"ab\r\ncd\r\n",
+            "loc_utf8.pep": "é\nx\n".encode("utf-8"),
+        }
+        cases = {
+            "loc_lf.pep": [
+                (0, (1, 1, b"ab", "^")),
+                (2, (1, 3, b"ab", "  ^")),
+                (3, (2, 1, b"cd", "^")),
+                (9, (4, 1, b"", "^")),
+                (99, (4, 1, b"", "^")),
+            ],
+            "loc_crlf.pep": [
+                (4, (2, 1, b"cd\r", "^")),
+                (2, (1, 3, b"ab\r", "  ^")),
+            ],
+            "loc_utf8.pep": [
+                (1, (1, 2, "é".encode("utf-8"), " ^")),
+                (3, (2, 1, b"x", "^")),
+            ],
+        }
+        outputs = []
+        for compiler, name in ((clang, "span_clang.exe"), (gcc, "span_gcc.exe")):
+            probe = self.build_span_probe(compiler, name)
+            rendered = []
+            for fixture, data in fixtures.items():
+                path = BUILD / fixture
+                path.write_bytes(data)
+                offsets = [str(off) for off, _ in cases[fixture]]
+                ran = run_bytes([str(probe), str(path), "t", *offsets])
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                rendered.append((fixture, self.parse_span_blocks(ran.stdout)))
+            outputs.append(rendered)
+        self.assertEqual(outputs[0], outputs[1])
+        for fixture, blocks in outputs[0]:
+            for (off, expected), got in zip(cases[fixture], blocks):
+                _, line, col, excerpt, caret, rest = got
+                self.assertEqual((line, col, excerpt, caret), expected, (fixture, off))
+                self.assertEqual(rest, "E_PROBE: probe message")
+
+    def test_span_matches_ocaml_inspect(self):
+        programs = {
+            "prog_lf.pep": b"fn main() -> Int {\n  return 42\n}\n",
+            "prog_crlf.pep": b"fn main() -> Int {\r\n  return 42\r\n}\r\n",
+            "prog_utf8.pep": "fn main() -> Int {\n  say(\"caf\u00e9\")\n  return 0\n}\n".encode("utf-8"),
+        }
+        clang = shutil.which("clang")
+        self.assertIsNotNone(clang, "Clang not found")
+        probe = self.build_span_probe(clang, "span_ocaml.exe")
+        for fixture, data in programs.items():
+            path = BUILD / fixture
+            path.write_bytes(data)
+            inspected = self.pep("inspect", str(path), "--json")
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            wanted = {}
+
+            def collect(node):
+                if isinstance(node, dict):
+                    if set(node) == {"offset", "line", "column"}:
+                        wanted[node["offset"]] = (node["line"], node["column"])
+                    for value in node.values():
+                        collect(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        collect(value)
+
+            collect(json.loads(inspected.stdout)["ast"])
+            self.assertTrue(wanted, fixture)
+            offsets = sorted(wanted)
+            ran = run_bytes([str(probe), str(path), "t", *[str(o) for o in offsets]])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            blocks = self.parse_span_blocks(ran.stdout)
+            self.assertEqual(len(blocks), len(offsets))
+            for off, (_, line, col, _, _, _) in zip(offsets, blocks):
+                self.assertEqual((line, col), wanted[off], (fixture, off))
 
 
 if __name__ == "__main__":
