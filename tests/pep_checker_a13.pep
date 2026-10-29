@@ -1327,14 +1327,14 @@ fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, fun
   return false
 }
 
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var activeFunctionFound = false
   var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
-  for node in nodes {
+  for node in activeNodes {
     if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
       let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
       if nextStatement.found { unreachable = UnreachableLookup { found: true, node: nextStatement.node } } else {}
@@ -2072,6 +2072,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
   }
   return TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: reverse(selectedDiagnosticsReversed), unreachable: unreachable }
+}
+fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+  return type_analysis_over_nodes(nodes, nodes, functions, bindings, references)
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
