@@ -286,6 +286,14 @@ fn list_int_prefix_length_between(values: List[Int], lower: Int, upper: Int) -> 
   return length
 }
 
+fn list_int_suffix_length_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var length = 0
+  for item in values {
+    length = if lower <= item && item <= upper { length + 1 } else { 0 }
+  }
+  return length
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
