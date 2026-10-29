@@ -182,6 +182,18 @@ fn list_int_count_rises(values: List[Int]) -> Int {
   return rises
 }
 
+fn list_int_count_falls(values: List[Int]) -> Int {
+  var falls = 0
+  var hasPrevious = false
+  var previous = 0
+  for item in values {
+    falls = if hasPrevious && !(previous <= item) { falls + 1 } else { falls }
+    previous = item
+    hasPrevious = true
+  }
+  return falls
+}
+
 fn list_int_count_runs(values: List[Int]) -> Int {
   var runs = 0
   var hasPrevious = false
