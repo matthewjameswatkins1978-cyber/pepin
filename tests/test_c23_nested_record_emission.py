@@ -130,30 +130,27 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
         source_text = (
             "type MaybeInt = None() | Some(Int)\n"
             "fn pass(value: MaybeInt) -> MaybeInt { return value }\n"
-            "fn unwrap(value: MaybeInt) -> Int {\n"
-            "  return match value {\n"
-            "    None() => 0\n"
-            "    Some(_) => 42\n"
-            "  }\n"
-            "}\n"
             "fn main() -> Int {\n"
             "  let absent = pass(None())\n"
             "  let candidate = Some(42)\n"
             "  let present = pass(candidate)\n"
-            "  return unwrap(present)\n"
+            "  return match present {\n"
+            "    None() => 0\n"
+            "    Some(value) => value\n"
+            "  }\n"
             "}\n")
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
             source = pathlib.Path(temp_dir) / "maybe-int.pep"
             source.write_text(source_text, encoding="utf-8", newline="\n")
             reference = pathlib.Path(temp_dir) / "reference.pep"
             reference.write_text(
-                source_text + "say(int_text(main()))\nsay(int_text(unwrap(pass(None()))))\n",
+                source_text + "say(int_text(main()))\n",
                 encoding="utf-8", newline="\n")
 
             interpreted = self.invoke("run", reference)
             self.assertEqual(interpreted.returncode, 0,
                              interpreted.stdout + interpreted.stderr)
-            self.assertEqual(interpreted.stdout, "42\n0\n")
+            self.assertEqual(interpreted.stdout, "42\n")
 
             generated = emit(source.read_bytes())
             self.assertRegex(
@@ -220,9 +217,58 @@ fn main() -> Int {
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
 
-    def test_recursive_union_layout_fails_closed(self):
+    def test_recursive_tree_union_uses_arena_and_checked_helper_passing(self):
+        source_text = """type Tree = Leaf(Int) | Branch(Tree)
+fn first(value: Tree) -> Tree {
+  return match value {
+    Leaf(_) => Leaf(0)
+    Branch(child) => child
+  }
+}
+fn main() -> Int {
+  let child = first(Branch(Leaf(19)))
+  return match child {
+    Leaf(number) => number
+    Branch(_) => 0
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-tree.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "19\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn('#include "pep_arena.h"', generated)
+            self.assertRegex(generated,
+                             r"struct pep_union_\d+ \* field_0;")
+            self.assertNotRegex(generated,
+                                r"struct \{ pep_union_\d+ field_0;")
+            self.assertRegex(
+                generated,
+                r"static pep_union_\d+ pep_require_union_\d+\(const pep_union_\d+ \*pep_value\)")
+            self.assertIn("pep_arena_alloc(pep_arena, sizeof(pep_union_", generated)
+            self.assertIn("pep_recursive_0 == NULL", generated)
+            self.assertRegex(
+                generated,
+                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+, pep_arena_t \*pep_arena\);")
+            self.assertIn("pep_arena), pep_arena)", generated)
+            self.assertIn("pep_arena_init(&pep_arena, 0)", generated)
+            self.assertIn("pep_arena_status(pep_arena)", generated)
+            self.assertIn("pep_arena_free(&pep_arena)", generated)
+            self.assertIn("pep_require_union_", generated)
+
+    def test_recursive_union_list_payload_fails_closed(self):
         source_text = (
-            "type Chain = End() | Link(Chain)\n"
+            "type Chain = End() | Link(List[Chain])\n"
             "fn main() -> Int { return 0 }\n")
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
