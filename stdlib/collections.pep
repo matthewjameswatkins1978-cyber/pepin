@@ -479,6 +479,16 @@ fn list_int_max_or(values: List[Int], fallback: Int) -> Int {
   return maximum
 }
 
+fn list_bool_index_of(values: List[Bool], needle: Bool) -> Int {
+  var index = 0
+  var foundAt = -1
+  for item in values {
+    foundAt = if foundAt == -1 && item == needle { index } else { foundAt }
+    index = index + 1
+  }
+  return foundAt
+}
+
 fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
   for item in values { return item }
   return fallback
