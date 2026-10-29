@@ -1,5 +1,5 @@
 """Agent-4 runtime text checks: builder foundation (slice 1), UTF-8 (slice 2),
-spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5).
+spans and diagnostics (slice 3), file pipeline (slice 4), JSON escaping (slice 5), integer parsing (slice 6).
 
 Builds the standalone demo with Clang (primary) and GCC (cross-check),
 runs both, and verifies identical generated text. Also verifies the Pep
@@ -197,6 +197,10 @@ class TextbufNativeTests(unittest.TestCase):
     def build_json_probe(self, compiler, exe_name):
         return self._build_c(compiler, exe_name,
             ["json_probe.c", "pep_json.c", "pep_textbuf.c"])
+
+    def build_num_probe(self, compiler, exe_name):
+        return self._build_c(compiler, exe_name,
+            ["num_probe.c", "pep_num.c", "pep_textbuf.c"])
 
     @staticmethod
     def parse_span_blocks(output):
@@ -402,6 +406,54 @@ class TextbufNativeTests(unittest.TestCase):
             ran = run_bytes([str(probe), str(raw)])
             self.assertEqual(ran.returncode, 0, ran.stderr)
             self.assertEqual(ran.stdout, expected)
+
+
+    def test_num_matches_ocaml_inspect(self):
+        clang = shutil.which("clang")
+        gcc = shutil.which("gcc")
+        self.assertIsNotNone(clang, "Clang not found")
+        self.assertIsNotNone(gcc, "GCC not found")
+        for literal in ("0", "007", "42", "9223372036854775807"):
+            path = BUILD / ("num_%s.pep" % literal)
+            path.write_text("fn main() -> Int {\n  return %s\n}\n" % literal,
+                            encoding="utf-8", newline="\n")
+            inspected = self.pep("inspect", str(path), "--json")
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            value = json.loads(inspected.stdout)["ast"][0]["body"][0]["value"]["value"]
+            self.assertEqual(value, int(literal), literal)
+            probe = self.build_num_probe(clang, "num_ocaml.exe")
+            ran = run_bytes([str(probe), literal])
+            self.assertEqual(ran.returncode, 0)
+            printed, consumed = ran.stdout.split(b"\n")[0].split(b" ")[1:]
+            self.assertEqual((int(printed), int(consumed)), (value, len(literal)))
+        rejected_path = BUILD / "num_big.pep"
+        rejected_path.write_text(
+            "fn main() -> Int {\n  return 9999999999999999999999\n}\n",
+            encoding="utf-8", newline="\n")
+        rejected = self.pep("inspect", str(rejected_path), "--json")
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("PEP_INT_LITERAL_RANGE", rejected.stdout)
+        vectors = ["0", "007", "-0", "-42", "9223372036854775807",
+                   "-9223372036854775808", "9223372036854775808",
+                   "-9223372036854775809", "", "-", "12x", " 12",
+                   "abc", "00", "-00"]
+        expected = (
+            b"p 0 1\np 7 3\np 0 2\np -42 3\np 9223372036854775807 19\n"
+            b"p -9223372036854775808 20\np overflow\np overflow\n"
+            b"p nodigits\np nodigits\np 12 2\np nodigits\np nodigits\n"
+            b"p 0 2\np 0 3\n"
+            b"r 0\nr 1\nr -1\nr 42\nr -42\nr 9223372036854775807\n"
+            b"r -9223372036854775808\nr 1234567890123456789\n"
+            b"r -1234567890123456789\n"
+        )
+        outputs = []
+        for compiler, name in ((clang, "num_clang.exe"), (gcc, "num_gcc.exe")):
+            probe = self.build_num_probe(compiler, name)
+            ran = run_bytes([str(probe), *vectors])
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(ran.stdout, expected)
+            outputs.append(ran.stdout)
+        self.assertEqual(outputs[0], outputs[1])
 
 
 if __name__ == "__main__":

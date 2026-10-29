@@ -93,3 +93,19 @@ can relay them.
 - New: `pep_json.h/.c` (`pep_json_escape`), a byte-exact mirror of the OCaml seed `json_string`, plus `json_probe.c`. Short escapes, `\b`, `\f`, lowercase `\u00xx`, raw passthrough for DEL/UTF-8/invalid bytes — no validation, exactly like the authority.
 - Evidence: differential loop per string literal — OCaml `inspect` raw token, Python `json.dumps` agreement assert, both C probes reproduce the token byte-for-byte. Covers `\" \\ \n \t \r \0`, raw controls (0x01 raw tab 0x08 0x0C 0x7F), empty string, quote/backslash-only, unicode, emoji, embedded NUL (length-delimited, no `strlen`), and raw invalid bytes. 13/13 suite green on both toolchains.
 - No Pep files: Str has no byte access or concatenation in the language, so this primitive is inexpressible in Pep; the OCaml differential is the execution evidence. Escaping changes rendering only, never semantics — offered as the future native machine-interface primitive.
+
+## 2026-10-29 -- slice 6: integer parsing + second review
+- New: `pep_num.h/.c` (`pep_parse_i64`) for the tool-protocol signed
+  decimal form (optional `-`, maximal digit run, MIN-safe unsigned
+  accumulation, NODIGITS/OVERFLOW/BADARG), plus `num_probe.c` with
+  argv vectors and fixed round-trips through `append_i64`.
+- Evidence: differential against OCaml `inspect` int values (0, 007,
+  42, MAX) with consumed-length equality, plus the overflow literal
+  rejected with `PEP_INT_LITERAL_RANGE`; exact probe output on both
+  toolchains incl. partial runs (`12x` → 12/end 2) and all nine
+  round-trips. 14/14 suite green.
+- Signed form is deliberate (tool-protocol authority, round-trip
+  needs), not lexer-token conflation; documented in the header.
+- Gap logged openly: JSON/number `BADARG` paths lack direct negative
+  calls (slice-7 micro-item). `REVIEW_SLICE6.md` holds the slices 4–6
+  cumulative review; no independent reviewer available in-session.
