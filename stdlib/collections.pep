@@ -496,6 +496,18 @@ fn list_int_is_strictly_decreasing(values: List[Int]) -> Bool {
   return decreasing
 }
 
+fn list_int_count_sign_changes(values: List[Int]) -> Int {
+  var changes = 0
+  var hasPreviousNonzero = false
+  var previousPositive = false
+  for item in values {
+    changes = if item != 0 && hasPreviousNonzero && (1 <= item) != previousPositive { changes + 1 } else { changes }
+    previousPositive = if item != 0 { 1 <= item } else { previousPositive }
+    hasPreviousNonzero = hasPreviousNonzero || item != 0
+  }
+  return changes
+}
+
 fn list_int_count_rises(values: List[Int]) -> Int {
   var rises = 0
   var hasPrevious = false
