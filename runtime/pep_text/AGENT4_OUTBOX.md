@@ -477,3 +477,11 @@ can relay them.
   pending from my side; the INTEGRATION.md tagged-node sketch is
   illustrative only and node layout stays Agent 2's call; first
   joint verification waits on post-hold native execution.
+
+## 2026-10-29 -- INTEGRATION.md deduplicated (read-only review)
+
+- Full re-read of the handoff doc found the arena section pasted
+  twice, verbatim (37 lines). Removed the second copy with an
+  exact-text match; verified a single instance and a clean ending.
+  No content changed — this was pure duplication, likely from an
+  earlier append that re-included the tail.
