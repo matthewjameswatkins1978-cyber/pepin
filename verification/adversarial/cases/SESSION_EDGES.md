@@ -33,6 +33,10 @@ Diagnostic instrumentation is queryable; it is not language semantics.
 
 Sequence: `open` → `query` → `query` (same rev) → `apply_edit` (1→2) → `query` (new rev) → `metrics` → `TESTED`: `parse_count: 2, typecheck_count: 2, cache_hits: 3`. Reading: the open analyses once; both same-revision queries hit the cache (+2); the edit forces full re-analysis (+1/+1, no cross-revision reuse); querying the fresh revision hits the just-computed analysis (+1). This is the documented incremental boundary behaving exactly as specified — reuse within a revision, never across one.
 
+## Superseded-but-valid revisions stay queryable
+
+After a valid `apply_edit` (rev1 → rev2), querying *both* revisions in-session → `TESTED`: `outcome: ok`, `status: valid` for each, with their own content-addressed revision identities. Retention is not just for the current revision or invalid ones (O2 tested): the full retained history remains queryable until the session ends, exactly as the protocol states.
+
 ## `inspect` is the untyped stage
 
 `inspect --json` on a valid file → `TESTED`: status `parsed` with a spanned AST and no `typedTree`; `check` adds the typed tree. The CLI stages (parse vs check) are distinct artifacts, consistent with the pipeline's stage separation.

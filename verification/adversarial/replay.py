@@ -641,6 +641,37 @@ def main():
           and _mz.get("cache_hits") == 3)
     results.append(("O5-xrev", PASS if ok else FAIL,
                     "metrics=%s" % _mz))
+    _ho = sess([{"schemaVersion": 3, "op": "open", "name": "m",
+                    "source": "fn main() -> Int { return 1 }\n"}])[0]
+    _hd2, _hr2 = _ho["document"], _ho["revision"]
+    _he = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd2,
+         "expected_revision": _hr2, "start_byte": 26, "end_byte": 27,
+         "replacement": "2"},
+        {"schemaVersion": 3, "op": "query", "document": _hd2,
+         "revision": _hr2},
+    ])
+    _hnew = _he[1]["revision"]
+    _hq = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd2,
+         "expected_revision": _hr2, "start_byte": 26, "end_byte": 27,
+         "replacement": "2"},
+        {"schemaVersion": 3, "op": "query", "document": _hd2,
+         "revision": _hr2},
+        {"schemaVersion": 3, "op": "query", "document": _hd2,
+         "revision": _hnew},
+    ])
+    ok = (_hq[2].get("outcome") == "ok"
+          and _hq[2].get("status") == "valid"
+          and _hq[3].get("outcome") == "ok"
+          and _hq[3].get("status") == "valid")
+    results.append(("O6-retained", PASS if ok else FAIL,
+                    "old=%s new=%s" % (_hq[2].get("status"),
+                                       _hq[3].get("status"))))
     _ip = TMP / "a3_inspect.pep"
     _ip.write_bytes(b"fn main() -> Int { return 1 }\n")
     try:
