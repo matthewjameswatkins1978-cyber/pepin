@@ -1101,6 +1101,41 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(result.stdout, "42\n")
 
 
+    def test_multi_parameter_generic_record_reorders_fields_and_checks_consistency(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "type Pair[A, B] { first: A second: B }\n"
+                "fn swap[A, B](pair: Pair[A, B]) -> Pair[B, A] { "
+                "return Pair { first: pair.second, second: pair.first } }\n"
+                "let pair = Pair { first: 42, second: \"pep\" }\n"
+                "let swapped: Pair[Str, Int] = swap(pair)\n"
+                "say(swapped.first)\n"
+                "say(int_text(swapped.second))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-pair.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            pair = json.loads(checked.stdout)["typedTree"]["types"][0]
+            self.assertEqual(pair["typeParameters"], ["A", "B"])
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "pep\n42\n")
+
+    def test_repeated_record_type_parameter_rejects_conflicting_fields(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "type Same[T] { first: T second: T }\n"
+                "let value = Same { first: 1, second: \"text\" }\n"
+            )
+            path = pathlib.Path(temporary) / "generic-record-conflict.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            result = invoke("check", path, "--json")
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            diagnostic = json.loads(result.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_GENERIC_ARGUMENT_MISMATCH")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], source.index("\"text\""))
+
     def test_generic_record_fields_compose_with_generic_function_inference(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = (

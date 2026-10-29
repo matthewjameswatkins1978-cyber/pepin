@@ -670,7 +670,7 @@ let check tops =
       |EList(items,_) when items<>[]->let inferred=List.filter_map infer_expression_type items in (match inferred with first::rest when List.for_all((=)first)rest->Some(List first)|_->None)
       |_->(try (synth env scope expression).ety with Error diagnostic when diagnostic.code="PEP_EMPTY_LIST_NEEDS_TYPE"->None)
     in
-    (match supplied_args with Some _->()|None->List.iter(fun(field,value,field_span)->match List.find_opt(fun(_,known,_,_)->known=field)info.record_fields with Some(_,_,template,_)->Option.iter(fun actual->infer_type template actual field_span)(infer_expression_type value)|None->())fields);
+    (match supplied_args with Some _->()|None->List.iter(fun(field,value,field_span)->match List.find_opt(fun(_,known,_,_)->known=field)info.record_fields with Some(_,_,template,_)->Option.iter(fun actual->infer_type template actual (expr_span value))(infer_expression_type value)|None->())fields);
     List.iter(fun parameter->if not(Hashtbl.mem substitutions parameter) then fail "PEP_GENERIC_INFERENCE" ("Cannot infer type parameter '"^parameter^"' for record '"^name^"'") s ())info.record_type_params;
     let args=List.map(fun parameter->Hashtbl.find substitutions parameter)info.record_type_params in
     let supplied=Hashtbl.create 8 in
