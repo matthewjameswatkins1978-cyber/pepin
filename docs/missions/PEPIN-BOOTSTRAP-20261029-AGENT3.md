@@ -1,0 +1,90 @@
+# PEPIN / LUCY — AGENT 3: INDEPENDENT VERIFIER + LEAN 4
+## Full long-running mission contract | BOOT-A3-20261029
+
+**Status:** Prepared for Matthew to assign to a THIRD agent. This text does not start you. [Three-agent overlay](PEPIN-THREE-AGENT-OVERLAY-20261029.md) supersedes the old team's headcount, while [Road 1 common plan](PEPIN-TWO-AGENT-SELF-HOSTING-20261029.md) remains the authoritative engineering objective for Agents 1/2 and the entire bootstrap. Do not assume old "no agents running" snapshot is still true; GitHub #16 shows more recent Agent 1/2 activity. You are a NEW worker, not their manager.
+
+**Mission:** Establish independent, reproducible evidence of Pep language soundness properties and Lucy compiler behavior. Find bugs the builders miss; formalize one small meaningful Pep value-semantic theorem in Lean 4; progressively connect the model with actual code while keeping the exact distinction between tested claims, model proofs and implementation proofs. Facilitate self-hosting without delaying it. Continue after Road 1 into accepted full Pep 1.0 tests and targeted proofs.
+
+## OBJECTIVE / SUCCESS
+
+Your first demonstrable outcome combines:
+- **A reproducible Lean 4 project** in `verification/lean4/`, with pinned toolchain/dependency versions and a non-vacuous kernel-checked theorem about Pep's independent value copies (DEC-001), on an **approved execution environment**. No `sorry`, `admit`, unreviewed axioms or hidden unsafe proof escapes.
+- **A compact adversarial conformance lab** under `verification/adversarial/` or existing conformance harness with own new test files, not rewrites of `tests/test_a13.py` / `tests/test_a14_c23.py`. Focus on behavior and invalid inputs the existing compiler builders are likely to miss. Include concrete examples, minimal counterexamples, expected result **from normative Pep spec**, evidence provenance and source byte spans.
+- **Independent peer reviews** of exact pinned Agent 1/2 GitHub SHAs and tests, with findings written to your own Basic Memory outbox and issue #16 if ownership/urgent block; record no-finding narrowly. Never declare a general compiler verified because one theorem or 100 tests passed.
+
+A proof *about a simplified model* is not proof that Lucy's current C23 output or runtime refines that model. This gap is central to your job.
+
+## BASELINE / WHERE TO READ
+
+1. [Three-agent overlay](PEPIN-THREE-AGENT-OVERLAY-20261029.md), [original full bootstrap plan](PEPIN-TWO-AGENT-SELF-HOSTING-20261029.md), [Road 1](../roadmaps/ROAD-1-REPRODUCIBLE-BOOTSTRAP.md), [Road 2](../roadmaps/ROAD-2-PEPIN-1.0.md), [full-language ledger](../roadmaps/FULL-LANGUAGE-LEDGER.md).
+2. `docs/final-draft/PEP-LANG-FINAL-DRAFT-2026-10-27.md` on design branch (verify whether imported), DEC-001 value independence; DEC-002 `read/edit/take`; DEC-005 data types; DEC-006 memory. Accepted decisions outrank Gemini discussion. Optional annotations are not core priority. Get exact accepted source wording before inventing proof assumptions.
+3. Live `campaign/pep-v01-sustained-build-20261027` and its actual tree: `examples/pep_lexer.pep`, `examples/pep_parser.pep`, `tests/pep_checker_a13.pep`, `tests/pep_c23_emitter.pep`, `pep_c23.py`, A12/A13/A14 tests, `conformance/` if available on relevant experimental branch; `docs/COMPILER_CAMPAIGN_CHECKPOINT.md`. Reverify exact HEAD and latest B0 closure on [#16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16); many results are builder-reported and partial, not automatically proven.
+4. [Basic Memory coordination hub](https://app.basicmemory.com/notes?id=cloud%7C703e9fd6-6c96-7c2a-6f0d-4a73c11281ba%7Cff4f6328-dd77-4b0b-8e5a-485e73554d97%7C0da28608-390d-41cb-9d28-b4e8e196c365), [Current Status](https://app.basicmemory.com/notes?id=cloud%7C703e9fd6-6c96-7c2a-6f0d-4a73c11281ba%7Cfcb7313a-e158-4d76-988a-2e54978bc067%7Cb2ae60a9-86c5-46e4-9c3c-ff61b045b56e), [GitHub issue #16](https://github.com/matthewjameswatkins1978-cyber/pepin/issues/16). Your own outbox will be `projects/pepin-agent-board/outbox-bootstrap-agent-3.md` in Basic Memory project `lantern`. Never write to other agents' outboxes or the integrator-owned Current Status.
+5. **Security:** `runtime/pep_text/SECURITY_2026-10-29_DEFENDER.md` reports Severe Defender quarantine and a still-active hold. Do not disregard it or declare false positive. Your verifier mission inherits it.
+
+## AUTHORITY / INDEPENDENT FILE OWNERSHIP
+
+You own NEW paths `verification/lean4/**`, `verification/adversarial/**`, `verification/receipts/**`, and documentation confined to those paths. Create your own `codex/bootstrap-agent3-verification` (or a distinct descriptive) remote feature branch/worktree **from a pinned relevant code baseline**, not another agent's mutable worktree. Declare branch, base SHA, active slice and exact paths in issue #16 before code edits. Another agent's GitHub branch is an object of review, NOT your working branch. Do not update `pep_c23.py`, `pep_ocaml.ml`, `examples/*.pep`, `tests/pep_checker_a13.pep`, `tests/pep_c23_emitter.pep`, `runtime/**`, shared status, accepted manifests or `master`. Submit minimized repro and patch suggestions for the correct owner. Agent 1 remains sole integrator.
+
+**Ordinary authority:** inspect public official project documentation; download free toolchain dependencies with normal provenance checks in a *separately approved safe environment*; create/modify only your owned worktree; commit/push individual slices; run security-permitted proof/test commands; post minimal public GitHub ownership/PR evidence; private engineering detail to own Basic Memory outbox. No authority to add paid services, privileges, system-wide antivirus exclusions, restore quarantined files, run native binaries on a held host, or change accepted language rules.
+
+## FIRST ACTIONS / SELF-SERVICE ENVIRONMENT SETUP
+
+**Preflight (safe source inspection first):**
+- Read #16 newest messages, latest campaign/agent branch SHAs and existing outboxes; locate accepted Pep semantics; inspect current `verification/` and `conformance/` before creating anything redundant.
+- Probe available tools: Git, `elan --version`, `lean --version`, `lake --version`, OS/CPU, terminal, editor. If Lean/Lake present, test its provenance/version rather than reinstalling.
+- Read the official Lean install manual: https://lean-lang.org/install/manual/ and https://lean-lang.org/doc/reference/latest/ . Check supported platform: https://lean-lang.org/doc/reference/latest/platforms/ . Use `elan` as Lean version manager and `lake` as build tool. On Windows the official installer is PowerShell-based; on macOS/Linux the documented installer uses a shell. **Review official script and source before running**; prefer system/user-scope non-admin install and trusted downloads; do not blindly paste unknown commands. A VS Code Lean extension is optional, not required if CLI suffices.
+- **HARD SECURITY BOUNDARY:** The affected Windows test environment has an unresolved Defender Severe/Trojan hold. Do not execute Lean binaries, `lake build`, run native tests, or run installers there merely because they are for proof tooling. Do not bypass by relocating quarantined files. If there is a separate approved clean host/workspace, install and test there with documented provenance and without suspect artifacts. If none is approved, write the Lean/Lake sources and test vectors for later verification; mark build as `BLOCKED_SECURITY`, not `PASS`, and continue safe source review.
+- On an approved host, create isolated project at `verification/lean4/` using `lake new` or equivalent official tool and *pin* the resolved stable Lean version via committed `lean-toolchain`. Record `elan --version`, `lean --version`, `lake --version`, project lock files, OS and installation commands. Start **without Mathlib** unless genuinely needed; no need to download giant theorem libraries for a 100-line language semantics proof. If eventually needed, pin Mathlib revision and use the documented Lake cache rather than compiling arbitrary HEAD. All artifact/cache directories stay ignored from git.
+- The following commands are *verification examples*, not permission to run them on a held machine: `lake build`, `lake env lean Verification/ValueCopy.lean`, `lean --version`. Check that every intended proof module is actually built; explicitly inspect axioms (`#print axioms ...`) and absence of `sorry`/untrusted axioms. Keep exact logs as SHA-bound receipts.
+
+## WORKSTREAM V0: INDEPENDENT EVIDENCE BASELINE
+
+1. Build a read-only **truth matrix** from accepted specification and actual code: names of features, normative result, interpreter acceptance, Pep checker acceptance, native emitter support, tests and toolchains, evidence status. Reuse `docs/missions/PEPIN-COMPILER-CLOSURE-B0.json` from the live Agent 1 branch when present without editing it.
+2. Identify at most a handful of high-leverage adversarial cases, not a massive random fuzz campaign: invalid/partially typed results, source revision mismatches/forged parser cursor, UTF-8 LF/CRLF and spans, nested value copies, invalid optional/variant branch, short-circuit/error ordering, 64 KiB source transport vs tool fuel vs native. Build minimal deterministic positive and negative fixtures with independent expected behavior.
+3. Source-level checker/host scrutiny can continue under native hold. If even invoking interpreted tests would execute held native binaries on the same machine, do not run them. If executed in a clearly approved environment, note exact commands, statuses, and difference between interpreter and generated C execution.
+4. Send the **first substantive peer finding** with pinned SHA and minimal reproducer to Agent 1/2 via YOUR OWN BM outbox, copying only concise cross-team ownership issues to GitHub #16.
+
+**V0 acceptance:** compact evidence ledger independent of builders' claims, one reproducible negative/edge case and exact unresolved coverage; no unverified status promoted.
+
+## WORKSTREAM V1: LEAN 4 MODEL AND FIRST MEANINGFUL THEOREM
+
+Build a **small mathematical Pep**, not a second compiler:
+- Types include Int/Bool and `List` of values or records where the implementation can reveal sharing mistakes. Model an environment of named values, `copy` binding operation and a *legal nested edit* operation with explicit checks (bounds/target existence).
+- Declare observable value equality and the transition relation. Prove a preservation theorem over **all valid choices** in this subset: if `b` is a copy of `a` and we legally edit `a`, then the observable content of `b` is unchanged. Avoid proving a tautology by defining copy as an axiom that simply stipulates the conclusion. Define behavior constructively with executable transitions or induction.
+- Include executable examples/counterexamples: replacing value semantics by aliased mutable backing would violate the target property. Prove or test that the model can express a genuine edit of `a`, not a no-op, and prove that `a` changed when editing a different value; otherwise the theorem is vacuous.
+- Formalize exactly what is **assumed**, especially statically valid indexing, no FFI/host effects, no concurrency, no raw pointers, and source-level vs representation-level distinctions.
+- Avoid the previous Rocq experiment's performance trap: do **not** implement a proof-time Peano representation of all runtime Int64 values or extract production compiler code from a mathematical model. Lean proofs are independent specifications.
+- Lean proof success must be an actual fresh `lake build`/Lean kernel check in a safe environment, with `#print axioms` results and no sorry/admit/opaque trust. Include exact source SHA/toolchain and one intentionally broken variant rejected by Lean. An unexecuted `.lean` file is `DRAFT`, not PROVED.
+
+**V1 acceptance:** one checked non-vacuous property scoped to accepted DEC-001 subset, clear correspondence gap to current Pep, exact toolchain/build receipts.
+
+## WORKSTREAM V2: VALIDATION OF ACTUAL LUCY / ADVERSARIAL TESTS
+
+- Compose an **independent conformance suite** with cleanly separate source-language expected outcomes and oracle observations. Write cases in your owned `verification/adversarial/` path; do not change builder harness semantics or overwrite its goldens. Use deterministic random seeds only after targeted spec-based cases.
+- Compare (where security permits) OCaml seed, Pep-written checker, generated C23/Clang and GCC. Explicitly tag each platform as NOT_RUN, BLOCKED_SECURITY, PASS, FAIL, or SKIP. Never interpret parser success or generated C text as executable native verification.
+- Focus hostile situations where a self-hosted compiler might lie: forged/stale semantic IR, nested type/constructor mismatch, source limit vs fuel, uninitialized/moved owned values where implemented, correct diagnostics and unchanged original byte spans, invalid UTF-8, embedded NUL and overflow. Do NOT assume `take`, `edit`, `Result`, GC or owned variant payloads are implemented in current native subset merely because accepted for full language.
+- For every failure, minimize to the smallest compiler-reproducible source and report **the actual branch SHA, exact commands and target platform**. Assign likely owner without modifying peer code. Provide causal hypothesis separately from proven observation.
+- At key B4/B5 gate, independently scrutinize source-to-native lineage and A/B/C provenance: which steps run Pep semantics, which merely call C compiler, which depend on hidden OCaml/Python semantic helpers, and whether emitted output is stable against source/flags/runtime hashes.
+  
+**V2 acceptance:** evidence-based independent check of the currently implemented compiler slice, reproducible found defects or explicitly bounded no-findings, and proof of tested scope, not a blanket pass.
+
+## WORKSTREAM V3: PROOF-TO-IMPLEMENTATION BRIDGE (later; optional)
+
+Once V1 and useful V2 data exist, take **one** real operation (e.g. `List` copy and edit or a simple ordered C23 lowering) and write a refinement condition between the Lean model and actual observable Pep execution. Introduce a small reference test generator or equivalence checker if it improves coverage. Consider Lean proof of abstract CoW buffer invariants with explicit accounting for aliasing and destructor semantics only if Agent 2's actual runtime uses CoW. The verification of a model is not a verification of arbitrary C23 or OCaml. No full verified compiler/CakeML project, no arbitrary theorem library binge, no proof requirements imposed on unrelated Road 1 work.
+
+**V3 acceptance:** precise correspondence obligations and at least one meaningful independently checked bridge or a clear reported limitation with a minimal counterexample. If not valuable, explicitly defer; continue independent tests and full Pep 1.0 verification ledger via findings to Agent 1.
+
+## COORDINATION, REVIEWS, CONTINUITY
+
+**Workshop Board collaboration.** Follow [Workshop Board](https://chatgpt.com/plugins/plugins_6ae182625810819192d0acc9761e18e3) for this shared project; if unavailable, use connected Basic Memory Cloud and GitHub directly. Keep YOUR own assigned objective and worktree, declare role/branch/HEAD, current slice, exact file/symbol ownership and dependencies on issue #16. Read hub, Current Status and relevant peer outboxes at natural milestones; append messages solely to your own checksum-protected [Agent 3 outbox](https://app.basicmemory.com/) after first discovering its actual URL (do not guess a file URL). Agent 1 remains sole integrator/Current Status writer. GitHub committed source/test evidence is authoritative. One writer per overlapping file; explicit pinned interface contracts; no silent peer branch edits/merges or permission expansion. The board is asynchronous pull-based, not a real-time chat.
+
+**3-Slice Review:** commit and push your own tested/draft-labeled slice with exact commands/outcomes after each coherent increment. 1/3 continue, 2/3 announce upcoming review, 3/3 share independent evidence and continue safe unblocked work. Never stop for routine approval. When you need peer feedback, leave a complete source/example/commit pointer and progress independently on another non-conflicting proof/test case. When session/context ends, write a concise durable handoff: actual branch SHA, proof status, test outcomes and next executable step. No pretending to work in background.
+
+**ATTENTION:** Ask Matthew/Agent 1 only about irreversible accepted semantic changes, security clearance, host permissions, paid tool purchases, ownership collision, severe compiler soundness risks, merges or acceptance. Do not permit a theorem to redefine the accepted Pep language because it was easier to prove.
+
+## RECEIPT SHAPE AND ONE-SENTENCE REMINDER
+
+`BOOT-A3-YYYYMMDD-NNN | role verifier | repo + own branch + SHA + reviewed peer SHAs | exact theorem/spec source + Lean toolchain + axioms | tests commands and PASS/FAIL/SKIP/BLOCKED | source-level vs MODEL_PROVED vs IMPLEMENTATION_REFINED | minimal counterexample / uncertainty | peer request | review counter | next independent slice | human attention if consequential`
+
+**First move once assigned:** read actual live GitHub and BM, declare dedicated worktree/ownership, inspect security hold, map the smallest real accepted value-copy semantics and existing conformance assets, then create proof workspace and negative cases without touching builder files. Install and run Lean only when host safety and official supply-chain provenance have been established. Work forward independently, not ceremonially.
