@@ -1335,7 +1335,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                 "fn main() -> Int {\n"
                 "  var total = 0\n"
                 "  for item in [1] {\n"
-                "    if item == 0 { return total } else { total = total + 3 }\n"
+                "    if item == 0 { let ignored = item } else { total = total + 3 }\n"
                 "  }\n"
                 "  return total\n"
                 "}\n"
@@ -1379,6 +1379,54 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                     self.assertEqual(result.stdout, reference.stdout)
                     c_source = generated_c.read_text(encoding="utf-8")
                     self.assertGreaterEqual(c_source.count("!!("), 2)
+
+    def test_loop_conditionals_can_return_early(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        cases = (
+            ("for-in",
+             "fn main() -> Int {\n"
+             "  var total = 0\n"
+             "  for item in [2, 3, 8] {\n"
+             "    if item == 3 { return total + item } else { total = total + item }\n"
+             "  }\n"
+             "  return total\n"
+             "}\n",
+             "5\n"),
+            ("while",
+             "fn main() -> Int {\n"
+             "  var index = 0\n"
+             "  while index != 10 {\n"
+             "    if index == 4 { return index + 38 } else { index = index + 1 }\n"
+             "  }\n"
+             "  return -1\n"
+             "}\n",
+             "42\n"),
+        )
+        for label, source_text, expected in cases:
+            with self.subTest(loop=label):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    folder = pathlib.Path(temp)
+                    source = folder / f"early-return-{label}.pep"
+                    reference_source = folder / "reference.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0,
+                                     reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, expected)
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            generated_c = folder / f"early-return-{label}-{compiler.stem}.c"
+                            native = self.invoke("run-c23", source, "--compiler", compiler,
+                                                 "--emit-c", generated_c)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+                            self.assertIn("pep_leave();",
+                                          generated_c.read_text(encoding="utf-8"))
 
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():

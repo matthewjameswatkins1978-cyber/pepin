@@ -894,6 +894,23 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
 fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int, localBindings: List[FlatAstNode]) -> PepC23Emission {
   if depth == 8 { return pep_c23_unsupported("Pep C23 loop condition nesting exceeds the supported depth") } else {}
   let indent = if depth == 0 { "    " } else { "      " }
+  if statement.kind == "return" {
+    let value = pep_c23_child(nodes, statement.id, "value", 0)
+    let result = pep_c23_child(nodes, function.id, "return_type", 0)
+    if !value.found || !result.found { return pep_c23_unsupported("Pep C23 loop return has no value or declared result type") } else {}
+    let cType = pep_c23_c_scalar_type(result.node)
+    if cType == "" { return pep_c23_unsupported("Pep C23 loop returns require a scalar result type") } else {}
+    let lowered = pep_c23_expression(nodes, function, value.node)
+    if lowered.status != "emitted" { return lowered } else {}
+    var parts: List[Str] = [indent, cType, " pep_result = "]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ";\n")
+    parts = append(parts, indent)
+    parts = append(parts, "pep_leave();\n")
+    parts = append(parts, indent)
+    parts = append(parts, "return pep_result;\n")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {}
   if statement.kind == "assignment" {
     let value = pep_c23_child(nodes, statement.id, "value", 0)
     if !value.found { return pep_c23_unsupported("Pep C23 loop assignment has no value") } else {}
@@ -948,7 +965,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       parts = append(parts, indent)
       parts = append(parts, "}\n")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
-    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments and conditionals with assignment sequences") }
+    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments, returns, and conditionals with assignment sequences") }
   }
 }
 fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode]) -> PepC23Emission {
