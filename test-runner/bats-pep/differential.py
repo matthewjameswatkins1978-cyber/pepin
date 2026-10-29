@@ -295,6 +295,18 @@ STEPREF_CASES = [
     ("stepref-wrong-phase", "setup:0", PEP_RUN0, "setup", 0, "INCONCLUSIVE"),
     ("stepref-bad-phase", "bogus:0", PEP_RUN0, "bogus", 0, "INVALID"),
 ]
+# `evidence_present` dispatch. The runner always captures git state, so the three
+# known kinds are present in every ordinary run; the measured reachable contrast is
+# kind-known (PROVEN) versus kind-unknown (INCONCLUSIVE, not INVALID — this condition
+# has no `validate_condition` rule). The absent-capture branch is modelled from the
+# source's `is_some()` and is covered by the self-test, not by this differential,
+# because no ordinary spec run can produce it.
+EVIDENCE_CASES = [
+    ("ev-git-diff", "git_diff", "PROVEN"),
+    ("ev-git-status", "git_status", "PROVEN"),
+    ("ev-base-snapshot", "base_snapshot", "PROVEN"),
+    ("ev-unknown-kind", "bogus", "INCONCLUSIVE"),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -516,8 +528,25 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
+        # evidence_present differential.
+        for ident, kind, expected in EVIDENCE_CASES:
+            body = SPEC_TEMPLATE.format(
+                ident=ident,
+                oracle_body="  all:\n"
+                            "    - type: evidence_present\n"
+                            "      kind: %s" % kind)
+            rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
+            pep = pep_expression(
+                composed, 'judge_evidence_present("%s", all_captures())' % kind)
+            agree = rust == pep == expected
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (
+                ident, rust, pep, expected, "AGREE" if agree else "DISAGREE"))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
-             + len(STEPREF_CASES))
+             + len(STEPREF_CASES) + len(EVIDENCE_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

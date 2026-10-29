@@ -207,6 +207,39 @@ produced no exit code", and those are different facts about a run:
 reference's `steps.iter().find(...)`. Matching requires both phase **and** index, so
 a resolver that matched on index alone would wrongly resolve `setup:0`.
 
+## Condition: `evidence_present`
+
+The first leaf condition here that is not `exit_code`, and it is fully expressible
+because the reference reads it from captures rather than from the filesystem:
+
+```pep
+type Capture = CaptureAbsent() | CapturePresent()
+type Captures { git_diff: Capture, git_status: Capture, base_snapshot: Capture }
+
+fn judge_evidence_present(kind: Str, captures: Captures) -> Verdict
+```
+
+`git_diff`, `git_status` and `base_snapshot` are present → PROVEN; absent → NOT
+OBSERVED; any other kind → INCONCLUSIVE.
+
+**Two measured findings, and the first one contradicts the step-reference rule.**
+
+1. An unknown kind is **INCONCLUSIVE, not INVALID.** `evidence_present` has no rule
+   in `validate_condition`, so `kind: bogus` is an evaluation problem. That is the
+   exact opposite of a malformed step reference, which is a validation problem. The
+   two conditions look similar and behave differently, which is why each condition is
+   measured instead of generalised from the previous one.
+2. The runner **always** captures git state. `git_diff`, `git_status` and
+   `base_snapshot` are PROVEN even with `capture: []`, so the absence branch cannot be
+   reached by an ordinary spec run. It is modelled anyway, from the source's
+   `is_some()`, because absence is representable in the reference's type and a model
+   that cannot express it would be a weaker model. The self-test covers it; the
+   differential does not claim it.
+
+Dispatch is on the kind name and therefore per-capture, not "is any capture present".
+Self-test case 55 exists to catch that specific shortcut: with only `git_status`
+present, asking for `git_diff` must answer NOT OBSERVED.
+
 ## Run it
 
 ```powershell
@@ -219,7 +252,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (49 cases; each prints its verdict label then its reason):
+Observed (55 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -272,6 +305,12 @@ Observed (49 cases; each prints its verdict label then its reason):
 | 47 | `run:0` present with `AbsentExit(...)` | INCONCLUSIVE (`process killed`) |
 | 48 | `[run:0 exit 1, run:1 exit 2]`, `run:1`, `equals 2` | PROVEN (index guard) |
 | 49 | `BothModes` with an empty step list | INVALID (vacuity guard) |
+| 50 | `git_diff`, all captures present | PROVEN |
+| 51 | `git_diff`, nothing captured | NOT OBSERVED |
+| 52 | `git_status`, all present | PROVEN |
+| 53 | `base_snapshot`, nothing captured | NOT OBSERVED |
+| 54 | kind `bogus` | INCONCLUSIVE (`unknown evidence kind`) |
+| 55 | `git_diff` absent but others present | NOT OBSERVED (dispatch guard) |
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -417,7 +456,16 @@ spec is never evaluated and therefore has no trail:
 | `step: setup:0` (wrong phase) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 | `step: bogus:0` (unknown phase) | INVALID | INVALID | INVALID |
 
-`SUMMARY cases=31 mismatches=0`.
+`evidence_present` is compared as verdict-only cases too:
+
+| Evidence kind | Rust runtime | Pep oracle | Expected |
+| --- | --- | --- | --- |
+| `git_diff` | PROVEN | PROVEN | PROVEN |
+| `git_status` | PROVEN | PROVEN | PROVEN |
+| `base_snapshot` | PROVEN | PROVEN | PROVEN |
+| `bogus` (unknown kind) | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
+
+`SUMMARY cases=35 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

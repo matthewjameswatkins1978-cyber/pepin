@@ -536,6 +536,90 @@ fn evaluate_tree_any(children: List[OracleExpr]) -> Evaluation {
 //
 // The labels use the reference's own `describe(cond)` wording, so a Pep trail and
 // a Rust receipt trail are directly comparable rather than merely similar.
+// ---------------------------------------------------------------------------
+// Condition: evidence_present
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//
+//   Condition::EvidencePresent { kind } =>
+//     present = match kind {
+//       "git_diff"      => captures.git_diff.is_some(),
+//       "git_status"    => captures.git_status.is_some(),
+//       "base_snapshot" => captures.base_snapshot.is_some(),
+//       other           => Undetermined("unknown evidence kind `{other}`"),
+//     }
+//     present ? Falsified : NotFalsified
+//
+// `evidence_present` has no rule in `validate_condition`, so an unknown kind is an
+// *evaluation* problem, not a spec problem: measured against the framework,
+// `kind: bogus` yields verdict INCONCLUSIVE, not INVALID. That is the opposite of
+// the step-reference finding above and the reason each condition is measured rather
+// than generalised.
+//
+// Measured caveat: the runner always captures git state, so `git_diff`,
+// `git_status` and `base_snapshot` are present in every ordinary run (verified with
+// `capture: []`, which does not disable them). The absence branch below is therefore
+// modelled from the source's `is_some()` but is not reachable through an ordinary
+// spec run. It is kept because absence is representable in the reference's type, and
+// a model that cannot express it would be a weaker model.
+
+// Whether one capture exists in the run's evidence store.
+type Capture = CaptureAbsent() | CapturePresent()
+
+type Captures { git_diff: Capture, git_status: Capture, base_snapshot: Capture }
+
+fn capture_present(capture: Capture) -> Bool {
+  return match capture {
+    CaptureAbsent() => false
+    CapturePresent() => true
+  }
+}
+
+fn presence_verdict(capture: Capture) -> Verdict {
+  if capture_present(capture) {
+    return Proven("the requested evidence was captured")
+  } else {
+    return NotObserved("the requested evidence was not captured")
+  }
+}
+
+// Dispatch is on the kind name, so the verdict depends on that specific capture and
+// not on whether any capture at all is present.
+fn judge_evidence_present(kind: Str, captures: Captures) -> Verdict {
+  var verdict = Inconclusive("unknown evidence kind")
+  if kind == "git_diff" {
+    verdict = presence_verdict(captures.git_diff)
+  } else {
+  }
+  if kind == "git_status" {
+    verdict = presence_verdict(captures.git_status)
+  } else {
+  }
+  if kind == "base_snapshot" {
+    verdict = presence_verdict(captures.base_snapshot)
+  } else {
+  }
+  return verdict
+}
+
+// Convenience for a run that captured everything, which is what a real run does.
+fn all_captures() -> Captures {
+  return Captures {
+    git_diff: CapturePresent(),
+    git_status: CapturePresent(),
+    base_snapshot: CapturePresent()
+  }
+}
+
+fn no_captures() -> Captures {
+  return Captures {
+    git_diff: CaptureAbsent(),
+    git_status: CaptureAbsent(),
+    base_snapshot: CaptureAbsent()
+  }
+}
+
 fn say_trail(evaluation: Evaluation) -> Unit {
   say("RESULT")
   say(verdict_label(evaluation.result))

@@ -14,7 +14,8 @@ note, not a status report on anyone else's work.
 | `1b1ec57` | Composition differential (17/17), the `text_contains` wall measured, grammar corrections |
 | `d512957` | Judgement trail: `ConditionOutcome` / `Evaluation` / `explain` / `say_trail`, trail differential (23/23) |
 | `c953e43` | Recursive `OracleExpr` tree with `evaluate_tree`, nested differential (27/27) |
-| (this commit) | Multi-step evidence and step-reference resolution, step-reference differential (31/31) |
+| `fbd4a6c` | Multi-step evidence and step-reference resolution, step-reference differential (31/31) |
+| (this commit) | `evidence_present` leaf condition, evidence differential (35/35) |
 
 Starting point of the first four was `749edb2`. The fifth slice began from `c953e43`
 after recovering state, not from a reset.
@@ -24,8 +25,8 @@ after recovering state, not from a reset.
 | Check | Result |
 | --- | --- |
 | `.\pep.ps1 check test-runner\bats-pep\oracle.pep --json` | `status valid`, 0 diagnostics |
-| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 109 lines, 49 verdict cases plus trail sizes and a full `explain` |
-| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=31 mismatches=0` |
+| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 121 lines, 55 verdict cases plus trail sizes and a full `explain` |
+| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=35 mismatches=0` |
 | `git ls-files --eol test-runner/bats-pep/` | all five files `i/lf w/lf` |
 | every file edit | Threadmoth `preview` → `mutate`, budget PASS, `unrelated_bytes_changed=false` |
 
@@ -45,6 +46,11 @@ after recovering state, not from a reset.
   reference does — validate, then look up, then read the exit code. The three
   outcomes stay distinguishable: `step did not execute`, `process killed`, and the
   resolved exit code.
+- **`evidence_present`**, the first leaf condition here that is not `exit_code`:
+  `judge_evidence_present(kind, captures)` over a typed `Captures` record. Present
+  known kind → PROVEN, absent → NOT OBSERVED, unknown kind → INCONCLUSIVE. Dispatch
+  is per kind, so asking for an absent `git_diff` is NOT OBSERVED even when
+  `git_status` is present.
 
 ## Measured finding: a step reference is validated, not resolved
 
@@ -64,6 +70,20 @@ is rejected before evaluation. Measured on the framework:
 
 `judge_step_ref` therefore answers `Invalid` for a malformed mode or an unknown
 phase, and only reports Undetermined for the two genuine evidence problems.
+
+## Measured finding: two conditions that look alike fail differently
+
+A malformed step reference is **INVALID** (validation), but an unknown evidence kind
+is **INCONCLUSIVE** (evaluation). `evidence_present` has no rule in
+`validate_condition`, so `kind: bogus` is only a problem once the oracle runs. These
+two conditions look structurally similar and behave differently, which is why each
+condition was measured against the framework instead of being generalised from the
+previous one.
+
+Second measured caveat: the runner always captures git state, so `git_diff`,
+`git_status` and `base_snapshot` are PROVEN even with `capture: []`. The
+absent-capture branch is therefore modelled from the source's `is_some()` and is
+covered by the self-test but **not** claimed by the differential.
 
 ## Blocked upstream: `text_contains`
 
@@ -113,8 +133,8 @@ Committed in the same commit as this outbox; verify with
 `Get-FileHash -Algorithm SHA256`.
 
 ```
-721f70f6353142a0703ff615049c82435b976cbd1147dc068611514346487597  oracle.pep
-59918cba48a861eb39c4f766da3a84de5a73c322ea972ce3e4c48f5016de0827  selftest.pep
-478f5c2e8bfa9a7176eed95c21b2e2f6e22a5971a657593f9ffcbc5f27bd7b02  differential.py
-4252e5c952fead9ef35f18f15c3fc335846eadde50a54b0315edb7dfc42dfc60  README.md
+bf01dabd4cbaab80bffd1307727dc261a4d9573686be92d56ea85f088ae3a974  oracle.pep
+333bba9caf964050300d659812dcf24be357a713c6227088f3dbbde1d1c64d50  selftest.pep
+8c122b90742773a52c9f390fee1b313ed5b07654ee2c0f270af86005958da80c  differential.py
+7e105fd40043693f392c1f654a50643438ab40252166d345202966d968367323  README.md
 ```

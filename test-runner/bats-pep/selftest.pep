@@ -153,3 +153,23 @@ show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit:
 show(judge_step_ref(EqualsMode(1), [EvidenceStep { phase: "run", index: 0, exit: AbsentExit("process killed") }], "run", 0))
 show(judge_step_ref(EqualsMode(2), [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }, EvidenceStep { phase: "run", index: 1, exit: ObservedExit(2) }], "run", 1))
 show(judge_step_ref(BothModes(1, 0), [], "run", 9))
+
+// --- Condition: evidence_present ---
+//
+// 50 ev-present-git-diff     git_diff, all captures present   -> PROVEN
+// 51 ev-absent-git-diff      git_diff, nothing captured       -> NOT OBSERVED
+// 52 ev-present-git-status   git_status, all present          -> PROVEN
+// 53 ev-absent-snapshot      base_snapshot, nothing captured  -> NOT OBSERVED
+// 54 ev-unknown-kind         kind "bogus"                     -> INCONCLUSIVE
+// 55 ev-dispatch-per-kind    git_diff absent, others present   -> NOT OBSERVED
+//
+// Case 54 is the measured surprise: unlike a malformed step reference, an unknown
+// evidence kind has no validate_condition rule, so it is Undetermined at evaluation
+// and not INVALID. Case 55 guards the dispatch: an implementation that asked "is any
+// capture present" would answer PROVEN there.
+show(judge_evidence_present("git_diff", all_captures()))
+show(judge_evidence_present("git_diff", no_captures()))
+show(judge_evidence_present("git_status", all_captures()))
+show(judge_evidence_present("base_snapshot", no_captures()))
+show(judge_evidence_present("bogus", all_captures()))
+show(judge_evidence_present("git_diff", Captures { git_diff: CaptureAbsent(), git_status: CapturePresent(), base_snapshot: CapturePresent() }))
