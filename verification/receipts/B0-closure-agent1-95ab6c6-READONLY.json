@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "mission": "PEPIN-COMPILER-CLOSURE-B0",
+  "evidenceKind": "source-only static inspection",
+  "repository": "matthewjameswatkins1978-cyber/pepin",
+  "branch": "codex/bootstrap-agent1-b0",
+  "baselineCommit": "805062bcda23b9ceab1c21f9a1ce31bc1c6b7969",
+  "workingTreeAtInspection": "clean",
+  "compilerSourceStatus": {
+    "classification": "Current C23 CLI source set; not ratified as canonical self-hosting source.",
+    "driver": "pep_c23.py",
+    "orderedPepSources": [
+      {
+        "path": "examples/pep_lexer.pep",
+        "gitBlob": "12bd93a1dfc5dba3b1cab49abefffed5e406b17d",
+        "gitBlobBytes": 18931,
+        "workingTreeBytes": 19425,
+        "workingTreeSha256": "729e01acdbbb538ef6578220c69e9fb62881874fcc0ae592735051d089587c46"
+      },
+      {
+        "path": "examples/pep_parser.pep",
+        "gitBlob": "4dd5d2a385f3143f44542472e82d5261a750bcf4",
+        "gitBlobBytes": 94274,
+        "workingTreeBytes": 96149,
+        "workingTreeSha256": "493897c888daf439b1ec27179ec7b9c225a18ef0be2fc48b7fa59e02fd436021"
+      },
+      {
+        "path": "tests/pep_checker_a13.pep",
+        "gitBlob": "e19fdde0f06981b84326d6285ae5f8eeae164277",
+        "gitBlobBytes": 150198,
+        "workingTreeBytes": 152459,
+        "workingTreeSha256": "cffbae7b6a76829d75e393446daac0d9b6d574898896e5fd2ec6c348a8582714"
+      },
+      {
+        "path": "tests/pep_c23_emitter.pep",
+        "gitBlob": "319629a5ec15dfcd2c78b1595858cb206c76610b",
+        "gitBlobBytes": 30744,
+        "workingTreeBytes": 31242,
+        "workingTreeSha256": "543214151f547a6834546890545c77caed71535165fdd73792b6e700f656be7d"
+      }
+    ],
+    "assembly": {
+      "implementation": "pep_c23.py:SOURCES and emit",
+      "behavior": "Python read_text(UTF-8, universal newlines), concatenate in listed order with one LF, open as one metadata-only OCaml session document.",
+      "normalizedBundleUtf8Bytes": 294153,
+      "normalizedBundleSha256": "186b9c72c976e0a5e5a348c46fe40ff5f55842d3c07fad71687d8afa725d29eb",
+      "compactOpenJsonlRequestUtf8Bytes": 303899,
+      "measurement": "Statically recomputed from the sources and compact JSON encoding; not sent to a live compiler."
+    }
+  },
+  "operationTrace": [
+    {
+      "stage": "CLI and session startup",
+      "owner": "pep.ps1 + Python driver; OCaml seed process",
+      "does": "Dispatch build-c23/run-c23, assemble/register Pep sources; start session --jsonl.",
+      "boundary": "PowerShell launches Python; Python frames messages; OCaml is the seed host. No Pep parse/check semantics here.",
+      "evidence": "Static source inspection only."
+    },
+    {
+      "stage": "Compiler bundle registration",
+      "owner": "Pep lexer/parser/checker/emitter executed by OCaml interpreter",
+      "does": "Open metadata-only bundle; register parser_parse_program, analyze_parsed, emit_c23_checked; validate fixed vectors and activate emitter.",
+      "boundary": "OCaml host parses/checks the bundle and owns the tool registry; invoked bodies are Pep functions.",
+      "evidence": "pep_c23.py and implementation sources inspected; no session run."
+    },
+    {
+      "stage": "Target source acquisition",
+      "owner": "Python I/O + OCaml document host",
+      "does": "Python reads raw bytes and sends unsigned-byte array via open_bytes; host assigns document/revision; v2 semanticTarget carries that identity.",
+      "boundary": "Python does file I/O/framing, not language parsing; Pep source_bytes is host-authorized.",
+      "evidence": "Static source inspection only."
+    },
+    {
+      "stage": "Lexing",
+      "owner": "examples/pep_lexer.pep",
+      "entry": "lexer_start/lexer_step via parser lexer-stream helpers",
+      "boundary": "Pep functions interpreted by OCaml during typed tool invocation.",
+      "evidence": "Declarations/calls inspected, not executed."
+    },
+    {
+      "stage": "Parsing",
+      "owner": "examples/pep_parser.pep",
+      "entry": "parser_parse_program",
+      "boundary": "Pep parser runs in OCaml interpreter; driver uses one-shot entry, not parser_start/parser_step.",
+      "evidence": "Static source inspection only."
+    },
+    {
+      "stage": "Checking",
+      "owner": "tests/pep_checker_a13.pep",
+      "entry": "analyze_parsed",
+      "boundary": "Pep checker runs in OCaml interpreter and receives parser result plus host target revision.",
+      "evidence": "Static source inspection only."
+    },
+    {
+      "stage": "C23 emission",
+      "owner": "tests/pep_c23_emitter.pep",
+      "entry": "emit_c23_checked",
+      "boundary": "Pep emitter runs in OCaml interpreter and checks parsed/checker document and revision against host semantic snapshot.",
+      "evidence": "Static source inspection only."
+    },
+    {
+      "stage": "Native compilation/run",
+      "owner": "Python driver + selected external Clang/GCC + OS",
+      "does": "Write generated C as UTF-8/LF, invoke -std=c23 -Wall -Wextra -Wpedantic -Werror -O2; run-c23 executes output.",
+      "boundary": "External toolchain/OS performs compilation and execution, outside Pep semantics.",
+      "evidence": "Static inspection only; Windows Defender hold prevents native generation/build/run."
+    }
+  ],
+  "resourceLimits": {
+    "sourceBytes": {
+      "value": 65536,
+      "unit": "raw bytes",
+      "scope": "open_bytes input; rejects longer arrays as PEP_SOURCE_BYTE_LIMIT"
+    },
+    "jsonlMessage": {
+      "value": 1048576,
+      "unit": "bytes per request/response line",
+      "scope": "session framing"
+    },
+    "toolSteps": {
+      "value": 100000,
+      "scope": "each typed tool invocation"
+    },
+    "toolCallDepth": {
+      "value": 128,
+      "scope": "typed tool invocation"
+    },
+    "typedValue": {
+      "maxNodes": 10000,
+      "maxDepth": 16,
+      "scope": "v2 typed argument/result traversal and semantic result construction"
+    },
+    "ordinaryInterpreter": {
+      "maxSteps": 1000000,
+      "maxCallDepth": 512,
+      "scope": "ordinary Pep execution; separate from tool limits; source-advertised, not measured"
+    }
+  },
+  "peerEvidence": [
+    {
+      "source": "Agent 2 outbox message BOOT-A2-20261029-002; GitHub issue #16 comment 6501091889",
+      "classification": "builder-reported; not independently reproduced by Agent 1",
+      "branch": "codex/bootstrap-agent2-b0",
+      "sourceCommit": "805062bcda23b9ceab1c21f9a1ce31bc1c6b7969",
+      "method": "Source inspection and pep_c23.emit(bytes) only; no C compiler/artifact/native executable.",
+      "observations": [
+        "A tiny fn main() -> Int { return 42 } target emitted 1529 C characters.",
+        "A valid list-length target passed to the C23 emitter was rejected because the builtin has no C lowering.",
+        "Emitter and lexer sources used as target programs opened within the 65536-byte cap, then parser tool execution failed with PEP_RUNTIME_STEP_LIMIT at 154:6.",
+        "Parser and checker source targets failed earlier at open_bytes with PEP_SOURCE_BYTE_LIMIT because they exceed 65536 bytes."
+      ],
+      "reportedEmitterClosure": [
+        "Scalar Int/Bool function signatures; direct immutable lets; calls of at most two parameters; scalar expressions; conditional-return bodies; checked Int64/division/call-depth helpers.",
+        "No C lowering for records, tagged unions, List, Str/Bytes, or file/argv host I/O."
+      ],
+      "security": "Native compile/run tests remain unexecuted under the Defender hold."
+    }
+  ],
+  "baselineAndLimits": {
+    "dynamicTestsRun": 0,
+    "reason": "Agent 1 ran no tests or compiler session. Agent 2 separately reports source-only Pep pipeline probes in peerEvidence; native test suites may compile and execute generated C23 binaries and remain held.",
+    "fuelOrRuntimeMeasured": false,
+    "largestAcceptedProgramBytesObserved": null,
+    "likelyEarlierCeilings": [
+      "100000 tool steps",
+      "10000 typed nodes",
+      "depth 16",
+      "1 MiB JSONL line"
+    ],
+    "conclusion": "The explicit raw source cap is 65536 bytes. The current compiler bundle is 294153 normalized UTF-8 bytes and its compact open request is about 303899 bytes, below the framing cap by static recomputation only. This does not show the bundle opens or a target fits parser/checker fuel or typed-result limits.",
+    "unknowns": [
+      "No clean OCaml build in this slice.",
+      "No parser/checker/emitter fuel profile or small/large execution baseline.",
+      "No runtime or memory measurements.",
+      "Agent 2 emitter/runtime evidence remains in its own lane."
+    ]
+  },
+  "authorityAndCompatibility": {
+    "revisions": "Compiler-bundle revision and host-selected target document/revision are distinct; tool invocation names the authorized semanticTarget.",
+    "protocols": "OCaml seed advertises v1/v2; current C23 driver uses typed tool protocol v2.",
+    "security": "Host is trusted-local, not a sandbox. No authority boundary change proposed.",
+    "acceptance": "No master, CURRENT.md, manifest.json, or milestone-status changes."
+  }
+}

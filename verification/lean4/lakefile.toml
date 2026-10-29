@@ -1,0 +1,9 @@
+name = "pep-value-copy"
+version = "0.1.0"
+defaultTargets = ["pep-value-copy"]
+
+[[require]]
+# No dependencies: Lean core only. Do NOT add Mathlib for this model.
+
+[[leanLib]]
+name = "Verification"
