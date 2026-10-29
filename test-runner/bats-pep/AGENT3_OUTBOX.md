@@ -20,7 +20,8 @@ note, not a status report on anyone else's work.
 | `35a5d00` | Evidence-driven trees composing all four condition types, mixed-tree trail differential (44/44) |
 | `bec1aab` | `path_changed` / `path_unchanged` over recorded changes, path differential (49/49) |
 | `f4817a5` | Coverage-at-a-glance table + source-selector validation (the decidable half of `text_contains`), source differential (55/55) |
-| (this commit) | text_contains decided except the non-empty search: empty-needle rule + load ordering (58/58) |
+| `4c3c48b` | text_contains decided except the non-empty search: empty-needle rule + load ordering (58/58) |
+| (this commit) | text_contains as a composable tree leaf (7th Condition variant), tree integration differential (59/59) |
 
 Starting point of the first four was `749edb2`. The fifth slice began from `c953e43`
 after recovering state, not from a reset.
@@ -30,8 +31,8 @@ after recovering state, not from a reset.
 | Check | Result |
 | --- | --- |
 | `.\pep.ps1 check test-runner\bats-pep\oracle.pep --json` | `status valid`, 0 diagnostics |
-| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 184 lines, 87 verdict cases plus trail sizes and a full `explain` |
-| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=58 mismatches=0` |
+| `.\pep.ps1 run _build\composed.pep` (oracle + selftest) | 193 lines, 91 verdict cases plus trail sizes and a full `explain` |
+| `python test-runner/bats-pep\differential.py` | `SUMMARY cases=59 mismatches=0` |
 | `git ls-files --eol test-runner/bats-pep/` | all five files `i/lf w/lf` |
 | every file edit | Threadmoth `preview` → `mutate`, budget PASS, `unrelated_bytes_changed=false` |
 
@@ -141,8 +142,8 @@ Committed in the same commit as this outbox; verify with
 `Get-FileHash -Algorithm SHA256`.
 
 ```
-ee1f7e532d97e05b9dd14fa911abc9c21dc52d4f228831d0342f3756d2d4abbd  oracle.pep
-7c7b44aaa61eed3720907b25f47d787bf6057552d5ad8307f006a433cce61275  selftest.pep
-0954330d59c1059e86325d9e51f953496019c6c0c9e2fcbf8f88ab677bc144e2  differential.py
-a0ebe1fb07d50b7e5b15c33b74fcd539ae68bd06a801672c60e357e2ccf9a682  README.md
+2556ce5ec9e288f9ede032ea8dd28d24599383d41c67eebf92198215a031f724  oracle.pep
+70f12a9f11391a2caafc5c4b238c30a6e8124e25f52bc7106e945c2beecd6908  selftest.pep
+2e779df6e878b940bfe38d3b1aa663529f595b29fde925e0afff5ebc59033fc8  differential.py
+7c904ddf3fcd148e2178275d8613675cd59ba6b9d69ede97de1d884b0e340638  README.md
 ```

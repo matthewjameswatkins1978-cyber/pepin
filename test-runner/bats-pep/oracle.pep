@@ -728,7 +728,8 @@ type Condition =
   FileExistsCondition(Str) |
   FileAbsentCondition(Str) |
   PathChangedCondition(Str) |
-  PathUnchangedCondition(Str)
+  PathUnchangedCondition(Str) |
+  TextContainsCondition(SourceSelector, Str, SourceAvailability)
 
 // What a run recorded about worktree changes. The reference derives this from
 // `git status --porcelain` plus its untracked list, matching a path against the
@@ -790,6 +791,7 @@ fn condition_name(condition: Condition) -> Str {
     FileAbsentCondition(path) => "file_absent"
     PathChangedCondition(path) => "path_changed"
     PathUnchangedCondition(path) => "path_unchanged"
+    TextContainsCondition(selector, needle, availability) => "text_contains"
   }
 }
 
@@ -802,6 +804,8 @@ fn evaluate_condition(condition: Condition, evidence: RunEvidence) -> Verdict {
     FileAbsentCondition(path) => judge_file_absent(path, evidence.worktree)
     PathChangedCondition(path) => judge_path_changed(path, evidence.changes)
     PathUnchangedCondition(path) => judge_path_unchanged(path, evidence.changes)
+    TextContainsCondition(selector, needle, availability) =>
+      judge_text_contains(selector, needle, availability)
   }
 }
 

@@ -499,7 +499,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (73 cases; each prints its verdict label then its reason):
+Observed (91 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -590,6 +590,12 @@ Observed (73 cases; each prints its verdict label then its reason):
 | 85 | step source, needle `""` | PROVEN |
 | 86 | malformed source, needle `""` | INVALID |
 | 87 | malformed source + failed load | INVALID (vacuity guard) |
+| 88 | tree leaf `text_contains`, needle `""` | PROVEN |
+| 89 | tree leaf `text_contains`, needle `"ref"` | INCONCLUSIVE |
+| 90 | `all` of an exit leaf + a text leaf | PROVEN |
+| 91 | `any` of a malformed text leaf | INVALID |
+
+Then `trail_size` of the case-90 tree is `2`.
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -764,6 +770,7 @@ is judged correctly but recorded in the wrong order still shows up:
 | `all` of exit fires + `file_exists` misses | NOT OBSERVED | NOT OBSERVED | 2 |
 | `any` of `file_exists` missing + present | PROVEN | PROVEN | 2 |
 | `not` of `file_exists .git` | NOT OBSERVED | NOT OBSERVED | 1 |
+| `all` of exit + `text_contains` (empty needle) | PROVEN | PROVEN | 2 |
 
 `path_changed` / `path_unchanged` run against a throwaway repo whose working tree the
 Bat's own attack step modifies, because the runner refuses to start on a dirty target:
@@ -801,7 +808,7 @@ capability gap to a verdict would be dishonest.
 | missing path, needle `""` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 | step source, needle `""` | PROVEN | PROVEN | PROVEN |
 
-`SUMMARY cases=58 mismatches=0`.
+`SUMMARY cases=59 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

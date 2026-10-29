@@ -330,3 +330,24 @@ show(judge_text_contains(sel_path_only(), "", SourceUnavailable("cannot read the
 show(judge_text_contains(sel_step_only(), "", SourceLoaded()))
 show(judge_text_contains(sel_two_sources(), "", SourceLoaded()))
 show(judge_text_contains(sel_none(), "ref", SourceUnavailable("cannot read the source")))
+
+// --- text_contains as a composable tree leaf ---
+//
+// 88 tree-text-empty        tree leaf, readable source, needle ""   -> PROVEN
+// 89 tree-text-nonempty     tree leaf, readable source, needle "ref" -> INCONCLUSIVE
+// 90 tree-text-mixed        exit leaf + text leaf in one `all`       -> PROVEN, 2 leaves
+// 91 tree-text-invalid      text leaf with a malformed source        -> INVALID
+fn leaf_text_empty() -> EvidenceExpr {
+  return ConditionLeaf("text_contains empty", TextContainsCondition(sel_path_only(), "", SourceLoaded()))
+}
+fn leaf_text_nonempty() -> EvidenceExpr {
+  return ConditionLeaf("text_contains ref", TextContainsCondition(sel_path_only(), "ref", SourceLoaded()))
+}
+fn leaf_text_invalid() -> EvidenceExpr {
+  return ConditionLeaf("text_contains bad source", TextContainsCondition(sel_two_sources(), "", SourceLoaded()))
+}
+show(result_of(evaluate_evidence_tree(AllOf([leaf_text_empty()]), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AllOf([leaf_text_nonempty()]), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AllOf([leaf_exit(), leaf_text_empty()]), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AnyOf([leaf_text_invalid()]), sample_evidence())))
+say(int_text(trail_size(evaluate_evidence_tree(AllOf([leaf_exit(), leaf_text_empty()]), sample_evidence()))))

@@ -374,6 +374,19 @@ EVIDENCE_TREE_CASES = [
     ("evtree-not",
      "  not:\n    type: file_exists\n    path: \".git\"",
      "evaluate_evidence_tree(NotOf(%s), %s)" % (EXISTS_LEAF, RUN_EVIDENCE)),
+    # text_contains in a tree: the empty needle over a loaded source is decidable, and
+    # the reference labels it `text_contains ""`.
+    ("evtree-text-empty",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: text_contains\n      path: \"README.md\"\n      substring: \"\"",
+     "evaluate_evidence_tree(AllOf([%s, %s]), %s)" % (
+         EXIT_LEAF,
+         condition_leaf('text_contains with empty needle',
+                        'TextContainsCondition(SourceSelector { path: FieldPresent("README.md"),'
+                        ' evidence: FieldAbsent(), step: NoStepSource(),'
+                        ' stream: FieldAbsent() }, "", SourceLoaded())'),
+         RUN_EVIDENCE)),
 ]
 # The path conditions need a target whose working tree the Bat itself changes: the
 # runner refuses to start on an already-dirty repository, so the modification has to
@@ -744,7 +757,15 @@ def main():
             (rust_result, rust_rows), receipt = rust_trail(
                 tb, repo, workdir, ident, oracle_body)
             pep_result, pep_rows = pep_trail(composed, pep_expr)
-            agree = rust_result == pep_result and rust_rows == pep_rows
+            # A reference label that embeds a quoted needle (`text_contains ""`) cannot be
+            # written as a Pep string literal -- Pep has no escaping and no concatenation --
+            # so for those cases the comparison is the result plus the leaf count, and the
+            # leaf label itself is not claimed to match.
+            labels_comparable = not any('"' in row[0] for row in rust_rows)
+            if labels_comparable:
+                agree = rust_result == pep_result and rust_rows == pep_rows
+            else:
+                agree = rust_result == pep_result and len(rust_rows) == len(pep_rows)
             mismatches += 0 if agree else 1
             print("CASE %-22s rust=%-13s pep=%-13s leaves=%d %s" % (
                 ident, rust_result, pep_result, len(rust_rows),
