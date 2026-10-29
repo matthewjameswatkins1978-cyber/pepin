@@ -1240,6 +1240,40 @@ class PepGenericFunctionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "84\n")
 
+    def test_nested_generic_record_union_inference_and_conflict_span(self):
+        valid_source = (
+            "type Box[T] { value: T }\n"
+            "type Option[T] = Some(T) | None()\n"
+            "fn empty_box[T]() -> Box[Option[T]] { return Box { value: None() } }\n"
+            "fn unwrap_or[T](value: Box[Option[T]], fallback: T) -> T { "
+            "return match value.value { Some(item) => item None() => fallback } }\n"
+            "let empty: Box[Option[Int]] = empty_box()\n"
+            "say(int_text(unwrap_or(empty, 37)))\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "nested-generic-context.pep"
+            path.write_text(valid_source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "37\n")
+
+        invalid_source = (
+            "type Box[T] { value: T }\n"
+            "type Option[T] = Some(T) | None()\n"
+            'let bad: Box[Option[Int]] = Box { value: Some("wrong") }\n'
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = pathlib.Path(temporary) / "nested-generic-conflict.pep"
+            path.write_text(invalid_source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 1, checked.stdout + checked.stderr)
+            diagnostic = json.loads(checked.stdout)["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "PEP_GENERIC_ARGUMENT_MISMATCH")
+            self.assertEqual(diagnostic["span"]["start"]["offset"], invalid_source.index('"wrong"'))
+            self.assertEqual(diagnostic["span"]["endOffset"], invalid_source.index('"wrong"') + len('"wrong"'))
+
     def test_generic_nullary_union_constructor_uses_result_context(self):
         source = (
             "type Option[T] = Some(T) | None()\n"
