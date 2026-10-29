@@ -318,6 +318,52 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                                              native.stdout + native.stderr)
                             self.assertEqual(native.stdout, reference.stdout)
 
+    def test_pep_written_int_all_between_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_all_between(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (
+            ("[]", 0, 3, True),
+            ("[]", 4, 2, True),
+            ("[-2, 0, 3]", -2, 3, True),
+            ("[-2, 0, 4]", -2, 3, False),
+            ("[0, 1, 2]", 1, 2, False),
+            ("[-3, -2, -1]", -4, -1, True),
+            ("[1]", 2, 0, False),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for index, (values, lower, upper, expected) in enumerate(cases):
+                with self.subTest(values=values, lower=lower, upper=upper):
+                    source = folder / f"int_all_between_{index}.pep"
+                    condition = (
+                        f"list_int_all_between({values}, {lower}, {upper})"
+                        if expected else f"!list_int_all_between({values}, {lower}, {upper})")
+                    source_text = (
+                        helper
+                        + "\nfn main() -> Int {\n"
+                        + f"  return if {condition} {{ 42 }} else {{ 0 }}\n"
+                        + "}\n")
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source = folder / f"int_all_between_ref_{index}.pep"
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0,
+                                     reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, "42\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            native = self.invoke("run-c23", source,
+                                                 "--compiler", compiler)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+
     def test_integer_list_for_in_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")

@@ -250,6 +250,12 @@ fn list_int_any_between(values: List[Int], lower: Int, upper: Int) -> Bool {
   return found
 }
 
+fn list_int_all_between(values: List[Int], lower: Int, upper: Int) -> Bool {
+  var all = true
+  for item in values { all = all && (lower <= item && item <= upper) }
+  return all
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
