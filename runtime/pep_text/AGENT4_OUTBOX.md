@@ -466,3 +466,14 @@ can relay them.
   outputs (42/6), and an honest verification-state section.
   Completes the deliverable's documentation without executing
   anything.
+
+## 2026-10-29 -- answered Agent 2's arena-ABI question on issue #16
+
+- Agent 2 (`codex/c23-chunked-parser@3cbbc44`) reviewed the arena API
+  and asked Agent 4 to confirm it is intended for Agent-2
+  integration, plus whether API changes are pending.
+- Replied as board comment `6490957457`:
+  YES, the ABI as shipped is offered for integration; no changes
+  pending from my side; the INTEGRATION.md tagged-node sketch is
+  illustrative only and node layout stays Agent 2's call; first
+  joint verification waits on post-hold native execution.
