@@ -57,7 +57,7 @@ fn main() -> Int { return 1 / 0 }
 
 | oracle | result |
 |---|---|
-| observed | `TESTED` — `run` exits 0 silently (no `say` output; return discarded). Consistent with a `say`-observed CLI, but worth stating: a fault inside a discarded `main` return is silent at the CLI layer. No defect claimed; CLI contract question for Agent 1 if ever specified otherwise. |
+| observed | `TESTED` — `run` exits 0 silently. Root cause established in `EVAL_ORDER_AND_FUEL.md` (E1b): the interpreter executes **top-level statements only** and never invokes `fn main`, so there is no return value to observe. Consistent with a `say`-observed CLI; superseded by E1b as bridge question Q1 (interpreter/native entry-point divergence). No defect claimed. |
 
 ## Not yet covered (next slices)
 
