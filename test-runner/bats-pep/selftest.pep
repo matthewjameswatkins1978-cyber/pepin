@@ -262,15 +262,14 @@ show(judge_path_unchanged("nothing.txt", ChangeStatusRecorded(sample_changes()))
 show(judge_path_unchanged("tracked.txt", ChangeStatusRecorded(sample_changes())))
 show(judge_path_changed("anything.txt", ChangeStatusMissing()))
 
-// --- Source-selector validation (the decidable half of text_contains) ---
+// --- Source-selector validation (the specification half of text_contains) ---
 //
-// 74 src-path-only        path, readable file              -> INCONCLUSIVE
-// 75 src-step-only        step, default stream             -> INCONCLUSIVE
-// 76 src-step-stderr      step + stream stderr             -> INCONCLUSIVE
+// 74 src-path-only        path, readable file              -> NOT OBSERVED
+// 75 src-step-only        step, default stream             -> NOT OBSERVED
+// 76 src-step-stderr      step + stream stderr             -> NOT OBSERVED
 // 77 src-none             no source at all                 -> INVALID
 // 78 src-two-sources      path + evidence                  -> INVALID
-// 79 src-stream-no-step   path + stream                    -> INVALID
-// 80 src-bad-stream       step + stream "bogus"            -> INVALID
+// 79 src-stream-no-step   path + stream                    -> INVALID// 80 src-bad-stream       step + stream "bogus"            -> INVALID
 // 81 src-bad-phase        step phase "bogus"               -> INVALID
 //
 // Cases 74-76 are valid specifications, and Pep answers INCONCLUSIVE for them rather
@@ -301,14 +300,14 @@ fn sel_bad_stream() -> SourceSelector {
 fn sel_bad_phase() -> SourceSelector {
   return SourceSelector { path: FieldAbsent(), evidence: FieldAbsent(), step: StepAt("bogus", 0), stream: FieldAbsent() }
 }
-show(judge_source_only(sel_path_only()))
-show(judge_source_only(sel_step_only()))
-show(judge_source_only(sel_step_stderr()))
-show(judge_source_only(sel_none()))
-show(judge_source_only(sel_two_sources()))
-show(judge_source_only(sel_stream_no_step()))
-show(judge_source_only(sel_bad_stream()))
-show(judge_source_only(sel_bad_phase()))
+show(judge_text_contains(sel_path_only(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_step_only(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_step_stderr(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_none(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_two_sources(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_stream_no_step(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_bad_stream(), "ref", SourceContentText("alpha beta gamma")))
+show(judge_text_contains(sel_bad_phase(), "ref", SourceContentText("alpha beta gamma")))
 
 // --- Condition: text_contains, decided as far as it can be ---
 //

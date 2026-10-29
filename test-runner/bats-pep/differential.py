@@ -858,7 +858,7 @@ def main():
             body = TEXT_CONTAINS_TEMPLATE.format(ident=ident,
                                                 source_block=source_block)
             rust, receipt = rust_run_verdict(tb, repo, workdir, ident, body)
-            pep = pep_expression(composed, "judge_source_only(%s)" % pep_selector)
+            pep = pep_expression(composed, "judge_text_contains(%s, \"ref\", SourceContentText(\"\"))" % pep_selector)
             agree = rust == pep == "INVALID"
             mismatches += 0 if agree else 1
             print("CASE %-22s rust=%-13s pep=%-13s expected=%-13s %s" % (

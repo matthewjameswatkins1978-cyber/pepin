@@ -987,17 +987,6 @@ fn validate_source(selector: SourceSelector) -> SourceValidation {
   return SourceShapeValid()
 }
 
-// What Pep can decide about a `text_contains`-shaped condition today. A malformed
-// source gets the reference's own INVALID verdict; a well-formed source is honestly
-// INCONCLUSIVE, because the byte search needs a primitive Pep does not have. When
-// `str_bytes` or `str_contains` lands, only the second branch changes.
-fn judge_source_only(selector: SourceSelector) -> Verdict {
-  return match validate_source(selector) {
-    SourceRejected(reason) => Invalid(reason)
-    SourceShapeValid() => Inconclusive("substring search needs str_bytes(Str) -> SourceBytes")
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Condition: text_contains, decided as far as it can be
 // ---------------------------------------------------------------------------

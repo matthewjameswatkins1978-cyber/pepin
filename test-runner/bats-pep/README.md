@@ -27,12 +27,11 @@ this document end to end.
 | `path_changed` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `path_unchanged` | **implemented** | PROVEN / NOT OBSERVED / INCONCLUSIVE |
 | `text_contains` | **implemented** | source validation, load ordering, empty-needle rule and the search itself all decided in Pep; a capture that is not valid UTF-8 is reported INCONCLUSIVE rather than decoded lossily |
-| `text_matches` | blocked | same, plus a regex engine |
-| `git_diff_contains` | blocked | same as `text_contains` (the diff capture itself is available) |
+| `text_matches` | blocked | needs `str_chars(Str) -> List[Str]`; the regex must be parsed and matched character by character, and `str_contains` cannot express that |
+| `git_diff_contains` | blocked | same as `text_contains`; the diff capture itself is available |
 | `git_diff_matches` | blocked | same as `text_matches` |
-| `json_value_equals` | blocked | same as `text_contains`, plus a JSON parser |
+| `json_value_equals` | blocked | needs `str_chars(Str) -> List[Str]` for the JSON parser, plus pointer resolution |
 | `command` | blocked | needs host process execution, which this engine deliberately does not do |
-
 The **expression layer is complete**: `all`, `any`, `not`, Kleene three-valued
 composition, empty-combinator handling, depth-first trails, and validate-before-
 evaluate are all implemented and differential-tested.
@@ -46,6 +45,23 @@ it decides over evidence; it does not perform the run.
 cheapest single addition: `byte_length` and `byte_at` already exist, so a byte-window
 search can be written in Pep and `text_contains` and `git_diff_contains` both follow,
 with `text_matches` and `git_diff_matches` additionally needing regex.
+
+**The next two conditions need one primitive, and it is not string bytes.**
+`text_matches`, `git_diff_matches` and `json_value_equals` all need to walk a `Str`
+character by character — to parse a regex, or to parse JSON. Pep's only `Str` operations
+are `==`, `!=` and `str_contains`, and `length` is list-only, so there is no way to index,
+slice or iterate a string today.
+
+`str_chars(text: Str) -> List[Str]` is the primitive to add, and it is the right shape
+because the rest of the machinery already exists: `length`, `for x in list` and `append`
+would then be enough to write a character-driven regex matcher and a JSON parser in Pep
+without any further language work. A smaller pair (`str_length` + `str_at`) would also
+work but needs more per-character glue.
+
+Until then these three conditions are genuinely out of reach, and they are reported as
+blocked rather than approximated. `validate_source` — the part they share with
+`text_contains` — is already implemented and differential-tested, so the specification
+half of each is done.
 
 ## Reference contract pinned, not guessed
 
@@ -440,14 +456,13 @@ type StepSource = NoStepSource() | StepAt(Str, Int)
 type SourceSelector { path: SourceField, evidence: SourceField, step: StepSource, stream: SourceField }
 
 fn validate_source(selector: SourceSelector) -> SourceValidation
-fn judge_source_only(selector: SourceSelector) -> Verdict
 ```
 
-`judge_source_only` returns the reference's own INVALID verdict for a malformed
-source, and answers honestly `Inconclusive("substring search needs str_bytes(Str) ->
-SourceBytes")` for a well-formed one. When the primitive lands, only that second
-branch changes — the validation half is already correct and differential-tested.
-
+`judge_text_contains` returns the reference's own INVALID verdict for a malformed source,
+and for a well-formed one proceeds to the load and then the search. Validation is a
+separate function (`validate_source`) because it is the half that needs no bytes, so a
+malformed specification is rejected identically for `text_contains`, `text_matches` and
+`json_value_equals`.
 The step reference arrives already split into phase and index because Pep cannot slice
 a string; everything after the split is judged here. The `:` split and the
 non-numeric-index rejection remain an explicit host boundary, not an invented
