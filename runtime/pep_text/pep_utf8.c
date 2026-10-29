@@ -48,7 +48,7 @@ static size_t lead_width(unsigned char first, pep_utf8_range *second)
 int pep_utf8_validate(const char *s, size_t n, size_t *error_offset)
 {
     size_t i = 0;
-    if (s == nullptr && n != 0) {
+    if (s == nullptr) {
         return PEP_UTF8_BADARG;
     }
     while (i < n) {

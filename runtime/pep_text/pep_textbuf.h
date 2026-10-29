@@ -49,8 +49,15 @@ int pep_textbuf_append_u64(pep_textbuf_t *buf, unsigned long long value);
 // Join helper for a host-owned fragment list (see INTEGRATION.md): appends
 // `count` NUL-terminated fragments in order. Replaces the Python-side
 // "".join once the differential gate passes; Python remains the authority
-// until then.
+// until then. Fragments are C strings: a fragment containing an embedded
+// NUL byte is truncated at the NUL (see pep_textbuf_join_n below and
+// INTEGRATION.md for the Agent-2 handoff analysis).
 int pep_textbuf_join(pep_textbuf_t *buf, const char *const *parts, size_t count);
+
+// Length-tagged join: appends `count` fragments with explicit byte
+// lengths, preserving embedded NUL bytes. The companion for host
+// transports that carry lengths alongside pointers.
+int pep_textbuf_join_n(pep_textbuf_t *buf, const char *const *parts, const size_t *lens, size_t count);
 
 // Read-only views. cstr is valid until the next mutating call or free;
 // it is "" when the builder never successfully allocated.

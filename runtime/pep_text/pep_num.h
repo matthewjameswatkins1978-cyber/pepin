@@ -20,8 +20,9 @@ enum {
 // Parse an optional "-" followed by a maximal ASCII digit run. At least
 // one digit is required. "-0" parses as 0. "+5", " 12", and "" report
 // NODIGITS with *end set to 0. A run past "9223372036854775807"
-// ("-9223372036854775808" when negated) reports OVERFLOW with *value and
-// *end left untouched. Stops at the first non-digit; that byte is not
+// ("-9223372036854775808" when negated) reports OVERFLOW with *value
+// untouched and *end set to 0. Stops at the first non-digit; that byte
+// is not
 // an error, it just ends the run.
 int pep_parse_i64(const char *s, size_t n, long long *value, size_t *end);
 

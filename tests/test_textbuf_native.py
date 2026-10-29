@@ -70,6 +70,19 @@ def run_guarded(command, **kwargs):
     raise last
 
 
+def msvc_flags(compiler):
+    # MSVC-target Clang deprecates fopen under -Werror. This define
+    # silences only that vendor diagnostic; the code stays strict
+    # portable C23 with identical warning flags. Single home for the
+    # rule so probe, library, and generated-code builds stay uniform.
+    flags = list(CLANG_FLAGS)
+    if "clang" in compiler.lower():
+        version = run_program([compiler, "--version"])
+        if "msvc" in (version.stdout + version.stderr).lower():
+            flags.append("-D_CRT_SECURE_NO_WARNINGS")
+    return flags
+
+
 class TextbufNativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -188,14 +201,7 @@ class TextbufNativeTests(unittest.TestCase):
 
 
     def _build_c(self, compiler, exe_name, sources):
-        flags = list(CLANG_FLAGS)
-        if "clang" in compiler.lower():
-            version = run_program([compiler, "--version"])
-            if "msvc" in (version.stdout + version.stderr).lower():
-                # MSVC-target Clang deprecates fopen under -Werror. The
-                # runtime library itself stays warning-clean under identical
-                # flags; this define silences only that vendor diagnostic; the code stays strict portable C23.
-                flags.append("-D_CRT_SECURE_NO_WARNINGS")
+        flags = msvc_flags(compiler)
         exe = BUILD / exe_name
         compiled = run_program(
             [compiler, *flags, *[str(TEXT / s) for s in sources], "-o", str(exe)],
@@ -607,11 +613,7 @@ class TextbufNativeTests(unittest.TestCase):
                 runner = BUILD / ("rt_%s_%s.c" % (tag, name))
                 runner.write_bytes(runner_tpl % literal)
                 exe = BUILD / ("rt_%s_%s.exe" % (tag, name))
-                flags = list(CLANG_FLAGS)
-                if "clang" in compiler.lower():
-                    version = run_program([compiler, "--version"])
-                    if "msvc" in (version.stdout + version.stderr).lower():
-                        flags.append("-D_CRT_SECURE_NO_WARNINGS")
+                flags = msvc_flags(compiler)
                 compiled = run_program([compiler, *flags, str(runner), "-o", str(exe)],
                                        cwd=ROOT)
                 self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -660,11 +662,7 @@ class TextbufNativeTests(unittest.TestCase):
         native.write_bytes(joined[0])
         for compiler, name in ((clang, "join_clang.exe"), (gcc, "join_gcc.exe")):
             exe = BUILD / name
-            flags = list(CLANG_FLAGS)
-            if "clang" in compiler.lower():
-                version = run_program([compiler, "--version"])
-                if "msvc" in (version.stdout + version.stderr).lower():
-                    flags.append("-D_CRT_SECURE_NO_WARNINGS")
+            flags = msvc_flags(compiler)
             compiled = run_program([compiler, *flags, str(native), "-o", str(exe)],
                                    cwd=ROOT)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)

@@ -11,7 +11,7 @@ int pep_span_locate(const char *s, size_t n, size_t offset,
     if (line == nullptr || col == nullptr) {
         return PEP_SPAN_BADARG;
     }
-    if (s == nullptr && n != 0) {
+    if (s == nullptr) {
         return PEP_SPAN_BADARG;
     }
     stop = (offset <= n) ? offset : n;
@@ -40,7 +40,7 @@ int pep_diag_render(pep_textbuf_t *buf, const char *file, const char *code,
     if (buf == nullptr || file == nullptr || code == nullptr || message == nullptr) {
         return PEP_SPAN_BADARG;
     }
-    if (s == nullptr && n != 0) {
+    if (s == nullptr) {
         return PEP_SPAN_BADARG;
     }
     if (offset > n) {

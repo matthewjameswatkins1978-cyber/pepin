@@ -40,6 +40,36 @@ not change; the join is a byte concatenation with no semantic content.
 3. No second authority: the joined text is never fed back into the
    checker, parser, or session as a new revision.
 
+## NUL-fragment contract (added slice 11, needs Agent 2 ruling)
+
+Python `str` can carry embedded NUL bytes (a Pep string literal can
+produce `\0`); C strings cannot. The two joins therefore differ on one
+input class:
+
+- `pep_textbuf_join` appends NUL-terminated fragments and truncates
+  any fragment at its first embedded NUL.
+- Python `"".join` preserves embedded NULs byte-for-byte.
+
+Three ways to close this, in increasing order of machinery:
+
+(a) Forbid it at the boundary: the host asserts every `sourceParts`
+    entry is NUL-free before calling the native join, and routes any
+    violation to `status: "unsupported"` with a diagnostic. No new
+    C API; the emitter must guarantee or check the precondition.
+(b) Length-tagged join: `pep_textbuf_join_n(buf, parts, lens, count)`
+    (implemented, same contract as `join`) preserves embedded NULs.
+    The host transport must then carry lengths alongside pointers —
+    a v2 tool-protocol decision that belongs to Agent 2's design.
+(c) Escape at emission: the emitter never emits raw NUL bytes into
+    fragments in the first place.
+
+Agent 4 recommends (a) for the first gate (smallest state, fail-closed)
+and offers (b) as implemented fallback. Until one is chosen, the
+Python join remains the production path — this is a documented
+divergence, not a silent one. Slice-10 evidence
+(`test_native_join_of_emitter_output`) covers NUL-free C source only
+and stays valid under any option.
+
 ## What Pep can and cannot express today (verified this slice)
 
 - Expressible and emitter-lowered: the capacity step

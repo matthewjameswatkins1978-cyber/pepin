@@ -198,3 +198,23 @@ can relay them.
   be told codes are component-local.
 - No changes made: audit only, zero bytes modified, nothing built
   or run. Residual `_build/spanprobe` scripts kept as evidence.
+
+## 2026-10-29 -- slice 11: contract fixes + join hardening (hold-safe)
+
+- Audit micro-fixes, all source-only: stale `next_capacity` comment,
+  strict null-`s` contract for validate/locate/render (headers match
+  code now), `pep_parse_i64` OVERFLOW doc (`*end` is set to 0),
+  `PEP_UTF8_RANGE` marked reserved, error codes documented as
+  component-local (README).
+- New: `pep_textbuf_join_n` (length-tagged join preserving embedded
+  NULs) plus an INTEGRATION.md NUL-fragment analysis for Agent 2:
+  option (a) NUL-free precondition, (b) length-tagged join (now
+  implemented), (c) escape at emission. Python join stays production.
+- Test hygiene: single `msvc_flags()` helper replaces three inline
+  copies; utf8/demo inline builds verified correct as-is (no fopen).
+- New: `runtime/pep_text/README.md` subsystem documentation.
+- Verification within hold limits: `py_compile` clean; all 18 C
+  files pass `clang -std=c23 -fsyntax-only -Wall -Wextra -Wpedantic
+  -Werror` with zero output artifacts (exe count unchanged).
+  Everything new is implemented-but-untested: the 19-test suite must
+  be re-run green after the hold before any behavior-dependent commit.

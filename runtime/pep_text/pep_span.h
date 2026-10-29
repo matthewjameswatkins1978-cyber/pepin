@@ -19,8 +19,8 @@ enum {
 };
 
 // 1-based line/column for a byte offset. Offsets past the end clamp to n
-// (the end-of-input position, as the seed lexer reports EOF). A null input
-// with n == 0 locates offset 0 at 1:1.
+// (the end-of-input position, as the seed lexer reports EOF). A null s is
+// always PEP_SPAN_BADARG, even with n == 0.
 int pep_span_locate(const char *s, size_t n, size_t offset,
                     unsigned long *line, unsigned long *col);
 

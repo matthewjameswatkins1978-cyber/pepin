@@ -15,13 +15,15 @@ enum {
     PEP_UTF8_OK = 0,       // valid input
     PEP_UTF8_INVALID = 1,  // malformed encoding; offset points at the byte
     PEP_UTF8_BADARG = 2,   // null pointer argument
-    PEP_UTF8_RANGE = 3     // code point is not a Unicode scalar value
+    PEP_UTF8_RANGE = 3     // reserved for future scalar-range reporting
 };
 
 // Validate n bytes. Returns PEP_UTF8_OK, or PEP_UTF8_INVALID with
 // *error_offset set to the first bad byte (same offsets as the Pep model:
 // truncation reports the lead byte, a bad continuation reports that byte).
 // A null error_offset is allowed; the status still reports validity.
+// A null s is always PEP_UTF8_BADARG, even with n == 0: pass "" or a
+// real buffer for empty input.
 int pep_utf8_validate(const char *s, size_t n, size_t *error_offset);
 
 // Decode the first scalar value. Needs n >= 1. Returns the width in bytes

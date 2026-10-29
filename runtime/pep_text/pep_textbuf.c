@@ -15,8 +15,8 @@ static int note(pep_textbuf_t *buf, int code)
 }
 
 // Saturating double shared with the Pep model (grow_step): doubling stops
-// at SIZE_MAX instead of wrapping. Returns false when `need` itself cannot
-// be represented alongside the terminator.
+// at SIZE_MAX instead of wrapping. `need` (len + extra + 1) is already
+// range-checked by the caller, so doubling always succeeds here.
 static bool next_capacity(size_t cap, size_t need, size_t *out)
 {
     size_t step;
@@ -160,6 +160,28 @@ int pep_textbuf_join(pep_textbuf_t *buf, const char *const *parts, size_t count)
             return note(buf, PEP_TEXTBUF_BADARG);
         }
         status = pep_textbuf_append_cstr(buf, parts[i]);
+        if (status != PEP_TEXTBUF_OK) {
+            return status;
+        }
+    }
+    return buf->err;
+}
+
+int pep_textbuf_join_n(pep_textbuf_t *buf, const char *const *parts, const size_t *lens, size_t count)
+{
+    size_t i;
+    if (buf == nullptr) {
+        return PEP_TEXTBUF_BADARG;
+    }
+    if ((parts == nullptr || lens == nullptr) && count != 0) {
+        return note(buf, PEP_TEXTBUF_BADARG);
+    }
+    for (i = 0; i < count; i++) {
+        int status;
+        if (parts[i] == nullptr && lens[i] != 0) {
+            return note(buf, PEP_TEXTBUF_BADARG);
+        }
+        status = pep_textbuf_append_bytes(buf, parts[i], lens[i]);
         if (status != PEP_TEXTBUF_OK) {
             return status;
         }
