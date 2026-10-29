@@ -1775,6 +1775,59 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                             if label == "for-in-multiple-returns":
                                 self.assertEqual(c_source.count("pep_result_"), 4)
 
+    def test_pep_written_count_between_matches_interpreter_on_clang_and_gcc(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_count_between(")
+        end = library.index("\n}\n", start) + 3
+        helper = library[start:end]
+        cases = (
+            ("[1, 2, 3, 2]", 2, 4, 3),
+            ("[-4, -1, 0, 2, 5]", -1, 2, 3),
+            ("[3, 3, 3]", 3, 3, 3),
+            ("[1, 2, 3]", 5, 1, 0),
+            ("[]", -10, 10, 0),
+        )
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for index, (values, lower, upper, expected) in enumerate(cases):
+                with self.subTest(values=values, lower=lower, upper=upper):
+                    source = folder / f"count_between_{index}.pep"
+                    source_text = (
+                        helper
+                        + "\nfn main() -> Int {\n"
+                        + f"  return list_int_count_between({values}, {lower}, {upper})\n"
+                        + "}\n")
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference_source = folder / f"count_between_ref_{index}.pep"
+                    reference_source.write_text(
+                        source_text + "say(int_text(main()))\n",
+                        encoding="utf-8", newline="\n")
+                    reference = self.invoke("run", reference_source)
+                    self.assertEqual(reference.returncode, 0,
+                                     reference.stdout + reference.stderr)
+                    self.assertEqual(reference.stdout, str(expected) + chr(10))
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(compiler=compiler.name):
+                            native = self.invoke("run-c23", source,
+                                                 "--compiler", compiler)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, reference.stdout)
+
+            unsupported = folder / "four_parameter.pep"
+            unsupported.write_text(
+                "fn sum_four(first: Int, second: Int, third: Int, fourth: Int) -> Int {\n"
+                "  return first + second + third + fourth\n"
+                "}\n"
+                "fn main() -> Int { return sum_four(1, 2, 3, 4) }\n",
+                encoding="utf-8", newline="\n")
+            rejected = self.invoke("run-c23", unsupported, "--compiler", CLANG)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("Pep C23 functions require supported scalar parameters and results",
+                          rejected.stdout + rejected.stderr)
+
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
