@@ -1300,6 +1300,76 @@ def main():
           and "typedTree" in _si)
     results.append(("O-inspect", PASS if ok else FAIL,
                     "outcome=%s" % _si.get("outcome")))
+    _mlib = ("fn dbl(n: Int) -> Int { return n + n }\n"
+             "fn neg(n: Int) -> Int { return 0 - n }\n"
+             "fn main() -> Int { return 0 }\n")
+    _mo = sess([{"schemaVersion": 3, "op": "open", "name": "m",
+                  "source": _mlib}])
+    _md2, _mr2 = _mo[0]["document"], _mo[0]["revision"]
+    def _MB(nm):
+        return {"schemaVersion": 3, "toolProtocolVersion": 1,
+                "tool": nm, "document": _md2, "revision": _mr2}
+    def _MIV(v):
+        return {"type": "Int", "value": str(v)}
+    _mm = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": _mlib},
+        dict(_MB("a"), op="tool_register", function="dbl"),
+        dict(_MB("a"), op="tool_validate",
+             testVectors=[{"arguments": [_MIV(21)],
+                           "expect": _MIV(42)}]),
+        dict(_MB("a"), op="tool_activate"),
+        dict(_MB("b"), op="tool_register", function="neg"),
+        dict(_MB("b"), op="tool_validate",
+             testVectors=[{"arguments": [_MIV(21)],
+                           "expect": _MIV(-21)}]),
+        dict(_MB("b"), op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "a",
+         "arguments": [_MIV(1)]},
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "b",
+         "arguments": [_MIV(1)]},
+    ])
+    _ia = _mm[7].get("result") == _MIV(2)
+    _ib = _mm[8].get("result") == _MIV(-1)
+    results.append(("O-multiactive", PASS if (_ia and _ib) else FAIL,
+                    "a=%s b=%s" % (_mm[7].get("result"),
+                                   _mm[8].get("result"))))
+    _rr = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+    ])
+    _rdoc = _rr[0]["document"]
+    _r2 = sess([
+        {"schemaVersion": 3, "op": "open", "name": "m",
+         "source": "fn main() -> Int { return 1 }\n"},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _rdoc,
+         "expected_revision": _rr[0]["revision"], "start_byte": 27,
+         "end_byte": 26, "replacement": "X"},
+    ])[1]
+    _re = _r2.get("error") or {}
+    ok = (_r2.get("outcome") == "error"
+          and (isinstance(_re, dict) and _re.get("code") == "PEP_INVALID_EDIT_RANGE" or "INVALID_EDIT_RANGE" in str(_re)))
+    results.append(("O-reversed-range", PASS if ok else FAIL,
+                    "outcome=%s" % _r2.get("outcome")))
+    _mo2 = sess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": "fn f(n: Int) -> Int { return n + ?h }\nfn main() -> Int { return 0 }\n"},
+    ])
+    _hd3, _hr3 = _mo2[0]["document"], _mo2[0]["revision"]
+    _mf = sess([
+        {"schemaVersion": 3, "op": "open", "name": "h",
+         "source": "fn f(n: Int) -> Int { return n + ?h }\nfn main() -> Int { return 0 }\n"},
+        {"schemaVersion": 3, "op": "fill_hole", "document": _hd3,
+         "expected_revision": _hr3, "scope": "f", "name": "h",
+         "replacement": "1", "mode": "bogus"},
+    ])[1]
+    _fe = _mf.get("error") or {}
+    ok = (_mf.get("outcome") == "error"
+          and (isinstance(_fe, dict) and _fe.get("code") == "PEP_FILL_HOLE_MODE" or "FILL_HOLE_MODE" in str(_fe)))
+    results.append(("O-badmode", PASS if ok else FAIL,
+                    "outcome=%s" % _mf.get("outcome")))
     # v2 transport exclusions: unions + SourceBytes (set 18)
     _xlib = ("type E = A(Int) | B()\n"
              "fn first(x: E) -> Int { return match x { A(v) => v B() => 1 } }\n"

@@ -45,6 +45,10 @@ After a valid `apply_edit` (rev1 → rev2), querying *both* revisions in-session
 
 Session `inspect` on an open revision → `TESTED`: `outcome: ok`, with both `ast` (list) and `typedTree` present. Unlike the file-based `inspect` (parse stage only, no typed tree — see above), the session variant serves the retained analysis. Same op name, different layers; both observed, not assumed.
 
+## Misc protocol edges: multi-active tools, reversed ranges, bad modes
+
+Two different tools can be `Active` simultaneously (both invoke correctly; `tool_list` shows both `Active`) — activeness is per-tool, not a global singleton. Three more fail-closed edges, all TESTED: reversed `apply_edit` range → `PEP_INVALID_EDIT_RANGE`; unknown `fill_hole` mode → `PEP_FILL_HOLE_MODE`; (stale revisions and unknown holes covered in R1/H4–H5). Every request shape the protocol defines has an explicit acceptance or rejection path.
+
 ## Status
 
 No findings. These close the session-transport loop left open by the
