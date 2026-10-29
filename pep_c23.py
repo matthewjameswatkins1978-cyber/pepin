@@ -203,6 +203,32 @@ def parser_node_identity(node, source_length):
     return node_id, values["parentId"]
 
 
+def validate_parser_node_sequence(node_ids):
+    ordered_ids = sorted(node_ids)
+    if ordered_ids != list(range(len(ordered_ids))):
+        raise RuntimeError("Pep C23 parser AST node ids are not exactly 0..n-1")
+
+
+def validate_parser_parent_links(node_ids, parent_ids):
+    for node_id, parent_id in parent_ids:
+        if parent_id != -1 and parent_id not in node_ids:
+            raise RuntimeError("Pep C23 parser returned an AST node with a missing parent")
+        if parent_id >= node_id:
+            raise RuntimeError("Pep C23 parser parent IDs do not match its preorder tree contract")
+
+
+def validate_parser_final_outcome(status, error_code):
+    if status == "complete":
+        if error_code:
+            raise RuntimeError("Pep C23 parser marked an errored result complete")
+        return
+    if status in {"incomplete", "invalid"}:
+        if not error_code:
+            raise RuntimeError("Pep C23 parser returned a failed status without an error code")
+        return
+    raise RuntimeError(f"Pep C23 parser returned unknown final status {status!r}")
+
+
 def parse_target(session, source_bytes, target, tool_revision):
     parse_started = time.perf_counter_ns()
     request_bytes_before = session.request_bytes_total
@@ -262,7 +288,7 @@ def parse_target(session, source_bytes, target, tool_revision):
             if node_id < 0 or node_id in node_ids:
                 raise RuntimeError("Pep C23 parser returned a negative or duplicate AST node id")
             node_ids.add(node_id)
-            parent_ids.append(parent_id)
+            parent_ids.append((node_id, parent_id))
             nodes.append(node)
             if len(nodes) > MAX_TYPED_NODES:
                 raise RuntimeError("Pep C23 parser AST exceeds the 10,000-node typed transport limit")
@@ -280,18 +306,13 @@ def parse_target(session, source_bytes, target, tool_revision):
     if final_fields is None:
         raise RuntimeError("Pep C23 parser produced no final chunk")
     final_status = typed_field_value(final_fields, "status", "Str", "final parser chunk")
+    validate_parser_node_sequence(node_ids)
     if final_status == "complete":
-        for node in nodes:
-            fields = typed_fields(node, "FlatAstNode", "parser node")
-            node_id = int(typed_field_value(fields, "id", "Int", "parser node"))
-            parent_id = int(typed_field_value(fields, "parentId", "Int", "parser node"))
-            if parent_id != -1 and parent_id not in node_ids:
-                raise RuntimeError("Pep C23 parser returned an AST node with a missing parent")
-            if parent_id >= node_id:
-                raise RuntimeError("Pep C23 parser returned an AST parent after its child")
+        validate_parser_parent_links(node_ids, parent_ids)
     nodes.sort(key=lambda node: int(typed_field_value(
         typed_fields(node, "FlatAstNode", "parser node"), "id", "Int", "parser node")))
     error_code = typed_field_value(final_fields, "errorCode", "Str", "final parser chunk")
+    validate_parser_final_outcome(final_status, error_code)
     error_start = int(typed_field_value(final_fields, "errorStart", "Int", "final parser chunk"))
     error_end = int(typed_field_value(final_fields, "errorEnd", "Int", "final parser chunk"))
     error_line = int(typed_field_value(final_fields, "errorLine", "Int", "final parser chunk"))
@@ -312,10 +333,7 @@ def parse_target(session, source_bytes, target, tool_revision):
         ("errorLine", final_fields["errorLine"]),
         ("errorColumn", final_fields["errorColumn"]),
     ])
-    ordered_ids = [int(typed_field_value(typed_fields(node, "FlatAstNode", "parser node"),
-                                         "id", "Int", "parser node")) for node in nodes]
-    if ordered_ids and ordered_ids != list(range(ordered_ids[0], ordered_ids[0] + len(ordered_ids))):
-        raise RuntimeError("Pep C23 parser AST node ids are not contiguous")
+
     session.parser_measurements = {
         "parser_status": typed_field_value(final_fields, "status", "Str", "final parser chunk"),
         "parser_error_code": typed_field_value(final_fields, "errorCode", "Str", "final parser chunk"),
