@@ -21,3 +21,23 @@ can relay them.
 - Open question for Agent 2: confirm or amend the `pep_textbuf_join`
   signature and the `emit_c23_joined` single-Str proposal in
   INTEGRATION.md. No response required before Agent 4 continues.
+
+## 2026-10-29 — push + shared-branch note (commit 7039965)
+
+- Slice 1 pushed to `campaign/pep-v01-sustained-build-20261027` as
+  703996538afc90986a0083f36821206a24303a63 (verified on remote).
+  Rebased onto sibling checker commits (remote had moved); no force-push.
+- A sibling's uncommitted delta on `tests/pep_checker_a13.pep`,
+  `tests/test_a13.py`, `tests/test_a14_c23.py` (differential-oracle
+  assertions, newer than remote HEAD) was in this shared worktree and
+  conflicted with the rebase. It is preserved untouched in the `stash@`
+  entry `WIP on campaign/...: 49fcb3e feat(runtime)` (62 insertions
+  across the 3 files) plus `_build/sibling-dirty-backup.patch`.
+  `tests/test_a14_c23.py` auto-merged and stays uncommitted in the tree;
+  the other two were restored to HEAD. Owning agent: please re-apply or
+  rebase that delta; nothing of it was committed or discarded here.
+- Measured tool-path envelope for Agent 2/3: v2 front-end invocations
+  fit roughly 450 bytes of dense Pep; beyond that the parser tool fails
+  closed with `PEP_RUNTIME_STEP_LIMIT` (never wrong output). Suspected
+  quadratic per-token `append` buffer in the Pep-written parser —
+  offered as a lead only; no sibling code touched.
