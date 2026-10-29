@@ -251,6 +251,15 @@ fn pep_c23_c_scalar_type(node: FlatAstNode) -> Str {
   if node.text == "Bool" { return "_Bool" } else {}
   return ""
 }
+
+fn pep_c23_c_record_field_type(nodes: List[FlatAstNode], owner: FlatAstNode, node: FlatAstNode) -> Str {
+  let scalar = pep_c23_c_scalar_type(node)
+  if scalar != "" { return scalar } else {}
+  if node.kind != "type_named" { return "" } else {}
+  let nested = pep_c23_record_declaration(nodes, node.text)
+  if !nested.found || !(nested.node.id + 1 <= owner.id) { return "" } else {}
+  return "record"
+}
 fn pep_c23_record_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   for node in nodes {
     if node.parentId == -1 && node.kind == "record_declaration" && node.text == name {
@@ -285,6 +294,19 @@ fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNod
 }
 fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "record" { return pep_c23_record_declaration(nodes, value.text) } else {}
+  if value.kind == "field_access" {
+    let base = pep_c23_child(nodes, value.id, "value", 0)
+    if !base.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let parent = pep_c23_record_value_type(nodes, function, base.node)
+    if !parent.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let field = pep_c23_record_field_declaration(nodes, parent.node, value.text)
+    if !field.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let fieldType = pep_c23_child(nodes, field.node.id, "type", 0)
+    if !fieldType.found || fieldType.node.kind != "type_named" {
+      return PepC23NodeLookup { found: false, node: empty_node() }
+    } else {}
+    return pep_c23_record_declaration(nodes, fieldType.node.text)
+  } else {}
   if value.kind == "name" {
     for parameter in nodes {
       if parameter.parentId == function.id && parameter.role == "parameter" && parameter.kind == "parameter" && parameter.text == value.text {
@@ -388,6 +410,15 @@ fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> B
   if node.kind == "field_access" {
     let value = pep_c23_child(nodes, node.id, "value", 0)
     return !value.found || pep_c23_expression_may_fail(nodes, value.node)
+  } else {}
+  if node.kind == "record" {
+    for field in nodes {
+      if field.parentId == node.id && field.role == "field" {
+        let value = pep_c23_child(nodes, field.id, "value", 0)
+        if !value.found || pep_c23_expression_may_fail(nodes, value.node) { return true } else {}
+      } else {}
+    }
+    return false
   } else {}
   if node.kind == "call" { return true } else {}
   if node.kind == "unary" && node.text == "!" {
@@ -521,8 +552,8 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         let declared = pep_c23_record_field_declaration(nodes, declaration.node, supplied.text)
         if !declared.found { return pep_c23_unsupported("Pep C23 record construction field does not resolve to a declaration") } else {}
         let fieldType = pep_c23_child(nodes, declared.node.id, "type", 0)
-        if !fieldType.found || pep_c23_c_scalar_type(fieldType.node) == "" {
-          return pep_c23_unsupported("Pep C23 records currently require fields of type Int or Bool")
+        if !fieldType.found || pep_c23_c_record_field_type(nodes, declaration.node, fieldType.node) == "" {
+          return pep_c23_unsupported("Pep C23 record fields require Int, Bool, or a preceding record declaration")
         } else {}
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 record field has no value") } else {}
@@ -1226,9 +1257,16 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       for field in parsed.nodes {
         if field.parentId == record.id && field.role == "field" && field.kind == "field_declaration" {
           let fieldType = pep_c23_child(parsed.nodes, field.id, "type", 0)
-          let cType = if fieldType.found { pep_c23_c_scalar_type(fieldType.node) } else { "" }
-          if cType == "" { return pep_c23_unsupported("Pep C23 records currently require fields of type Int or Bool") } else {}
-          parts = append(parts, cType)
+          let fieldKind = if fieldType.found { pep_c23_c_record_field_type(parsed.nodes, record, fieldType.node) } else { "" }
+          if fieldKind == "" { return pep_c23_unsupported("Pep C23 record fields require Int, Bool, or a preceding record declaration") } else {}
+          if fieldKind == "record" {
+            let nested = pep_c23_record_declaration(parsed.nodes, fieldType.node.text)
+            if !nested.found { return pep_c23_unsupported("Pep C23 nested record field has no declaration") } else {}
+            parts = append(parts, "pep_record_")
+            parts = append(parts, int_text(nested.node.id))
+          } else {
+            parts = append(parts, fieldKind)
+          }
           parts = append(parts, " pep_field_")
           parts = append(parts, int_text(field.childIndex))
           parts = append(parts, "; ")
