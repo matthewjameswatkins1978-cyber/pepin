@@ -757,6 +757,28 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(hole["expectedType"], "Int")
         self.assertIn(("n", "Int"), [(b["name"], b["type"]) for b in hole["bindings"]])
 
+    def test_bare_identifier_matching_constructor_name_is_binding(self):
+        source = (
+            "type T = A(Int) | B()\n"
+            "fn f(x: T) -> Int { return match x { A(n) => n B => 0 } }\n"
+        )
+        result = invoke("check", self.source(source), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pattern = json.loads(result.stdout)["typedTree"]["functions"][0]["body"][0]["value"]["expression"]["arms"][1]["pattern"]
+        self.assertEqual(pattern["kind"], "binding")
+        self.assertEqual(pattern["name"], "B")
+
+        explicit = source.replace("B => 0", "B() => 0")
+        result = invoke("check", self.source(explicit), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pattern = json.loads(result.stdout)["typedTree"]["functions"][0]["body"][0]["value"]["expression"]["arms"][1]["pattern"]
+        self.assertEqual(pattern["kind"], "constructor")
+
+        catch_all = source.replace("B => 0", "B => 0 A(other) => other")
+        result = invoke("check", self.source(catch_all), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_UNREACHABLE_MATCH_ARM")
+
     def test_union_constructor_and_match_errors(self):
         prefix = "type Expr = Number(Int) | Add(Expr, Expr)\n"
         cases = [
