@@ -902,13 +902,15 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
     if cType == "" { return pep_c23_unsupported("Pep C23 loop returns require a scalar result type") } else {}
     let lowered = pep_c23_expression(nodes, function, value.node)
     if lowered.status != "emitted" { return lowered } else {}
-    var parts: List[Str] = [indent, cType, " pep_result = "]
+    var parts: List[Str] = [indent, cType, " pep_result_", int_text(statement.id), " = "]
     for part in lowered.sourceParts { parts = append(parts, part) }
     parts = append(parts, ";\n")
     parts = append(parts, indent)
     parts = append(parts, "pep_leave();\n")
     parts = append(parts, indent)
-    parts = append(parts, "return pep_result;\n")
+    parts = append(parts, "return pep_result_")
+    parts = append(parts, int_text(statement.id))
+    parts = append(parts, ";\n")
     return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
   } else {}
   if statement.kind == "assignment" {

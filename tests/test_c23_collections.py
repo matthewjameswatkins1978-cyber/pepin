@@ -1415,6 +1415,14 @@ class PepC23CollectionLoopTests(unittest.TestCase):
              "  return -1\n"
              "}\n",
              "2\n"),
+            ("for-in-multiple-returns",
+             "fn main() -> Int {\n"
+             "  for item in [2] {\n"
+             "    if item == 2 { return item } else { return item + 1 }\n"
+             "  }\n"
+             "  return -1\n"
+             "}\n",
+             "2\n"),
         )
         for label, source_text, expected in cases:
             with self.subTest(loop=label):
@@ -1438,8 +1446,10 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                             self.assertEqual(native.returncode, 0,
                                              native.stdout + native.stderr)
                             self.assertEqual(native.stdout, reference.stdout)
-                            self.assertIn("pep_leave();",
-                                          generated_c.read_text(encoding="utf-8"))
+                            c_source = generated_c.read_text(encoding="utf-8")
+                            self.assertIn("pep_leave();", c_source)
+                            if label == "for-in-multiple-returns":
+                                self.assertEqual(c_source.count("pep_result_"), 4)
 
     def test_typed_empty_mutable_lists_use_zero_length_runtime_descriptors(self):
         if not CLANG.is_file() or not GCC.is_file():
