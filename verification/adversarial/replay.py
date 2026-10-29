@@ -1010,6 +1010,57 @@ def main():
           ((isinstance(_eb, dict) and _eb.get("code") == "PEP_SEMANTIC_ROOT_NOT_FOUND") or "SEMANTIC_ROOT" in str(_eb)))
     results.append(("SN-badentry", PASS if ok else FAIL,
                     "outcome=%s" % _rb.get("outcome")))
+    # v2 transport exclusions: unions + SourceBytes (set 18)
+    _xlib = ("type E = A(Int) | B()\n"
+             "fn first(x: E) -> Int { return match x { A(v) => v B() => 1 } }\n"
+             "fn grab() -> SourceBytes { return source_bytes() }\n"
+             "fn main() -> Int { return 0 }\n")
+    _xg = "fn main() -> Int { return 0 }\n"
+    def _xsess(reqs):
+        _rr = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                    inp="\n".join(json.dumps(_x) for _x in reqs) + "\n")
+        return [json.loads(_ln) for _ln in (_rr.stdout or "").splitlines()
+                if _ln.strip()]
+    _xo = _xsess([{"schemaVersion": 3, "op": "open", "name": "t",
+                    "source": _xlib},
+                   {"schemaVersion": 3, "op": "open", "name": "g",
+                    "source": _xg}])
+    _xd, _xr = _xo[0]["document"], _xo[0]["revision"]
+    _xgd, _xgr = _xo[1]["document"], _xo[1]["revision"]
+    _xst = {"document": _xgd, "revision": _xgr,
+            "entryFunctions": ["main"]}
+    def _xval(tool, fn, args, expect):
+        _B = {"schemaVersion": 3, "toolProtocolVersion": 2,
+              "tool": tool, "document": _xd, "revision": _xr}
+        return _xsess([
+            {"schemaVersion": 3, "op": "open", "name": "t",
+             "source": _xlib},
+            {"schemaVersion": 3, "op": "open", "name": "g",
+             "source": _xg},
+            dict(_B, op="tool_register", function=fn),
+            dict(_B, op="tool_validate",
+                 testVectors=[{"arguments": args, "expect": expect,
+                               "semanticTarget": _xst}]),
+        ])[3]
+    _IVX = lambda v: {"type": "Int", "value": str(v)}
+    _xok = True
+    for _tn, _fn, _args, _exp in (
+            ("u1", "first",
+             [{"type": "E", "value": 1}], _IVX(1)),
+            ("u2", "first",
+             [{"type": "E", "fields": [
+                 {"name": "A",
+                  "value": {"type": "Int", "value": "1"}}]}],
+             _IVX(1)),
+            ("g", "grab", [], _IVX(0))):
+        _xv = _xval(_tn, _fn, _args, _exp)
+        _xe = _xv.get("error")
+        _xok = (_xok and _xv.get("outcome") == "rejected" and (
+            (isinstance(_xe, dict)
+             and "scalar, List, and monomorphic record" in str(_xe.get("message", _xe)))
+            or "scalar, List, and monomorphic record" in str(_xe)))
+    results.append(("X-transport-excl", PASS if _xok else FAIL,
+                    "all-rejected"))
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
           % (len(results) - len(fails), len(results)))
