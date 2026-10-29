@@ -458,3 +458,11 @@ can relay them.
   guidance ("let real dependencies determine the order").
 - Deferred, not dropped: revisit on the first demonstrated native
   parser need or Agent-2 request. No code written for it on purpose.
+
+## 2026-10-29 -- arena README (hold-safe docs)
+
+- New `runtime/pep_arena/README.md`: API/ownership contract,
+  growth and threading model, demo description with expected
+  outputs (42/6), and an honest verification-state section.
+  Completes the deliverable's documentation without executing
+  anything.
