@@ -20,8 +20,9 @@ enum {
 };
 
 // Find the first occurrence of `needle[0..nn)` in `hay[0..hn)`.
-// An empty needle is found at offset 0. A needle longer than the
-// haystack is never found. Worst case O(hn*nn) byte comparisons;
+// An empty needle is found at offset 0 (`*at` set). A needle longer
+// than the haystack is never found (`*at` set to `hn`). `*at` is
+// left untouched on BADARG. Worst case O(hn*nn) byte comparisons;
 // no state, no allocation, no reads outside [hay, hay+hn).
 // Codes are component-local, matching the rest of runtime/pep_text.
 int pep_text_find(const char *hay, size_t hn, const char *ndl, size_t nn, size_t *at);
