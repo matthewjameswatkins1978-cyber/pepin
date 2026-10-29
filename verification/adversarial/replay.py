@@ -951,6 +951,26 @@ def main():
             and _fi2.get("result") == _HIV(22))
     results.append(("H2-failedswap", PASS if _ok2 else FAIL,
                     "invoke=%s" % _fi2.get("result")))
+    # Platform inventory pin (set 20)
+    _pd = _pwsh(["./pep.ps1", "describe", "--json"])
+    try:
+        _pj = json.loads((_pd.stdout or "{}"))
+        _pbn = sorted(b.get("name") for b in _pj.get("builtins", []))
+        ok = (_pj.get("language") == "Pep"
+              and _pj.get("types") == ["Int", "Bool", "Str",
+                                          "SourceBytes", "Unit"]
+              and _pbn == ["append", "byte_at", "byte_length",
+                           "byte_slice", "contains", "int_text",
+                           "length", "prepend", "reverse", "say",
+                           "source_bytes", "utf8_slice"]
+              and "str_contains" not in _pbn
+              and _pj.get("runtime") == {"maxSteps": 1000000,
+                                           "maxCallDepth": 512}
+              and _pj.get("session", {}).get("toolProtocolVersions") == [1, 2])
+        results.append(("PL-platform", PASS if ok else FAIL,
+                        "builtins=%d" % len(_pbn)))
+    except Exception as e:
+        results.append(("PL-platform", FAIL, "error: %r" % e))
     # Declaration edges (set 19)
     check("D-nested-fn",
           "fn outer() -> Int {\n fn inner() -> Int { return 1 }\n return inner()\n}\nfn main() -> Int { return 0 }",
