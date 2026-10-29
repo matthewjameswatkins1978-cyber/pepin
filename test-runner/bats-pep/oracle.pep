@@ -315,6 +315,89 @@ fn explain(evaluation: Evaluation) -> Unit {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Recursive oracle expression
+// ---------------------------------------------------------------------------
+//
+// Reference contract, The-Terror-Bats @ d5e6404 (src/oracle.rs):
+//   enum OracleExpr { All(Vec<OracleExpr>), Any(Vec<OracleExpr>), Not(Box<OracleExpr>), Cond(Condition) }
+//
+// `eval` recurses. Two facts follow, and both were measured against the real
+// framework before this code was written, because guessing either one produces a
+// wrong oracle that still looks plausible:
+//
+//  1. A combinator combines its DIRECT CHILD RESULTS, not the flattened leaf
+//     verdicts. Kleene AND/OR are associative so that difference is invisible for
+//     pure nesting, but it is decisive once `not` is nested: `all[not(equals 0),
+//     equals 1]` with exit 1 is PROVEN in the reference, while flattening the
+//     leaves would compose NotFalsified AND Falsified and answer NOT OBSERVED.
+//  2. The trail is depth-first, left to right: leaves only, in the order the
+//     recursion reaches them. `not` records the child's leaves unchanged and
+//     inverts only the result it returns.
+
+type OracleExpr =
+  LeafNode(ConditionOutcome) |
+  AllNode(List[OracleExpr]) |
+  AnyNode(List[OracleExpr]) |
+  NotNode(OracleExpr)
+
+fn concat_outcomes(first: List[ConditionOutcome], second: List[ConditionOutcome]) -> List[ConditionOutcome] {
+  var joined = first
+  for entry in second {
+    joined = append(joined, entry)
+  }
+  return joined
+}
+
+fn evaluate_tree(expr: OracleExpr) -> Evaluation {
+  return match expr {
+    LeafNode(leaf) => Evaluation { result: leaf.verdict, trail: [leaf] }
+    AllNode(children) => evaluate_tree_all(children)
+    AnyNode(children) => evaluate_tree_any(children)
+    NotNode(child) => evaluate_tree_not(child)
+  }
+}
+
+// `not` inverts the judgement and leaves the evidence trail exactly as found.
+fn evaluate_tree_not(child: OracleExpr) -> Evaluation {
+  var judged = evaluate_tree(child)
+  return Evaluation { result: compose_not(judged.result), trail: judged.trail }
+}
+
+fn evaluate_tree_all(children: List[OracleExpr]) -> Evaluation {
+  var results: List[Verdict] = []
+  var trail: List[ConditionOutcome] = []
+  for child in children {
+    var judged = evaluate_tree(child)
+    results = append(results, judged.result)
+    trail = concat_outcomes(trail, judged.trail)
+  }
+  var result = compose_all(results)
+  if length(children) == 0 {
+    trail = [empty_combinator("all: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: trail }
+}
+
+fn evaluate_tree_any(children: List[OracleExpr]) -> Evaluation {
+  var results: List[Verdict] = []
+  var trail: List[ConditionOutcome] = []
+  for child in children {
+    var judged = evaluate_tree(child)
+    results = append(results, judged.result)
+    trail = concat_outcomes(trail, judged.trail)
+  }
+  var result = compose_any(results)
+  if length(children) == 0 {
+    trail = [empty_combinator("any: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: trail }
+}
+
 // Machine-readable trail, one record per line so a differential can consume it
 // positionally without string formatting (Pep has no Str concatenation).
 //

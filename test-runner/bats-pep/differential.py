@@ -228,6 +228,50 @@ TRAIL_CASES = [
      ' judge(EqualsMode(1), AbsentExit("step did not execute")))])'),
 ]
 
+def pep_leaf(equals_value):
+    """The Pep expression for one exit_code leaf, labelled as Rust describes it."""
+    return ('LeafNode(outcome("exit_code run:0 equals %d", '
+            "judge(EqualsMode(%d), ObservedExit(1))))" % (equals_value, equals_value))
+
+
+# Nested trees, added to the trail comparison rather than given a new harness: leaf
+# order, leaf labels and per-leaf results must all match. These are the cases that
+# prove the engine combines child RESULTS and not flattened leaf verdicts --
+# flattening `all[not(equals 0), equals 1]` would answer NOT OBSERVED, while the
+# reference answers PROVEN.
+TRAIL_CASES += [
+    ("nest-not-in-all",
+     "  all:\n"
+     "    - not:\n"
+     "        type: exit_code\n"
+     "        step: run:0\n"
+     "        equals: 0\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1",
+     "evaluate_tree(AllNode([NotNode(%s), %s]))" % (pep_leaf(0), pep_leaf(1))),
+    ("nest-not-of-all",
+     "  not:\n"
+     "    all:\n"
+     "      - type: exit_code\n        step: run:0\n        equals: 1\n"
+     "      - type: exit_code\n        step: run:0\n        equals: 1",
+     "evaluate_tree(NotNode(AllNode([%s, %s])))" % (pep_leaf(1), pep_leaf(1))),
+    ("nest-all-with-any",
+     "  all:\n"
+     "    - any:\n"
+     "        - type: exit_code\n          step: run:0\n          equals: 0\n"
+     "        - type: exit_code\n          step: run:0\n          equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1",
+     "evaluate_tree(AllNode([AnyNode([%s, %s]), %s]))" % (
+         pep_leaf(0), pep_leaf(1), pep_leaf(1))),
+    ("nest-not-in-any",
+     "  any:\n"
+     "    - not:\n"
+     "        type: exit_code\n"
+     "        step: run:0\n"
+     "        equals: 1\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 0",
+     "evaluate_tree(AnyNode([NotNode(%s), %s]))" % (pep_leaf(1), pep_leaf(0))),
+]
+
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
     bat = workdir / ("%s.yaml" % ident)

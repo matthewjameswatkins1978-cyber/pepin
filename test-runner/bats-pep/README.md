@@ -117,6 +117,39 @@ differential exploits exactly that.
 <condition> <label>`) because Pep has no `Str` concatenation, so a positional
 format is the honest one.
 
+## Recursive oracle expression
+
+Composition over a flat list is not the reference's shape. `OracleExpr` is a
+recursive tree, and A4 recursive tagged unions make that expressible directly:
+
+```pep
+type OracleExpr =
+  LeafNode(ConditionOutcome) |
+  AllNode(List[OracleExpr]) |
+  AnyNode(List[OracleExpr]) |
+  NotNode(OracleExpr)
+
+fn evaluate_tree(expr: OracleExpr) -> Evaluation
+```
+
+Two facts were measured against the real framework before this was written, because
+guessing either one yields a wrong oracle that still looks plausible:
+
+1. **A combinator combines its direct child RESULTS, not the flattened leaves.**
+   Kleene AND/OR are associative, so for pure nesting the difference is invisible —
+   but it is decisive once `not` is nested. Measured: with exit 1,
+   `all[not(equals 0), equals 1]` is **PROVEN** in the reference (the leaves are
+   `NotFalsified` and `Falsified`; `not(NotFalsified)` is `Falsified`, and
+   `Falsified AND Falsified` is `Falsified`). Flattening the leaves instead gives
+   `NotFalsified AND Falsified` = NOT OBSERVED. The self-test case and the
+   differential both pin that case precisely for this reason.
+2. **The trail is depth-first, left to right**, leaves only, and `not` leaves the
+   child's trail untouched while inverting only the result it returns.
+
+So `evaluate_tree_all` accumulates two parallel things: each child's composed
+`Verdict` for the Kleene step, and each child's trail concatenated in evaluation
+order for the explanation. The two are deliberately not derived from each other.
+
 ## Run it
 
 ```powershell
@@ -129,7 +162,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (35 cases; each prints its verdict label then its reason):
+Observed (41 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -168,10 +201,17 @@ Observed (35 cases; each prints its verdict label then its reason):
 | 33 | `evaluate_all([])` | INCONCLUSIVE |
 | 34 | `evaluate_not(Proven leaf)` | NOT OBSERVED |
 | 35 | `evaluate_all` over Proven + Invalid child | INVALID |
+| 36 | `evaluate_tree(LeafNode(Proven leaf))` | PROVEN |
+| 37 | `all[not(equals 0), equals 1]` on exit 1 | PROVEN (the flattening discriminator) |
+| 38 | `not(all[equals 1, equals 1])` | NOT OBSERVED |
+| 39 | `all[any[equals 0, equals 1], equals 1]` | PROVEN |
+| 40 | `any[not(equals 1), equals 0]` | NOT OBSERVED |
+| 41 | `evaluate_tree(AllNode([]))` | INCONCLUSIVE |
 
-Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of `evaluate_all([])`
-is `1` (the synthetic empty-combinator outcome), and `explain` prints the composed
-verdict followed by every leaf: label, verdict, reason.
+Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
+`evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
+the case-39 tree is `3`, and `explain` prints the composed verdict followed by
+every leaf: label, verdict, reason.
 
 Case 9 is the vacuity guard: a malformed experiment must never be reported as
 merely inconclusive, and case 5/6 are the infrastructure guard: missing evidence
@@ -293,8 +333,16 @@ composed result:
 | `not` not fired | 1 | `NotFalsified` | NOT OBSERVED |
 | `all: []` | 1 | `all: []` Undetermined | INCONCLUSIVE (synthetic) |
 | `all` fired + unexecuted step | 2 | `Falsified`, `Undetermined` | PROVEN, INCONCLUSIVE |
+| `all[not(equals 0), equals 1]` | 2 | `NotFalsified`, `Falsified` | NOT OBSERVED, PROVEN |
+| `not(all[equals 1, equals 1])` | 2 | `Falsified`, `Falsified` | PROVEN, PROVEN |
+| `all[any[equals 0, equals 1], equals 1]` | 3 | `NotFalsified`, `Falsified`, `Falsified` | NOT OBSERVED, PROVEN, PROVEN |
+| `any[not(equals 1), equals 0]` | 2 | `Falsified`, `NotFalsified` | PROVEN, NOT OBSERVED |
 
-`SUMMARY cases=23 mismatches=0`.
+Those four nested rows are what distinguish "combines child results" from "combines
+flattened leaves": in each one the flattened composition answers differently from
+the reference, and the Pep engine matches the reference.
+
+`SUMMARY cases=27 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict

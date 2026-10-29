@@ -106,3 +106,23 @@ show(result_of(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMod
 say(int_text(trail_size(evaluate_all([outcome("a", judge(EqualsMode(1), ObservedExit(1))), outcome("b", judge(EqualsMode(1), ObservedExit(1)))]))))
 say(int_text(trail_size(evaluate_all([]))))
 explain(evaluate_all([outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))), outcome("exit_code run:0 equals 2", judge(EqualsMode(2), ObservedExit(1)))]))
+
+// --- Recursive oracle expression (Rust OracleExpr trees) ---
+//
+// 36 tree-leaf          evaluate_tree(LeafNode(Proven leaf))    -> PROVEN
+// 37 tree-not-in-all    all[not(equals 0), equals 1]            -> PROVEN
+// 38 tree-not-of-all    not(all[equals 1, equals 1])            -> NOT OBSERVED
+// 39 tree-all-with-any  all[any[equals 0, equals 1], equals 1]  -> PROVEN
+// 40 tree-not-in-any    any[not(equals 1), equals 0]            -> NOT OBSERVED
+// 41 tree-all-empty     evaluate_tree(AllNode([]))              -> INCONCLUSIVE
+//
+// Case 37 is the discriminating case: composing the flattened leaf verdicts would
+// answer NOT OBSERVED, and the reference answers PROVEN. Nesting must combine
+// child results, not leaves.
+show(result_of(evaluate_tree(LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1)))))))
+show(result_of(evaluate_tree(AllNode([NotNode(LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1))))), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))]))))
+show(result_of(evaluate_tree(NotNode(AllNode([LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1)))), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))])))))
+show(result_of(evaluate_tree(AllNode([AnyNode([LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1)))), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))]), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))]))))
+show(result_of(evaluate_tree(AnyNode([NotNode(LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))), LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1))))]))))
+show(result_of(evaluate_tree(AllNode([]))))
+say(int_text(trail_size(evaluate_tree(AllNode([AnyNode([LeafNode(outcome("exit_code run:0 equals 0", judge(EqualsMode(0), ObservedExit(1)))), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))]), LeafNode(outcome("exit_code run:0 equals 1", judge(EqualsMode(1), ObservedExit(1))))])))))
