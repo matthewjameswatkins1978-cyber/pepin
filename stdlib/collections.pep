@@ -499,6 +499,14 @@ fn list_bool_last_index_of(values: List[Bool], needle: Bool) -> Int {
   return foundAt
 }
 
+fn list_bool_has_true_majority(values: List[Bool]) -> Bool {
+  var balance = 0
+  for item in values {
+    balance = if item { balance + 1 } else { balance - 1 }
+  }
+  return !(balance <= 0)
+}
+
 fn list_bool_first_or(values: List[Bool], fallback: Bool) -> Bool {
   for item in values { return item }
   return fallback
