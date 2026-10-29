@@ -2450,21 +2450,36 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
     def test_many_function_signatures_are_collected_in_source_order(self):
         declarations = []
+        expected_arities = []
+        expected_return_types = []
         for index in range(24):
-            if index % 3 == 0:
-                declarations.append(
-                    f"fn helper_{index:02d}() -> Int {{ return {index} }}"
-                )
-            elif index % 3 == 1:
-                declarations.append(
-                    f"fn helper_{index:02d}(value: Int) -> Int {{ return value }}"
-                )
+            arity = index % 3
+            result_kind = (index // 3) % 3
+            parameters = (
+                ""
+                if arity == 0
+                else "(value: Int)"
+                if arity == 1
+                else "(value: Int, enabled: Bool)"
+            )
+            if result_kind == 0:
+                result_type = "Int"
+                expression = str(index) if arity == 0 else "value"
+            elif result_kind == 1:
+                result_type = "Bool"
+                expression = "enabled" if arity == 2 else "true"
             else:
-                declarations.append(
-                    f"fn helper_{index:02d}(value: Int, enabled: Bool) -> Int {{ return value }}"
-                )
+                result_type = "List[Int]"
+                expression = "[]" if arity == 0 else "[value]"
+            declarations.append(
+                f"fn helper_{index:02d}{parameters} -> {result_type} "
+                f"{{ return {expression} }}"
+            )
+            expected_arities.append(arity)
+            expected_return_types.append(result_type)
+
         source = NL.join(declarations + [
-            "fn main() -> Int { return helper_23(23, true) }"
+            "fn main() -> Int { return helper_18() }"
         ])
         reference = self._reference_check("many-function-signatures", source)
         self.assertEqual(reference["status"], "valid", reference)
@@ -2478,12 +2493,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
             [f"helper_{index:02d}" for index in range(24)] + ["main"],
         )
         self.assertEqual(
-            [int(scalar(item["arity"])) for item in functions[:3]],
-            [0, 1, 2],
+            [int(scalar(item["arity"])) for item in functions],
+            expected_arities + [0],
         )
         self.assertEqual(
             [scalar(item["returnType"]) for item in functions],
-            ["Int"] * 25,
+            expected_return_types + ["Int"],
         )
 
     def test_nested_boolean_helper_calls_complete_within_tool_budget(self):
