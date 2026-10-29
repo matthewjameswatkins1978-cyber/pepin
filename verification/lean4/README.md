@@ -21,12 +21,17 @@ Build label: `BLOCKED_SECURITY` (see `../receipts/lean4-build-BLOCKED_SECURITY.m
 
 ## Layout
 
+- `Verification.lean` — library root importing both model modules so
+  default-glob `lake build` checks the whole library (added after
+  delegated tactic review 2026-10-29; avoids `lakefile.toml` glob
+  syntax uncertainty).
 - `Verification/ValueCopy.lean` — functional value model, checked edit,
   copy-preservation theorem, executable non-vacuity examples.
 - `Verification/AliasedCounterexample.lean` — shared-backing variant in
   which the copy property FAILS, with an explicit `example` witness.
-- `Verification/BrokenVariant.lean` — intentionally unprovable variant;
-  `lake build` MUST reject it (proves the build checks proofs).
+- `BrokenVariant.lean` (package root, NOT in `Verification/`) —
+  intentionally unprovable variant; `lake build` MUST reject it (proves
+  the build checks proofs).
 - `lakefile.toml` — Lake build, no dependencies (no Mathlib needed).
 
 ## Build on an approved host
@@ -35,7 +40,8 @@ Build label: `BLOCKED_SECURITY` (see `../receipts/lean4-build-BLOCKED_SECURITY.m
 elan --version; lean --version; lake --version
 lake build
 lake env lean Verification/ValueCopy.lean
-# inspect axioms, e.g.: #print axioms copy_preserved
+lake env lean Verification/AliasedCounterexample.lean
+lake env lean BrokenVariant.lean   # MUST FAIL with a type error
 ```
 
 Acceptance for `MODEL_PROVED`: `lake build` green, no `sorry`/`admit`/

@@ -44,8 +44,15 @@
 elan --version; lean --version; lake --version
 lake build
 lake env lean Verification/ValueCopy.lean
+lake env lean Verification/AliasedCounterexample.lean
 lake env lean BrokenVariant.lean   # MUST fail with a type error
 ```
+
+Build coverage note (delegated tactic review 2026-10-29): `lake build`
+with default globs builds the `Verification` root module, which now
+imports both model modules via `Verification.lean`; the receipt must
+record all three `lake env lean` outcomes (two passes + one mandated
+failure) plus `#print axioms` results before any MODEL_PROVED claim.
 
 Record `lean --version` output, file SHAs, `#print axioms` results, and
 the broken-variant rejection transcript in a follow-up receipt; only
