@@ -790,7 +790,107 @@ def main():
                              or "PEP_TOOL_VALUE_DEPTH" in str(_e))
     results.append(("V6-depth16-17", PASS if v6ok else FAIL,
                     "boundary-16/17"))
+    # Tool hot-replacement (set 14)
+    _hv1 = ("fn f(n: Int) -> Int { return n + 1 }\n"
+            "fn main() -> Int { return 0 }\n")
+    def _hsess(reqs):
+        _r = _pwsh(["./pep.ps1", "session", "--jsonl"],
+                   inp="\n".join(json.dumps(x) for x in reqs) + "\n")
+        return [json.loads(_ln) for _ln in (_r.stdout or "").splitlines()
+                if _ln.strip()]
 
+    def _HIV(v):
+        return {"type": "Int", "value": str(v)}
+    _ho = _hsess([{"schemaVersion": 3, "op": "open", "name": "t",
+                    "source": _hv1}])
+    _hd, _hr = _ho[0]["document"], _ho[0]["revision"]
+    def _HB(rv):
+        return {"schemaVersion": 3, "toolProtocolVersion": 1,
+                "tool": "dt", "document": _hd, "revision": rv}
+    _hr1 = _hsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _hv1},
+        dict(_HB(_hr), op="tool_register", function="f"),
+        dict(_HB(_hr), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(22)}]),
+        dict(_HB(_hr), op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dt",
+         "arguments": [_HIV(21)]},
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd,
+         "expected_revision": _hr, "start_byte": 29, "end_byte": 34,
+         "replacement": "n + 100"},
+    ])
+    _newrev = _hr1[5]["revision"]
+    _hr2 = _hsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _hv1},
+        dict(_HB(_hr), op="tool_register", function="f"),
+        dict(_HB(_hr), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(22)}]),
+        dict(_HB(_hr), op="tool_activate"),
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd,
+         "expected_revision": _hr, "start_byte": 29, "end_byte": 34,
+         "replacement": "n + 100"},
+        dict(_HB(_newrev), op="tool_register", function="f"),
+        dict(_HB(_newrev), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(121)}]),
+        dict(_HB(_newrev), op="tool_activate"),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dt",
+         "arguments": [_HIV(21)]},
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_list"},
+    ])
+    _inv = _hr2[8]
+    _lst = _hr2[9]
+    _states = sorted((t.get("status") or "") for t in _lst.get("tools", []))
+    _ok = (_inv.get("result") == _HIV(121)
+           and "Active" in _states and "Superseded" in _states)
+    results.append(("H1-hotswap", PASS if _ok else FAIL,
+                    "invoke=%s states=%s" % (_inv.get("result"),
+                                            _states)))
+    _hb = _hsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _hv1},
+        dict(_HB(_hr), op="tool_register", function="f"),
+        dict(_HB(_hr), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(22)}]),
+        dict(_HB(_hr), op="tool_activate"),
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd,
+         "expected_revision": _hr, "start_byte": 26, "end_byte": 27,
+         "replacement": "@@@"},
+    ])
+    _bad = _hb[4]["revision"]
+    _hf = _hsess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _hv1},
+        dict(_HB(_hr), op="tool_register", function="f"),
+        dict(_HB(_hr), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(22)}]),
+        dict(_HB(_hr), op="tool_activate"),
+        {"schemaVersion": 3, "op": "apply_edit", "document": _hd,
+         "expected_revision": _hr, "start_byte": 26, "end_byte": 27,
+         "replacement": "@@@"},
+        dict(_HB(_bad), op="tool_register", function="f"),
+        dict(_HB(_bad), op="tool_validate",
+             testVectors=[{"arguments": [_HIV(21)],
+                           "expect": _HIV(22)}]),
+        {"schemaVersion": 3, "toolProtocolVersion": 1,
+         "op": "tool_invoke", "tool": "dt",
+         "arguments": [_HIV(21)]},
+    ])
+    _fi, _fv, _fi2 = _hf[5], _hf[6], _hf[7]
+    _ok2 = (_fi.get("outcome") == "rejected"
+            and _fv.get("outcome") == "rejected"
+            and _fi2.get("result") == _HIV(22))
+    results.append(("H2-failedswap", PASS if _ok2 else FAIL,
+                    "invoke=%s" % _fi2.get("result")))
     fails = [(n, d) for n, s, d in results if s == FAIL]
     print("=== Agent 3 corpus replay: %d/%d PASS ==="
           % (len(results) - len(fails), len(results)))
