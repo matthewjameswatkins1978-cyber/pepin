@@ -158,6 +158,14 @@ fn list_int_count_positive(values: List[Int]) -> Int {
   return total
 }
 
+fn list_int_index_of(values: List[Int], needle: Int) -> Int {
+  var index = 0
+  for item in values {
+    if item == needle { return index } else { index = index + 1 }
+  }
+  return -1
+}
+
 fn list_int_contains(values: List[Int], needle: Int) -> Bool {
   return contains(values, needle)
 }
