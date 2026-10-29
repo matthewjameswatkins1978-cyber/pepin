@@ -124,6 +124,18 @@ fn list_bool_count_runs(values: List[Bool]) -> Int {
   return runs
 }
 
+fn list_int_longest_run(values: List[Int]) -> Int {
+  var current = 0
+  var longest = 0
+  var previous = 0
+  for item in values {
+    current = if item == previous { current + 1 } else { 1 }
+    longest = if current <= longest { longest } else { current }
+    previous = item
+  }
+  return longest
+}
+
 fn list_int_count_runs(values: List[Int]) -> Int {
   var runs = 0
   var hasPrevious = false
