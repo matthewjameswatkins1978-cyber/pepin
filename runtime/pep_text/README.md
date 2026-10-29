@@ -30,7 +30,9 @@ here invents language semantics.
   fixed 3-digit octal, no trigraphs or octal-merge hazards).
 - `pep_find.{h,c}` — byte-substring search over explicit lengths
   (empty needle found at 0, embedded NULs ordinary, no
-  normalization); `find_probe` searches file bytes.
+  normalization); `find_probe` searches file bytes;
+  `pep_find_model.pep` mirrors the policy on `List[Int]`
+  (interpreter-only, untested).
 - `*_probe.c`, `demo_textbuf.c`, `utf8check.c` — test drivers and the
   first real tools on the library: `frag_probe` joins argv fragments,
   `fragn_probe` joins explicit file slices NUL-safely; probes print

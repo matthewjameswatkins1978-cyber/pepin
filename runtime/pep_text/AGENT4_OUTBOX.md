@@ -313,6 +313,22 @@ can relay them.
   vs leaving the empty-runner test scoped out as it already is)
   remains Matthew's call; this note only scopes the options.
 
+## 2026-10-29 -- slice 14 (cont.): Pep find model (unexecuted)
+
+- New: `pep_find_model.pep` — the find policy over `List[Int]`
+  (bytes as ints; list-walk replaces indexing). Hand-traced all
+  8 drivers to completion, including termination on every path:
+  expected output `1 0 3 1 0 0 1 0` (each on its own line).
+- Re-reading caught a real infinite-loop bug in the first draft
+  (`match_at` never exited on a successful match — `ok` stayed
+  true with `j` pinned at the end). Rewrote with a compound
+  `while ok && !(...)` plus a load-bearing early return for the
+  empty needle (without it, `i <= hlen` stays true forever).
+- Verify post-hold: `check` must accept, `run` must print the
+  expected values. Constructs used mirror verified files
+  (compound `&&` whiles, bare-Bool `if`, early return in a branch,
+  empty `else` blocks, `for`-in accumulation).
+
 ## 2026-10-29 -- slice 14: byte-substring find primitive (no execution)
 
 - New: `pep_find.h/.c` (`pep_text_find`) — explicit lengths, empty
@@ -335,3 +351,17 @@ can relay them.
   `clang -fsyntax-only` strict-clean with zero output artifacts.
   Untested until the post-hold suite re-run, like everything
   since the hold began.
+
+## 2026-10-29 -- memory systems actually work (read-only check)
+
+- Correction to all prior "no Basic Memory tools" claims: both MCP
+  servers connect from this session. Basic Memory needs exact
+  schema args (no extra keys; it's `page_size`, not `limit`) plus
+  an explicit `project` (`main` holds the Pepin board). Lantern
+  connects and answers, but its search/context indexes hold
+  nothing on the Agent-2 outbox — those files live in Lantern's
+  file store, for which this session exposes no read path.
+- Searched Basic Memory (`main`) and Lantern for Agent-2 outbox
+  content: nothing retrievable here. The in-repo codex branch
+  inspection remains our only Agent-2 signal (no overlap found).
+  Future sessions: use `mcp(connect)` first, match schemas exactly.
