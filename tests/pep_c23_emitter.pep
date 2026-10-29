@@ -891,7 +891,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 
-fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int) -> PepC23Emission {
+fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int, localBindings: List[FlatAstNode]) -> PepC23Emission {
   if depth == 8 { return pep_c23_unsupported("Pep C23 loop condition nesting exceeds the supported depth") } else {}
   let indent = if depth == 0 { "    " } else { "      " }
   if statement.kind == "assignment" {
@@ -901,7 +901,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
     if lowered.status != "emitted" { return lowered } else {}
     var targetId = -1
     var targetFound = false
-    for local in nodes {
+    for local in localBindings {
       if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
         targetId = local.id
         targetFound = true
@@ -915,31 +915,43 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
   } else {
     if statement.kind == "if_statement" {
       let condition = pep_c23_child(nodes, statement.id, "condition", 0)
-      let thenStatement = pep_c23_child(nodes, statement.id, "then", 0)
-      let elseStatement = pep_c23_child(nodes, statement.id, "else", 0)
-      if !condition.found || !thenStatement.found || !elseStatement.found || count_children(nodes, statement.id, "then") != 1 || count_children(nodes, statement.id, "else") != 1 {
-        return pep_c23_unsupported("Pep C23 loop conditionals require one condition and one statement in each branch")
-      } else {}
+      if !condition.found { return pep_c23_unsupported("Pep C23 loop conditional has no condition") } else {}
       let loweredCondition = pep_c23_expression(nodes, function, condition.node)
       if loweredCondition.status != "emitted" { return loweredCondition } else {}
-      let loweredThen = pep_c23_loop_statement(nodes, function, thenStatement.node, depth + 1)
-      if loweredThen.status != "emitted" { return loweredThen } else {}
-      let loweredElse = pep_c23_loop_statement(nodes, function, elseStatement.node, depth + 1)
-      if loweredElse.status != "emitted" { return loweredElse } else {}
+      var thenParts: List[Str] = []
+      var elseParts: List[Str] = []
+      var foundThen = false
+      var foundElse = false
+      for branchStatement in nodes {
+        if branchStatement.parentId == statement.id && branchStatement.role == "then" {
+          foundThen = true
+          let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings)
+          if loweredBranch.status != "emitted" { return loweredBranch } else {}
+          for part in loweredBranch.sourceParts { thenParts = append(thenParts, part) }
+        } else {
+          if branchStatement.parentId == statement.id && branchStatement.role == "else" {
+            foundElse = true
+            let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings)
+            if loweredBranch.status != "emitted" { return loweredBranch } else {}
+            for part in loweredBranch.sourceParts { elseParts = append(elseParts, part) }
+          } else {}
+        }
+      }
+      if !foundThen || !foundElse { return pep_c23_unsupported("Pep C23 loop conditionals require non-empty assignment branches") } else {}
       var parts: List[Str] = [indent, "if (!!("]
       for part in loweredCondition.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")) {\n")
-      for part in loweredThen.sourceParts { parts = append(parts, part) }
+      for part in thenParts { parts = append(parts, part) }
       parts = append(parts, indent)
       parts = append(parts, "} else {\n")
-      for part in loweredElse.sourceParts { parts = append(parts, part) }
+      for part in elseParts { parts = append(parts, part) }
       parts = append(parts, indent)
       parts = append(parts, "}\n")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
-    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments and conditionals with assignment branches") }
+    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments and conditionals with assignment sequences") }
   }
 }
-fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode) -> PepC23Emission {
+fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode]) -> PepC23Emission {
   let condition = pep_c23_child(nodes, loop.id, "condition", 0)
   if !condition.found || count_children(nodes, loop.id, "body") == 0 {
     return pep_c23_unsupported("Pep C23 while lowering requires a condition and a non-empty assignment body")
@@ -952,7 +964,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   for statement in nodes {
     if statement.parentId == loop.id && statement.role == "body" {
       if statement.kind == "if_statement" {
-        let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0)
+        let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings)
         if loweredConditional.status != "emitted" { return loweredConditional } else {}
         for part in loweredConditional.sourceParts { parts = append(parts, part) }
       } else {
@@ -963,7 +975,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
         if loweredValue.status != "emitted" { return loweredValue } else {}
         var targetId = -1
         var targetFound = false
-        for local in nodes {
+        for local in localBindings {
           if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
             targetId = local.id
             targetFound = true
@@ -1008,6 +1020,12 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   if extraParameter.found || (secondParameter.found && !parameter.found) || (function.text == "main" && (parameter.found || secondParameter.found)) || (parameter.found && parameterCType == "") || (secondParameter.found && secondParameterCType == "") || resultCType == "" || (function.text == "main" && result.node.text != "Int") {
     return pep_c23_unsupported("Pep C23 functions require supported scalar parameters and results")
   } else {}
+  var localBindings: List[FlatAstNode] = []
+  for local in nodes {
+    if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
+      localBindings = append(localBindings, local)
+    } else {}
+  }
   var returned = false
   var statementCount = 0
   var returnStatement = PepC23NodeLookup { found: false, node: empty_node() }
@@ -1080,13 +1098,13 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           for bodyStatement in nodes {
             if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
-              let loweredBody = pep_c23_loop_statement(nodes, function, bodyStatement, 0)
+              let loweredBody = pep_c23_loop_statement(nodes, function, bodyStatement, 0, localBindings)
               if loweredBody.status != "emitted" { return loweredBody } else {}
             } else {}
           }
         } else {
           if statement.kind == "while" && !returned {
-            let loweredWhile = pep_c23_while_body(nodes, function, statement)
+            let loweredWhile = pep_c23_while_body(nodes, function, statement, localBindings)
             if loweredWhile.status != "emitted" { return loweredWhile } else {}
           } else {
             if statement.kind == "return" && !returned {
@@ -1216,6 +1234,12 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
         bodyParts = append(bodyParts, int_text(secondParameter.node.id))
         bodyParts = append(bodyParts, ";\n")
       } else {}
+      var localBindings: List[FlatAstNode] = []
+      for local in parsed.nodes {
+        if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
+          localBindings = append(localBindings, local)
+        } else {}
+      }
       for statement in parsed.nodes {
         if statement.parentId == node.id && statement.role == "statement" && (statement.kind == "let" || statement.kind == "var") {
           let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
@@ -1358,7 +1382,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
             for loopStatement in parsed.nodes {
               if loopStatement.parentId == statement.id && loopStatement.role == "body" {
-                let loweredBody = pep_c23_loop_statement(parsed.nodes, node, loopStatement, 0)
+                let loweredBody = pep_c23_loop_statement(parsed.nodes, node, loopStatement, 0, localBindings)
                 if loweredBody.status != "emitted" { return loweredBody } else {}
                 for part in loweredBody.sourceParts { bodyParts = append(bodyParts, part) }
               } else {}
@@ -1366,7 +1390,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             bodyParts = append(bodyParts, "  }\n")
           } else {
             if statement.parentId == node.id && statement.role == "statement" && statement.kind == "while" {
-              let loweredWhile = pep_c23_while_body(parsed.nodes, node, statement)
+              let loweredWhile = pep_c23_while_body(parsed.nodes, node, statement, localBindings)
               if loweredWhile.status != "emitted" { return loweredWhile } else {}
               for part in loweredWhile.sourceParts { bodyParts = append(bodyParts, part) }
             } else {}

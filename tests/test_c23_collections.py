@@ -1299,8 +1299,14 @@ class PepC23CollectionLoopTests(unittest.TestCase):
             "fn main() -> Int {\n"
             "  var total = 0\n"
             "  for item in [-3, 0, 2, 5] {\n"
-            "    if item == 0 { total = total + 10 } else {\n"
-            "      if item == 2 { total = total + 20 } else { total = total + item }\n"
+            "    if item == 0 {\n"
+            "      total = total + 10\n"
+            "      total = total + 1\n"
+            "    } else {\n"
+            "      if item == 2 {\n"
+            "        total = total + 20\n"
+            "        total = total + 2\n"
+            "      } else { total = total + item }\n"
             "    }\n"
             "  }\n"
             "  return total\n"
@@ -1315,7 +1321,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                                         encoding="utf-8", newline="\n")
             reference = self.invoke("run", reference_source)
             self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
-            self.assertEqual(reference.stdout, "32\n")
+            self.assertEqual(reference.stdout, "35\n")
             for compiler in (CLANG, GCC):
                 with self.subTest(compiler=compiler.name):
                     generated_c = folder / f"conditional-for-in-{compiler.stem}.c"
@@ -1329,15 +1335,12 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                 "fn main() -> Int {\n"
                 "  var total = 0\n"
                 "  for item in [1] {\n"
-                "    if item == 0 {\n"
-                "      total = total + 1\n"
-                "      total = total + 2\n"
-                "    } else { total = total + 3 }\n"
+                "    if item == 0 { return total } else { total = total + 3 }\n"
                 "  }\n"
                 "  return total\n"
                 "}\n"
             )
-            unsupported = folder / "multi-statement-branch.pep"
+            unsupported = folder / "unsupported-loop-statement.pep"
             unsupported.write_text(unsupported_source, encoding="utf-8", newline="\n")
             rejected = self.invoke("run-c23", unsupported, "--compiler", CLANG)
             self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
