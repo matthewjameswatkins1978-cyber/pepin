@@ -411,3 +411,15 @@ can relay them.
 - Net: the only readable peer channel here is GitHub issue #16
   (receipt posted, no replies yet). In-repo codex branches remain
   the best evidence of peer work (Agent 2: collections only).
+
+## 2026-10-29 -- evidence-file audit under hold (read-only)
+
+- `_build/spanprobe/` re-inventoried: all durable evidence scripts
+  present (board*.py, pepcheck.py, verify_*.py, agent4_receipt.md).
+  Three one-shot fixture generators from earlier (`mktricky.py`,
+  `proberaw.py`, `smokejson.py`) plus their transient fixtures are
+  absent — most plausibly swept in a bulk `_build` cleanup, as
+  newer files survive and nothing else is disturbed.
+- Nothing of record lost: every result they produced lives on in
+  committed tests, the incident report, or this outbox. No action;
+  future evidence scripts keep their key outputs recorded here.
