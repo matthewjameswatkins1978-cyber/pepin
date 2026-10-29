@@ -48,7 +48,7 @@ input F2.
 
 ## Addendum (file-path breadth scaling, 2026-10-29)
 
-To locate the F2 cliff precisely, the same trivial-function programs were run through the file-based OCaml `check` (10/50/100/200/400 functions): all `valid`, wall time flat at ~0.5s (startup-dominated). The binding constraint is therefore the **staged Pep-parser tool invocation** (100k-step budget), not file breadth through the native checker at this shape. Depth/complexity scaling (e.g. A1's `int_gcd` composition) was not probed here and remains A1's lane.
+To locate the F2 cliff precisely, the same trivial-function programs were run through the file-based OCaml `check` (10/50/100/200/400 functions): all `valid`, wall time flat at ~0.5s (startup-dominated). Sequential depth was probed the same way (chained `let aN = a(N-1)` bindings, 10->800 deep): all `valid`, flat ~0.5s. The binding constraint is therefore the **staged Pep-parser tool invocation** (100k-step budget), not file breadth or sequential depth through the native checker at these shapes. Larger compositions (e.g. A1's pinned `int_gcd` case) and deeper nesting shapes were not probed here and remain A1's lane.
 
 ## Status
 
