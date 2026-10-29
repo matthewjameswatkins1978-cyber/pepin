@@ -219,6 +219,20 @@ can relay them.
   Everything new is implemented-but-untested: the 19-test suite must
   be re-run green after the hold before any behavior-dependent commit.
 
+## 2026-10-29 -- cross-lane check: no Agent-2 overlap (read-only)
+
+- Inspected Agent 2's branch `codex/native-collections-loop`
+  (@ 8fc2386) without touching it: its only additions vs our base
+  are `stdlib/collections.pep` (`list_*` helpers) plus
+  `tests/test_c23_collections.py`. No text/byte-builder, no join,
+  no `runtime/pep_text` of its own; the shared
+  `runtime/pep_runtime.{c,h}` shim is untouched.
+- Zero surface overlap with this lane (`grow_step`/`int_width`/
+  `utf8_*` here vs `list_*` there) and no shared files. The
+  INTEGRATION.md join proposal stands unanswered but unconflicted;
+  their branch predates it, so a re-read will be needed on their
+  side whenever coordination resumes — nothing for me to change.
+
 ## 2026-10-29 -- probe/tool audit under hold (no execution)
 
 - Read all six file-reading probes plus demo/neg/utf8check end to
