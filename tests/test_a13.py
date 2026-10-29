@@ -570,7 +570,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             f"fn {name}() -> Int {{ return {index} }}"
             for index, name in enumerate(scale_names)
         ]
-        scale_late_mismatch = scale_helpers[-1].replace("return 59", 'return "text"')
+        scale_late_mismatch = scale_helpers[-1].replace(f"return {len(scale_helpers) - 1}", 'return "text"')
         scale_main = "fn main() -> Int { return 0 }"
         cases = [
             ("index-of-helper-alone", first_helper, "valid"),
@@ -650,7 +650,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 current = fields(checker_cursor)
                 self.assertTrue(scalar(current["done"]), phases)
                 root_count = sum(1 for node in nodes if scalar(fields(node)["parentId"]) == -1)
-                expected_type_steps = max(1, (root_count + 7) // 8)
+                expected_type_steps = max(1, (root_count + 11) // 12)
                 self.assertEqual(phases, [
                     "functions", "bindings", "names", "binding_types",
                     *("type_analysis" for _ in range(expected_type_steps)),

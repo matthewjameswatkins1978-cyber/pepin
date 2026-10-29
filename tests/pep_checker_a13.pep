@@ -2212,7 +2212,7 @@ fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
   for node in nodes {
     if startNode <= node.id {
       if node.parentId == -1 {
-        if 8 <= rootsInChunk {
+        if 12 <= rootsInChunk {
           return node.id
         } else {}
         rootsInChunk = rootsInChunk + 1
