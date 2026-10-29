@@ -158,6 +158,18 @@ fn list_int_longest_run(values: List[Int]) -> Int {
   return longest
 }
 
+fn list_int_count_adjacent_equal_pairs(values: List[Int]) -> Int {
+  var pairs = 0
+  var hasPrevious = false
+  var previous = 0
+  for item in values {
+    pairs = if hasPrevious && item == previous { pairs + 1 } else { pairs }
+    previous = item
+    hasPrevious = true
+  }
+  return pairs
+}
+
 fn list_int_count_runs(values: List[Int]) -> Int {
   var runs = 0
   var hasPrevious = false
