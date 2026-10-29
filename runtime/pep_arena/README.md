@@ -34,9 +34,13 @@ across growth is exercised rather than asserted.
 
 ## Verification state
 
-Source-complete and syntax-checked only (`clang -std=c23 -fsyntax-only
--Wall -Wextra -Wpedantic -Werror`, zero output artifacts). Never
-built, never executed: the 2026-10-29 security hold forbids native
-binaries. Post-hold gate: build with Clang 23.1.4 and GCC 16.2.0,
-run the demo, expect `42` then `6`, then fold the demo into the
-shared native test suite.
+Built and executed in the 2026-10-29 post-hold re-run.
+`tests/test_textbuf_native.py::test_arena_demo_builds_and_runs` compiles the demo
+with Clang 23.1.4 and GCC 16.2.0 and runs it. The Clang build prints `42` then
+`6`, so the post-hold gate stated here previously is met in substance.
+
+One test defect remains and it is not an arena bug: the assertions at
+`tests/test_textbuf_native.py:777,783` expect `b"42\n6\n"` while the Windows CRT
+translates the demo `\n` to `\r\n` on stdout, so Clang fails on the CRLF
+mismatch and the GCC half never runs. Fix the expectation or write through a
+binary handle; do not normalise away the byte-exact comparison.

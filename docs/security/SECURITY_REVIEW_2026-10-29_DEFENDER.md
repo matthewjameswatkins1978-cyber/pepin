@@ -620,6 +620,8 @@ small items remain, and neither is security:
   vector runs fine without one. The comment should carry the measured facts and
   the binary hash instead.
 
-Status lines asserting an active hold (`runtime/pep_text/README.md:48`,
-`runtime/pep_arena/README.md:39-40`) are now false and should be updated by the
-lane owner. This review did not edit another lane files.
+Status lines asserting an active hold were stale and have been updated in this
+branch under owner instruction: `runtime/pep_text/README.md:48` and the
+verification-state blocks in `runtime/pep_text/README.md` and
+`runtime/pep_arena/README.md`. The lane owner should confirm that wording when
+merging; no source or test file was touched.

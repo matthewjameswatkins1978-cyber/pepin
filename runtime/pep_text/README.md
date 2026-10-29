@@ -45,7 +45,9 @@ here invents language semantics.
   including the NUL-fragment contract and the differential gate.
 - `REVIEW_SLICE{3,6,9,12}.md` — cumulative review notes with openly
   logged gaps. `AGENT4_OUTBOX.md` — append-only coordination log.
-- `SECURITY_2026-10-29_DEFENDER.md` — incident record (hold active).
+- `SECURITY_2026-10-29_DEFENDER.md` — incident record. Native hold **cleared**
+  2026-10-29 on measured evidence; see
+  `docs/security/SECURITY_REVIEW_2026-10-29_DEFENDER.md`.
 
 ## Build rules
 
@@ -64,13 +66,19 @@ corrupt byte-exact assertions. Library code never touches modes.
 
 ## Verification state
 
-`tests/test_textbuf_native.py`: 19/19 green on both toolchains before
-the 2026-10-29 security hold (byte-identical outputs, OCaml
-differentials, compiler-oracle round-trips), plus 1 unexecuted
-fragn test added under the hold (20 total, pending re-run).
-While the hold stands:
-no native builds, no execution, no new test runs. Source edits made
-under the hold are syntax-checked only (`clang -fsyntax-only`,
-`python -m py_compile`) and marked implemented-but-untested; the
-suite must be re-run green before any further commit that depends
-on behavior.
+`tests/test_textbuf_native.py`: **22 tests, 21 pass** on both toolchains in the
+2026-10-29 post-hold re-run (byte-identical outputs, OCaml differentials,
+compiler-oracle round-trips, plus the fragn and arena vectors added under the
+hold). The single failure is `test_arena_demo_builds_and_runs`, and it is a test
+expectation bug rather than a runtime fault: the demo prints `42` then `6`
+through the Windows CRT, so stdout is `b"42\r\n6\r\n"` while the test expects
+`b"42\n6\n"`. Every other native assertion compares bytes written via
+`fopen(..., "wb")` and is unaffected. Do not weaken the byte-exact comparison to
+fix it — the expectation or the write path is what should change.
+
+Native build-and-execute is cleared. The only vector still skipped is the
+**clang** empty-literal cstr runner (`tests/test_textbuf_native.py:617-624`),
+which Defender detects and quarantines reproducibly under signature 1.463.30.0
+(binary SHA-256 `0C383A7472E3DCC28EDB705C5E17BF2D7CE999B7868890858ED0646C08727E56`).
+The GCC build of the same program runs clean. Evidence:
+`docs/security/SECURITY_REVIEW_2026-10-29_DEFENDER.md` §16.
