@@ -244,6 +244,12 @@ fn list_int_count_not_equal(values: List[Int], expected: Int) -> Int {
   return total
 }
 
+fn list_int_any_between(values: List[Int], lower: Int, upper: Int) -> Bool {
+  var found = false
+  for item in values { found = found || (lower <= item && item <= upper) }
+  return found
+}
+
 fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
