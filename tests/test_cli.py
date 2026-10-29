@@ -1187,6 +1187,82 @@ class PepGenericFunctionTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], code)
 
+    def test_generic_union_infers_payload_types_and_matches_exhaustively(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                "type Option[T] = Some(T) | None()\n"
+                "type Result[T, E] = Ok(T) | Err(E)\n"
+                "type Chain[T] = End() | More(T, Chain[T])\n"
+                "fn count[T](items: Chain[T]) -> Int { return match items { End() => 0 More(_, tail) => 1 + count(tail) } }\n"
+                "fn unwrap_or[T](value: Option[T], fallback: T) -> T { "
+                "return match value { Some(item) => item None() => fallback } }\n"
+                "fn value_or[T, E](value: Result[T, E], fallback: T) -> T { "
+                "return match value { Ok(item) => item Err(_) => fallback } }\n"
+                "let first: Option[Int] = Some(20)\n"
+                "let second = Some(22)\n"
+                "let empty: Option[Int] = None()\n"
+                "let success: Result[Int, Str] = Ok(40)\n"
+                "let failure: Result[Int, Str] = Err(\"failure\")\n"
+                "let chain = More(1, More(2, End()))\n"
+                "say(int_text(unwrap_or(first, 0) + unwrap_or(second, 0) + "
+                "unwrap_or(empty, 0) + value_or(success, 0) + value_or(failure, 0) + count(chain)))\n"
+            )
+            path = pathlib.Path(temporary) / "generic-unions.pep"
+            path.write_text(source, encoding="utf-8", newline="")
+            checked = invoke("check", path, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            checked_json = json.loads(checked.stdout)
+            self.assertEqual(checked_json["typedTree"]["types"][0]["typeParameters"], ["T"])
+            self.assertEqual(checked_json["typedTree"]["types"][1]["typeParameters"], ["T", "E"])
+            result = invoke("run", path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "84\n")
+
+    def test_generic_union_rejects_conflicting_payloads_and_wrong_arity(self):
+        cases = [
+            ("type Same[T] = Both(T, T)\nlet value = Both(1, \"text\")\n", "PEP_GENERIC_ARGUMENT_MISMATCH"),
+            ("type Option[T] = Some(T) | None()\nlet value: Option[Int] = Some()\n", "PEP_ARGUMENT_COUNT"),
+            ("type Option[T] = Some(T) | None()\nlet value: Option = None()\n", "PEP_TYPE_ARGUMENT_COUNT"),
+            ("type Option[T] = Some(T) | None()\nlet value = None()\n", "PEP_GENERIC_INFERENCE"),
+            ("type Result[T, E] = Ok(T) | Err(E)\nlet value: Result[Int] = Ok(1)\n", "PEP_TYPE_ARGUMENT_COUNT"),
+        ]
+        for source, code in cases:
+            with self.subTest(code=code):
+                with tempfile.TemporaryDirectory() as temporary:
+                    path = pathlib.Path(temporary) / "invalid-generic-union.pep"
+                    path.write_text(source, encoding="utf-8", newline="")
+                    result = invoke("check", path, "--json")
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], code)
+
+class PepModuleGenericUnionTests(unittest.TestCase):
+    @staticmethod
+    def _write_project(directory, files):
+        for name, source in files.items():
+            (directory / name).write_bytes(source.encode("utf-8"))
+
+    def test_imported_public_generic_union_round_trips_through_functions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = pathlib.Path(temporary)
+            self._write_project(project, {
+                "main.pep": (
+                    "import library as l\n"
+                    "let value: l.Option[Int] = l.some(42)\n"
+                    "say(int_text(l.unwrap_or(value, 0)))\n"
+                ),
+                "library.pep": (
+                    "pub type Option[T] = Some(T) | None()\n"
+                    "pub fn some[T](value: T) -> Option[T] { return Some(value) }\n"
+                    "pub fn unwrap_or[T](value: Option[T], fallback: T) -> T { "
+                    "return match value { Some(item) => item None() => fallback } }\n"
+                ),
+            })
+            checked = invoke("check", project / "main.pep", "--project", "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            result = invoke("run", project / "main.pep", "--project")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "42\n")
+
 class PepModuleCliTests(unittest.TestCase):
     @staticmethod
     def _write_project(directory, files):
