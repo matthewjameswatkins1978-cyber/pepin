@@ -651,6 +651,32 @@ def main():
     ok = _he.get("outcome") == "rejected"
     results.append(("T-hole-src", PASS if ok else FAIL,
                     "validate=%s" % _he.get("outcome")))
+    check("X-assign-immutable", b"let x = 1\nx = 2\nsay(int_text(x))",
+          "invalid", ("PEP_ASSIGN_IMMUTABLE",))
+    check("X-bare-empty", b"for v in [] {\n say(int_text(v))\n}",
+          "invalid", ("PEP_EMPTY_LIST_NEEDS_TYPE",))
+    check("X-unterm-eof", b'say("abc',
+          "invalid", ("PEP_UNTERMINATED_STRING",))
+    _ht = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},
+    ])
+    _hd4, _hr4 = _ht[0]["document"], _ht[0]["revision"]
+    _HB4 = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 1,
+                       "tool": nm, "document": _hd4, "revision": _hr4}
+    _hw = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},
+        dict(_HB4("w"), op="tool_register", function="double"),
+        dict(_HB4("w"), op="tool_validate",
+             testVectors=[{"arguments": [{"type": "Int", "value": "21"}],
+                           "expect": {"type": "Int", "value": "999"}}]),
+    ])[2]
+    _we = _hw.get("error") or {}
+    ok = (_hw.get("outcome") == "rejected"
+          and (isinstance(_we, dict) and _we.get("code") == "PEP_TOOL_TEST_FAILED" or "TEST_FAILED" in str(_we)))
+    results.append(("T-wrong-expect", PASS if ok else FAIL,
+                    "validate=%s" % _hw.get("outcome")))
     # Session edges (set 11)
     _om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
     ok = _om.get("outcome") == "ok" and "metrics" in _om

@@ -50,5 +50,5 @@ issue. Recorded as a diagnostic-quality observation, not a defect.
 ## Status
 
 No findings. The escape surface is fully mapped (6 in / rest out);
-non-decimal literals are absent with fail-closed-but-confusing codes.
+non-decimal literals are absent with fail-closed-but-confusing codes. A file ending mid-string is `PEP_UNTERMINATED_STRING` (distinct from newline-terminated `PEP_NEWLINE_IN_STRING`).
 A13 parity and native behavior stay `NOT_RUN`/`BLOCKED_SECURITY`.

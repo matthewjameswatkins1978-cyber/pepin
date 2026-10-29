@@ -39,11 +39,8 @@ step / 128 depth tool budget (not separately stressed here).
 - Registered-but-never-validated tool invoked → `TESTED`: `error`, `PEP_TOOL_NOT_ACTIVE`. The middle state is not callable either; only `Active` executes (completing the T-set's callable-only-when-Active ladder).
 - Broken-source tool: register → `rejected` ("Source is invalid and has no checked function signature"); validate → `rejected` ("Source is invalid and cannot be validated"); invoke → `TESTED`: `error`, `PEP_TOOL_NOT_ACTIVE`. An invalid bundle yields no activatable tool at any step.
 
+- Incomplete (holey) source tool: registers fine (signature is derivable), but validation is refused. No holey program can ever become callable. (The rejection message names activation while surfacing at validation — a cosmetic mismatch in an otherwise correct fail-closed path.)
+
 ## Status
 
-No findings. This closes the A5 tool-registry surface at the v1
-protocol layer on the seed path. v2 typed transport (`List`/record
-values, semantic snapshot) and the Pep-written checker/driver use of
-these ops stay `NOT_RUN`/`BLOCKED_SECURITY` where they exceed this
-probe (notably the staged `emit` path, which authenticates via v2
-`semanticTarget` — see F2).
+No findings. This closes the A5 tool-registry surface at the v1 protocol layer on the seed path. v2 typed transport, host grants, semantic snapshots, and the Pep-written checker/driver use of these ops are covered in the V-set, G-set, SN-set and X-set case files; native execution stays `BLOCKED_SECURITY`. (Validation diagnostics observed: wrong *type* in expect → `PEP_TOOL_ARGUMENT_TYPE`; wrong *value* with correct types → `PEP_TOOL_TEST_FAILED` ("Interpreter result did not match the expected test vector").)

@@ -47,5 +47,5 @@ correction; the declaration side follows the same rule.)
 
 No findings. One behavior note (no loop-exit keywords / generic
 diagnostic) and one syntax rule (parens-required nullaries with
-next-line error position) recorded. A13 parity and native behavior
+next-line error position) recorded. Assigning to a `let` binding fails closed (`PEP_ASSIGN_IMMUTABLE`), and a bare `[]` iterable needs its contextual annotation (`PEP_EMPTY_LIST_NEEDS_TYPE`). A13 parity and native behavior
 stay `NOT_RUN`/`BLOCKED_SECURITY`.
