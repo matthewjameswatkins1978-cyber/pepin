@@ -112,6 +112,18 @@ fn list_int_sum_outside(values: List[Int], lower: Int, upper: Int) -> Int {
   return total
 }
 
+fn list_bool_count_runs(values: List[Bool]) -> Int {
+  var runs = 0
+  var hasPrevious = false
+  var previous = false
+  for item in values {
+    runs = if !hasPrevious { runs + 1 } else { if item != previous { runs + 1 } else { runs } }
+    previous = item
+    hasPrevious = true
+  }
+  return runs
+}
+
 fn list_int_count_runs(values: List[Int]) -> Int {
   var runs = 0
   var hasPrevious = false
