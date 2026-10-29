@@ -699,3 +699,120 @@ fn judge_file_absent(path: Str, view: WorktreeView) -> Verdict {
     return Proven("the path does not exist in the worktree")
   }
 }
+
+// ---------------------------------------------------------------------------
+// Evidence-driven oracle trees: the four conditions composed together
+// ---------------------------------------------------------------------------
+//
+// Up to here the tree judged leaves that had already been judged. This section judges
+// *conditions* against run evidence, so one oracle can mix condition types — which is
+// what a real bat does.
+//
+// Reference contract: `OracleExpr` leaves are `Condition` values and `eval` resolves
+// each against `EvalCtx`. Measured example (exit 1, clean clone):
+//
+//   all: [exit_code run:0 equals 1, evidence_present git_diff,
+//         file_exists .git, file_absent no-such-file.txt]
+//   -> PROVEN, four leaves, in exactly that order
+//
+// `EvidenceExpr` is a second tree type rather than a fifth case on `OracleExpr`.
+// A leaf here is a condition still to be judged, not a finished judgement, and
+// without generics on this base one parameterised tree cannot be both. Keeping them
+// apart also keeps `evaluate_tree`'s contract exactly as it was: it never has to
+// answer a node it has no evidence for.
+
+// A condition that has not been judged yet.
+type Condition =
+  ExitCodeCondition(Mode, Str, Int) |
+  EvidencePresentCondition(Str) |
+  FileExistsCondition(Str) |
+  FileAbsentCondition(Str)
+
+// Everything an evidence-driven tree may read.
+type RunEvidence {
+  steps: List[EvidenceStep],
+  captures: Captures,
+  worktree: WorktreeView
+}
+
+// The condition's own name. The reference's `describe(cond)` also renders the
+// arguments ("exit_code run:0 equals 1"), which needs string concatenation Pep does
+// not have; a caller that wants that label supplies it to `ConditionLeaf`.
+fn condition_name(condition: Condition) -> Str {
+  return match condition {
+    ExitCodeCondition(mode, phase, index) => "exit_code"
+    EvidencePresentCondition(kind) => "evidence_present"
+    FileExistsCondition(path) => "file_exists"
+    FileAbsentCondition(path) => "file_absent"
+  }
+}
+
+fn evaluate_condition(condition: Condition, evidence: RunEvidence) -> Verdict {
+  return match condition {
+    ExitCodeCondition(mode, phase, index) =>
+      judge_step_ref(mode, evidence.steps, phase, index)
+    EvidencePresentCondition(kind) => judge_evidence_present(kind, evidence.captures)
+    FileExistsCondition(path) => judge_file_exists(path, evidence.worktree)
+    FileAbsentCondition(path) => judge_file_absent(path, evidence.worktree)
+  }
+}
+
+// An oracle tree whose leaves are conditions rather than finished judgements.
+type EvidenceExpr =
+  ConditionLeaf(Str, Condition) |
+  AllOf(List[EvidenceExpr]) |
+  AnyOf(List[EvidenceExpr]) |
+  NotOf(EvidenceExpr)
+
+fn judge_leaf(label: Str, condition: Condition, evidence: RunEvidence) -> Evaluation {
+  var verdict = evaluate_condition(condition, evidence)
+  return Evaluation { result: verdict, trail: [outcome(label, verdict)] }
+}
+
+fn evaluate_evidence_tree(expr: EvidenceExpr, evidence: RunEvidence) -> Evaluation {
+  return match expr {
+    ConditionLeaf(label, condition) => judge_leaf(label, condition, evidence)
+    AllOf(children) => evaluate_evidence_all(children, evidence)
+    AnyOf(children) => evaluate_evidence_any(children, evidence)
+    NotOf(child) => evaluate_evidence_not(child, evidence)
+  }
+}
+
+fn evaluate_evidence_not(child: EvidenceExpr, evidence: RunEvidence) -> Evaluation {
+  var judged = evaluate_evidence_tree(child, evidence)
+  return Evaluation { result: compose_not(judged.result), trail: judged.trail }
+}
+
+fn evaluate_evidence_all(children: List[EvidenceExpr], evidence: RunEvidence) -> Evaluation {
+  var results: List[Verdict] = []
+  var trail: List[ConditionOutcome] = []
+  for child in children {
+    var judged = evaluate_evidence_tree(child, evidence)
+    results = append(results, judged.result)
+    trail = concat_outcomes(trail, judged.trail)
+  }
+  var result = compose_all(results)
+  if length(children) == 0 {
+    trail = [empty_combinator("all: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: trail }
+}
+
+fn evaluate_evidence_any(children: List[EvidenceExpr], evidence: RunEvidence) -> Evaluation {
+  var results: List[Verdict] = []
+  var trail: List[ConditionOutcome] = []
+  for child in children {
+    var judged = evaluate_evidence_tree(child, evidence)
+    results = append(results, judged.result)
+    trail = concat_outcomes(trail, judged.trail)
+  }
+  var result = compose_any(results)
+  if length(children) == 0 {
+    trail = [empty_combinator("any: []")]
+    result = Inconclusive("empty combinator: nothing to judge")
+  } else {
+  }
+  return Evaluation { result: result, trail: trail }
+}

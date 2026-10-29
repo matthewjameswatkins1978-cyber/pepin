@@ -322,6 +322,57 @@ FILE_CASES = [
     ("fx-absent-missing", "file_absent", "no-such-file.txt", "PROVEN"),
     ("fx-rejected", "file_exists", "../outside.txt", "INCONCLUSIVE"),
 ]
+# Mixed-condition trees. These reuse the trail comparison rather than a verdict-only
+# one, because a composed tree is only trustworthy when each leaf is judged correctly
+# AND lands in the reference's order under the reference's label.
+RUN_EVIDENCE = ('RunEvidence { steps: [EvidenceStep { phase: "run", index: 0, '
+                'exit: ObservedExit(1) }], captures: all_captures(), '
+                'worktree: WorktreeView { present_paths: [".git", "README.md"], '
+                'rejected_paths: ["../outside.txt"] } }')
+
+
+def condition_leaf(label, condition):
+    return 'ConditionLeaf("%s", %s)' % (label, condition)
+
+
+EXIT_LEAF = condition_leaf("exit_code run:0 equals 1",
+                           'ExitCodeCondition(EqualsMode(1), "run", 0)')
+EVIDENCE_LEAF = condition_leaf("evidence_present git_diff",
+                               'EvidencePresentCondition("git_diff")')
+EXISTS_LEAF = condition_leaf("file_exists .git", 'FileExistsCondition(".git")')
+EXISTS_MISSING_LEAF = condition_leaf("file_exists no-such-file.txt",
+                                     'FileExistsCondition("no-such-file.txt")')
+ABSENT_MISSING_LEAF = condition_leaf("file_absent no-such-file.txt",
+                                     'FileAbsentCondition("no-such-file.txt")')
+
+
+def ev_tree(wrapper, leaves):
+    return "evaluate_evidence_tree(%s([%s]), %s)" % (
+        wrapper, ", ".join(leaves), RUN_EVIDENCE)
+
+
+EVIDENCE_TREE_CASES = [
+    ("evtree-all-mixed",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: evidence_present\n      kind: git_diff\n"
+     "    - type: file_exists\n      path: \".git\"\n"
+     "    - type: file_absent\n      path: \"no-such-file.txt\"",
+     ev_tree("AllOf", [EXIT_LEAF, EVIDENCE_LEAF, EXISTS_LEAF, ABSENT_MISSING_LEAF])),
+    ("evtree-all-missing",
+     "  all:\n"
+     "    - type: exit_code\n      step: run:0\n      equals: 1\n"
+     "    - type: file_exists\n      path: \"no-such-file.txt\"",
+     ev_tree("AllOf", [EXIT_LEAF, EXISTS_MISSING_LEAF])),
+    ("evtree-any",
+     "  any:\n"
+     "    - type: file_exists\n      path: \"no-such-file.txt\"\n"
+     "    - type: file_exists\n      path: \".git\"",
+     ev_tree("AnyOf", [EXISTS_MISSING_LEAF, EXISTS_LEAF])),
+    ("evtree-not",
+     "  not:\n    type: file_exists\n    path: \".git\"",
+     "evaluate_evidence_tree(NotOf(%s), %s)" % (EXISTS_LEAF, RUN_EVIDENCE)),
+]
 
 
 def rust_verdict(tb, repo, workdir, ident, mode, value, exit_code):
@@ -389,8 +440,11 @@ def pep_expression(composed, expr):
     composed.write_text(source, encoding="utf-8", newline="\n")
     proc = subprocess.run(["pwsh", "-NoProfile", "-File", str(PEP), "run", str(composed)],
                           text=True, capture_output=True, timeout=600)
+    if proc.returncode != 0:
+        # A Pep failure must be diagnosable, not silently become an unmatched verdict.
+        err = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return "PEP-ERROR: %s" % (err[-1] if err else "no output")
     return (proc.stdout or "").strip()
-
 def pep_trail(composed, expr):
     """Return (result label, [(condition, label), ...]) from the Pep evaluation."""
     source = ORACLE.read_text(encoding="utf-8") + "\nsay_trail(%s)\n" % expr
@@ -577,8 +631,28 @@ def main():
             if receipt:
                 print("     rust_receipt=%s" % receipt)
 
+        # Mixed-condition tree differential: result and full leaf trail.
+        for ident, oracle_body, pep_expr in EVIDENCE_TREE_CASES:
+            # rust_trail formats SPEC_TEMPLATE itself; passing an already-formatted
+            # spec here nests the whole document under `oracle:` and the YAML parser
+            # then rejects the duplicate `version` key.
+            (rust_result, rust_rows), receipt = rust_trail(
+                tb, repo, workdir, ident, oracle_body)
+            pep_result, pep_rows = pep_trail(composed, pep_expr)
+            agree = rust_result == pep_result and rust_rows == pep_rows
+            mismatches += 0 if agree else 1
+            print("CASE %-22s rust=%-13s pep=%-13s leaves=%d %s" % (
+                ident, rust_result, pep_result, len(rust_rows),
+                "AGREE" if agree else "DISAGREE"))
+            if not agree:
+                print("     rust_leaves=%r" % (rust_rows,))
+                print("     pep_leaves =%r" % (pep_rows,))
+            if receipt:
+                print("     rust_receipt=%s" % receipt)
+
     total = (len(CASES) + 3 + len(COMPOSITION_CASES) + len(TRAIL_CASES)
-             + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES))
+             + len(STEPREF_CASES) + len(EVIDENCE_CASES) + len(FILE_CASES)
+             + len(EVIDENCE_TREE_CASES))
     print("SUMMARY cases=%d mismatches=%d" % (total, mismatches))
     return 0 if mismatches == 0 else 1
 

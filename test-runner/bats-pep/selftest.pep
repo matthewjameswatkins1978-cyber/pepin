@@ -195,3 +195,46 @@ show(judge_file_absent(".git", repo_view()))
 show(judge_file_absent("no-such-file.txt", repo_view()))
 show(judge_file_exists("../outside.txt", repo_view()))
 show(judge_file_absent("C:/Windows/system.ini", repo_view()))
+
+// --- Evidence-driven trees: the four condition types composed ---
+//
+// 62 evtree-mixed-all       exit + evidence + file_exists + file_absent -> PROVEN
+// 63 evtree-mixed-missing   exit fires, file_exists misses             -> NOT OBSERVED
+// 64 evtree-any             one missing, one present                   -> PROVEN
+// 65 evtree-not             negated file_exists                        -> NOT OBSERVED
+// 66 evtree-all-empty       no children                                -> INCONCLUSIVE
+// 67 evtree-trail-size      the mixed tree trail                      -> 4
+//
+// Labels are the reference describe(cond) wording, supplied because Pep has no string
+// concatenation; the verdicts are decided in Pep from the evidence record.
+fn sample_evidence() -> RunEvidence {
+  return RunEvidence {
+    steps: [EvidenceStep { phase: "run", index: 0, exit: ObservedExit(1) }],
+    captures: all_captures(),
+    worktree: WorktreeView { present_paths: [".git", "README.md"], rejected_paths: ["../outside.txt"] }
+  }
+}
+fn leaf_exit() -> EvidenceExpr {
+  return ConditionLeaf("exit_code run:0 equals 1", ExitCodeCondition(EqualsMode(1), "run", 0))
+}
+fn leaf_evidence() -> EvidenceExpr {
+  return ConditionLeaf("evidence_present git_diff", EvidencePresentCondition("git_diff"))
+}
+fn leaf_exists() -> EvidenceExpr {
+  return ConditionLeaf("file_exists .git", FileExistsCondition(".git"))
+}
+fn leaf_exists_missing() -> EvidenceExpr {
+  return ConditionLeaf("file_exists no-such-file.txt", FileExistsCondition("no-such-file.txt"))
+}
+fn leaf_absent_missing() -> EvidenceExpr {
+  return ConditionLeaf("file_absent no-such-file.txt", FileAbsentCondition("no-such-file.txt"))
+}
+fn mixed_tree() -> EvidenceExpr {
+  return AllOf([leaf_exit(), leaf_evidence(), leaf_exists(), leaf_absent_missing()])
+}
+show(result_of(evaluate_evidence_tree(mixed_tree(), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AllOf([leaf_exit(), leaf_exists_missing()]), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AnyOf([leaf_exists_missing(), leaf_exists()]), sample_evidence())))
+show(result_of(evaluate_evidence_tree(NotOf(leaf_exists()), sample_evidence())))
+show(result_of(evaluate_evidence_tree(AllOf([]), sample_evidence())))
+say(int_text(trail_size(evaluate_evidence_tree(mixed_tree(), sample_evidence()))))

@@ -278,6 +278,63 @@ fact. That boundary is recorded rather than faked.
 This is also the first condition to use `contains` over `List[Str]` (scalar list
 membership), which exists and works.
 
+## Evidence-driven trees: all four conditions composed
+
+Until here the tree judged leaves that had already been judged. This section judges
+**conditions** against run evidence, so one oracle can mix condition types — which is
+what a real bat does, and the first time this engine composes more than one condition
+type in a single judgement.
+
+```pep
+type Condition =
+  ExitCodeCondition(Mode, Str, Int) |
+  EvidencePresentCondition(Str) |
+  FileExistsCondition(Str) |
+  FileAbsentCondition(Str)
+
+type RunEvidence {
+  steps: List[EvidenceStep],
+  captures: Captures,
+  worktree: WorktreeView
+}
+
+type EvidenceExpr =
+  ConditionLeaf(Str, Condition) |
+  AllOf(List[EvidenceExpr]) |
+  AnyOf(List[EvidenceExpr]) |
+  NotOf(EvidenceExpr)
+
+fn evaluate_evidence_tree(expr: EvidenceExpr, evidence: RunEvidence) -> Evaluation
+```
+
+Measured against the framework (exit 1, clean clone):
+
+```yaml
+oracle:
+  all:
+    - { type: exit_code, step: run:0, equals: 1 }
+    - { type: evidence_present, kind: git_diff }
+    - { type: file_exists, path: ".git" }
+    - { type: file_absent, path: "no-such-file.txt" }
+```
+
+→ **PROVEN**, four leaves, in exactly that order, with labels `exit_code run:0 equals
+1`, `evidence_present git_diff`, `file_exists .git`, `file_absent no-such-file.txt`.
+The differential compares result *and* the full leaf trail for four such trees.
+
+`EvidenceExpr` is a second tree type rather than a fifth case on `OracleExpr`. A leaf
+here is a condition still to be judged, not a finished judgement; without generics on
+this base one parameterised tree cannot be both, and keeping them apart keeps
+`evaluate_tree`'s contract exactly as it was — it never has to answer a node it has no
+evidence for.
+
+Leaf labels are supplied by the caller because the reference's `describe(cond)`
+renders arguments (`exit_code run:0 equals 1`) and Pep has no string concatenation.
+The label is descriptive text; every verdict is still decided in Pep.
+
+`condition_name(condition)` gives the bare kind name for callers that do not need the
+arguments.
+
 ## Run it
 
 ```powershell
@@ -290,7 +347,7 @@ New-Item -ItemType Directory -Force -Path ..\..\_build | Out-Null
 .\..\..\pep.ps1 run ..\..\_build\composed.pep
 ```
 
-Observed (61 cases; each prints its verdict label then its reason):
+Observed (67 cases; each prints its verdict label then its reason):
 
 | # | Inputs | Verdict |
 | --- | --- | --- |
@@ -355,6 +412,13 @@ Observed (61 cases; each prints its verdict label then its reason):
 | 59 | `file_absent "no-such-file.txt"` | PROVEN |
 | 60 | `file_exists "../outside.txt"` (rejected path) | INCONCLUSIVE |
 | 61 | `file_absent` absolute path (rejected) | INCONCLUSIVE |
+| 62 | `all` of exit + evidence + `file_exists` + `file_absent` | PROVEN |
+| 63 | `all` of exit fires + `file_exists` misses | NOT OBSERVED |
+| 64 | `any` of `file_exists` missing + present | PROVEN |
+| 65 | `not` of `file_exists .git` | NOT OBSERVED |
+| 66 | `all` with no children | INCONCLUSIVE |
+
+Then `trail_size` of the case-62 tree is `4`.
 
 Then `trail_size` of a two-leaf evaluation is `2`, `trail_size` of
 `evaluate_all([])` is `1` (the synthetic empty-combinator outcome), `trail_size` of
@@ -520,7 +584,17 @@ and `no-such-file.txt` is not:
 | `file_absent "no-such-file.txt"` | PROVEN | PROVEN | PROVEN |
 | `file_exists "../outside.txt"` | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 
-`SUMMARY cases=40 mismatches=0`.
+Mixed-condition trees are compared on result **and** full leaf trail, so a leaf that
+is judged correctly but recorded in the wrong order still shows up:
+
+| Tree | Rust runtime | Pep oracle | Leaves |
+| --- | --- | --- | --- |
+| `all` of exit + evidence + `file_exists` + `file_absent` | PROVEN | PROVEN | 4 |
+| `all` of exit fires + `file_exists` misses | NOT OBSERVED | NOT OBSERVED | 2 |
+| `any` of `file_exists` missing + present | PROVEN | PROVEN | 2 |
+| `not` of `file_exists .git` | NOT OBSERVED | NOT OBSERVED | 1 |
+
+`SUMMARY cases=44 mismatches=0`.
 
 One measurement worth recording: `terrorbats spec check` **accepts** a spec whose
 `exit_code` sets both modes; the reference rejects it at **run** time with verdict
