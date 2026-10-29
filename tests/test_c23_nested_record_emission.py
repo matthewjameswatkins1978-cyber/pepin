@@ -273,6 +273,23 @@ fn main() -> Int {
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
 
+    def test_nonrecursive_union_list_parameter_iteration_fails_closed(self):
+        source_text = """type Item = Empty() | Number(Int)
+fn first(items: List[Item]) -> Int {
+  var result = 0
+  for item in items {
+    result = match item {
+      Empty() => 0
+      Number(number) => number
+    }
+  }
+  return result
+}
+fn main() -> Int { return first([Number(42)]) }
+"""
+        with self.assertRaisesRegex(ValueError, "supported parameters"):
+            emit(source_text.encode("utf-8"))
+
     def test_bare_identifier_pattern_is_not_a_nullary_constructor(self):
         source_text = (
             "type MaybeInt = None() | Some(Int)\n"
