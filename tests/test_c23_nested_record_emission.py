@@ -126,5 +126,83 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             self.assertIn(".pep_field_1 = 23", generated)
 
 
+    def test_int_tagged_union_construction_helper_and_match_emit_c(self):
+        source_text = (
+            "type MaybeInt = None() | Some(Int)\n"
+            "fn pass(value: MaybeInt) -> MaybeInt { return value }\n"
+            "fn unwrap(value: MaybeInt) -> Int {\n"
+            "  return match value {\n"
+            "    None() => 0\n"
+            "    Some(item) => item\n"
+            "  }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let absent = pass(None())\n"
+            "  let candidate = Some(42)\n"
+            "  let present = pass(candidate)\n"
+            "  return unwrap(present)\n"
+            "}\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "maybe-int.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\nsay(int_text(unwrap(pass(None()))))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "42\n0\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(
+                generated,
+                r"typedef struct \{ uint32_t tag; int64_t payload; \} pep_union_\d+;")
+            self.assertRegex(
+                generated,
+                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
+            self.assertRegex(generated, r"\.tag = 0")
+            self.assertRegex(
+                generated,
+                r"\.tag = 1, \.payload = 42")
+            self.assertRegex(generated, r"\.tag == 0")
+            self.assertRegex(generated, r"\.tag == 1")
+            self.assertRegex(generated, r"\.payload")
+            self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
+
+    def test_tagged_union_rejects_non_int_payload_layout(self):
+        source_text = (
+            "type MaybeText = None() | Some(Str)\n"
+            "fn main() -> Int { return 0 }\n")
+        with self.assertRaisesRegex(ValueError, "nullary plus one Int payload"):
+            emit(source_text.encode("utf-8"))
+
+    def test_recursive_union_layout_fails_closed(self):
+        source_text = (
+            "type Chain = End() | Link(Chain)\n"
+            "fn main() -> Int { return 0 }\n")
+        with self.assertRaisesRegex(ValueError, "nullary plus one Int payload"):
+            emit(source_text.encode("utf-8"))
+
+    def test_bare_identifier_pattern_is_not_a_nullary_constructor(self):
+        source_text = (
+            "type MaybeInt = None() | Some(Int)\n"
+            "fn unwrap(value: MaybeInt) -> Int { return match value { None => 7 } }\n"
+            "fn main() -> Int { let value = None(); return unwrap(value) }\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "bare-binding.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "7\n")
+            with self.assertRaisesRegex(ValueError, "bare identifiers are bindings"):
+                emit(source.read_bytes())
+
 if __name__ == "__main__":
     unittest.main()
