@@ -103,21 +103,21 @@ class C23RecordSourceEmissionTests(unittest.TestCase):
 
     def test_record_payload_union_passes_helpers_and_matches(self):
         source = (
-            "type Point { x: Int }\n"
-            "type Maybe = None() | Some(Point)\n"
+            "type AstSpan { start: Int, end: Int }\n"
+            "type Maybe = None() | Some(AstSpan)\n"
             "fn relay(value: Maybe) -> Maybe { return value }\n"
             "fn main() -> Int {\n"
-            "  let wrapped = relay(Some(Point { x: 23 }))\n"
+            "  let wrapped = relay(Some(AstSpan { start: 7, end: 23 }))\n"
             "  return match wrapped {\n"
             "    None() => 0\n"
-            "    Some(point) => point.x\n"
+            "    Some(span) => span.end\n"
             "  }\n"
             "}\n"
         )
         generated = emit(source.encode("utf-8"))
         self.assertIn("pep_record_0 payload_1", generated)
         self.assertIn(".tag = 1, .payload.payload_1 = (pep_record_0)", generated)
-        self.assertIn(".payload.payload_1.pep_field_0", generated)
+        self.assertIn(".payload.payload_1.pep_field_1", generated)
         self.assertIn(".tag == 0", generated)
         self.assertIn(".tag == 1", generated)
         self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
