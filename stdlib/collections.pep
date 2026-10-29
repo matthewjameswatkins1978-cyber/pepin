@@ -284,6 +284,14 @@ fn list_int_count_between(values: List[Int], lower: Int, upper: Int) -> Int {
   return total
 }
 
+fn list_int_product_between(values: List[Int], lower: Int, upper: Int) -> Int {
+  var product = 1
+  for item in values {
+    product = if lower <= item && item <= upper { product * item } else { product }
+  }
+  return product
+}
+
 fn list_int_sum_between(values: List[Int], lower: Int, upper: Int) -> Int {
   var total = 0
   for item in values {
