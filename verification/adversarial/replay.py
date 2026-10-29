@@ -264,6 +264,21 @@ def main():
     run("S6-assoc-div", "say(int_text(100 / 10 / 2))\n", exp_out="5\n")
     check("S6-str-plus", 'say("a" + "b")',
           "invalid", ("PEP_TYPE_MISMATCH",))
+    check("M-match-bool",
+          "fn main() -> Int { return match true { true => 1 false => 0 } }",
+          "invalid", ("PEP_MATCH_NON_UNION",))
+    check("M-if-branch-mismatch",
+          'fn main() -> Int { return if true { 1 } else { "s" } }',
+          "invalid", ("PEP_TYPE_MISMATCH",))
+    check("M-empty-record",
+          "type E { }\nfn main() -> Int { return 0 }", "valid")
+    check("M-fn-type-samename",
+          "type Point { x: Int }\nfn Point() -> Int { return 1 }\n"
+          "fn main() -> Int { return Point() }", "valid")
+    run("M-samename-run",
+        "type Point { x: Int }\nfn Point() -> Int { return 1 }\n"
+        "fn main() -> Int { return 0 }\nsay(int_text(Point()))",
+        exp_out="1\n")
     # Records + unions
     hdr = "type Point { x: Int y: Int }\ntype Expr = Number(Int) | Add(Expr, Expr)\n"
     run("REC-access", hdr + 'say(int_text(Point { x: 1, y: 2 }.x))\n',
