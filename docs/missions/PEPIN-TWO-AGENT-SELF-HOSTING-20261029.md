@@ -110,3 +110,16 @@ Conformance categories: lexer/parser originals UTF-8 LF/CRLF/invalid encoding, s
 5. Integrator publishes one human-readable current status with explicit security hold and owner state after actual restart; never imply agents are currently running merely because plan exists.
 
 **Launch readiness:** GO to evidence-led B0/source-safe work once agents are appointed. NO-GO to native execution on the affected held Windows host, speculative runtime ABI freeze, wholesale rewrite, and accepted-master promotion without further authorization.
+
+## 8. Optional Lean 4 proof pilot (Matthew decision, 29 October 2026)
+
+**Selected proof assistant: Lean 4, NOT Coq/Rocq for this pilot.** This is an evidence-gathering side track, not an additional bootstrap prerequisite and not a claim that formal verification is complete. An earlier Rocq extracted-OCaml lab on a separate project demonstrated tiny cases but scaled poorly (e.g. ~5.7 s at a 1,000-link chain), so avoid extracting production compiler code from proof-first representations. Rocq's maturity is not the issue; the prior workflow was the wrong shape for a fast implementation.
+
+**Smallest useful pilot (source-only planning while the affected native test lane remains held):**
+1. Pin a Lean 4 stable toolchain and Lake project after confirming a safe execution environment; no dynamic `latest` dependency in proof CI.
+2. Specify *a tiny subset* of Pep values with lists and independent copying, a small-step or big-step interpreter model, and the effect of editing one logical value. Give each definition a correspondence note to accepted DEC-001 source semantics; never silently redefine Pep.
+3. Machine-check a concrete theorem: after copying an ordinary value into `b`, a legal edit to `a` cannot change the observable value of `b`. Mark proof green **only** after actual Lean kernel acceptance with no `sorry`, `admit`, unreviewed axioms or `native_decide` used as an unexplained trust bypass.
+4. The first theorem is about the **model**, not Lucy. Next optional experiment: compare a tiny actual compiled Pep implementation against the model, then prove/refine an abstract CoW implementation if worthwhile. Report the unverified bridge and runtime/FFI assumptions prominently.
+5. Allow minimal proof-task proposals as bounded *Agent 1 semantic specification* work and Agent 2 counterexample/review input only when they do not delay B0/B1/B2/B3 native self-hosting or breach ownership/security holds. Do not pull both agents into a large Lean formalization campaign. If repeated proof engineering yields no implementation insight, park the pilot with a reproducible receipt.
+
+**Acceptance vocabulary:** TESTED (observed), MODEL-PROVED (kernel checked under stated axioms/model), IMPLEMENTATION-REFINED (verified correspondence to actual Pep/Lucy), UNVERIFIED. Self-hosting A→B→C alone is consistency evidence and must not be described as MODEL-PROVED.
