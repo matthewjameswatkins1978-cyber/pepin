@@ -1259,7 +1259,8 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
             } else {}
             resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 1, 0,
               PepC23NodeLookup { found: false, node: empty_node() }, false)
-            resultParts = append(resultParts, ".length")
+            resultParts = prepend(resultParts, "pep_checked_length(")
+            resultParts = append(resultParts, ".length)")
           } else {
             if result.node.kind == "name" && result.node.text == patternArgument.node.text {
               let recursiveBinding = payloadType.node.kind == "type_named" && payloadType.node.text == declaration.node.text
@@ -1506,31 +1507,31 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         pep_c23_int_list_parameter(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if listParameter.found {
-        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(listParameter.node.id), ".length"], diagnostic: "" }
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(listParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let boolListParameter = if argument.node.kind == "name" {
         pep_c23_bool_list_parameter(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if boolListParameter.found {
-        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(boolListParameter.node.id), ".length"], diagnostic: "" }
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(boolListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let recordListParameter = if argument.node.kind == "name" {
         pep_c23_record_list_parameter(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if recordListParameter.found {
-        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(recordListParameter.node.id), ".length"], diagnostic: "" }
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(recordListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let unionListParameter = if argument.node.kind == "name" {
         pep_c23_union_list_parameter(nodes, function, argument.node.text)
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if unionListParameter.found {
-        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(unionListParameter.node.id), ".length"], diagnostic: "" }
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(unionListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       for binding in nodes {
         if binding.parentId == function.id && binding.role == "statement" && binding.kind == "var" && binding.text == argument.node.text {
           let initial = pep_c23_child(nodes, binding.id, "value", 0)
           if initial.found && initial.node.kind == "list" {
-            return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(binding.id), ".length"], diagnostic: "" }
+            return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_local_", int_text(binding.id), ".length)"], diagnostic: "" }
           } else {}
         } else {}
       }
@@ -2121,7 +2122,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   if requiresArena { reversed = prepend(reversed, "#include \"pep_arena.h\"\n") } else {}
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
-  reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
+  reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n[[maybe_unused]] static int64_t pep_checked_length(size_t length) { if ((uintmax_t)length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } return (int64_t)length; }\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
   for record in parsed.nodes {
     if record.parentId == -1 && record.kind == "record_declaration" {
       var parts: List[Str] = ["typedef struct { "]

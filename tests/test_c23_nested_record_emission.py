@@ -571,6 +571,8 @@ fn main() -> Int {
                              r"pep_union_\d+ pep_local_\d+ = pep_iter_\d+\[pep_index_\d+\]")
 
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
     def test_recursive_union_local_branch_with_child_list_iteration(self):
         source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
 fn main() -> Int {
@@ -601,6 +603,29 @@ fn main() -> Int {
             self.assertRegex(generated,
                              r"pep_union_\d+ pep_iter_\d+\[\] = \{")
             self.assertIn(".payload.payload_1.field_0.length", generated)
+            self.assertIn("pep_checked_length(", generated)
+
+            generated_c = pathlib.Path(temp_dir) / "recursive-union-branch-list.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
+            arena_include = ROOT / "runtime" / "pep_arena"
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = pathlib.Path(temp_dir) / (
+                        compiler.stem + "-recursive-union-branch-list.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", "-I", str(arena_include),
+                         str(generated_c), str(arena_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "1\n")
 
 
     def test_nested_recursive_union_constructor_composition(self):
