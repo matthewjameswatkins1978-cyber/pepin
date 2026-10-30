@@ -883,6 +883,28 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
       pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, value.node) &&
       parentRecord.found && field.found
   } else {}
+  if node.kind == "record" {
+    let declaration = pep_c23_record_declaration(nodes, node.text)
+    if !declaration.found { return false } else {}
+    var fieldCount = 0
+    for supplied in nodes {
+      if supplied.parentId == node.id && supplied.role == "field" && supplied.kind == "record_field" {
+        let declared = pep_c23_record_field_declaration(nodes, declaration.node, supplied.text)
+        let fieldType = if declared.found {
+          pep_c23_child(nodes, declared.node.id, "type", 0)
+        } else { PepC23NodeLookup { found: false, node: empty_node() } }
+        let value = pep_c23_child(nodes, supplied.id, "value", 0)
+        if !declared.found || !fieldType.found ||
+           pep_c23_c_record_field_type(nodes, declaration.node, fieldType.node) == "" ||
+           !value.found ||
+           !pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, value.node) {
+          return false
+        } else {}
+        fieldCount = fieldCount + 1
+      } else {}
+    }
+    return !(fieldCount <= 0)
+  } else {}
   if node.kind == "call" && node.text == "length" {
     let argument = pep_c23_child(nodes, node.id, "argument", 0)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 1)
