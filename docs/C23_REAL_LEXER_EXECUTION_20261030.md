@@ -634,6 +634,33 @@ of swapping in a still-unsupported exemplar (`length(append([1], 2))`, verified
 unsupported): pinning new behaviour tests more than avoiding it. Both are
 compatible — pin the positive case, and keep a separate unsupported exemplar for
 the fail-closed path.
+
+## The `utf8_check` rewrite route is measured, and it is not cheap (Agent 3)
+
+Last turn I suggested that hoisting `next` out of the loop would be a cheap way to
+unblock `utf8_check` without touching the emitter. That suggestion does not
+survive measurement. Two variants, with `byte_at` replaced by a deterministic
+stand-in so the loop shape itself is exercised:
+
+| variant | native | reason |
+| --- | --- | --- |
+| hoist the binding: `var next = 0` outside, `next = next_byte(...)` inside | **unsupported** | "loop conditionals require non-empty assignment branches" |
+| additionally replace `else { }` with `else { bad = 0 }` | **step limit** | got past every construct check, then `PEP_RUNTIME_STEP_LIMIT` at emit |
+
+Both produce `586` under the interpreter, so the semantics are right and the
+failures are purely compiler-side.
+
+So a source-level rewrite of `utf8_check` would need **two** restructurings —
+hoisting the binding *and* replacing the `else { }` guard with an assignment — and
+would then still hit the emitter's step budget. That is no longer a workaround,
+it is three separate pieces of work disguised as one.
+
+**Corrected recommendation:** treat this as an emitter track rather than a source
+rewrite. In order: (1) support `let` inside loop bodies, (2) allow loop
+conditionals whose branch is a `return` rather than only an assignment, (3) bring
+the emitter's step cost down enough that a real function fits. Only after all
+three does `utf8_check` become emittable, with `SourceBytes` lowering as a fourth
+dependency on top.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
