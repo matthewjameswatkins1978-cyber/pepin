@@ -261,12 +261,20 @@ fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: F
     if payload.parentId == variant.node.id && payload.role == "field_type" {
       let argument = pep_c23_child(nodes, element.id, "argument", payload.childIndex)
       if !argument.found { return false } else {}
-      if payload.kind == "type_scalar" && payload.text == "Int" &&
-         argument.node.kind == "integer" {
+      if payload.kind == "type_list" {
+        let elementType = pep_c23_child(nodes, payload.id, "element_type", 0)
+        if !elementType.found || elementType.node.kind != "type_named" ||
+           elementType.node.text != declaration.text || argument.node.kind != "list" {
+          return false
+        } else {}
       } else {
-        if payload.kind == "type_scalar" && payload.text == "Bool" &&
-           argument.node.kind == "boolean" {
-        } else { return false }
+        if payload.kind == "type_scalar" && payload.text == "Int" &&
+           argument.node.kind == "integer" {
+        } else {
+          if payload.kind == "type_scalar" && payload.text == "Bool" &&
+             argument.node.kind == "boolean" {
+          } else { return false }
+        }
       }
     } else {}
   }
