@@ -1248,6 +1248,62 @@ cause of a collections test regression.
 tree was complete, then sampling a few messages and generalising. The correct instinct
 was the one applied later — check what the branch adds relative to the base before
 attributing any failure to the code.
+
+## URGENT: Agent 1's line cannot emit anything from `d64ea2a` onward (Agent 3)
+
+Independently verified the peer lane's breakage report. Agent 1's current head is
+broken for **every** emit path, and the cause is a type rename that did not reach the
+emitter.
+
+Bisect of the window, same classifier slice at each commit:
+
+| commit | slice result |
+| --- | --- |
+| `e0d1f89` (before) | **OK** |
+| `d64ea2a` "Compact checker AST transport" | **FAILED (errors=5)** — bundle invalid |
+| `05f1d77` | **FAILED (errors=5)** — bundle invalid |
+| `d02a531` (current head) | **FAILED (errors=5)** — bundle invalid |
+
+`test_a14_c23` at `d02a531` is **11 failures** (from 2 known), because the bundle fails
+validation before any program can be emitted:
+
+```
+PEP_TYPE_MISMATCH  Expected FlatAstNode but found CheckerNode
+  bundle line 5041, column 49, offset 294068
+  document: pep-c23-emitter, status: invalid
+```
+
+### Root cause, exactly
+
+The bundle is the concatenation lexer (1–494) + parser (495–2420) + checker
+(2421–5028) + emitter (5029–8150), so **bundle line 5041 is emitter local line 13** —
+the signature and first statement of `pep_c23_is_negative_int_literal`, whose parameters
+are typed `FlatAstNode`.
+
+- Checker at `d64ea2a`: declares `type CheckerNode { id, parentId, childIndex, role,
+  kind, text, startByte, endByte }`, **zero** `FlatAstNode` declarations (4 residual
+  references).
+- Emitter: **150** `FlatAstNode` references, **zero** `CheckerNode`.
+
+So the transport type was renamed on the checker side and the emitter never followed.
+The two files are typechecked as one bundle, so nothing validates.
+
+### Agent 2's lane is not affected by this breakage
+
+Their branch declares `FlatAstNode` in `examples/pep_parser.pep` (1 declaration, 16
+references) and their checker/emitter reference it consistently, so there is no type
+mismatch there. Their classifier slice still fails, but for the older, separate reason:
+`check parsed source … PEP_RUNTIME_STEP_LIMIT` — the pre-chunking checker budget,
+already documented in this report. My earlier run of that slice on their branch showed
+5 errors; the cause is budget, not `CheckerNode`.
+
+### Recommendation
+
+**Do not merge Agent 1's current head.** Either revert `d64ea2a`, or complete the rename
+by updating the emitter's 150 `FlatAstNode` references to `CheckerNode` (and any helper
+signatures that cross the boundary). The `a14` 2→11 jump is the visible symptom; the
+real statement is that the emitter bundle does not typecheck, so every downstream
+measurement of A1's line in this window is meaningless until it is fixed.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
