@@ -82,15 +82,6 @@ class PepC23StrContainsTests(unittest.TestCase):
                 f"pep_fn_{contains_id}(pep_arg_{haystack_id}, pep_arg_{needle_id})",
                 generated)
 
-            equality_source = folder / "str-equality.pep"
-            equality_source.write_text(
-                "fn equal(left: Str, right: Str) -> Bool { return left == right }\n"
-                "fn main() -> Int { return 0 }\n",
-                encoding="utf-8", newline="\n")
-            with self.assertRaisesRegex(
-                    ValueError, "Str comparison and binary operations are not yet lowered"):
-                emit(equality_source.read_bytes())
-
             generated_path = folder / "generated.c"
             harness_path = folder / "harness.c"
             harness_path.write_text(
@@ -148,6 +139,115 @@ class PepC23StrContainsTests(unittest.TestCase):
                     self.assertEqual(invalid.returncode, 1)
                     self.assertEqual(invalid.stdout, "")
                     self.assertEqual(invalid.stderr, "PEP_RUNTIME_INVALID_STR\n")
+
+    def test_native_str_equality_is_length_tagged_and_byte_exact(self):
+        source_text = """fn equal(left: Str, right: Str) -> Bool {
+  return left == right
+}
+fn relay(left: Str, right: Str) -> Bool {
+  return equal(left, right)
+}
+fn different(left: Str, right: Str) -> Bool {
+  return left != right
+}
+fn main() -> Int { return 0 }
+"""
+        reference_text = source_text + """fn bool_int(value: Bool) -> Int {
+  if value { return 1 } else { return 0 }
+}
+say(int_text(bool_int(equal("", ""))))
+say(int_text(bool_int(equal("abc", "ab"))))
+say(int_text(bool_int(relay("x\\0y", "x\\0y"))))
+say(int_text(bool_int(equal("x\\0y", "y"))))
+say(int_text(bool_int(equal("café", "café"))))
+say(int_text(bool_int(equal("café", "café"))))
+say(int_text(bool_int(different("café", "café"))))
+"""
+        expected = "1\n0\n1\n0\n1\n0\n1\n"
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "str-equality.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "str-equality-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            self.assertIn("static _Bool pep_str_equal(pep_str left, pep_str right)", generated)
+            self.assertIn("PEP_RUNTIME_INVALID_STR", generated)
+            declarations = re.findall(
+                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_\d+, pep_str pep_arg_\d+\);",
+                generated)
+            self.assertEqual(len(declarations), 3, generated)
+            equal_id, relay_id, different_id = declarations
+            self.assertIn(f"pep_str_equal(pep_arg_", generated)
+            self.assertIn(f"pep_fn_{equal_id}(pep_arg_", generated)
+
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "str-equality-harness.c"
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n"
+                '#include "generated.c"\n'
+                "#undef main\n"
+                "int main(int argc, char **argv) {\n"
+                "  (void)argv;\n"
+                "  static const unsigned char abc[] = {97, 98, 99};\n"
+                "  static const unsigned char ab[] = {97, 98};\n"
+                "  static const unsigned char embedded[] = {120, 0, 121};\n"
+                "  static const unsigned char y[] = {121};\n"
+                "  static const unsigned char cafe_nfc[] = {99, 97, 102, 195, 169};\n"
+                "  static const unsigned char cafe_nfd[] = {99, 97, 102, 101, 204, 129};\n"
+                "  if (argc > 1) {\n"
+                f"    (void)pep_fn_{equal_id}((pep_str){{NULL, 1}}, (pep_str){{NULL, 0}});\n"
+                "    return 0;\n"
+                "  }\n"
+                f'  printf("%d\\n%d\\n%d\\n%d\\n%d\\n%d\\n%d\\n", '
+                f"pep_fn_{equal_id}((pep_str){{NULL, 0}}, (pep_str){{NULL, 0}}), "
+                f"pep_fn_{equal_id}((pep_str){{abc, sizeof abc}}, (pep_str){{ab, sizeof ab}}), "
+                f"pep_fn_{relay_id}((pep_str){{embedded, sizeof embedded}}, (pep_str){{embedded, sizeof embedded}}), "
+                f"pep_fn_{equal_id}((pep_str){{embedded, sizeof embedded}}, (pep_str){{y, sizeof y}}), "
+                f"pep_fn_{equal_id}((pep_str){{cafe_nfc, sizeof cafe_nfc}}, (pep_str){{cafe_nfc, sizeof cafe_nfc}}), "
+                f"pep_fn_{equal_id}((pep_str){{cafe_nfc, sizeof cafe_nfc}}, (pep_str){{cafe_nfd, sizeof cafe_nfd}}), "
+                f"pep_fn_{different_id}((pep_str){{cafe_nfc, sizeof cafe_nfc}}, (pep_str){{cafe_nfd, sizeof cafe_nfd}}));\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"str-equality-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
+                    malformed = subprocess.run(
+                        [str(executable), "malformed"], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertNotEqual(malformed.returncode, 0)
+                    self.assertEqual(malformed.stdout, "")
+                    self.assertIn("PEP_RUNTIME_INVALID_STR", malformed.stderr)
 
     def test_native_string_literals_and_immutable_locals_preserve_source_bytes(self):
         source_text = r'''fn empty_literals() -> Bool {

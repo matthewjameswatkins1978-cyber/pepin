@@ -37,7 +37,7 @@ class PepC23CliTests(unittest.TestCase):
             self.assertIn("int64_t pep_fn_", c_source)
             self.assertIn(" ? ", c_source)
 
-    def test_run_c23_executes_native_output_for_typed_empty_mutable_list(self):
+    def test_run_c23_executes_native_output_and_rejects_parameterized_main(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             folder = pathlib.Path(temp)
             source = folder / "answer.pep"
@@ -64,12 +64,7 @@ class PepC23CliTests(unittest.TestCase):
             too_deep = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertNotEqual(too_deep.returncode, 0)
             self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
-            source.write_text("type Point { x: Int }\n"
-                              "type Located { point: Point }\n"
-                              "fn main() -> Int {\n"
-                              "  let located = Located { point: Point { x: 42 } }\n"
-                              "  return located.point.x\n"
-                              "}\n",
+            source.write_text("fn main(value: Int) -> Int { return value }\n",
                               encoding="utf-8", newline="\n")
             generated = folder / "unsupported.c"
             rejected = self.invoke("run-c23", source, "--compiler", CLANG, "--emit-c", generated)
@@ -359,10 +354,10 @@ class PepC23CliTests(unittest.TestCase):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         cases = (
-            ("record-string-field",
+            ("record-string-literal-field-initializer",
              "type Label { text: Str }\n"
              "fn main() -> Int { let label = Label { text: \"hello\" }; return 42 }\n",
-             "Pep C23 unsupported: Pep C23 records currently require fields of type Int or Bool",
+             "Pep C23 unsupported: Pep C23 record field initializers currently require expressions without runtime failure",
              "valid"),
             ("record-fallible-initializer",
              "type Value { value: Int }\n"
