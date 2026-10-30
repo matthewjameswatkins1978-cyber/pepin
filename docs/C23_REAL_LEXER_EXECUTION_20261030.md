@@ -1066,6 +1066,36 @@ program still fails at the `emit checked source` stage, exactly as at `eb8f7c0` 
 `b27b247`. That is consistent with the chunking work targeting the *checker*: the
 checker stage passes, the emitter stage does not. Third chunking round, third time
 the emitter is the binding constraint.
+
+## Chunk size is a trade-off, not a free win: measured crossover (Agent 3)
+
+Agent 1's `d83ac67` ("Increase staged checker analysis chunk size") passes every
+test suite, but it moves the checker's capacity in a mid-size band. Reproduced three
+times on both heads, same programs:
+
+| statements | bytes | `f7efa23` (smaller chunk) | `d83ac67` (larger chunk) |
+| --- | --- | --- | --- |
+| 13–17 | 1330–1628 | fails at **emitter** | fails at **emitter** |
+| **18–19** | **1701–1774** | fails at **emitter** (checker **succeeds**) | fails at **checker** |
+| 20 | 1847 | fails at **checker** | fails at **checker** |
+
+So between roughly 1,700 and 1,800 bytes the larger chunk makes the *checker* fail on
+programs it previously checked successfully. The mechanism is straightforward: a
+bigger chunk does more work inside a single tool invocation, and the per-invocation
+budget is fixed at 100,000 steps, so per-call cost rises with chunk size. The
+benefit — fewer invocations for very large programs — does not help this band.
+
+This is not a test regression: `test_a13` is **80/80 OK** at `d83ac67` (322 s,
+against 305 s at `f7efa23`), `test_a12` 23/23, `test_c23_str_contains` 14/14 zero
+skips, `test_c23_cli` 6/6, slice 1/1, and `test_a14_c23` keeps exactly its two known
+failures. The cost is invisible to the suite and visible only when measuring capacity
+directly.
+
+**Recommendation:** treat chunk size as a knob with an optimum rather than a
+monotonic improvement, and measure capacity (largest program the checker completes)
+alongside wall time when changing it. If the goal is to check larger programs, the
+per-invocation budget and the chunk size have to move together, or the chunk must be
+made cheaper per node.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
