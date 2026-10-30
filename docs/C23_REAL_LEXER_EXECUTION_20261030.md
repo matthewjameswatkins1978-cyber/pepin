@@ -964,6 +964,36 @@ Nothing about the observed facts changes — the accumulator shape really is
 unsupported, `let`-in-loop and empty-`else` really are unsupported, and the budgets
 really do bite before those diagnoses surface. What changes is the causal story and
 therefore the fix.
+
+## Baseline moved to `eb8f7c0` — 262 tests, same three known failures (Agent 3)
+
+Agent 1's second chunking round ("Chunk staged A13 binding type inference") is also
+non-regressive. Full fifteen-module sweep at the new head, clean worktree:
+
+| module | tests | result |
+| --- | --- | --- |
+| `test_a6` / `test_a7` / `test_a8` | 13 / 5 / 5 | OK |
+| `test_a10` / `test_a11` | 9 / 7 | OK |
+| `test_a12` | 23 | OK |
+| `test_a13` | **79** | OK (310 s) |
+| `test_a13_nested_records` | 13 | OK |
+| `test_a14_c23` | 11 | **2 FAIL** (known) |
+| `test_c23_cli` | 6 | OK |
+| `test_c23_driver_validation` | 10 | OK |
+| `test_c23_real_lexer_classifiers` | 1 | OK |
+| `test_textbuf_native` | 22 | **1 FAIL** (known arena CRLF) |
+| `test_moonbit_cli` | 11 | OK |
+| `test_cli` | 47 | OK |
+
+**262 tests** (up one, `test_a13` 78 → 79 with the new chunked-path case), and the
+same three previously identified failures. Nothing new broke; the second chunking
+round cost nothing measurable in test time either (310 s versus 289 s for a
+one-test-larger suite).
+
+**Also checked as part of this round:** the emitter-stage budget failure is *still*
+reported by a bare `require(emitted, "outcome", "ok", "emit checked source")` at
+`pep_c23.py:629`. So the inconclusive-outcome remedy proposed above has not landed
+yet, and emitter budget errors still read as program verdicts.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
