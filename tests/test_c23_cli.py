@@ -35,13 +35,16 @@ class PepToolBudgetErrorTests(unittest.TestCase):
         for stage, tool in (
             ("parser", "pep-c23-parser-step"),
             ("checker", "pep-c23-checker-step"),
+            ("emitter", "pep-c23-emitter"),
         ):
             with self.subTest(stage=stage):
                 with self.assertRaises(PepCompilerToolBudgetError) as captured:
                     invoke_tool(FailedSession(), tool, [], target, "sha256:compiler-bundle",
                                 "profile failure", stage=stage)
                 error = captured.exception
+                self.assertEqual(error.analysis_status, "INCONCLUSIVE")
                 self.assertEqual(error.stage, stage)
+                self.assertEqual(error.code, "PEP_RUNTIME_STEP_LIMIT")
                 self.assertEqual(error.target_document, "doc-target")
                 self.assertEqual(error.target_revision, "sha256:target-bytes")
                 self.assertIsNone(error.target_span)
@@ -51,6 +54,22 @@ class PepToolBudgetErrorTests(unittest.TestCase):
                 self.assertNotIn("target_location=2441:26", str(error))
 
 
+    def test_non_budget_tool_errors_are_not_reported_as_inconclusive_budget(self):
+        class FailedSession:
+            def send(self, request):
+                return {
+                    "schemaVersion": 3,
+                    "outcome": "error",
+                    "tool": request["tool"],
+                    "revision": "sha256:compiler-bundle",
+                    "error": {"code": "PEP_TOOL_NOT_ACTIVE", "message": "tool is not active"},
+                }
+
+        with self.assertRaises(RuntimeError) as captured:
+            invoke_tool(FailedSession(), "pep-c23-emitter", [],
+                        {"document": "doc-target", "revision": "sha256:target-bytes"},
+                        "sha256:compiler-bundle", "emit failure", stage="emitter")
+        self.assertNotIsInstance(captured.exception, PepCompilerToolBudgetError)
 @unittest.skipUnless(CLANG.is_file(), f"Clang not installed at {CLANG}")
 class PepC23CliTests(unittest.TestCase):
     @classmethod

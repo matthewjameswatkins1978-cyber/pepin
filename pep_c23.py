@@ -172,7 +172,9 @@ def typed_field_value(fields, name, type_name, label):
 class PepCompilerToolBudgetError(RuntimeError):
     def __init__(self, stage, tool, target_document, target_revision, tool_revision,
                  tool_source_location):
+        self.analysis_status = "INCONCLUSIVE"
         self.stage = stage
+        self.code = "PEP_RUNTIME_STEP_LIMIT"
         self.tool = tool
         self.target_document = target_document
         self.target_revision = target_revision
@@ -181,7 +183,7 @@ class PepCompilerToolBudgetError(RuntimeError):
         self.tool_source_location = tool_source_location
         location = tool_source_location or "unavailable"
         super().__init__(
-            f"stage={stage} code=PEP_RUNTIME_STEP_LIMIT; "
+            f"analysis_status={self.analysis_status}; stage={stage}; code={self.code}; "
             f"target_document={target_document}; target_revision={target_revision}; "
             f"target_source_span=unavailable; compiler_tool={tool}; "
             f"compiler_bundle_revision={tool_revision}; "
@@ -626,14 +628,14 @@ def emit(source_bytes, measurements=None):
         report_fields = typed_fields(checked_report, "CheckerReport", "checker report")
         measurements["checker_status"] = typed_field_value(report_fields, "status", "Str", "checker report")
         emitter_started = time.perf_counter_ns()
-        emitted = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
-                                "op": "tool_invoke", "tool": "pep-c23-emitter",
-                                "arguments": [parsed_value, checked_report],
-                                "semanticTarget": semantic_target})
+        emitter_request_bytes_before = session.request_bytes_total
+        emitter_response_bytes_before = session.response_bytes_total
+        emitted = invoke_tool(session, "pep-c23-emitter", [parsed_value, checked_report], semantic_target,
+                              tool_revision, "emit checked source", stage="emitter")
         measurements["emitter_stage_ms"] = (time.perf_counter_ns() - emitter_started) / 1_000_000
-        require(emitted, "outcome", "ok", "emit checked source")
-        require(emitted, "revision", tool_revision, "verify emitter revision")
-        fields = {item["name"]: item["value"] for item in emitted["result"]["fields"]}
+        measurements["emitter_request_bytes"] = session.request_bytes_total - emitter_request_bytes_before
+        measurements["emitter_response_bytes"] = session.response_bytes_total - emitter_response_bytes_before
+        fields = {item["name"]: item["value"] for item in emitted["fields"]}
         if fields["status"]["value"] != "emitted":
             measurements["emitter_status"] = fields["status"]["value"]
             measurements["emitter_diagnostic"] = fields["diagnostic"]["value"]
