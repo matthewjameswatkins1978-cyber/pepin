@@ -85,7 +85,7 @@ def pep_flat_nodes(result):
         integer_value = int(scalar(item["integerValue"]))
         boolean_value = scalar(item["booleanValue"])
         string_parts = [scalar(part) for part in item["stringParts"]["value"]]
-        if kind in {"type_scalar", "type_named", "type_list"}:
+        if kind in {"type_scalar", "type_named", "type_list", "type_parameter"}:
             node_span = None
         else:
             node_span = (int(scalar(item["startByte"])), int(scalar(item["endByte"])),
@@ -225,6 +225,8 @@ def ocaml_flat_nodes(tops):
         kind = node["kind"]
         if kind == "function":
             add("function", node["name"], node["span"])
+            for type_parameter in node.get("typeParameters", []):
+                add("type_parameter", type_parameter, None)
             for parameter in node["parameters"]:
                 add("parameter", parameter["name"], parameter["span"])
                 output.extend(ocaml_type_nodes(parameter["type"]))
@@ -394,6 +396,8 @@ def ocaml_tree_nodes(tops):
         kind = node["kind"]
         if kind == "function":
             node_id = add("function", node["name"], node["span"], -1, top_index, "top_level")
+            for index, type_parameter in enumerate(node.get("typeParameters", [])):
+                add("type_parameter", type_parameter, None, node_id, index, "type_parameter")
             for index, parameter in enumerate(node["parameters"]):
                 parameter_id = add("parameter", parameter["name"], parameter["span"],
                                    node_id, index, "parameter")
@@ -889,6 +893,33 @@ class A12ParserDifferentialTests(unittest.TestCase):
                                  diagnostic["span"]["start"]["offset"])
                 self.assertEqual(scalar(parser_fields["errorEnd"]),
                                  diagnostic["span"]["endOffset"])
+
+    def test_generic_function_type_parameters_match_ocaml_and_keep_byte_spans(self):
+        source = (
+            "fn identity[T](value: T) -> T { return value }\n"
+            "fn first[T, U](left: T, right: U) -> T { return left }\n"
+        )
+        self.assert_differential(source)
+        _, result = self.parse(source)
+        type_parameters = []
+        for node in fields(result)["nodes"]["value"]:
+            item = fields(node)
+            if scalar(item["kind"]) == "type_parameter":
+                type_parameters.append((
+                    scalar(item["text"]),
+                    int(scalar(item["startByte"])),
+                    int(scalar(item["endByte"])),
+                ))
+        expected = [
+            ("T", source.index("[T]") + 1, source.index("[T]") + 2),
+            ("T", source.index("[T, U]") + 1, source.index("[T, U]") + 2),
+            ("U", source.index("[T, U]") + 4, source.index("[T, U]") + 5),
+        ]
+        self.assertEqual(type_parameters, expected)
+
+        malformed = "fn bad[]() -> Int { return 0 }"
+        _, bad_result = self.parse(malformed, metadata_only=True)
+        self.assertEqual(scalar(fields(bad_result)["errorCode"]), "PEP_EMPTY_TYPE_PARAMETERS")
 
     def test_repository_examples_match_ocaml_parser_ast(self):
         matched = 0

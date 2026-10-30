@@ -1,5 +1,5 @@
 type AstSpan { startByte: Int, endByte: Int, line: Int, column: Int }
-type AstValue = AstAbsent() | AstInteger(Int, AstSpan) | AstBoolean(Bool, AstSpan) | AstString(List[Str], AstSpan) | AstName(Str, AstSpan) | AstHole(Str, AstSpan) | AstCall(Str, List[AstValue], AstSpan) | AstBinary(Str, AstValue, AstValue, AstSpan) | AstUnary(Str, AstValue, AstSpan) | AstList(List[AstValue], AstSpan) | AstIfExpression(AstValue, AstValue, AstValue, AstSpan) | AstRecordField(Str, AstValue, AstSpan) | AstRecordExpression(Str, List[AstValue], AstSpan) | AstFieldAccess(AstValue, Str, AstSpan) | AstMatchExpression(AstValue, List[AstValue], AstSpan) | AstWildcardPattern(AstSpan) | AstBindingPattern(Str, AstSpan) | AstConstructorPattern(Str, List[AstValue], AstSpan) | AstMatchArm(AstValue, AstValue, AstSpan) | AstTypeScalar(Str, AstSpan) | AstTypeNamed(Str, AstSpan) | AstTypeList(AstValue, AstSpan) | AstParameter(Str, AstValue, AstSpan) | AstFieldDeclaration(Str, AstValue, AstSpan) | AstVariantDeclaration(Str, List[AstValue], AstSpan) | AstRecordDeclaration(Str, List[AstValue], AstSpan) | AstUnionDeclaration(Str, List[AstValue], AstSpan) | AstLet(Str, AstValue, AstValue, AstSpan) | AstVar(Str, AstValue, AstValue, AstSpan) | AstAssignment(Str, AstValue, AstSpan) | AstReturn(AstValue, AstSpan) | AstBlock(List[AstValue], AstSpan) | AstIfStatement(AstValue, List[AstValue], List[AstValue], AstSpan) | AstForIn(Str, AstValue, List[AstValue], AstSpan) | AstWhile(AstValue, List[AstValue], AstSpan) | AstExpressionStatement(AstValue, AstSpan) | AstFunction(Str, List[AstValue], AstValue, List[AstValue], AstSpan)
+type AstValue = AstAbsent() | AstInteger(Int, AstSpan) | AstBoolean(Bool, AstSpan) | AstString(List[Str], AstSpan) | AstName(Str, AstSpan) | AstHole(Str, AstSpan) | AstCall(Str, List[AstValue], AstSpan) | AstBinary(Str, AstValue, AstValue, AstSpan) | AstUnary(Str, AstValue, AstSpan) | AstList(List[AstValue], AstSpan) | AstIfExpression(AstValue, AstValue, AstValue, AstSpan) | AstRecordField(Str, AstValue, AstSpan) | AstRecordExpression(Str, List[AstValue], AstSpan) | AstFieldAccess(AstValue, Str, AstSpan) | AstMatchExpression(AstValue, List[AstValue], AstSpan) | AstWildcardPattern(AstSpan) | AstBindingPattern(Str, AstSpan) | AstConstructorPattern(Str, List[AstValue], AstSpan) | AstMatchArm(AstValue, AstValue, AstSpan) | AstTypeScalar(Str, AstSpan) | AstTypeNamed(Str, AstSpan) | AstTypeList(AstValue, AstSpan) | AstTypeParameter(Str, AstSpan) | AstParameter(Str, AstValue, AstSpan) | AstFieldDeclaration(Str, AstValue, AstSpan) | AstVariantDeclaration(Str, List[AstValue], AstSpan) | AstRecordDeclaration(Str, List[AstValue], AstSpan) | AstUnionDeclaration(Str, List[AstValue], AstSpan) | AstLet(Str, AstValue, AstValue, AstSpan) | AstVar(Str, AstValue, AstValue, AstSpan) | AstAssignment(Str, AstValue, AstSpan) | AstReturn(AstValue, AstSpan) | AstBlock(List[AstValue], AstSpan) | AstIfStatement(AstValue, List[AstValue], List[AstValue], AstSpan) | AstForIn(Str, AstValue, List[AstValue], AstSpan) | AstWhile(AstValue, List[AstValue], AstSpan) | AstExpressionStatement(AstValue, AstSpan) | AstFunction(Str, List[AstValue], List[AstValue], AstValue, List[AstValue], AstSpan)
 
 type FlatAstNode {
   id: Int,
@@ -135,6 +135,7 @@ fn ast_value_span(value: AstValue) -> AstSpan {
     AstTypeScalar(name, span) => span
     AstTypeNamed(name, span) => span
     AstTypeList(element, span) => span
+    AstTypeParameter(name, span) => span
     AstParameter(name, ty, span) => span
     AstFieldDeclaration(name, ty, span) => span
     AstVariantDeclaration(name, args, span) => span
@@ -149,7 +150,7 @@ fn ast_value_span(value: AstValue) -> AstSpan {
     AstForIn(name, values, body, span) => span
     AstWhile(condition, body, span) => span
     AstExpressionStatement(value, span) => span
-    AstFunction(name, parameters, result, body, span) => span
+    AstFunction(name, typeParameters, parameters, result, body, span) => span
     AstAbsent() => AstSpan { startByte: 0, endByte: 0, line: 1, column: 1 }
   }
 }
@@ -262,11 +263,12 @@ fn flat_if_statement(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   return flat_children(no, nodeId, "else", withYes)
 }
 fn flat_function(value: AstValue, parentId: Int, childIndex: Int, role: Str,
-  name: Str, parameters: List[AstValue], result: AstValue,
+  name: Str, typeParameters: List[AstValue], parameters: List[AstValue], result: AstValue,
   body: List[AstValue], state: FlatState) -> FlatState {
   let parent = flat_plain(value, parentId, childIndex, role, "function", name, 0, false, [], state)
   let nodeId = parent.nextId - 1
-  let withParameters = flat_children(parameters, nodeId, "parameter", parent)
+  let withTypeParameters = flat_children(typeParameters, nodeId, "type_parameter", parent)
+  let withParameters = flat_children(parameters, nodeId, "parameter", withTypeParameters)
   let withResult = flat_node(result, nodeId, 0, "return_type", withParameters)
   return flat_children(body, nodeId, "statement", withResult)
 }
@@ -295,6 +297,7 @@ fn flat_node(value: AstValue, parentId: Int, childIndex: Int, role: Str,
     AstTypeScalar(name, span) => flat_plain(value, parentId, childIndex, role, "type_scalar", name, 0, false, [], state)
     AstTypeNamed(name, span) => flat_plain(value, parentId, childIndex, role, "type_named", name, 0, false, [], state)
     AstTypeList(element, span) => flat_composite(value, parentId, childIndex, role, "type_list", "", [element], "element_type", state)
+    AstTypeParameter(name, span) => flat_plain(value, parentId, childIndex, role, "type_parameter", name, 0, false, [], state)
     AstParameter(name, ty, span) => flat_composite(value, parentId, childIndex, role, "parameter", name, [ty], "type", state)
     AstFieldDeclaration(name, ty, span) => flat_composite(value, parentId, childIndex, role, "field_declaration", name, [ty], "type", state)
     AstVariantDeclaration(name, args, span) => flat_composite(value, parentId, childIndex, role, "variant_declaration", name, args, "field_type", state)
@@ -309,7 +312,7 @@ fn flat_node(value: AstValue, parentId: Int, childIndex: Int, role: Str,
     AstForIn(name, iterable, body, span) => flat_loop(value, parentId, childIndex, role, "for_in", name, iterable, body, "iterable", "body", state)
     AstWhile(condition, body, span) => flat_loop(value, parentId, childIndex, role, "while", "", condition, body, "condition", "body", state)
     AstExpressionStatement(expression, span) => flat_composite(value, parentId, childIndex, role, "expression_statement", "", [expression], "value", state)
-    AstFunction(name, parameters, result, body, span) => flat_function(value, parentId, childIndex, role, name, parameters, result, body, state)
+    AstFunction(name, typeParameters, parameters, result, body, span) => flat_function(value, parentId, childIndex, role, name, typeParameters, parameters, result, body, state)
   }
 }
 fn token_at(tokens: List[LexToken], index: Int) -> LexToken {
@@ -936,11 +939,57 @@ fn parse_statement(stream: ParserStream, depth: Int) -> AstParse {
   if !semicolon.ok { return parse_lex_error(semicolon.stream) } else { }
   return parse_ok(AstExpressionStatement(expression.value, expressionSpan), semicolon.stream)
 }
+fn parse_type_parameters(stream: ParserStream, depth: Int) -> AstParse {
+  let first = stream_peek(stream, 0)
+  if !(first.token.kind == "symbol" && first.token.text == "[") {
+    return parse_ok(AstList([], AstSpan { startByte: 0, endByte: 0, line: 1, column: 1 }), first.stream)
+  } else { }
+  let open = stream_take(first.stream)
+  var current = open.stream
+  let firstParameter = stream_peek(current, 0)
+  current = firstParameter.stream
+  if firstParameter.token.kind == "symbol" && firstParameter.token.text == "]" {
+    return parse_error("PEP_EMPTY_TYPE_PARAMETERS", "A generic parameter list cannot be empty", firstParameter.token, current)
+  } else { }
+  var reversedParameters: List[AstValue] = []
+  var more = true
+  while more {
+    let parameter = stream_take(current)
+    if !parameter.ok { return parse_lex_error(parameter.stream) } else { }
+    if parameter.token.kind != "identifier" {
+      return parse_error("PEP_PARSE_TYPE_PARAMETER", "Expected a generic type parameter name", parameter.token, parameter.stream)
+    } else { }
+    reversedParameters = prepend(reversedParameters, AstTypeParameter(parameter.token.text, ast_span(parameter.token)))
+    let separator = stream_peek(parameter.stream, 0)
+    current = separator.stream
+    if separator.token.kind == "symbol" && separator.token.text == "," {
+      current = stream_take(current).stream
+      let afterComma = stream_peek(current, 0)
+      current = afterComma.stream
+      if afterComma.token.kind == "symbol" && afterComma.token.text == "]" {
+        return parse_error("PEP_PARSE_TYPE_PARAMETER", "Expected a type parameter after ','", afterComma.token, current)
+      } else { }
+    } else { more = false }
+  }
+  let close = expect_symbol(current, "]")
+  if !close.ok {
+    if close.stream.lexErrorCode != "" { return parse_lex_error(close.stream) } else { }
+    return parse_error("PEP_PARSE_EXPECTED", "Expected ']'", close.token, close.stream)
+  } else { }
+  return parse_ok(AstList(reverse(reversedParameters), ast_combine(ast_span(open.token), ast_span(close.token))), close.stream)
+}
+
 fn parse_function_header_after(first: LexToken, stream: ParserStream, depth: Int) -> AstParse {
   let name = stream_take(stream)
   if !name.ok { return parse_lex_error(name.stream) } else { }
   if name.token.kind != "identifier" { return parse_error("PEP_PARSE_NAME", "Expected a name", name.token, name.stream) } else { }
-  let open = expect_symbol(name.stream, "(")
+  let parsedTypeParameters = parse_type_parameters(name.stream, depth + 1)
+  if !parsedTypeParameters.ok { return parsedTypeParameters } else { }
+  let typeParameters = match parsedTypeParameters.value {
+    AstList(items, _) => items
+    _ => []
+  }
+  let open = expect_symbol(parsedTypeParameters.stream, "(")
   if !open.ok {
     if open.stream.lexErrorCode != "" { return parse_lex_error(open.stream) } else { }
     return parse_error("PEP_PARSE_EXPECTED", "Expected '('", open.token, open.stream)
@@ -985,7 +1034,7 @@ fn parse_function_header_after(first: LexToken, stream: ParserStream, depth: Int
   if !result.ok { return result } else { }
   let functionSpan = AstSpan { startByte: first.startByte,
     endByte: ast_value_span(result.value).endByte, line: first.line, column: first.column }
-  return parse_ok(AstFunction(name.token.text, reverse(parameters), result.value, [], functionSpan), result.stream)
+  return parse_ok(AstFunction(name.token.text, typeParameters, reverse(parameters), result.value, [], functionSpan), result.stream)
 }
 
 fn parse_function_after(first: LexToken, stream: ParserStream, depth: Int) -> AstParse {
@@ -998,17 +1047,17 @@ fn parse_function_after(first: LexToken, stream: ParserStream, depth: Int) -> As
       errorEnd: body.errorEnd, errorLine: body.errorLine, errorColumn: body.errorColumn }
   } else { }
   return match header.value {
-    AstFunction(name, parameters, resultType, bodyItems, span) => parse_complete_function(
-      name, parameters, resultType, span, body)
+    AstFunction(name, typeParameters, parameters, resultType, bodyItems, span) => parse_complete_function(
+      name, typeParameters, parameters, resultType, span, body)
     _ => parse_error("PEP_PARSER_INTERNAL", "Function header did not produce a function", body.opening, body.stream)
   }
 }
 
-fn parse_complete_function(name: Str, parameters: List[AstValue], resultType: AstValue,
+fn parse_complete_function(name: Str, typeParameters: List[AstValue], parameters: List[AstValue], resultType: AstValue,
   span: AstSpan, body: BlockParse) -> AstParse {
   let functionSpan = AstSpan { startByte: span.startByte, endByte: body.closing.endByte,
     line: span.line, column: span.column }
-  return parse_ok(AstFunction(name, parameters, resultType, body.statements, functionSpan), body.stream)
+  return parse_ok(AstFunction(name, typeParameters, parameters, resultType, body.statements, functionSpan), body.stream)
 }
 fn parse_expression(stream: ParserStream, minimumPrecedence: Int, recordAllowed: Bool, depth: Int) -> AstParse {
   if depth <= 64 { } else {
@@ -1312,6 +1361,7 @@ fn ast_set_span(value: AstValue, span: AstSpan) -> AstValue {
     AstTypeScalar(name, oldSpan) => AstTypeScalar(name, span)
     AstTypeNamed(name, oldSpan) => AstTypeNamed(name, span)
     AstTypeList(element, oldSpan) => AstTypeList(element, span)
+    AstTypeParameter(name, oldSpan) => AstTypeParameter(name, span)
     AstParameter(name, ty, oldSpan) => AstParameter(name, ty, span)
     AstFieldDeclaration(name, ty, oldSpan) => AstFieldDeclaration(name, ty, span)
     AstVariantDeclaration(name, args, oldSpan) => AstVariantDeclaration(name, args, span)
@@ -1326,7 +1376,7 @@ fn ast_set_span(value: AstValue, span: AstSpan) -> AstValue {
     AstForIn(name, iterable, body, oldSpan) => AstForIn(name, iterable, body, span)
     AstWhile(condition, body, oldSpan) => AstWhile(condition, body, span)
     AstExpressionStatement(expression, oldSpan) => AstExpressionStatement(expression, span)
-    AstFunction(name, parameters, result, body, oldSpan) => AstFunction(name, parameters, result, body, span)
+    AstFunction(name, typeParameters, parameters, result, body, oldSpan) => AstFunction(name, typeParameters, parameters, result, body, span)
     AstAbsent() => AstAbsent()
   }
 }
@@ -1522,18 +1572,19 @@ fn parser_begin_function(cursor: ParserCursor, header: AstParse) -> ParserChunk 
     return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '{'", opening.token, opening.stream))
   } else { }
   return match header.value {
-    AstFunction(name, parameters, resultType, body, span) => parser_function_header_chunk(
-      cursor, opening.stream, name, parameters, resultType, span)
+    AstFunction(name, typeParameters, parameters, resultType, body, span) => parser_function_header_chunk(
+      cursor, opening.stream, name, typeParameters, parameters, resultType, span)
     _ => parser_finish_step(cursor, parse_error("PEP_PARSER_INTERNAL", "Function header did not produce a function",
       opening.token, opening.stream))
   }
 }
 
 fn parser_function_header_chunk(cursor: ParserCursor, stream: ParserStream, name: Str,
-  parameters: List[AstValue], resultType: AstValue, span: AstSpan) -> ParserChunk {
+  typeParameters: List[AstValue], parameters: List[AstValue], resultType: AstValue, span: AstSpan) -> ParserChunk {
   let rootId = cursor.nextNodeId
   let start = FlatState { nextId: rootId + 1, nodesReversed: [] }
-  let withParameters = flat_children(parameters, rootId, "parameter", start)
+  let withTypeParameters = flat_children(typeParameters, rootId, "type_parameter", start)
+  let withParameters = flat_children(parameters, rootId, "parameter", withTypeParameters)
   let withResult = flat_node(resultType, rootId, 0, "return_type", withParameters)
   let nodes = reverse(withResult.nodesReversed)
   let next = ParserCursor {
