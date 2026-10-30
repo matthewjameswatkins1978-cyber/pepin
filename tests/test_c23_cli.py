@@ -350,20 +350,38 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(native.stdout, reference.stdout)
                     self.assertIn("pep_record_", generated.read_text(encoding="utf-8"))
 
+    def test_record_single_fallible_field_initializer_runs_natively(self):
+        if not CLANG.is_file() or not GCC.is_file():
+            self.skipTest("both Clang and GCC are required for the differential native check")
+        source_text = (
+            "type Value { value: Int }\n"
+            "fn calculate() -> Int { return 42 }\n"
+            "fn main() -> Int { let value = Value { value: calculate() }; return value.value }\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            folder = pathlib.Path(temp)
+            source = folder / "record-fallible-initializer.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference_source = folder / "record-fallible-initializer-reference.pep"
+            reference_source.write_text(source_text + "say(int_text(main()))\n",
+                                        encoding="utf-8", newline="\n")
+            reference = self.invoke("run", reference_source)
+            self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+            self.assertEqual(reference.stdout, "42\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    result = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, reference.stdout)
+
     def test_c23_unsupported_programs_fail_closed_consistently_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():
             self.skipTest("both Clang and GCC are required for the differential native check")
         cases = (
-            ("record-string-literal-field-initializer",
-             "type Label { text: Str }\n"
-             "fn main() -> Int { let label = Label { text: \"hello\" }; return 42 }\n",
-             "Pep C23 unsupported: Pep C23 record field initializers currently require expressions without runtime failure",
-             "valid"),
-            ("record-fallible-initializer",
-             "type Value { value: Int }\n"
+            ("record-multiple-fallible-initializers",
+             "type Value { first: Int, second: Int }\n"
              "fn calculate() -> Int { return 42 }\n"
-             "fn main() -> Int { let value = Value { value: calculate() }; return value.value }\n",
-             "Pep C23 unsupported: Pep C23 record field initializers currently require expressions without runtime failure",
+             "fn main() -> Int { let value = Value { first: calculate(), second: calculate() }; return value.first + value.second }\n",
+             "Pep C23 unsupported: Pep C23 record construction rejects multiple fallible field expressions because C field evaluation order is unspecified",
              "valid"),
             ("record-list-empty-pep-checker-mismatch",
              "type Point { x: Int }\n"

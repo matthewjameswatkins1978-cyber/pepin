@@ -1856,6 +1856,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     var parts: List[Str] = []
     parts = ["(pep_record_", int_text(declaration.node.id), "){ "]
     var fieldCount = 0
+    var fallibleFieldCount = 0
     for supplied in nodes {
       if supplied.parentId == node.id && supplied.role == "field" && supplied.kind == "record_field" {
         let declared = pep_c23_record_field_declaration(nodes, declaration.node, supplied.text)
@@ -1867,7 +1868,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 record field has no value") } else {}
         if pep_c23_expression_may_fail(nodes, value.node) {
-          return pep_c23_unsupported("Pep C23 record field initializers currently require expressions without runtime failure")
+          if fallibleFieldCount != 0 {
+            return pep_c23_unsupported("Pep C23 record construction rejects multiple fallible field expressions because C field evaluation order is unspecified")
+          } else {}
+          fallibleFieldCount = fallibleFieldCount + 1
         } else {}
         let lowered = pep_c23_expression(nodes, function, value.node)
         if lowered.status != "emitted" { return lowered } else {}
@@ -2365,13 +2369,22 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   }
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
-  let extraParameter = pep_c23_child(nodes, function.id, "parameter", 2)
+  let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
+  let extraParameter = pep_c23_child(nodes, function.id, "parameter", 3)
   let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
-  if extraParameter.found || (secondParameter.found && !parameter.found) || (function.text == "main" && (parameter.found || secondParameter.found)) || (parameter.found && (!parameterType.found || parameterType.node.kind != "type_scalar" || (parameterType.node.text != "Int" && parameterType.node.text != "Bool"))) || (secondParameter.found && (!secondParameterType.found || secondParameterType.node.kind != "type_scalar" || (secondParameterType.node.text != "Int" && secondParameterType.node.text != "Bool"))) || !result.found || result.node.kind != "type_scalar" || (result.node.text != "Int" && result.node.text != "Bool") || (function.text == "main" && result.node.text != "Int") {
-    return pep_c23_unsupported("Pep C23 conditional-return functions require supported scalar parameters and results")
+  let scalarResult = result.found && result.node.kind == "type_scalar" &&
+    (result.node.text == "Int" || result.node.text == "Bool")
+  let recordResult = if result.found && result.node.kind == "type_named" {
+    pep_c23_record_declaration(nodes, result.node.text)
+  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let supportedResult = scalarResult || recordResult.found
+  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && (!parameterType.found || parameterType.node.kind != "type_scalar" || (parameterType.node.text != "Int" && parameterType.node.text != "Bool"))) || (secondParameter.found && (!secondParameterType.found || secondParameterType.node.kind != "type_scalar" || (secondParameterType.node.text != "Int" && secondParameterType.node.text != "Bool"))) || (thirdParameter.found && (!thirdParameterType.found || thirdParameterType.node.kind != "type_scalar" || (thirdParameterType.node.text != "Int" && thirdParameterType.node.text != "Bool"))) || !supportedResult || (function.text == "main" && (!scalarResult || result.node.text != "Int")) {
+    return pep_c23_unsupported("Pep C23 conditional-return functions require supported scalar parameters and scalar or record results")
   } else {}
+  let resultTypeParts = pep_c23_c_parameter_type_parts(nodes, result.node)
   var statementCount = 0
   var conditionalCount = 0
   var prefixValid = true
@@ -2411,9 +2424,13 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   if loweredElse.status != "emitted" { return loweredElse } else {}
   var parts: List[Str] = ["if (!!("]
   for part in loweredCondition.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ")) {\n  int64_t pep_result = ")
+  parts = append(parts, ")) {\n  ")
+  for part in resultTypeParts { parts = append(parts, part) }
+  parts = append(parts, " pep_result = ")
   for part in loweredThen.sourceParts { parts = append(parts, part) }
-  parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n} else {\n  int64_t pep_result = ")
+  parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n} else {\n  ")
+  for part in resultTypeParts { parts = append(parts, part) }
+  parts = append(parts, " pep_result = ")
   for part in loweredElse.sourceParts { parts = append(parts, part) }
   parts = append(parts, ";\n  pep_leave();\n  return pep_result;\n}\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
@@ -3034,6 +3051,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 }
               }
               for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+              bodyParts = append(bodyParts, ";\n  (void)pep_local_")
+              bodyParts = append(bodyParts, int_text(statement.id))
               bodyParts = append(bodyParts, ";\n")
             }
           }

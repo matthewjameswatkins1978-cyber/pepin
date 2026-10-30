@@ -1357,6 +1357,64 @@ fn main() -> Int {
 
     @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
                          "Clang and GCC are required for native C23 verification")
+    def test_lucy_advance_position_record_return_runs_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(f"blob {len(lexer)}\0".encode("ascii") + lexer).hexdigest()
+        self.assertEqual(blob, "12bd93a1dfc5dba3b1cab49abefffed5e406b17d",
+                         "Lucy lexer changed; review this native helper before repinning")
+        lexer_text = lexer.decode("utf-8")
+        declaration = "type SourcePosition { line: Int, column: Int }"
+        self.assertIn(declaration, lexer_text)
+        start = lexer_text.index("fn advance_position(")
+        end = lexer_text.index("\n}", start) + 2
+        function = lexer_text[start:end]
+        cases = ((10, 51), (65, 49))
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for byte, expected in cases:
+                with self.subTest(byte=byte):
+                    source_text = (
+                        declaration + "\n\n" + function + "\n"
+                        "fn main() -> Int {\n"
+                        f"  let position = advance_position(4, 8, {byte})\n"
+                        "  return position.line * 10 + position.column\n"
+                        "}\n")
+                    source = folder / f"lexer-position-{byte}.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference = folder / f"lexer-position-{byte}-reference.pep"
+                    reference.write_text(source_text + "say(int_text(main()))\n",
+                                         encoding="utf-8", newline="\n")
+
+                    interpreted = self.invoke("run", reference)
+                    self.assertEqual(interpreted.returncode, 0,
+                                     interpreted.stdout + interpreted.stderr)
+                    self.assertEqual(interpreted.stdout, f"{expected}\n")
+
+                    generated = emit(source.read_bytes())
+                    self.assertIn("pep_record_", generated)
+                    self.assertIn("pep_field_0", generated)
+                    c_source = folder / f"lexer-position-{byte}.c"
+                    c_source.write_text(generated, encoding="utf-8", newline="\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(byte=byte, compiler=compiler.name):
+                            executable = folder / f"lexer-position-{byte}-{compiler.stem}.exe"
+                            compiled = subprocess.run(
+                                [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                                 "-Wpedantic", "-Werror", "-O2",
+                                 str(c_source), "-o", str(executable)],
+                                cwd=ROOT, text=True, capture_output=True, check=False)
+                            self.assertEqual(compiled.returncode, 0,
+                                             compiled.stdout + compiled.stderr)
+                            native = subprocess.run(
+                                [str(executable)], cwd=ROOT, text=True,
+                                capture_output=True, check=False)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, f"{expected}\n")
+
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
     def test_lucy_continue_expression_composes_real_lexer_helpers(self):
         lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
         blob = hashlib.sha1(f"blob {len(lexer)}\0".encode("ascii") + lexer).hexdigest()
