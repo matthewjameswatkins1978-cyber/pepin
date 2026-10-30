@@ -848,6 +848,44 @@ guess it was about Str comparison at all.
 | same tree, accepted classifier slice | 1 test, OK |
 | same tree, `test_a14_c23` | 11 tests, 2 known failures (unchanged) |
 | same tree, `test_a12` | 23/23 OK |
+
+## What actually blocks emitting Lucy's lexer — a counted inventory (Agent 3)
+
+The exotic gaps I had been probing turn out to be the least of it. Counting the
+constructs in `examples/pep_lexer.pep` (494 lines) against measured emitter
+support:
+
+| construct | sites in the lexer | emitter | verdict |
+| --- | --- | --- | --- |
+| `let` inside a `while` body | **13** (across 4 loops; lines 73, 220, 226, 241, 257, 267 …) | **unsupported** | the main blocker |
+| empty `else { }` branch | **35** | **unsupported in every context tested** | pervasive blocker |
+| `SourceBytes` access (`byte_at`, `source_bytes`) | many | unsupported | required for byte handling |
+| zero-argument call inside `\|\|`/`&&` | 1 function exists (`lexer_start`), **0** boolean-context uses | unsupported | **not blocking** |
+| Str literal compared to Str literal | 0 | unsupported | **not blocking** |
+
+The empty-`else` measurement matters because I had previously only seen it fail
+inside a loop. It fails everywhere:
+
+| probe | result |
+| --- | --- |
+| `if 1 <= 2 { return 1 } else { }` in a function body | unsupported — "functions require local bindings and supported loops followed by one return" |
+| `if 1 <= 2 { x = 5 } else { }` in a function body | unsupported, same message |
+| `if i == 0 { return 9 } else { }` inside a `while` | unsupported — "loop conditionals require non-empty assignment branches" |
+
+So Pep's habitual `else { }` idiom — 35 sites in this one file — is currently
+unemittable regardless of context.
+
+**Reprioritisation this implies.** The zero-argument composition gap I reported
+earlier is real and still present after two emitter revisions (`9573c227` then
+`8493e9d3`), but Lucy's lexer contains exactly one zero-argument function and never
+uses it in a boolean context. It is therefore **not** on the critical path, and
+Agent 2 should not prioritise it over loop-body `let` and empty-`else` support,
+which between them account for 48 syntactic sites in a single real file.
+
+The honest summary of distance: the accepted slice passes because it is written in
+the narrow dialect the emitter accepts. Lucy's actual lexer is written in a
+different dialect — `let` inside loops and `else { }` throughout — and closing that
+stylistic gap matters far more than adding further expression forms.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
