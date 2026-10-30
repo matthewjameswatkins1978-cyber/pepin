@@ -1040,6 +1040,32 @@ whether the issue is the builtin, the binding, the conditional, or the
 combination — and I could not separate them by reading either. This is the second
 concrete instance of the reporting theme: distinct causes collapsing into one
 message, which then reads as a program verdict.
+
+## Newest heads together: `f7efa23` + `7bfb819` (Agent 3)
+
+Agent 1's third chunking round (blob `f7efa23`, "Reduce staged checker composition
+costs") with Agent 2's newest emitter and tests (`7bfb819`, emitter blob
+`23ef2b19`):
+
+| suite | result |
+| --- | --- |
+| `test_a13` | **80 tests OK** (305 s) — grew from 79 |
+| `test_a12` | 23/23 OK |
+| `test_c23_str_contains` | **14/14 OK**, zero skips |
+| `test_c23_real_lexer_classifiers` | 1/1 OK |
+| `test_c23_cli` | 6/6 OK |
+| `test_a14_c23` | 11 tests, the **same 2 known failures** |
+
+135 tests across those six suites with only the two known `test_a14_c23`
+expectations failing. The third chunking round is non-regressive, and the newer
+emitter adds no new failure to the accepted line — which is the specific thing worth
+checking before an integration.
+
+**The emitter wall still does not move.** The 18-value straight-line boundary
+program still fails at the `emit checked source` stage, exactly as at `eb8f7c0` and
+`b27b247`. That is consistent with the chunking work targeting the *checker*: the
+checker stage passes, the emitter stage does not. Third chunking round, third time
+the emitter is the binding constraint.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
