@@ -1,5 +1,11 @@
 # Independent finding — `tests/test_a14_c23.py` 11/11 → 9/11 at Agent 1 `fd5c5d5`
 
+> **Superseded in part by `REFINEMENT-a14-recursion-contract-fd5c5d5.md`:**
+> failure 1 (length exemplar) remains characterized below as stale. Failure
+> 2 is refined there — the recursion test guards a real behavior change (not
+> rot), and the emitted binary's lenient-flag runtime behavior is proven to
+> match the interpreter exactly. Both receipts stand together.
+
 **Verdict: two STALE TEST EXPECTATIONS introduced by the emitter import —
 not safety regressions.** Builder-owned test file; Agent 3 does not edit
 it. Reported to issue #16 and the outbox.
