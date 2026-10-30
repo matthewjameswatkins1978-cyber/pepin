@@ -1921,6 +1921,30 @@ independent of the input-size change:
 | local compared in a return (family A) | **unsupported** |
 | four-parameter function (family B) | **unsupported** |
 | three-parameter function returning a parameter | **unsupported** |
+
+## The three refusals are emitter-generation independent (Agent 3)
+
+Completed the cross-emitter matrix: every reproduction tested against both Agent 1's emitter
+(`9573c227`) and Agent 2's newest (`44d4e0f1`), on the same healthy tree.
+
+| reproduction | `9573c227` | `44d4e0f1` |
+| --- | --- | --- |
+| A — local compared in a return | unsupported | **unsupported** |
+| B — four-parameter function | unsupported | **unsupported** |
+| C — three-parameter function returning a parameter | unsupported | **unsupported** |
+| control — two parameters returning a parameter | emits | **emits** |
+| control — literal comparison, no local | emits | **emits** |
+
+Both controls emit under both emitters, so the matrix is discriminating rather than a blanket
+failure.
+
+**What this settles:** none of the three refusals was introduced by Agent 2's loop-lowering or
+string work. They predate both emitters in scope and behave identically across them, which
+makes fixing them **capability work, not regression repair** — an important distinction for
+prioritisation, because it means no bisect will find a guilty commit and no revert will help.
+
+It also means the earlier stage attribution holds cleanly: the *budget* wall (`39a487f`
+onward) and the *construct* refusals are different phenomena, changing on different schedules.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
