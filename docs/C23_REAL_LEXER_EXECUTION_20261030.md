@@ -1096,6 +1096,58 @@ monotonic improvement, and measure capacity (largest program the checker complet
 alongside wall time when changing it. If the goal is to check larger programs, the
 per-invocation budget and the chunk size have to move together, or the chunk must be
 made cheaper per node.
+
+## `39a487f` clears the `utf8_check` construct barrier — and exposes an integration surface (Agent 3)
+
+Agent 2's `39a487f` ("Lower byte locals and conditionals inside C23 loops") addresses
+exactly the two blockers this report ranked highest. Measured against it (A1
+`d83ac67` plus emitter blob `e806ee66`):
+
+| probe | before | now |
+| --- | --- | --- |
+| `let` inside a `while` whose initializer is `byte_at(...)` | unsupported | **accepted** — reaches the emitter stage |
+| `let` inside a `while` with an arithmetic initializer | unsupported | unsupported, but with a **specific** message: "while-local lets currently require a byte_at initializer" |
+| empty `else { }` at top level | unsupported | **emits** |
+| Lucy's real `utf8_check` loop shape (verbatim, `byte_at` initializer) | unsupported | **accepted**, fails only on `PEP_RUNTIME_STEP_LIMIT` |
+| full `utf8_check` function as written in the lexer | unsupported | **accepted**, fails only on `PEP_RUNTIME_STEP_LIMIT` |
+
+So the construct barrier in front of `utf8_check` is effectively gone: the function as
+Lucy writes it now passes every emission check and stops at the step budget. Combined
+with the earlier `byte_length`/`byte_at` lowering, the remaining obstacle for that
+component is budget, not language.
+
+This also retires much of the blocker inventory above: of the 48 sites counted, the
+13 `let`-in-loop and 35 empty-`else` sites are no longer categorical blocks — assuming
+their initialisers are `byte_at`-shaped, which for the lexer's byte readers they are.
+
+### Integration surface this exposes
+
+Agent 2's branch carries two test modules that do not exist on Agent 1's line:
+`test_c23_collections.py` (129 tests) and `test_c23_nested_record_emission.py` (41
+tests). Carried onto the integrated tree with their emitter, they do not pass:
+
+| module | on A1 `d83ac67` + A2 emitter | on A2's own branch `8e076e2` |
+| --- | --- | --- |
+| `test_c23_collections` | **2 failures, 91 errors** | did not finish within 40 minutes |
+| `test_c23_nested_record_emission` | **6 errors**, 0 skipped | 1 error, 5 skipped |
+
+Every failure I inspected is `PEP_RUNTIME_STEP_LIMIT` at the **emitter** stage, not a
+missing feature. The skips vanishing is itself informative: they were guarded by
+"the bundled checker predates Agent 1's contract", so the newer checker makes five
+more tests actually run — and several of those then exhaust the emitter budget.
+
+**Hypothesis, not established:** `test_c23_collections` probably *passes* on Agent 2's
+branch and is simply slow (129 native compile-and-run cases), whereas on the combined
+tree most cases abort in ~2 s at the emitter budget. That would mean the suites are
+not broken but the emitter budget cannot carry them once the newer checker's output is
+in play. I did not complete that measurement — the run exceeded a 40-minute cap — so it
+is a hypothesis with evidence pointing at it, not a finding.
+
+**What this means for integration:** merging Agent 2 fully would bring a large red
+surface whose cause is the emitter stage budget, not the feature work. That is the same
+wall this report has now measured from four directions (two chunking rounds, the
+boundary ladder, the utf8_check probes). Whoever integrates should expect it and
+should not read those 91 errors as regressions in the collections feature.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
