@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -3236,6 +3237,63 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(reference["diagnostics"], [], reference)
         _, report = self._analyze(source)
         self.assertEqual(scalar(report["status"]), "valid", report)
+
+
+class PepC23LargeSourceInputTests(unittest.TestCase):
+    def test_large_valid_utf8_source_uses_text_open_and_preserves_byte_revision(self):
+        from pep_c23 import Session, open_source_target
+
+        prefix = b"fn main() -> Int { return 42 }\n//"
+        raw = prefix + (b"x" * (65_536 - len(prefix) - 1)) + "é".encode("utf-8")
+        self.assertGreater(len(raw), 65_536)
+        session = Session()
+        try:
+            target = open_source_target(session, raw, "large-valid-utf8")
+        finally:
+            session.close()
+
+        self.assertEqual(target.get("outcome"), "ok", target)
+        self.assertEqual(target.get("status"), "valid", target)
+        self.assertEqual(
+            target.get("revision"),
+            "sha256:" + hashlib.sha256(raw).hexdigest(),
+        )
+
+    def test_small_source_bytes_remain_opaque_and_oversized_invalid_bytes_fail_closed(self):
+        from pep_c23 import open_source_target
+
+        class CaptureSession:
+            def __init__(self):
+                self.requests = []
+
+            def send(self, request):
+                self.requests.append(request)
+                return {
+                    "outcome": "ok",
+                    "revision": "sha256:" + hashlib.sha256(source_bytes).hexdigest(),
+                }
+
+        source_bytes = b"\xff"
+        session = CaptureSession()
+        open_source_target(session, source_bytes, "raw-small")
+        self.assertEqual(session.requests[0]["op"], "open_bytes")
+        self.assertEqual(session.requests[0]["bytes"], [255])
+
+        session = CaptureSession()
+        oversized_invalid = b"x" * 65_536 + b"\xff"
+        with self.assertRaisesRegex(RuntimeError, "PEP_SOURCE_BYTE_LIMIT"):
+            open_source_target(session, oversized_invalid, "raw-large")
+        self.assertEqual(session.requests, [])
+
+    def test_open_source_target_checks_revision_against_original_bytes(self):
+        from pep_c23 import open_source_target
+
+        class MismatchedRevisionSession:
+            def send(self, request):
+                return {"outcome": "ok", "revision": "sha256:wrong"}
+
+        with self.assertRaisesRegex(RuntimeError, "revision does not match"):
+            open_source_target(MismatchedRevisionSession(), b"fn main() -> Int { return 0 }", "wrong")
 
 
 if __name__ == "__main__":

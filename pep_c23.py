@@ -576,6 +576,26 @@ def check_target(session, parsed, target, tool_revision, source_length):
     return report, measurements
 
 
+def open_source_target(session, source_bytes, name):
+    if len(source_bytes) > 65_536:
+        try:
+            source_text = source_bytes.decode("utf-8", "strict")
+        except UnicodeDecodeError as error:
+            raise RuntimeError(
+                "PEP_SOURCE_BYTE_LIMIT: Source byte input exceeds 65536 bytes"
+            ) from error
+        target = session.send({"schemaVersion": 3, "op": "open", "name": name,
+                               "source": source_text, "metadataOnly": True})
+    else:
+        target = session.send({"schemaVersion": 3, "op": "open_bytes", "name": name,
+                               "bytes": list(source_bytes), "metadataOnly": True})
+    require(target, "outcome", "ok", "open source")
+    expected_revision = "sha256:" + hashlib.sha256(source_bytes).hexdigest()
+    if target.get("revision") != expected_revision:
+        raise RuntimeError("Pep source revision does not match the original UTF-8 bytes")
+    return target
+
+
 def emit(source_bytes, measurements=None):
     measurements = measurements if measurements is not None else {}
     emit_started = time.perf_counter_ns()
@@ -670,10 +690,8 @@ def emit(source_bytes, measurements=None):
         measurements["stage_registration_validation_ms"] = (time.perf_counter_ns() - validation_started) / 1_000_000
 
         target_open_started = time.perf_counter_ns()
-        target = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "native-target",
-                               "bytes": list(source_bytes)})
+        target = open_source_target(session, source_bytes, "native-target")
         measurements["target_open_parse_check_ms"] = (time.perf_counter_ns() - target_open_started) / 1_000_000
-        require(target, "outcome", "ok", "open source")
         measurements["source_document"] = target["document"]
         measurements["source_revision"] = target["revision"]
         semantic_target = {"document": target["document"], "revision": target["revision"], "entryFunctions": []}
