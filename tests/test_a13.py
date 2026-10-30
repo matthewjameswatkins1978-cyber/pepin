@@ -1209,6 +1209,21 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     self.assertEqual(len(report["holes"]["value"]), 1, report)
                     self.assertEqual(scalar(fields(report["holes"]["value"][0])["expectedType"]), "Str")
 
+        source = (
+            'fn has(haystack: Str, needle: Str) -> Bool { return str_contains(haystack, needle) }'
+            + NL
+            + 'fn flags(haystack: Str, needle: Str) -> List[Bool] { return [str_contains(haystack, needle)] }'
+        )
+        reference = self._reference_check("str-contains-declaration-signatures", source)
+        _, report = self._analyze_staged(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        declarations = [fields(item) for item in report["functions"]["value"]]
+        self.assertEqual(
+            [(scalar(item["name"]), scalar(item["arity"]), scalar(item["returnType"])) for item in declarations],
+            [("has", 2, "Bool"), ("flags", 2, "List[Bool]")],
+        )
+
     def test_list_builtin_signatures_and_element_holes(self):
         cases = [
             ("fn size(values: List[Int]) -> Int { return length(values) }", "Int"),
