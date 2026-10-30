@@ -621,6 +621,48 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
                     self.assertEqual(result.stdout, "1\n1\n0\n")
 
 
+    def test_short_circuit_and_evaluates_two_helper_operands_in_order(self):
+        source_text = """fn left_true(value: Int) -> Bool { return value == 1 }
+fn right_false(value: Int) -> Bool { return value == 1 }
+fn main() -> Int {
+  if left_true(1) && right_false(0) { return 1 } else { return 0 }
+}
+"""
+        reference = ROOT / "_build" / "short-circuit-two-calls-reference.pep"
+        reference.write_text(source_text + "say(int_text(main()))\n",
+                             encoding="utf-8", newline="\n")
+        interpreted = self.invoke("run", reference)
+        self.assertEqual(interpreted.returncode, 0,
+                         interpreted.stdout + interpreted.stderr)
+        self.assertEqual(interpreted.stdout, "0\n")
+
+        generated = emit(source_text.encode("utf-8"))
+        self.assertIn(" && ", generated)
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"short-circuit-two-calls-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(generated_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_boolean_helper_calls_preserve_short_circuit_under_clang_and_gcc(self):
         source_text = """fn identity(value: Bool) -> Bool { return value }
 fn bomb() -> Bool {
