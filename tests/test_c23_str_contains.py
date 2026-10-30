@@ -334,7 +334,7 @@ fn bomb() -> Bool {
   return if 1 / 0 == 0 { true } else { false }
 }
 fn combine(value: Bool) -> Bool {
-  return identity(value) && bomb() || identity(true) || bomb()
+  return identity(value) == true && bomb() || identity(true) == true || bomb()
 }
 fn main() -> Int {
   return if combine(false) { 0 } else { 1 }
@@ -381,6 +381,21 @@ fn main() -> Int {
                         capture_output=True, check=False)
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
+
+    def test_boolean_comparison_with_two_fallible_calls_fails_closed(self):
+        source_text = """fn left() -> Bool { return true }
+fn right() -> Bool { return true }
+fn combined() -> Bool { return left() == right() && true }
+fn main() -> Int { return 0 }
+"""
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "unordered-bool-calls.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            with self.assertRaisesRegex(ValueError, "two fallible operands"):
+                emit(source.read_bytes())
 
 if __name__ == "__main__":
     unittest.main()
