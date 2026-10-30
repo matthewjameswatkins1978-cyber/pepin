@@ -657,6 +657,15 @@ def main():
           "invalid", ("PEP_EMPTY_LIST_NEEDS_TYPE",))
     check("X-unterm-eof", b'say("abc',
           "invalid", ("PEP_UNTERMINATED_STRING",))
+    for _gn, _gb, _gc in (("X-garb-braces", b"}{)(fn}{",
+                           "PEP_PARSE_EXPRESSION"),
+                          ("X-garb-kw", b"fn fn fn",
+                           "PEP_PARSE_EXPECTED"),
+                          ("X-garb-bytes", b"\xff\xfe\x00fn",
+                           "PEP_INVALID_UTF8"),
+                          ("X-garb-ret", b"return return return",
+                           "PEP_PARSE_EXPRESSION")):
+        check(_gn, _gb, "invalid", (_gc,))
     run("X-lead-zero", "say(int_text(007))\n", exp_out="7\n")
     run("X-neg-zero", "say(int_text(-0))\n", exp_out="0\n")
     check("X-neg-big",
