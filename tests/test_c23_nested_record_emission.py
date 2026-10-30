@@ -967,6 +967,59 @@ fn main() -> Int {
                                      result.stdout + result.stderr)
                     self.assertEqual(result.stdout, "39\n")
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_recursive_ast_union_child_list_length_runs_natively(self):
+        source_text = """type AstSpan { endByte: Int }
+type AstLocation { span: AstSpan }
+type AstValue = Leaf(Int) | Node(AstLocation, List[AstValue])
+fn main() -> Int {
+  let value = Node(AstLocation { span: AstSpan { endByte: 39 } }, [Leaf(7)])
+  return match value {
+    Leaf(number) => number
+    Node(location, children) => length(children)
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "recursive-ast-child-length.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "1\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn("pep_checked_length(", generated)
+            self.assertIn(".payload.payload_1.field_1.length", generated)
+            self.assertIn("pep_recursive_list_1[pep_i] = pep_ctor_arg_1.data[pep_i]", generated)
+            generated_c = folder / "recursive-ast-child-length.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
+            arena_include = ROOT / "runtime" / "pep_arena"
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / (compiler.stem + "-recursive-ast-child-length.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", "-I", str(arena_include),
+                         str(generated_c), str(arena_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "1\n")
+
     def test_nested_recursive_union_constructor_composition(self):
         source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
 fn main() -> Int {

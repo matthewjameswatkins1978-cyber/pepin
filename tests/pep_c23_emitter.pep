@@ -1265,11 +1265,32 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
             return pep_c23_unsupported("Pep C23 payload patterns require bindings or wildcards matching a supported constructor layout")
           } else {}
           var bindingIndex = -1
+          var bindingIsLength = false
           if result.node.kind == "name" && result.node.text == patternArgument.node.text {
             bindingIndex = 0
           } else {}
           if result.node.kind == "name" && result.node.text == secondPatternArgument.node.text {
             bindingIndex = 1
+          } else {}
+          if result.node.kind == "call" && result.node.text == "length" {
+            let lengthArgument = pep_c23_child(nodes, result.node.id, "argument", 0)
+            let extraLengthArgument = pep_c23_child(nodes, result.node.id, "argument", 1)
+            if lengthArgument.found && !extraLengthArgument.found && lengthArgument.node.kind == "name" {
+              if patternArgument.node.kind == "binding_pattern" &&
+                 lengthArgument.node.text == patternArgument.node.text &&
+                 payloadType.node.kind == "type_list" &&
+                 pep_c23_union_payload_is_recursive(nodes, declaration.node, payloadType.node) {
+                bindingIndex = 0
+                bindingIsLength = true
+              } else {}
+              if bindingIndex == -1 && secondPatternArgument.node.kind == "binding_pattern" &&
+                 lengthArgument.node.text == secondPatternArgument.node.text &&
+                 secondPayloadType.node.kind == "type_list" &&
+                 pep_c23_union_payload_is_recursive(nodes, declaration.node, secondPayloadType.node) {
+                bindingIndex = 1
+                bindingIsLength = true
+              } else {}
+            } else {}
           } else {}
           if bindingIndex != -1 {
             let bindingType = if bindingIndex == 0 { payloadType.node } else { secondPayloadType.node }
@@ -1277,6 +1298,10 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
             resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
               variant, 2, bindingIndex,
               PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
+            if bindingIsLength {
+              resultParts = prepend(resultParts, "pep_checked_length(")
+              resultParts = append(resultParts, ".length)")
+            } else {}
           } else {
             let base = pep_c23_child(nodes, result.node.id, "value", 0)
             let firstRecord = if payloadType.node.kind == "type_named" {
