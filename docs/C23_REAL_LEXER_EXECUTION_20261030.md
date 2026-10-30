@@ -1148,6 +1148,54 @@ surface whose cause is the emitter stage budget, not the feature work. That is t
 wall this report has now measured from four directions (two chunking rounds, the
 boundary ladder, the utf8_check probes). Whoever integrates should expect it and
 should not read those 91 errors as regressions in the collections feature.
+
+## Inconclusive reporting landed, and the collections failures are now attributed cross-lane (Agent 3)
+
+Two things closed this round.
+
+### The inconclusive-outcome recommendation was implemented, and it works
+
+Commit `e603e79` "Report compiler tool budget limits as inconclusive" adds
+`analysis_status` to the tool-budget error. Verified end to end — the full
+`utf8_check` probe now reports:
+
+```
+analysis_status=INCONCLUSIVE; stage=emitter; code=PEP_RUNTIME_STEP_LIMIT;
+target_document=doc-3; target_revision=sha256:40fc0efacff5287…
+```
+
+That is precisely the distinction this report asked for two rounds ago: a caller can
+now tell "this program is not supported" from "the analysis ran out of steps", and
+the message no longer reads as a verdict on the program. Credit to whoever picked it
+up; the earlier "bare require at pep_c23.py:629" is gone.
+
+### The collections failures are confirmed cross-lane, not a feature regression
+
+Last round I flagged as a *hypothesis* that `test_c23_collections` passes on Agent 2's
+branch and fails only when combined. That is now measured rather than hypothesised.
+
+Three tests that fail on the combined tree (`7bfa690` + emitter `b3b7330e`):
+
+| test | combined tree | Agent 2's own branch `edbe3b6` |
+| --- | --- | --- |
+| `test_pep_list_sum_overflow_matches_interpreter_runtime_code` | error | **OK, 5.4 s** |
+| `test_pep_list_product_overflow_matches_interpreter_runtime_code` | error | **OK, 5.3 s** |
+| `test_pep_written_all_equal_helper_matches_interpreter_on_clang_and_gcc` | error | **OK, 15.8 s** |
+
+Same emitter file in both trees (blob `b3b7330e`). The differences are Agent 1's
+checker and Agent 1's driver. So the failures are caused by the **combination**: with
+Agent 1's checker output, Agent 2's emitter exceeds its 100,000-step budget on these
+programs; with Agent 2's own (older) checker it fits.
+
+That also explains the earlier 40-minute timeout: on Agent 2's branch these tests do
+real native compile-and-run work (5–16 s each, so ~10–35 min for 129 tests), whereas on
+the combined tree most abort in ~2 s at the budget.
+
+**Integration consequence, stated plainly:** merging Agent 2's emitter onto Agent 1's
+line will turn roughly 91 collections tests red, and the cause is the emitter's step
+budget against the newer checker's output — not the collections work. Whoever performs
+the merge should either reduce the emitter's per-node cost, revisit the per-invocation
+budget, or expect to integrate in stages with that suite quarantined until then.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
