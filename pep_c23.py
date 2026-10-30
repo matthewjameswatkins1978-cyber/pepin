@@ -171,10 +171,10 @@ def typed_field_value(fields, name, type_name, label):
 
 class PepCompilerToolBudgetError(RuntimeError):
     def __init__(self, stage, tool, target_document, target_revision, tool_revision,
-                 tool_source_location):
+                 tool_source_location, code="PEP_RUNTIME_STEP_LIMIT"):
         self.analysis_status = "INCONCLUSIVE"
         self.stage = stage
-        self.code = "PEP_RUNTIME_STEP_LIMIT"
+        self.code = code
         self.tool = tool
         self.target_document = target_document
         self.target_revision = target_revision
@@ -197,18 +197,20 @@ def invoke_tool(session, tool, arguments, semantic_target, tool_revision, label,
                              "arguments": arguments, "semanticTarget": semantic_target})
     if response.get("outcome") != "ok":
         error = response.get("error", {})
-        if stage and error.get("code") == "PEP_RUNTIME_STEP_LIMIT":
-            message = error.get("message", "")
-            marker = " at "
+        if stage and error.get("code") in {"PEP_RUNTIME_STEP_LIMIT", "PEP_TOOL_VALUE_LIMIT"}:
+            code = error["code"]
             location = None
-            if marker in message:
-                candidate = message.rsplit(marker, 1)[-1]
-                line, separator, column = candidate.partition(":")
-                if separator and line.isdigit() and column.isdigit():
-                    location = f"compiler-bundle:{line}:{column}"
+            if code == "PEP_RUNTIME_STEP_LIMIT":
+                message = error.get("message", "")
+                marker = " at "
+                if marker in message:
+                    candidate = message.rsplit(marker, 1)[-1]
+                    line, separator, column = candidate.partition(":")
+                    if separator and line.isdigit() and column.isdigit():
+                        location = f"compiler-bundle:{line}:{column}"
             raise PepCompilerToolBudgetError(
                 stage, tool, semantic_target.get("document", "unavailable"),
-                semantic_target.get("revision", "unavailable"), tool_revision, location
+                semantic_target.get("revision", "unavailable"), tool_revision, location, code=code
             )
     require(response, "outcome", "ok", label)
     require(response, "tool", tool, label)
