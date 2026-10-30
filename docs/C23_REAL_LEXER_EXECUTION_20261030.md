@@ -1749,6 +1749,34 @@ exactly the prohibited shape.
 **Unchanged:** the diagnostic still reports "one-parameter calls require one argument and a
 call-free target expression" for all of these. The five-line reproduction in the previous
 section remains the artefact for the builder.
+
+## Impact of the rule, measured: 16 of the unsupported cases, not all of them (Agent 3)
+
+Last round I said relaxing the local-comparison rule should convert "roughly 31" collection
+failures. Measured properly, that was optimistic:
+
+| test method | failures | unsupported | budget | helper return |
+| --- | --- | --- | --- | --- |
+| `bool_true_majority` | 16 | **16** | 0 | `return !(balance <= 0)` — **compares a local** |
+| `count_between` | 1 | **1** | 0 | `return total` — **returns a local, no comparison** |
+| `count_runs` | 2 | 0 | **2** | budget, not a shape problem |
+
+So:
+
+- **16 failures are directly attributable** to the rule, via `list_bool_has_true_majority`
+  whose return compares a local — exactly the prohibited shape.
+- **1 is not explained** by it: `list_int_count_between` returns the local directly
+  (`return total`), which the rule permits, yet one of its cases is still refused. That is a
+  counter-example to the rule being the whole story, and I would rather record it than round
+  it off.
+- **2 are budget**, a different wall entirely.
+
+The remaining unsupported cases from the later slices (14 in tests 81–96) belong to test
+methods I have not mapped to their helpers yet, so their attribution is unknown.
+
+**Corrected statement for the builder:** relaxing the local-binding restriction should
+convert **16 of the ~31 unsupported cases**; at least one has a different cause; the rest are
+unattributed. The five-line reproduction still stands as the smallest artefact.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
