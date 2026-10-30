@@ -17,6 +17,7 @@ from pep_c23 import (checker_binding_context_nodes, checker_binding_type_context
                       checker_cursor_without_typed_bindings,
                       checker_name_result, checker_empty_type_result,
                       checker_type_result, checker_cursor_with_results,
+                      checker_cursor_with_functions, checker_functions_for_context,
                       parser_cursor_value, parser_chunk_value)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -333,6 +334,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
         external_typed_bindings = typed_list("BindingFact", [])
         external_name_references = []
         external_name_diagnostics = []
+        external_functions = []
+        external_type_facts = []
+        external_type_diagnostics = []
+        external_type_unreachable = None
         report_source_fields = None
         node_count = len(parser_nodes)
         binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
@@ -342,7 +347,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         )
         maximum_steps = min(4096, 9 + 2 * ((node_count + 31) // 32) +
                             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
-                            node_count + ((node_count + 1) // 2) +
+                            node_count + ((node_count + 7) // 8) +
                             (binding_count + 3) // 4)
         for _ in range(maximum_steps):
             current = fields(value)
@@ -351,6 +356,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             previous = value
             step_nodes = checker_nodes
             step_bindings = external_typed_bindings
+            step_value = value
             if scalar(current["phase"]) == "validation":
                 next_node = scalar(fields(current["validation"])["nextNode"])
                 step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
@@ -361,15 +367,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 offset = scalar(current["typeOffset"])
                 step_nodes = checker_binding_context_nodes(
                     checker_context_index, offset, min(offset + 8, node_count))
+                step_value = checker_cursor_with_functions(
+                    value, checker_functions_for_context(external_functions, step_nodes))
             elif scalar(current["phase"]) == "names":
                 offset = scalar(current["typeOffset"])
                 step_nodes = checker_scope_context_nodes(
-                    checker_context_index, offset, min(offset + 16, node_count))
+                    checker_context_index, offset, min(offset + 8, node_count))
+                step_value = checker_cursor_with_functions(
+                    value, checker_functions_for_context(external_functions, step_nodes))
             elif scalar(current["phase"]) == "binding_types":
                 pending_bindings = fields(current["bindingResult"])["bindings"]["value"]
                 syntax_ids = [scalar(fields(binding)["syntaxId"])
                               for binding in pending_bindings[:4]]
                 step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
+                context_ids = {
+                    scalar(fields(node)["id"]) for node in step_nodes
+                }
+                context_references = [
+                    reference for reference in external_name_references
+                    if scalar(fields(reference)["syntaxId"]) in context_ids
+                ]
+                step_value = checker_cursor_with_results(
+                    value, checker_name_result(context_references), fields(value)["typeResult"])
             elif scalar(current["phase"]) == "type_analysis":
                 offset = scalar(current["typeOffset"])
                 end_node = min(offset + 1, node_count)
@@ -397,16 +416,38 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     ]
                     step_bindings = checker_bindings_for_references(
                         external_typed_bindings, context_references)
+                step_types = checker_type_result(
+                    (), reversed(external_type_diagnostics), external_type_unreachable
+                ) if end_node == node_count else checker_empty_type_result()
+                step_value = checker_cursor_with_results(
+                    value, checker_name_result(context_references), step_types)
+                step_value = checker_cursor_with_functions(
+                    step_value, checker_functions_for_context(external_functions, step_nodes))
             elif scalar(current["phase"]) == "holes":
                 step_nodes = checker_hole_context_nodes(checker_context_index)
+                hole_context_ids = {
+                    scalar(fields(node)["id"]) for node in step_nodes
+                }
+                hole_references = [
+                    reference for reference in external_name_references
+                    if scalar(fields(reference)["syntaxId"]) in hole_context_ids
+                ]
+                step_value = checker_cursor_with_results(
+                    value, checker_name_result(hole_references), checker_empty_type_result())
             elif scalar(current["phase"]) == "duplicate_functions":
                 step_nodes = checker_duplicate_context_nodes(checker_context_index)
+                step_value = checker_cursor_with_results(
+                    value, checker_name_result(),
+                    checker_type_result((), external_type_diagnostics, external_type_unreachable))
             elif scalar(current["phase"]) == "report":
+                step_value = checker_cursor_with_results(
+                    value, checker_name_result(external_name_references, external_name_diagnostics),
+                    fields(value)["typeResult"])
                 step_nodes = checker_report_context_nodes(
-                    checker_context_index, checker_report_diagnostic_codes(current))
+                    checker_context_index, checker_report_diagnostic_codes(fields(step_value)))
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [value, typed_list("CheckerNode", step_nodes), step_bindings],
+                                        "arguments": [step_value, typed_list("CheckerNode", step_nodes), step_bindings],
                                         "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", {
                 "phase": scalar(current["phase"]),
@@ -415,8 +456,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
             })
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             if scalar(current["phase"]) == "report":
-                report_source_fields = current
+                report_source_fields = fields(step_value)
             value = stepped["result"]
+            if (scalar(current["phase"]) == "functions"
+                    and scalar(fields(value)["phase"]) != "functions"):
+                external_functions = fields(value)["functions"]["value"]
+            if scalar(current["phase"]) in ("bindings", "names", "type_analysis"):
+                value = checker_cursor_with_functions(
+                    value, typed_list("CheckedFunction", external_functions))
             if scalar(current["phase"]) == "names":
                 name_fields = fields(value)["nameResult"]
                 external_name_references.extend(
@@ -434,13 +481,30 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
                 if scalar(fields(value)["phase"]) != "binding_types":
                     external_typed_bindings["value"].reverse()
+            if scalar(current["phase"]) == "type_analysis":
+                type_fields = fields(value)["typeResult"]
+                next_phase = scalar(fields(value)["phase"])
+                if next_phase == "type_analysis":
+                    external_type_facts.extend(reversed(type_fields["fields"][0]["value"]["value"]))
+                    external_type_diagnostics.extend(reversed(type_fields["fields"][1]["value"]["value"]))
+                    unreachable = type_fields["fields"][2]["value"]
+                    if external_type_unreachable is None and scalar(fields(unreachable)["found"]):
+                        external_type_unreachable = unreachable
+                elif next_phase == "holes":
+                    external_type_facts.extend(type_fields["fields"][0]["value"]["value"])
+                    external_type_diagnostics[:] = type_fields["fields"][1]["value"]["value"]
+                    external_type_unreachable = type_fields["fields"][2]["value"]
+                value = checker_cursor_with_results(
+                    value, checker_name_result(), checker_empty_type_result())
             value = checker_cursor_without_typed_bindings(value)
             self.assertNotEqual(value, previous)
         cursor_fields = fields(value)
         self.assertTrue(scalar(cursor_fields["done"]), cursor_fields)
         report_value = cursor_fields["report"]
         if report_source_fields is not None:
-            report_value = checker_complete_report(report_value, report_source_fields, external_typed_bindings)
+            report_value = checker_complete_report(
+                report_value, report_source_fields, external_typed_bindings,
+                external_name_references, external_type_facts)
         report = fields(report_value)
         self.assertEqual(scalar(report["document"]), opened["document"])
         self.assertEqual(scalar(report["revision"]), opened["revision"])
@@ -611,7 +675,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             4096,
             9 + 2 * ((node_count + 31) // 32) +
             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
-            node_count + ((node_count + 1) // 2) + (binding_count + 3) // 4
+            node_count + ((node_count + 7) // 8) + (binding_count + 3) // 4
         )
         while not scalar(fields(cursor_value)["done"]) and step_count < maximum_steps:
             previous = fields(cursor_value)
@@ -1661,16 +1725,20 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(opened.get("outcome"), "ok", opened)
         self.assertEqual(opened.get("status"), "valid", opened)
 
-    def test_staged_checker_composes_one_hundred_sixty_function_roots(self):
-        count = 160
+    def test_staged_checker_composes_two_hundred_twenty_four_function_roots(self):
+        count = 224
         declarations = [
             f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
             for index in range(count)
         ]
-        declarations.append("fn main() -> Int { return 0 }")
+        declarations.extend([
+            "fn enabled() -> Bool { return true }",
+            "fn values() -> List[Int] { return [1] }",
+            "fn main() -> Int { return 0 }",
+        ])
         source = NL.join(declarations)
 
-        reference = self._reference_check("staged-160-function-roots", source)
+        reference = self._reference_check("staged-224-function-roots", source)
         parser_result = self._parse_staged(source)
         _, report = self._analyze_staged(source, parser_result=parser_result)
 
@@ -1680,9 +1748,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
             (scalar(fields(item)["name"]), scalar(fields(item)["arity"]), scalar(fields(item)["returnType"]))
             for item in report["functions"]["value"]
         ]
-        self.assertEqual(len(actual), count + 1)
+        self.assertEqual(len(actual), count + 3)
+        self.assertTrue(all(item[1] == 1 and item[2] == "Int" for item in actual[:count]))
         self.assertEqual(actual[0], ("f0", 1, "Int"))
-        self.assertEqual(actual[-1], ("main", 0, "Int"))
+        self.assertEqual(actual[-3:], [
+            ("enabled", 0, "Bool"),
+            ("values", 0, "List[Int]"),
+            ("main", 0, "Int"),
+        ])
 
     def test_staged_functions_resolve_forward_nominal_return_across_chunks(self):
         spacer_fields = ", ".join(f"slot{index}: Int" for index in range(16))

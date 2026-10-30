@@ -170,6 +170,32 @@ def checker_cursor_with_name_result(cursor, name_result):
     ])
 
 
+def checker_cursor_with_functions(cursor, functions):
+    typed_fields(cursor, "CheckerCursor", "checker cursor")
+    return typed_record_value("CheckerCursor", [
+        (item["name"], functions if item["name"] == "functions" else item["value"])
+        for item in cursor["fields"]
+    ])
+
+
+def checker_functions_for_context(functions, nodes):
+    function_ids = {
+        int(typed_field_value(
+            typed_fields(node, "CheckerNode", "checker function context"),
+            "id", "Int", "checker function context"))
+        for node in nodes
+        if typed_field_value(
+            typed_fields(node, "CheckerNode", "checker function context"),
+            "kind", "Str", "checker function context") == "function"
+    }
+    return typed_list("CheckedFunction", [
+        function for function in functions
+        if int(typed_field_value(
+            typed_fields(function, "CheckedFunction", "checker function context"),
+            "syntaxId", "Int", "checker function context")) in function_ids
+    ])
+
+
 def checker_empty_type_result():
     empty_node = typed_record_value("CheckerNode", [
         ("id", typed("Int", -1)), ("parentId", typed("Int", -1)),
@@ -1077,12 +1103,13 @@ def check_target(session, parsed, target, tool_revision, source_length,
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + node_count + ((node_count + 1) // 2) + (binding_count + 3) // 4)
+                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + node_count + ((node_count + 7) // 8) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     external_typed_bindings = typed_list("BindingFact")
     external_name_references = []
     external_name_diagnostics = []
+    external_functions = []
     external_type_facts = []
     external_type_diagnostics = []
     external_type_unreachable = None
@@ -1108,10 +1135,14 @@ def check_target(session, parsed, target, tool_revision, source_length,
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_binding_context_nodes(
                 checker_context_index, next_node, min(next_node + 8, node_count))
+            step_cursor = checker_cursor_with_functions(
+                cursor, checker_functions_for_context(external_functions, step_nodes))
         elif phase == "names":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_scope_context_nodes(
-                checker_context_index, next_node, min(next_node + 2, node_count))
+                checker_context_index, next_node, min(next_node + 8, node_count))
+            step_cursor = checker_cursor_with_functions(
+                cursor, checker_functions_for_context(external_functions, step_nodes))
         elif phase == "binding_types":
             binding_result = typed_fields(cursor_fields.get("bindingResult"), "BindingCollection", "checker bindings")
             pending_bindings = typed_field_value(binding_result, "bindings", "List[BindingFact]", "checker bindings")
@@ -1122,6 +1153,20 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 for binding in pending_bindings[:binding_count]
             ]
             step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
+            context_ids = {
+                int(typed_field_value(
+                    typed_fields(node, "CheckerNode", "checker binding context"),
+                    "id", "Int", "checker binding context"))
+                for node in step_nodes
+            }
+            context_references = [
+                reference for reference in external_name_references
+                if int(typed_field_value(
+                    typed_fields(reference, "ResolvedName", "checker name result"),
+                    "syntaxId", "Int", "checker name result")) in context_ids
+            ]
+            step_cursor = checker_cursor_with_name_result(
+                cursor, checker_name_result(context_references))
         elif phase == "type_analysis":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             end_node = min(next_node + 1, node_count)
@@ -1165,6 +1210,8 @@ def check_target(session, parsed, target, tool_revision, source_length,
             else:
                 step_types = checker_empty_type_result()
             step_cursor = checker_cursor_with_results(cursor, step_names, step_types)
+            step_cursor = checker_cursor_with_functions(
+                step_cursor, checker_functions_for_context(external_functions, step_nodes))
         elif phase == "holes":
             step_nodes = checker_hole_context_nodes(checker_context_index)
             hole_context_ids = {
@@ -1202,6 +1249,14 @@ def check_target(session, parsed, target, tool_revision, source_length,
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
         cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "functions" and typed_field_value(
+                cursor_fields, "phase", "Str", "checker cursor") != "functions":
+            external_functions = typed_field_value(
+                cursor_fields, "functions", "List[CheckedFunction]", "checker cursor")
+        if phase in ("bindings", "names", "type_analysis"):
+            cursor = checker_cursor_with_functions(
+                cursor, typed_list("CheckedFunction", external_functions))
+            cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
         if phase == "names":
             name_fields = typed_fields(cursor_fields.get("nameResult"), "NameResolution", "checker name delta")
             external_name_references.extend(reversed(typed_field_value(
