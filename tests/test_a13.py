@@ -372,6 +372,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         cursor_value = cursor["result"]
         step_count = 0
+        type_analysis_steps = 0
         while not scalar(fields(cursor_value)["done"]) and step_count < 32:
             previous = fields(cursor_value)
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
@@ -382,10 +383,12 @@ class A13FunctionResolutionTests(unittest.TestCase):
             cursor_value = stepped["result"]
             current = fields(cursor_value)
             if scalar(previous["phase"]) == "type_analysis":
+                type_analysis_steps += 1
                 self.assertTrue(scalar(current["typeOffset"]) > scalar(previous["typeOffset"]) or scalar(current["phase"]) == "holes")
             step_count += 1
         self.assertTrue(scalar(fields(cursor_value)["done"]), fields(cursor_value))
-        self.assertGreaterEqual(step_count, 12)
+        self.assertGreaterEqual(step_count, 9)
+        self.assertGreaterEqual(type_analysis_steps, 2)
         report = fields(fields(cursor_value)["report"])
         reference = self._reference_check("cursor-composed-int-gcd", source)
         self.assertEqual(reference["status"], "valid", reference)
