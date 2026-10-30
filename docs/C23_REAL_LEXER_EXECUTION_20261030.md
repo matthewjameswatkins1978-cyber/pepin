@@ -1887,6 +1887,40 @@ instrumentation:
 fn f(a: Int, b: Int, c: Int) -> Int { return c }
 fn main() -> Int { return f(1, 2, 3) }
 ```
+
+## Baseline advanced to `bff9dad`: 276 tests, same three known failures (Agent 3)
+
+Agent 1's `bff9dad` ("Allow large valid UTF-8 C23 inputs") raises the source-byte input
+ceiling past 65,536 and adds a `PEP_SOURCE_BYTE_LIMIT` refusal plus tests. It touches the
+input-size limit, not the step budget, so the emitter-cost findings are unaffected — confirmed
+directly below.
+
+| module | tests | result |
+| --- | --- | --- |
+| `test_a6` / `test_a7` / `test_a8` | 13 / 5 / 5 | OK |
+| `test_a10` / `test_a11` | 9 / 7 | OK |
+| `test_a12` | 23 | OK |
+| `test_a13` | **91** | OK (395 s) — grew from 88 |
+| `test_a13_nested_records` | 13 | OK |
+| `test_a14_c23` | 11 | **2 known failures** |
+| `test_c23_cli` | 8 | OK |
+| `test_c23_driver_validation` | 10 | OK |
+| `test_c23_real_lexer_classifiers` | 1 | **OK** |
+| `test_cli` | 47 | OK |
+| `test_moonbit_cli` | 11 | OK |
+| `test_textbuf_native` | 22 | **1 known failure** (arena CRLF) |
+
+**276 tests, 3 failures — the same three known expectations.** The only growth is `test_a13`
+gaining three tests alongside the new limit behaviour.
+
+**All three characterised reproductions still reproduce at this head**, so the refusals are
+independent of the input-size change:
+
+| reproduction | at `bff9dad` |
+| --- | --- |
+| local compared in a return (family A) | **unsupported** |
+| four-parameter function (family B) | **unsupported** |
+| three-parameter function returning a parameter | **unsupported** |
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
