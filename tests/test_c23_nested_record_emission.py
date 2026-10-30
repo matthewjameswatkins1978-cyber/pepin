@@ -1357,6 +1357,67 @@ fn main() -> Int {
 
     @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
                          "Clang and GCC are required for native C23 verification")
+    def test_lucy_continue_expression_composes_real_lexer_helpers(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(f"blob {len(lexer)}\0".encode("ascii") + lexer).hexdigest()
+        self.assertEqual(blob, "12bd93a1dfc5dba3b1cab49abefffed5e406b17d",
+                         "Lucy lexer changed; review this native expression before repinning")
+        lexer_text = lexer.decode("utf-8")
+
+        def function_source(name):
+            start = lexer_text.index(f"fn {name}(")
+            end = lexer_text.index("\n}", start) + 2
+            return lexer_text[start:end]
+
+        helpers = function_source("ascii_letter") + "\n" + function_source("ascii_digit")
+        continuation = function_source("ascii_continue")
+        match = re.search(r"return (ascii_letter\(byte\) \|\| ascii_digit\(byte\))", continuation)
+        self.assertIsNotNone(match, continuation)
+        cases = ((65, "42\n"), (57, "42\n"), (64, "0\n"))
+
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for byte, expected in cases:
+                with self.subTest(byte=byte):
+                    condition = match.group(1).replace("byte", str(byte))
+                    source_text = (
+                        helpers + "\nfn main() -> Int {\n"
+                        f"  if {condition} {{ return 42 }} else {{ return 0 }}\n"
+                        "}\n")
+                    source = folder / f"lexer-continue-{byte}.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference = folder / f"lexer-continue-{byte}-reference.pep"
+                    reference.write_text(source_text + "say(int_text(main()))\n",
+                                         encoding="utf-8", newline="\n")
+
+                    interpreted = self.invoke("run", reference)
+                    self.assertEqual(interpreted.returncode, 0,
+                                     interpreted.stdout + interpreted.stderr)
+                    self.assertEqual(interpreted.stdout, expected)
+
+                    generated = emit(source.read_bytes())
+                    self.assertIn(" || ", generated)
+                    self.assertIn("pep_fn_", generated)
+                    c_source = folder / f"lexer-continue-{byte}.c"
+                    c_source.write_text(generated, encoding="utf-8", newline="\n")
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(byte=byte, compiler=compiler.name):
+                            executable = folder / f"lexer-continue-{byte}-{compiler.stem}.exe"
+                            compiled = subprocess.run(
+                                [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                                 "-Wpedantic", "-Werror", "-O2",
+                                 str(c_source), "-o", str(executable)],
+                                cwd=ROOT, text=True, capture_output=True, check=False)
+                            self.assertEqual(compiled.returncode, 0,
+                                             compiled.stdout + compiled.stderr)
+                            native = subprocess.run(
+                                [str(executable)], cwd=ROOT, text=True,
+                                capture_output=True, check=False)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, expected)
+                            self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_lucy_ascii_letter_boolean_expression_runs_natively(self):
         lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
         lexer_text = lexer.decode("utf-8")
