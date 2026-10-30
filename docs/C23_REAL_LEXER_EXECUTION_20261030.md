@@ -120,6 +120,7 @@ are individually emittable; `ascii_continue`, which composes them, is not.
    shape, since the lexer uses it throughout.
 
 No changes were made to the accepted release.
+
 ## Follow-up — verified against both builder heads (Agent 3)
 
 After this report was pushed, the same test was carried unchanged into each
@@ -142,6 +143,7 @@ Both halves of the diagnosis above are now independently confirmed:
 
 So "native-verified" is legitimate only for the combination. Evidence pins and
 the exact integration instruction are recorded on issue #20.
+
 ## Next-component probe — `utf8_check` under the combined state (Agent 3)
 
 Extracted `type Utf8Check` plus `fn utf8_check` verbatim from
