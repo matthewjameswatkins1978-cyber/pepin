@@ -385,6 +385,56 @@ fn main() -> Int {
                                      result.stdout + result.stderr)
                     self.assertEqual(result.stdout, "39\n")
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_three_level_ast_record_payload_projection_runs_natively(self):
+        source_text = """type AstSpan { endByte: Int }
+type AstLocation { span: AstSpan }
+type AstNode { location: AstLocation }
+type AstValue = Located(AstNode) | Missing()
+fn main() -> Int {
+  let value = Located(AstNode { location: AstLocation { span: AstSpan { endByte: 39 } } })
+  return match value {
+    Located(node) => node.location.span.endByte
+    Missing() => 0
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "three-level-ast-record.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "39\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn(".pep_field_0.pep_field_0.pep_field_0", generated)
+            generated_c = folder / "three-level-ast-record.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / (compiler.stem + "-three-level-ast-record.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2",
+                         str(generated_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "39\n")
+
     def test_tagged_union_rejects_non_int_payload_layout(self):
         source_text = (
             "type MaybeText = None() | Some(Str)\n"

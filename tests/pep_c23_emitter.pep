@@ -1160,6 +1160,48 @@ fn pep_c23_union_payload_parts(subject: List[Str], variant: FlatAstNode,
   if dereference { parts = append(parts, ")") } else {}
   return parts
 }
+fn pep_c23_union_payload_record_path_type(nodes: List[FlatAstNode],
+  payloadRecord: FlatAstNode, bindingName: Str, value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind == "name" {
+    if value.text == bindingName {
+      return PepC23NodeLookup { found: true, node: payloadRecord }
+    } else {}
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
+  if value.kind != "field_access" {
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
+  let base = pep_c23_child(nodes, value.id, "value", 0)
+  if !base.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  let parentRecord = pep_c23_union_payload_record_path_type(nodes, payloadRecord,
+    bindingName, base.node)
+  if !parentRecord.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  let field = pep_c23_record_field_declaration(nodes, parentRecord.node, value.text)
+  let fieldType = if field.found {
+    pep_c23_child(nodes, field.node.id, "type", 0)
+  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if !field.found || !fieldType.found || fieldType.node.kind != "type_named" {
+    return PepC23NodeLookup { found: false, node: empty_node() }
+  } else {}
+  return pep_c23_record_declaration(nodes, fieldType.node.text)
+}
+fn pep_c23_union_payload_record_path_parts(nodes: List[FlatAstNode],
+  payloadRecord: FlatAstNode, bindingName: Str, value: FlatAstNode) -> List[Str] {
+  if value.kind == "name" && value.text == bindingName { return [] } else {}
+  if value.kind != "field_access" { return [] } else {}
+  let base = pep_c23_child(nodes, value.id, "value", 0)
+  if !base.found { return [] } else {}
+  let parentRecord = pep_c23_union_payload_record_path_type(nodes, payloadRecord,
+    bindingName, base.node)
+  if !parentRecord.found { return [] } else {}
+  let field = pep_c23_record_field_declaration(nodes, parentRecord.node, value.text)
+  if !field.found { return [] } else {}
+  var parts = pep_c23_union_payload_record_path_parts(nodes, payloadRecord,
+    bindingName, base.node)
+  parts = append(parts, ".pep_field_")
+  parts = append(parts, int_text(field.node.childIndex))
+  return parts
+}
 fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNode,
   node: FlatAstNode) -> PepC23Emission {
   let subject = pep_c23_child(nodes, node.id, "value", 0)
@@ -1303,34 +1345,29 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                     1, 0, field, false)
                 } else {
                   if base.found && base.node.kind == "field_access" {
-                    let root = pep_c23_child(nodes, base.node.id, "value", 0)
                     let record = pep_c23_record_declaration(nodes, payloadType.node.text)
-                    let field = if record.found {
-                      pep_c23_record_field_declaration(nodes, record.node, base.node.text)
+                    let parentRecord = if record.found {
+                      pep_c23_union_payload_record_path_type(nodes, record.node,
+                        patternArgument.node.text, base.node)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    let field = if parentRecord.found {
+                      pep_c23_record_field_declaration(nodes, parentRecord.node, result.node.text)
                     } else { PepC23NodeLookup { found: false, node: empty_node() } }
                     let fieldType = if field.found {
                       pep_c23_child(nodes, field.node.id, "type", 0)
                     } else { PepC23NodeLookup { found: false, node: empty_node() } }
-                    let nestedRecord = if fieldType.found && fieldType.node.kind == "type_named" {
-                      pep_c23_record_declaration(nodes, fieldType.node.text)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
-                    let nestedField = if nestedRecord.found {
-                      pep_c23_record_field_declaration(nodes, nestedRecord.node, result.node.text)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
-                    let nestedFieldType = if nestedField.found {
-                      pep_c23_child(nodes, nestedField.node.id, "type", 0)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
-                    if !root.found || root.node.kind != "name" ||
-                       root.node.text != patternArgument.node.text || !record.found ||
-                       !field.found || !fieldType.found || !nestedRecord.found ||
-                       !nestedField.found || !nestedFieldType.found ||
-                       pep_c23_c_scalar_type(nestedFieldType.node) == "" {
+                    if !record.found || !parentRecord.found || !field.found ||
+                       !fieldType.found || pep_c23_c_scalar_type(fieldType.node) == "" {
                       return pep_c23_unsupported("Pep C23 nested record payload projection requires a scalar terminal field")
                     } else {}
                     resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
-                      variant, 1, 0, field, false)
+                      variant, 1, 0, PepC23NodeLookup { found: false, node: empty_node() }, false)
+                    for pathPart in pep_c23_union_payload_record_path_parts(nodes,
+                      record.node, patternArgument.node.text, base.node) {
+                      resultParts = append(resultParts, pathPart)
+                    }
                     resultParts = append(resultParts, ".pep_field_")
-                    resultParts = append(resultParts, int_text(nestedField.node.childIndex))
+                    resultParts = append(resultParts, int_text(field.node.childIndex))
                   } else {
                     let loweredResult = pep_c23_expression(nodes, function, result.node)
                     if loweredResult.status != "emitted" { return loweredResult } else {}
