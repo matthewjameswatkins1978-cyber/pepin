@@ -116,6 +116,18 @@ class PepC23CheckerDriverTests(unittest.TestCase):
         self.assertGreater(measurements["parser_node_count"], 0)
 
 
+    def test_binding_type_projection_retains_called_function_signature(self):
+        source = (
+            b"fn main() -> Int { let result = helper(); return result }\n"
+            b"fn helper() -> Int { return 42 }\n"
+        )
+        measurements = {}
+        c_source = emit(source, measurements)
+
+        self.assertIn("pep_fn_", c_source)
+        self.assertEqual(measurements["checker_status"], "valid")
+        self.assertEqual(measurements["emitter_status"], "emitted")
+
     def test_staged_checker_completes_three_hundred_function_binding_batches(self):
         count = 297
         declarations = [

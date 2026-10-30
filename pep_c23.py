@@ -202,6 +202,25 @@ def checker_binding_facts_for_owners(bindings, owner_ids):
     ])
 
 
+def checker_functions_for_binding_context(functions, nodes, owner_ids):
+    called_names = {
+        typed_field_value(typed_fields(node, "CheckerNode", "checker call context"),
+                          "text", "Str", "checker call context")
+        for node in nodes
+        if typed_field_value(typed_fields(node, "CheckerNode", "checker call context"),
+                             "kind", "Str", "checker call context") == "call"
+    }
+    return typed_list("CheckedFunction", [
+        function for function in functions
+        if int(typed_field_value(
+            typed_fields(function, "CheckedFunction", "checker function context"),
+            "semanticId", "Int", "checker function context")) in owner_ids
+        or typed_field_value(
+            typed_fields(function, "CheckedFunction", "checker function context"),
+            "name", "Str", "checker function context") in called_names
+    ])
+
+
 def checker_functions_for_context(functions, nodes):
     function_ids = {
         int(typed_field_value(
@@ -1207,6 +1226,9 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 cursor, checker_name_result(context_references))
             step_cursor = checker_cursor_with_binding_result(
                 step_cursor, checker_binding_result(work_bindings, external_binding_diagnostics))
+            step_cursor = checker_cursor_with_functions(
+                step_cursor, checker_functions_for_binding_context(
+                    external_functions, step_nodes, owner_ids))
             step_bindings = checker_binding_facts_for_owners(
                 external_typed_bindings["value"], owner_ids)
         elif phase == "type_analysis":
