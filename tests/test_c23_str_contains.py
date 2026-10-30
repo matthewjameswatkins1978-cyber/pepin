@@ -1233,6 +1233,141 @@ fn main() -> Int { return 0 }
                     self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES",
                                   malformed.stderr)
 
+    def test_lucy_named_hole_continuation_guard_runs_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        guard = "!(length <= offset) && ascii_continue(byte_at(source, offset))"
+        self.assertIn(guard, lexer)
+
+        start = lexer.index("fn ascii_digit(")
+        end = lexer.index("\nfn ascii_continue", start)
+        digit_predicate = lexer[start:end].rstrip()
+        predicates = (
+            digit_predicate + "\n\n"
+            "fn ascii_continue(byte: Int) -> Bool {\n"
+            "  return byte == 102 || byte == 95 || ascii_digit(byte)\n"
+            "}")
+        source_text = (
+            predicates + "\n\n"
+            "fn has_next_identifier_byte(source: SourceBytes, offset: Int) -> Bool {\n"
+            "  let length = byte_length(source)\n"
+            "  return !(length <= offset) && ascii_continue(byte_at(source, offset))\n"
+            "}\n"
+            "fn main() -> Int { return 0 }\n")
+        reference_text = source_text + (
+            "fn probe(offset: Int) -> Bool {\n"
+            "  return has_next_identifier_byte(source_bytes(), offset)\n"
+            "}\n")
+
+        def digest(raw):
+            return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+        def req(op, **fields):
+            return {"schemaVersion": 3, "toolProtocolVersion": 2, "op": op, **fields}
+
+        def encoded_int(value):
+            return {"type": "Int", "value": str(value)}
+
+        def encoded_bool(value):
+            return {"type": "Bool", "value": value}
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-named-hole-continuation.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-named-hole-continuation-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            input_bytes = reference.read_bytes()
+            source_revision = digest(reference_text.encode("utf-8"))
+            input_revision = digest(input_bytes)
+            requests = [
+                req("open", source=reference_text, name="lucy-named-hole-continuation"),
+                req("open_bytes", bytes=list(input_bytes)),
+                req("tool_register", tool="named-hole-continuation",
+                    document="doc-1", revision=source_revision, function="probe"),
+                req("tool_validate", tool="named-hole-continuation",
+                    document="doc-1", revision=source_revision,
+                    testVectors=[
+                        {"arguments": [encoded_int(offset)],
+                         "expect": encoded_bool(expected),
+                         "semanticTarget": {"document": "doc-2",
+                                            "revision": input_revision,
+                                            "entryFunctions": []}}
+                        for offset, expected in ((0, True), (len(input_bytes), False))
+                    ]),
+                req("tool_activate", tool="named-hole-continuation",
+                    document="doc-1", revision=source_revision),
+                req("tool_invoke", tool="named-hole-continuation",
+                    arguments=[encoded_int(0)],
+                    semanticTarget={"document": "doc-2", "revision": input_revision,
+                                    "entryFunctions": []}),
+                req("tool_invoke", tool="named-hole-continuation",
+                    arguments=[encoded_int(len(input_bytes))],
+                    semanticTarget={"document": "doc-2", "revision": input_revision,
+                                    "entryFunctions": []}),
+            ]
+            session = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+                cwd=ROOT, text=True,
+                input="".join(json.dumps(item, ensure_ascii=True) + "\n" for item in requests),
+                capture_output=True, check=False)
+            self.assertEqual(session.returncode, 0, session.stderr)
+            responses = [json.loads(line) for line in session.stdout.splitlines()]
+            self.assertEqual(responses[3]["status"], "Validated", responses[3])
+            self.assertEqual(responses[4]["status"], "Active", responses[4])
+            interpreted_values = [responses[5]["result"], responses[6]["result"]]
+            self.assertEqual(interpreted_values,
+                             [encoded_bool(True), encoded_bool(False)], responses[5:])
+            interpreted_output = "".join(
+                "1\n" if result["value"] else "0\n" for result in interpreted_values)
+
+            generated = emit(source.read_bytes())
+            declaration = re.search(
+                r"_Bool pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+), "
+                r"int64_t pep_arg_(\d+)\);", generated)
+            self.assertIsNotNone(declaration, generated)
+            function_id = declaration.group(1)
+            self.assertIn(" && ", generated)
+            self.assertIn("pep_byte_at(pep_arg_", generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+
+            input_bytes = reference.read_bytes()
+            byte_initializer = ", ".join(str(byte) for byte in input_bytes)
+            harness_path = folder / "named-hole-continuation-harness.c"
+            harness_path.write_text(
+                "#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                f"  static const unsigned char input[] = {{{byte_initializer}}};\n"
+                "  pep_source_bytes source = {input, sizeof input};\n"
+                f'  (void)printf("%d\\n%d\\n", '
+                f"pep_fn_{function_id}(source, 0), "
+                f"pep_fn_{function_id}(source, (int64_t)sizeof input));\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"named-hole-continuation-{compiler.stem}.exe"
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted_output)
+
     def test_lucy_source_byte_length_matches_interpreter_and_native_c23(self):
         lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
         length_binding = next(
