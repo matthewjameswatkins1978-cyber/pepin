@@ -264,10 +264,14 @@ fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
 fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: FlatAstNode,
   element: FlatAstNode) -> Bool {
   if element.kind != "call" { return false } else {}
-  let variant = pep_c23_union_variant(nodes, element.text)
-  if !variant.found { return false } else {}
-  let owner = pep_c23_union_of_variant(nodes, variant.node)
-  if !owner.found || owner.node.id != declaration.id ||
+  var variant = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.parentId == declaration.id && candidate.role == "variant" &&
+       candidate.kind == "variant_declaration" && candidate.text == element.text && !variant.found {
+      variant = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  if !variant.found ||
      count_children(nodes, element.id, "argument") != count_children(nodes, variant.node.id, "field_type") {
     return false
   } else {}
@@ -728,6 +732,19 @@ fn pep_c23_union_list_local_declaration(nodes: List[FlatAstNode], function: Flat
     } else {}
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
+}
+fn pep_c23_local_recursive_union_list_is_iterated(nodes: List[FlatAstNode],
+  function: FlatAstNode, name: Str) -> Bool {
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" &&
+       statement.kind == "for_in" {
+      let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
+      if iterable.found && iterable.node.kind == "name" && iterable.node.text == name {
+        return true
+      } else {}
+    } else {}
+  }
+  return false
 }
 fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for node in nodes {
@@ -2333,6 +2350,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
 fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" &&
+       (statement.kind == "for_in" || statement.kind == "while") {
+      return pep_c23_unsupported("Pep C23 conditional-return specialization does not lower loops")
+    } else {}
+  }
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
   let extraParameter = pep_c23_child(nodes, function.id, "parameter", 2)
@@ -2594,18 +2617,17 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             pep_c23_union_list_local_declaration(nodes, function, statement.text)
           } else { PepC23NodeLookup { found: false, node: empty_node() } }
           if recursiveUnionList.found {
-            if count_children(nodes, initialValue.node.id, "element") == 0 {
-              return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
-            } else {}
-            for item in nodes {
-              if item.parentId == initialValue.node.id && item.role == "element" {
-                let actual = pep_c23_union_value_type(nodes, function, item)
-                if !actual.found || actual.node.id != recursiveUnionList.node.id ||
+            if !pep_c23_local_recursive_union_list_is_iterated(nodes, function, statement.text) {
+              if count_children(nodes, initialValue.node.id, "element") == 0 {
+                return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
+              } else {}
+              for item in nodes {
+                if item.parentId == initialValue.node.id && item.role == "element" &&
                    !pep_c23_union_list_element_supported(nodes, recursiveUnionList.node, item) {
                   return pep_c23_unsupported("Pep C23 recursive union list locals require matching constructors with scalar literal payloads")
                 } else {}
-              } else {}
-            }
+              }
+            } else {}
           } else {
             let recordList = pep_c23_record_list_declaration(nodes, initialValue.node)
             var hasRecordElement = false
@@ -2677,15 +2699,9 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
                count_children(nodes, iterableList.node.id, "element") == 0 {
               return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
             } else {}
-            for item in nodes {
-              if item.parentId == iterableList.node.id && item.role == "element" {
-                if recursiveUnionList.found {
-                  let actual = pep_c23_union_value_type(nodes, function, item)
-                  if !actual.found || actual.node.id != recursiveUnionList.node.id ||
-                     !pep_c23_union_list_element_supported(nodes, recursiveUnionList.node, item) {
-                    return pep_c23_unsupported("Pep C23 recursive union list locals require matching constructors with scalar literal payloads")
-                  } else {}
-                } else {
+            if !recursiveUnionList.found {
+              for item in nodes {
+                if item.parentId == iterableList.node.id && item.role == "element" {
                   if recordLiteral.found {
                     if item.kind != "record" { return pep_c23_unsupported("Pep C23 record list iteration requires record values") } else {}
                   } else {
@@ -2693,9 +2709,9 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
                       return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
                     } else {}
                   }
-                }
-              } else {}
-            }
+                } else {}
+              }
+            } else {}
           } else {}
           for bodyStatement in nodes {
             if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
@@ -2937,6 +2953,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
       let thirdParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 2)
+      let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       var bodyParts: List[Str] = ["  pep_enter();\n"]
       if requiresArena { bodyParts = append(bodyParts, "  (void)pep_arena;\n") } else {}
       if parameter.found {
@@ -3194,14 +3211,12 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       if hasConditionalBody {
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
       } else {
-        let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
         bodyParts = append(bodyParts, "  ")
         for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { bodyParts = append(bodyParts, resultPart) }
         bodyParts = append(bodyParts, " pep_result = ")
         for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
         bodyParts = append(bodyParts, ";\n  pep_leave();\n  return pep_result;\n")
       }
-      let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
