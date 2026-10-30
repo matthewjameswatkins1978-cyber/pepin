@@ -1368,6 +1368,143 @@ fn main() -> Int { return 0 }
                                      native.stdout + native.stderr)
                     self.assertEqual(native.stdout, interpreted_output)
 
+    def test_lucy_compound_comment_guard_short_circuits_at_end_of_source(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        guard = "byte == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47"
+        self.assertIn(guard, lexer)
+
+        source_text = (
+            "fn starts_line_comment(byte: Int, source: SourceBytes, offset: Int) -> Bool {\n"
+            "  let length = byte_length(source)\n"
+            "  return byte == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47\n"
+            "}\n"
+            "fn main() -> Int { return 0 }\n")
+        reference_text = source_text + (
+            "fn probe(byte: Int, offset: Int) -> Bool {\n"
+            "  return starts_line_comment(byte, source_bytes(), offset)\n"
+            "}\n")
+
+        def digest(raw):
+            return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+        def req(op, **fields):
+            return {"schemaVersion": 3, "toolProtocolVersion": 2, "op": op, **fields}
+
+        def encoded_int(value):
+            return {"type": "Int", "value": str(value)}
+
+        def encoded_bool(value):
+            return {"type": "Bool", "value": value}
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-comment-guard.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-comment-guard-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            source_revision = digest(reference_text.encode("utf-8"))
+            requests = [
+                req("open", source=reference_text, name="lucy-comment-guard"),
+                req("open_bytes", bytes=list(b"/")),
+                req("open_bytes", bytes=list(b"//")),
+                req("open_bytes", bytes=list(b"x")),
+                req("tool_register", tool="lucy-comment-guard",
+                    document="doc-1", revision=source_revision, function="probe"),
+                req("tool_validate", tool="lucy-comment-guard",
+                    document="doc-1", revision=source_revision,
+                    testVectors=[
+                        {"arguments": [encoded_int(byte), encoded_int(0)],
+                         "expect": encoded_bool(expected),
+                         "semanticTarget": {"document": document,
+                                            "revision": digest(raw),
+                                            "entryFunctions": []}}
+                        for byte, raw, expected, document in (
+                            (47, b"/", False, "doc-2"),
+                            (47, b"//", True, "doc-3"),
+                            (120, b"x", False, "doc-4"))
+                    ]),
+                req("tool_activate", tool="lucy-comment-guard",
+                    document="doc-1", revision=source_revision),
+                req("tool_invoke", tool="lucy-comment-guard",
+                    arguments=[encoded_int(47), encoded_int(0)],
+                    semanticTarget={"document": "doc-2", "revision": digest(b"/"),
+                                    "entryFunctions": []}),
+                req("tool_invoke", tool="lucy-comment-guard",
+                    arguments=[encoded_int(47), encoded_int(0)],
+                    semanticTarget={"document": "doc-3", "revision": digest(b"//"),
+                                    "entryFunctions": []}),
+                req("tool_invoke", tool="lucy-comment-guard",
+                    arguments=[encoded_int(120), encoded_int(0)],
+                    semanticTarget={"document": "doc-4", "revision": digest(b"x"),
+                                    "entryFunctions": []}),
+            ]
+            session = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+                cwd=ROOT, text=True,
+                input="".join(json.dumps(item, ensure_ascii=True) + "\n" for item in requests),
+                capture_output=True, check=False)
+            self.assertEqual(session.returncode, 0, session.stderr)
+            responses = [json.loads(line) for line in session.stdout.splitlines()]
+            self.assertEqual(responses[5]["status"], "Validated", responses[5])
+            self.assertEqual(responses[6]["status"], "Active", responses[6])
+            interpreted_values = [response["result"] for response in responses[7:10]]
+            self.assertEqual(interpreted_values, [
+                encoded_bool(False), encoded_bool(True), encoded_bool(False)
+            ], responses[7:10])
+            interpreted_output = "".join(
+                "1\n" if result["value"] else "0\n" for result in interpreted_values)
+
+            generated = emit(source.read_bytes())
+            declaration = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_(\d+), "
+                r"pep_source_bytes pep_arg_(\d+), int64_t pep_arg_(\d+)\);",
+                generated)
+            self.assertIsNotNone(declaration, generated)
+            function_id = declaration.group(1)
+            self.assertIn(" && ", generated)
+            self.assertIn("pep_byte_at(pep_arg_", generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "comment-guard-harness.c"
+            harness_path.write_text(
+                "#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                "  static const unsigned char one_slash[] = {47};\n"
+                "  static const unsigned char two_slashes[] = {47, 47};\n"
+                "  static const unsigned char other[] = {120};\n"
+                "  pep_source_bytes short_source = {one_slash, sizeof one_slash};\n"
+                "  pep_source_bytes comment_source = {two_slashes, sizeof two_slashes};\n"
+                "  pep_source_bytes other_source = {other, sizeof other};\n"
+                f'  (void)printf("%d\\n%d\\n%d\\n", '
+                f"pep_fn_{function_id}(47, short_source, 0), "
+                f"pep_fn_{function_id}(47, comment_source, 0), "
+                f"pep_fn_{function_id}(120, other_source, 0));\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-comment-guard-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted_output)
+
     def test_lucy_source_byte_length_matches_interpreter_and_native_c23(self):
         lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
         length_binding = next(
