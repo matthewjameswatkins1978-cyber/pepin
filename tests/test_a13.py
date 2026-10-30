@@ -313,7 +313,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             scalar(fields(node)["kind"]) in binding_kinds
             for node in fields(parsed)["nodes"]["value"]
         )
-        maximum_steps = min(4096, 8 + 3 * ((node_count + 31) // 32) +
+        maximum_steps = min(4096, 8 + ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) +
                             (node_count + 7) // 8 + (binding_count + 7) // 8)
         for _ in range(maximum_steps):
             current = fields(value)

@@ -2527,7 +2527,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     if !(0 <= cursor.typeOffset) || length(inputNodes) <= cursor.typeOffset {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", empty_node()))
     } else {}
-    let proposed = cursor.typeOffset + 32
+    let proposed = cursor.typeOffset + 16
     let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
     let chunk = collect_bindings_chunk(inputNodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
     if length(inputNodes) <= chunkEnd {
@@ -2538,7 +2538,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     }
   } else {}
   if cursor.phase == "names" {
-    let proposed = cursor.typeOffset + 32
+    let proposed = cursor.typeOffset + 16
     let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
     let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
     if length(inputNodes) <= chunkEnd {
