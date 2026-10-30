@@ -2705,7 +2705,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     if !(0 <= cursor.typeOffset) {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", checker_empty_node()))
     } else {}
-    let chunkEnd = if length(cursor.bindingResult.bindings) <= 8 { length(cursor.bindingResult.bindings) } else { 8 }
+    let chunkEnd = if length(cursor.bindingResult.bindings) <= 32 { length(cursor.bindingResult.bindings) } else { 32 }
     let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, externalTypedBindings)
     let bindingTypeDelta = take_binding_prefix(chunk, chunkEnd)
     let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)

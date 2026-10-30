@@ -348,7 +348,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         maximum_steps = min(4096, 9 + 2 * ((node_count + 31) // 32) +
                             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
                             ((node_count + 7) // 8) + ((node_count + 7) // 8) +
-                            (binding_count + 7) // 8)
+                            (binding_count + 31) // 32)
         for _ in range(maximum_steps):
             current = fields(value)
             if scalar(current["done"]):
@@ -378,7 +378,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             elif scalar(current["phase"]) == "binding_types":
                 pending_bindings = fields(current["bindingResult"])["bindings"]["value"]
                 syntax_ids = [scalar(fields(binding)["syntaxId"])
-                              for binding in pending_bindings[:8]]
+                              for binding in pending_bindings[:32]]
                 step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
                 context_ids = {
                     scalar(fields(node)["id"]) for node in step_nodes
@@ -675,7 +675,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             4096,
             9 + 2 * ((node_count + 31) // 32) +
             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
-            ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 7) // 8
+            ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 31) // 32
         )
         while not scalar(fields(cursor_value)["done"]) and step_count < maximum_steps:
             previous = fields(cursor_value)
@@ -1723,6 +1723,25 @@ class A13FunctionResolutionTests(unittest.TestCase):
         source = NL.join(lines)
 
         reference = self._reference_check("staged-256-sequential-bindings", source)
+        parser_result = self._parse_staged(source)
+        _, report = self._analyze_staged(source, parser_result=parser_result)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(len(report["bindings"]["value"]), count, report)
+        self.assertEqual(len(report["references"]["value"]), count, report)
+
+    def test_staged_checker_composes_five_hundred_thirteen_sequential_local_bindings(self):
+        count = 513
+        lines = ["fn main() -> Int {"]
+        lines.extend(
+            f"  let x{index} = {index}" if index == 0 else f"  let x{index} = x{index - 1} + 1"
+            for index in range(count)
+        )
+        lines.extend([f"  return x{count - 1}", "}"])
+        source = NL.join(lines)
+
+        reference = self._reference_check("staged-513-sequential-bindings", source)
         parser_result = self._parse_staged(source)
         _, report = self._analyze_staged(source, parser_result=parser_result)
 
