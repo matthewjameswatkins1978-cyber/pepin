@@ -1587,6 +1587,43 @@ filtering text instead of parsing structured results.
 
 **Priority unchanged and now better supported:** emitter cost blocks 182 of 213 failures;
 the function-shape rule blocks 31; correctness blocks none.
+
+## Complete 272-test baseline at the healthy head `46bf1c0`, and Lean re-confirmed (Agent 3)
+
+With Agent 1's line healthy again, ran all fifteen modules once:
+
+| module | tests | result |
+| --- | --- | --- |
+| `test_a6` / `test_a7` / `test_a8` | 13 / 5 / 5 | OK |
+| `test_a10` / `test_a11` | 9 / 7 | OK |
+| `test_a12` | 23 | OK |
+| `test_a13` | **87** | OK (344 s) |
+| `test_a13_nested_records` | 13 | OK |
+| `test_a14_c23` | 11 | **2 known failures** |
+| `test_c23_cli` | 8 | OK |
+| `test_c23_driver_validation` | 10 | OK |
+| `test_c23_real_lexer_classifiers` | 1 | **OK** |
+| `test_cli` | 47 | OK |
+| `test_moonbit_cli` | 11 | OK |
+| `test_textbuf_native` | 22 | **1 known failure** (arena CRLF) |
+
+**272 tests, 3 failures, all three previously identified.** This is the green reference
+for the current healthy line: everything passes except the two stale `test_a14_c23`
+expectations and the long-standing arena CRLF expectation.
+
+Note what is *included* here that was failing hours ago: the classifier slice (1/1), the
+CLI suite (8/8), and `test_a13` at 87 tests. Those were the three casualties of the
+`CheckerNode` window, so this run closes that incident.
+
+### Lean 4 proofs re-confirmed
+
+`verification/lean4` has not changed since `a41d967`, where I validated it independently.
+Re-ran anyway at the current tree:
+
+- `lake build` → exit 0, "Build completed successfully (5 jobs)" (1.3 s, cached)
+- `lake env lean BrokenVariant.lean` → **exit 1**, the negative control still rejects
+
+So the proofs still compile and the build still actually checks them.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
