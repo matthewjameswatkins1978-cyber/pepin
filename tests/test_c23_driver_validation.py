@@ -1,7 +1,8 @@
 import unittest
 
-from pep_c23 import (emit, validate_parser_final_outcome, validate_parser_node_sequence,
-                      validate_parser_parent_links)
+from pep_c23 import (checker_binding_context_nodes, checker_node_context_index, emit,
+                      typed, typed_record_value, validate_parser_final_outcome,
+                      validate_parser_node_sequence, validate_parser_parent_links)
 
 
 class PepC23ParserValidationTests(unittest.TestCase):
@@ -46,6 +47,51 @@ class PepC23ParserValidationTests(unittest.TestCase):
 
 
 class PepC23CheckerDriverTests(unittest.TestCase):
+    @staticmethod
+    def _node(node_id, parent_id, child_index, role, kind, text="", start=0, end=0):
+        return typed_record_value("CheckerNode", [
+            ("id", typed("Int", node_id)),
+            ("parentId", typed("Int", parent_id)),
+            ("childIndex", typed("Int", child_index)),
+            ("role", typed("Str", role)),
+            ("kind", typed("Str", kind)),
+            ("text", typed("Str", text)),
+            ("startByte", typed("Int", start)),
+            ("endByte", typed("Int", end)),
+        ])
+
+    def test_binding_range_carries_ancestors_and_complete_annotation_type(self):
+        nodes = [
+            self._node(0, -1, -1, "", "function"),
+            self._node(1, 0, 0, "statement", "let"),
+            self._node(2, 1, 0, "annotation", "type_list"),
+            self._node(3, 2, 0, "element", "type_named", "Point"),
+            self._node(4, 1, 0, "value", "integer", "1"),
+        ]
+        index = checker_node_context_index(nodes)
+
+        actual = checker_binding_context_nodes(index, 1, 2)
+        actual_ids = [int({field["name"]: field["value"] for field in node["fields"]}["id"]["value"])
+                      for node in actual]
+
+        self.assertEqual(actual_ids, [0, 1, 2, 3])
+        self.assertNotIn(4, actual_ids)
+
+    def test_binding_pattern_range_carries_arm_result_context(self):
+        nodes = [
+            self._node(0, -1, -1, "", "function"),
+            self._node(1, 0, 0, "statement", "match_arm"),
+            self._node(2, 1, 0, "pattern", "constructor_pattern"),
+            self._node(3, 2, 0, "argument", "binding_pattern", "value"),
+            self._node(4, 1, 1, "result", "integer", "1"),
+        ]
+        actual = checker_binding_context_nodes(checker_node_context_index(nodes), 3, 4)
+        actual_ids = [int({field["name"]: field["value"] for field in node["fields"]}["id"]["value"])
+                      for node in actual]
+
+        self.assertEqual(actual_ids, [0, 1, 2, 3, 4])
+
+
     def test_staged_checker_emits_small_program_with_fixed_budgets(self):
         measurements = {}
         c_source = emit(b"fn main() -> Int { return 0 }\n", measurements)

@@ -104,6 +104,50 @@ def typed_record_value(type_name, fields):
     ]}
 
 
+def checker_complete_report(summary, source_cursor_fields, typed_bindings):
+    summary_fields = typed_fields(summary, "CheckerReport", "checker report summary")
+    names = typed_fields(source_cursor_fields.get("nameResult"), "NameResolution", "checker name result")
+    types = typed_fields(source_cursor_fields.get("typeResult"), "TypeAnalysis", "checker type result")
+    return typed_record_value("CheckerReport", [
+        ("document", summary_fields["document"]),
+        ("revision", summary_fields["revision"]),
+        ("status", summary_fields["status"]),
+        ("syntaxNodeCount", summary_fields["syntaxNodeCount"]),
+        ("functions", source_cursor_fields["functions"]),
+        ("bindings", typed_bindings),
+        ("references", names["references"]),
+        ("calls", summary_fields["calls"]),
+        ("expressionTypes", types["expressionTypes"]),
+        ("holes", source_cursor_fields["holes"]),
+        ("diagnostics", summary_fields["diagnostics"]),
+    ])
+
+
+def checker_emitter_report(report):
+    fields = typed_fields(report, "CheckerReport", "checker report")
+    return typed_record_value("CheckerReport", [
+        ("document", fields["document"]),
+        ("revision", fields["revision"]),
+        ("status", fields["status"]),
+        ("syntaxNodeCount", fields["syntaxNodeCount"]),
+        ("functions", typed_list("CheckedFunction")),
+        ("bindings", typed_list("BindingFact")),
+        ("references", typed_list("ResolvedName")),
+        ("calls", typed_list("ResolvedCall")),
+        ("expressionTypes", typed_list("ExpressionTypeFact")),
+        ("holes", typed_list("HoleFact")),
+        ("diagnostics", typed_list("CheckDiagnostic")),
+    ])
+
+
+def checker_cursor_without_typed_bindings(cursor):
+    typed_fields(cursor, "CheckerCursor", "checker cursor")
+    return typed_record_value("CheckerCursor", [
+        (item["name"], typed_list("BindingFact") if item["name"] == "typedBindings" else item["value"])
+        for item in cursor["fields"]
+    ])
+
+
 def checker_node_value(node, source_length):
     fields = typed_fields(node, "FlatAstNode", "checker input node")
     line = int(typed_field_value(fields, "line", "Int", "checker input node"))
@@ -123,6 +167,275 @@ def checker_node_value(node, source_length):
         raise PepToolError("checker input node has an out-of-range byte span")
     names = ("id", "parentId", "childIndex", "role", "kind", "text", "startByte", "endByte")
     return typed_record_value("CheckerNode", [(name, fields[name]) for name in names])
+
+
+def checker_node_context_index(checker_nodes):
+    values = {}
+    metadata = {}
+    children = {}
+    for value in checker_nodes:
+        fields = typed_fields(value, "CheckerNode", "checker context node")
+        node_id = int(typed_field_value(fields, "id", "Int", "checker context node"))
+        if node_id in values:
+            raise RuntimeError("checker context nodes contain a duplicate id")
+        values[node_id] = value
+        metadata[node_id] = {
+            "parent": int(typed_field_value(fields, "parentId", "Int", "checker context node")),
+            "child_index": int(typed_field_value(fields, "childIndex", "Int", "checker context node")),
+            "role": typed_field_value(fields, "role", "Str", "checker context node"),
+            "kind": typed_field_value(fields, "kind", "Str", "checker context node"),
+        }
+        children.setdefault(metadata[node_id]["parent"], []).append(node_id)
+    return values, metadata, children
+
+
+def checker_type_context_nodes(index, start_node, end_node):
+    values, metadata, children = index
+    included = set(range(start_node, end_node))
+
+    def include_ancestors(node_id):
+        current = node_id
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata or parent_id in included:
+                break
+            included.add(parent_id)
+            current = parent_id
+
+    def include_subtree(root_id):
+        pending = [root_id]
+        while pending:
+            node_id = pending.pop()
+            if node_id not in metadata:
+                continue
+            if node_id not in included:
+                included.add(node_id)
+            pending.extend(child_id for child_id in children.get(node_id, ())
+                           if child_id not in included)
+
+    for node_id in range(start_node, end_node):
+        if node_id not in metadata:
+            raise RuntimeError("checker type slice is missing a validated node id")
+        include_ancestors(node_id)
+        include_subtree(node_id)
+
+    for node_id, node in metadata.items():
+        if node["parent"] == -1 and node["kind"] in ("record_declaration", "union_declaration"):
+            include_subtree(node_id)
+
+    return [values[node_id] for node_id in sorted(included)]
+
+
+def checker_scope_context_nodes(index, start_node, end_node):
+    values, metadata, _ = index
+    included = set(range(start_node, end_node))
+    for node_id in range(start_node, end_node):
+        if node_id not in metadata:
+            raise RuntimeError("checker name slice is missing a validated node id")
+        current = node_id
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata or parent_id in included:
+                break
+            included.add(parent_id)
+            current = parent_id
+    return [values[node_id] for node_id in sorted(included)]
+
+
+def checker_binding_type_context_nodes(index, binding_nodes):
+    values, metadata, children = index
+    included = set()
+
+    def include_ancestors(node_id):
+        current = node_id
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata or parent_id in included:
+                break
+            included.add(parent_id)
+            current = parent_id
+
+    def include_subtree(root_id):
+        pending = [root_id]
+        while pending:
+            node_id = pending.pop()
+            if node_id not in metadata:
+                continue
+            if node_id not in included:
+                included.add(node_id)
+            pending.extend(child_id for child_id in children.get(node_id, ())
+                           if child_id not in included)
+
+    for binding_id in binding_nodes:
+        if binding_id not in metadata:
+            raise RuntimeError("checker binding facts reference a missing syntax node")
+        include_ancestors(binding_id)
+        include_subtree(binding_id)
+        current = binding_id
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata:
+                break
+            if metadata[parent_id]["kind"] == "match":
+                include_subtree(parent_id)
+                break
+            current = parent_id
+
+    for node_id, node in metadata.items():
+        if node["parent"] == -1 and node["kind"] in ("record_declaration", "union_declaration"):
+            include_subtree(node_id)
+
+    return [values[node_id] for node_id in sorted(included)]
+
+
+def checker_hole_context_nodes(index):
+    values, metadata, children = index
+    included = set()
+    hole_ids = [node_id for node_id, node in metadata.items() if node["kind"] == "hole"]
+    if not hole_ids:
+        return []
+
+    def include_subtree(root_id):
+        pending = [root_id]
+        while pending:
+            node_id = pending.pop()
+            if node_id not in metadata or node_id in included:
+                continue
+            included.add(node_id)
+            pending.extend(children.get(node_id, ()))
+
+    relevant_parent_kinds = {
+        "assignment", "binary", "call", "field_access", "if_expression",
+        "list", "match", "match_arm", "record", "return", "unary",
+    }
+    for hole_id in hole_ids:
+        current = hole_id
+        included.add(current)
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata:
+                break
+            included.add(parent_id)
+            if metadata[parent_id]["kind"] in relevant_parent_kinds:
+                include_subtree(parent_id)
+            current = parent_id
+
+    for node_id, node in metadata.items():
+        if node["parent"] == -1 and node["kind"] in ("record_declaration", "union_declaration"):
+            include_subtree(node_id)
+    return [values[node_id] for node_id in sorted(included)]
+
+
+def checker_duplicate_context_nodes(index):
+    values, metadata, _ = index
+    keep = {
+        node_id for node_id, node in metadata.items()
+        if (node["parent"] == -1 and node["kind"] == "function") or
+           node["kind"] == "variant_declaration"
+    }
+    return [values[node_id] for node_id in sorted(keep)]
+
+
+def checker_report_context_nodes(index, diagnostic_codes=()):
+    values, metadata, children = index
+    codes = set(diagnostic_codes)
+    has_calls = any(node["kind"] == "call" for node in metadata.values())
+    keep = set()
+    if has_calls:
+        keep.update(
+            node_id for node_id, node in metadata.items()
+            if (node["parent"] == -1 and node["kind"] == "function") or
+               node["kind"] in ("call", "variant_declaration")
+        )
+        for node_id in tuple(keep):
+            if metadata[node_id]["kind"] == "call":
+                keep.update(child_id for child_id in children.get(node_id, ())
+                            if metadata[child_id]["role"] == "argument")
+    if "PEP_DUPLICATE_FIELD" in codes:
+        keep.update(node_id for node_id, node in metadata.items()
+                    if node["kind"] == "field_declaration")
+    if "PEP_MISSING_FIELD" in codes:
+        keep.update(
+            node_id for node_id, node in metadata.items()
+            if node["kind"] in (
+                "field_declaration", "record_declaration", "record", "record_field",
+            )
+        )
+    return [values[node_id] for node_id in sorted(keep)]
+
+
+def checker_report_diagnostic_codes(cursor_fields):
+    codes = set()
+    record_types = {
+        "bindingResult": "BindingCollection",
+        "nameResult": "NameResolution",
+        "typeResult": "TypeAnalysis",
+        "report": "CheckerReport",
+    }
+    for field_name, type_name in record_types.items():
+        value = cursor_fields.get(field_name)
+        if value is None:
+            continue
+        record_fields = typed_fields(value, type_name, "checker report context")
+        diagnostics = record_fields.get("diagnostics")
+        if diagnostics is None:
+            continue
+        for diagnostic_value in typed_field_value(
+                record_fields, "diagnostics", "List[CheckDiagnostic]", "checker report context"):
+            diagnostic_fields = typed_fields(diagnostic_value, "CheckDiagnostic", "checker diagnostic")
+            codes.add(typed_field_value(diagnostic_fields, "code", "Str", "checker diagnostic"))
+    return codes
+
+
+def checker_binding_context_nodes(index, start_node, end_node):
+    values, metadata, children = index
+    included = set(range(start_node, end_node))
+
+    def include_ancestors(node_id):
+        while node_id in metadata:
+            parent_id = metadata[node_id]["parent"]
+            if parent_id < 0 or parent_id not in metadata or parent_id in included:
+                break
+            included.add(parent_id)
+            node_id = parent_id
+
+    def include_subtree(root_id):
+        pending = [root_id]
+        while pending:
+            node_id = pending.pop()
+            if node_id not in metadata:
+                continue
+            if node_id not in included:
+                included.add(node_id)
+            pending.extend(child_id for child_id in children.get(node_id, ())
+                           if child_id not in included)
+
+    primary_ids = range(start_node, end_node)
+    for node_id in primary_ids:
+        if node_id not in metadata:
+            raise RuntimeError("checker binding slice is missing a validated node id")
+        include_ancestors(node_id)
+        node = metadata[node_id]
+        if node["kind"] in ("parameter", "let", "var"):
+            wanted_role = "type" if node["kind"] == "parameter" else "annotation"
+            for child_id in children.get(node_id, ()):
+                child = metadata[child_id]
+                if child["role"] == wanted_role and child["child_index"] == 0:
+                    include_subtree(child_id)
+                    break
+        if node["kind"] == "binding_pattern":
+            ancestor_id = node["parent"]
+            while ancestor_id in metadata:
+                ancestor = metadata[ancestor_id]
+                if ancestor["kind"] == "match_arm":
+                    for child_id in children.get(ancestor_id, ()):
+                        child = metadata[child_id]
+                        if child["role"] == "result" and child["child_index"] == 1:
+                            included.add(child_id)
+                            break
+                    break
+                ancestor_id = ancestor["parent"]
+    return [values[node_id] for node_id in sorted(included)]
 
 
 def checker_progress_header(parsed):
@@ -512,9 +825,8 @@ def check_target(session, parsed, target, tool_revision, source_length):
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
     max_request_bytes = session.last_request_bytes
     max_response_bytes = session.last_response_bytes
-    if 9 * node_count + 512 > MAX_TYPED_NODES:
-        raise RuntimeError("Pep C23 checker input exceeds the direct typed-node envelope; packed semantic checking is not implemented")
     checker_nodes = [checker_node_value(node, source_length) for node in parser_nodes]
+    checker_context_index = checker_node_context_index(checker_nodes)
     binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
     binding_count = sum(
         typed_field_value(typed_fields(node, "FlatAstNode", "parser node"), "kind", "Str", "parser node")
@@ -526,6 +838,8 @@ def check_target(session, parsed, target, tool_revision, source_length):
                         ((node_count + 7) // 8) + ((node_count + 3) // 4) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
+    external_typed_bindings = typed_list("BindingFact")
+    report_source_fields = None
     for _ in range(maximum_steps):
         if typed_field_value(cursor_fields, "document", "Str", "checker cursor") != target["document"] or \
            typed_field_value(cursor_fields, "revision", "Str", "checker cursor") != target["revision"]:
@@ -542,19 +856,59 @@ def check_target(session, parsed, target, tool_revision, source_length):
             else:
                 next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
+        elif phase == "bindings":
+            next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
+            step_nodes = checker_binding_context_nodes(
+                checker_context_index, next_node, min(next_node + 8, node_count))
+        elif phase == "names":
+            next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
+            step_nodes = checker_scope_context_nodes(
+                checker_context_index, next_node, min(next_node + 16, node_count))
+        elif phase == "binding_types":
+            binding_result = typed_fields(cursor_fields.get("bindingResult"), "BindingCollection", "checker bindings")
+            pending_bindings = typed_field_value(binding_result, "bindings", "List[BindingFact]", "checker bindings")
+            binding_count = min(4, len(pending_bindings))
+            syntax_ids = [
+                int(typed_field_value(typed_fields(binding, "BindingFact", "checker binding"),
+                                      "syntaxId", "Int", "checker binding"))
+                for binding in pending_bindings[:binding_count]
+            ]
+            step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
+        elif phase == "type_analysis":
+            next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
+            step_nodes = checker_type_context_nodes(
+                checker_context_index, next_node, min(next_node + 8, node_count))
+        elif phase == "holes":
+            step_nodes = checker_hole_context_nodes(checker_context_index)
+        elif phase == "duplicate_functions":
+            step_nodes = checker_duplicate_context_nodes(checker_context_index)
+        elif phase == "report":
+            step_nodes = checker_report_context_nodes(
+                checker_context_index, checker_report_diagnostic_codes(cursor_fields))
+        if phase == "report":
+            report_source_fields = cursor_fields
         step_started = time.perf_counter_ns()
         cursor = invoke_tool(session, "pep-c23-checker-step",
-                             [cursor, typed_list("CheckerNode", step_nodes)], target,
+                             [cursor, typed_list("CheckerNode", step_nodes), external_typed_bindings], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
+        cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "binding_types":
+            delta = typed_field_value(cursor_fields, "typedBindings", "List[BindingFact]", "checker binding delta")
+            external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
+            if typed_field_value(cursor_fields, "phase", "Str", "checker cursor") != "binding_types":
+                external_typed_bindings["value"].reverse()
+        cursor = checker_cursor_without_typed_bindings(cursor)
         if cursor == previous_cursor:
             raise RuntimeError("Pep checker continuation did not make progress")
         cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
     if not typed_field_value(cursor_fields, "done", "Bool", "final checker cursor"):
         raise RuntimeError(f"Pep checker exceeded the host continuation limit of {maximum_steps} steps")
     report = cursor_fields.get("report")
+    if report_source_fields is not None:
+        report = checker_complete_report(report, report_source_fields, external_typed_bindings)
     report_fields = typed_fields(report, "CheckerReport", "checker report")
     if typed_field_value(report_fields, "document", "Str", "checker report") != target["document"] or \
        typed_field_value(report_fields, "revision", "Str", "checker report") != target["revision"]:
@@ -651,7 +1005,7 @@ def emit(source_bytes, measurements=None):
             ("pep-c23-checker-start", "checker_start", [empty_parsed, typed("Int", 0)],
              checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation")),
             ("pep-c23-checker-step", "checker_step",
-             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation"), typed_list("CheckerNode")],
+             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation"), typed_list("CheckerNode"), typed_list("BindingFact")],
              checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")),
         ]
         for tool, function, arguments, expected in empty_expected:
@@ -707,7 +1061,8 @@ def emit(source_bytes, measurements=None):
         emitter_started = time.perf_counter_ns()
         emitter_request_bytes_before = session.request_bytes_total
         emitter_response_bytes_before = session.response_bytes_total
-        emitted = invoke_tool(session, "pep-c23-emitter", [parsed_value, checked_report], semantic_target,
+        emitter_report = checker_emitter_report(checked_report)
+        emitted = invoke_tool(session, "pep-c23-emitter", [parsed_value, emitter_report], semantic_target,
                               tool_revision, "emit checked source", stage="emitter")
         measurements["emitter_stage_ms"] = (time.perf_counter_ns() - emitter_started) / 1_000_000
         measurements["emitter_request_bytes"] = session.request_bytes_total - emitter_request_bytes_before

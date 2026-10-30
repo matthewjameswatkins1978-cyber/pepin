@@ -7,7 +7,13 @@ import subprocess
 import unittest
 
 from tests.test_a11 import JsonLineClient, revision, typed, typed_list, typed_record
-from pep_c23 import checker_node_value, parser_cursor_value, parser_chunk_value
+from pep_c23 import (checker_binding_context_nodes, checker_binding_type_context_nodes,
+                      checker_node_context_index, checker_node_value, checker_scope_context_nodes,
+                      checker_type_context_nodes, checker_hole_context_nodes,
+                      checker_duplicate_context_nodes, checker_report_context_nodes,
+                      checker_report_diagnostic_codes, checker_complete_report,
+                      checker_cursor_without_typed_bindings,
+                      parser_cursor_value, parser_chunk_value)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LEXER = ROOT / "examples" / "pep_lexer.pep"
@@ -202,7 +208,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         tools = [
             ("pep-a13-parser", "parser_parse_program", [], parsed),
             ("pep-a13-checker-start", "checker_start", [parsed, typed("Int", "0")], initial),
-            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", [])], bindings),
+            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", []), typed_list("BindingFact", [])], bindings),
         ]
         for tool, function, arguments, expected in tools:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -311,11 +317,17 @@ class A13FunctionResolutionTests(unittest.TestCase):
         target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
         parser_nodes = fields(parsed)["nodes"]["value"]
         checker_nodes = [checker_node_value(node, len(source.encode("utf-8"))) for node in parser_nodes]
+        try:
+            checker_context_index = checker_node_context_index(checker_nodes)
+        except RuntimeError:
+            checker_context_index = ({}, {}, {})
         cursor = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                    "op": "tool_invoke", "tool": "pep-a13-checker-start",
                                    "arguments": [checker_progress_header(parsed), typed("Int", str(len(parser_nodes)))], "semanticTarget": target})
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         value = cursor["result"]
+        external_typed_bindings = typed_list("BindingFact", [])
+        report_source_fields = None
         node_count = len(parser_nodes)
         binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
         binding_count = sum(
@@ -337,9 +349,33 @@ class A13FunctionResolutionTests(unittest.TestCase):
             elif scalar(current["phase"]) == "functions":
                 offset = scalar(current["typeOffset"])
                 step_nodes = checker_nodes[offset:min(offset + 32, node_count)]
+            elif scalar(current["phase"]) == "bindings":
+                offset = scalar(current["typeOffset"])
+                step_nodes = checker_binding_context_nodes(
+                    checker_context_index, offset, min(offset + 8, node_count))
+            elif scalar(current["phase"]) == "names":
+                offset = scalar(current["typeOffset"])
+                step_nodes = checker_scope_context_nodes(
+                    checker_context_index, offset, min(offset + 16, node_count))
+            elif scalar(current["phase"]) == "binding_types":
+                pending_bindings = fields(current["bindingResult"])["bindings"]["value"]
+                syntax_ids = [scalar(fields(binding)["syntaxId"])
+                              for binding in pending_bindings[:4]]
+                step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
+            elif scalar(current["phase"]) == "type_analysis":
+                offset = scalar(current["typeOffset"])
+                step_nodes = checker_type_context_nodes(
+                    checker_context_index, offset, min(offset + 8, node_count))
+            elif scalar(current["phase"]) == "holes":
+                step_nodes = checker_hole_context_nodes(checker_context_index)
+            elif scalar(current["phase"]) == "duplicate_functions":
+                step_nodes = checker_duplicate_context_nodes(checker_context_index)
+            elif scalar(current["phase"]) == "report":
+                step_nodes = checker_report_context_nodes(
+                    checker_context_index, checker_report_diagnostic_codes(current))
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [value, typed_list("CheckerNode", step_nodes)],
+                                        "arguments": [value, typed_list("CheckerNode", step_nodes), external_typed_bindings],
                                         "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", {
                 "phase": scalar(current["phase"]),
@@ -347,11 +383,22 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 "response": stepped,
             })
             self.assertEqual(stepped.get("revision"), self.tool_revision)
+            if scalar(current["phase"]) == "report":
+                report_source_fields = current
             value = stepped["result"]
+            if scalar(current["phase"]) == "binding_types":
+                delta = fields(value)["typedBindings"]["value"]
+                external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
+                if scalar(fields(value)["phase"]) != "binding_types":
+                    external_typed_bindings["value"].reverse()
+            value = checker_cursor_without_typed_bindings(value)
             self.assertNotEqual(value, previous)
         cursor_fields = fields(value)
         self.assertTrue(scalar(cursor_fields["done"]), cursor_fields)
-        report = fields(cursor_fields["report"])
+        report_value = cursor_fields["report"]
+        if report_source_fields is not None:
+            report_value = checker_complete_report(report_value, report_source_fields, external_typed_bindings)
+        report = fields(report_value)
         self.assertEqual(scalar(report["document"]), opened["document"])
         self.assertEqual(scalar(report["revision"]), opened["revision"])
         return opened, report
@@ -377,7 +424,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         after_first_step = checker_cursor(opened["document"], source, parsed, "functions")
         for tool, function, arguments, expected in [
             ("pep-a13-checker-start", "checker_start", [parsed, typed("Int", "0")], initial),
-            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", [])], after_first_step),
+            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", []), typed_list("BindingFact", [])], after_first_step),
         ]:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                            "op": "tool_register", "tool": tool,
@@ -409,7 +456,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 break
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [cursor, typed_list("CheckerNode", [])], "semanticTarget": target})
+                                        "arguments": [cursor, typed_list("CheckerNode", []), typed_list("BindingFact", [])], "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             cursor = stepped["result"]
@@ -439,7 +486,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("pep-a13-checker-start", "checker_start", [empty_parsed, typed("Int", "0")],
              checker_cursor(empty["document"], "", empty_parsed, "validation")),
             ("pep-a13-checker-step", "checker_step",
-             [checker_cursor(empty["document"], "", empty_parsed, "validation"), typed_list("CheckerNode", [])],
+             [checker_cursor(empty["document"], "", empty_parsed, "validation"), typed_list("CheckerNode", []), typed_list("BindingFact", [])],
              checker_cursor(empty["document"], "", empty_parsed, "functions")),
         ]:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -507,6 +554,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                                    "semanticTarget": target})
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         cursor_value = cursor["result"]
+        external_typed_bindings = typed_list("BindingFact", [])
         step_count = 0
         type_analysis_steps = 0
         while not scalar(fields(cursor_value)["done"]) and step_count < 40:
@@ -522,11 +570,17 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 end_node = min(start_node + 32, scalar(fields(previous["validation"])["totalCount"]))
                 step_nodes = checker_nodes[start_node:end_node]
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-                                        "tool": "pep-a13-checker-step", "arguments": [cursor_value, typed_list("CheckerNode", step_nodes)],
+                                        "tool": "pep-a13-checker-step", "arguments": [cursor_value, typed_list("CheckerNode", step_nodes), external_typed_bindings],
                                         "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             cursor_value = stepped["result"]
+            if phase == "binding_types":
+                delta = fields(cursor_value)["typedBindings"]["value"]
+                external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
+                if scalar(fields(cursor_value)["phase"]) != "binding_types":
+                    external_typed_bindings["value"].reverse()
+            cursor_value = checker_cursor_without_typed_bindings(cursor_value)
             current = fields(cursor_value)
             if scalar(previous["phase"]) == "type_analysis":
                 type_analysis_steps += 1
@@ -1489,8 +1543,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(opened.get("outcome"), "ok", opened)
         self.assertEqual(opened.get("status"), "valid", opened)
 
-    def test_staged_checker_composes_one_hundred_twenty_eight_function_roots(self):
-        count = 128
+    def test_staged_checker_composes_one_hundred_sixty_function_roots(self):
+        count = 160
         declarations = [
             f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
             for index in range(count)
@@ -1498,7 +1552,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         declarations.append("fn main() -> Int { return 0 }")
         source = NL.join(declarations)
 
-        reference = self._reference_check("staged-128-function-roots", source)
+        reference = self._reference_check("staged-160-function-roots", source)
         parser_result = self._parse_staged(source)
         _, report = self._analyze_staged(source, parser_result=parser_result)
 
@@ -1559,7 +1613,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             stepped = self.client.send({
                 "schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                 "tool": "pep-a13-checker-step",
-                "arguments": [cursor_value, typed_list("CheckerNode", step_nodes)],
+                "arguments": [cursor_value, typed_list("CheckerNode", step_nodes), typed_list("BindingFact", [])],
                 "semanticTarget": target,
             })
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
@@ -1612,7 +1666,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(started.get("outcome"), "ok", started)
         stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                     "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                    "arguments": [started["result"], typed_list("CheckerNode", [])],
+                                    "arguments": [started["result"], typed_list("CheckerNode", []), typed_list("BindingFact", [])],
                                     "semanticTarget": target})
         self.assertEqual(stepped.get("outcome"), "ok", stepped)
         report = fields(fields(stepped["result"])["report"])

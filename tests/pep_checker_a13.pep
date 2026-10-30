@@ -625,54 +625,30 @@ fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunct
   var reversed = previous.bindings
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var ordinal = length(previous.bindings)
-  if length(functions) != 1 {
-    var activeFunctionId = -1
-    var activeFunctionSyntaxId = -1
-    var activeFunctionStart = 0
-    var activeFunctionEnd = 0
-    var nextFunctionOrdinal = 0
-    var nodeOffset = 0
-    for node in nodes {
-      if node.parentId == -1 && node.kind == "function" {
-        activeFunctionId = 100000 + nextFunctionOrdinal
-        activeFunctionSyntaxId = node.id
-        activeFunctionStart = node.startByte
-        activeFunctionEnd = node.endByte
-        nextFunctionOrdinal = nextFunctionOrdinal + 1
-      } else {}
-      let parameter = node.kind == "parameter" && node.parentId == activeFunctionSyntaxId
-      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd
-      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && activeFunctionId != -1 && (parameter || local) {
-        let scope = binding_scope_id(nodes, node, activeFunctionSyntaxId, activeFunctionId)
-        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
-        let duplicate = duplicate_binding_exists(reversed, activeFunctionId, scope, node.text)
-        let declaredInfo = declared_binding_info(nodes, node)
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
-        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
-        reversed = prepend(reversed, binding)
-        ordinal = ordinal + 1
-      } else {}
-      nodeOffset = nodeOffset + 1
-    }
-    return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
-  } else {}
-  for function in functions {
-    var nodeOffset = 0
-    for node in nodes {
-      let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
-      let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(node, function)
-      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (parameter || local) {
-        let scope = binding_scope_id(nodes, node, function.syntaxId, function.semanticId)
-        let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
-        let duplicate = duplicate_binding_exists(reversed, function.semanticId, scope, node.text)
-        let declaredInfo = declared_binding_info(nodes, node)
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
-        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
-        reversed = prepend(reversed, binding)
-        ordinal = ordinal + 1
-      } else {}
-      nodeOffset = nodeOffset + 1
-    }
+  for node in nodes {
+    let inRange = startNode <= node.id && node.id + 1 <= endNode
+    let parameter = node.kind == "parameter"
+    let local = node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern"
+    var ownerFound = false
+    var owner = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
+    if inRange && (parameter || local) {
+      for function in functions {
+        if !ownerFound && (parameter && node.parentId == function.syntaxId || local && inside_function(node, function)) {
+          ownerFound = true
+          owner = function
+        } else {}
+      }
+    } else {}
+    if ownerFound {
+      let scope = binding_scope_id(nodes, node, owner.syntaxId, owner.semanticId)
+      let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
+      let duplicate = duplicate_binding_exists(reversed, owner.semanticId, scope, node.text)
+      let declaredInfo = declared_binding_info(nodes, node)
+      let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: owner.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
+      if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
+      reversed = prepend(reversed, binding)
+      ordinal = ordinal + 1
+    } else {}
   }
   return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
 }
@@ -684,28 +660,24 @@ fn collect_bindings(nodes: List[CheckerNode], functions: List[CheckedFunction]) 
 fn resolve_names_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], startNode: Int, endNode: Int, previous: NameResolution) -> NameResolution {
   var reversedReferences = previous.references
   var reversedDiagnostics = previous.diagnostics
-  if length(functions) != 1 {
-    var activeFunctionId = -1
-    var activeFunctionSyntaxId = -1
-    var activeFunctionStart = 0
-    var activeFunctionEnd = 0
-    var nextFunctionOrdinal = 0
-    var nodeOffset = 0
-    for node in nodes {
-      if node.parentId == -1 && node.kind == "function" {
-        activeFunctionId = 100000 + nextFunctionOrdinal
-        activeFunctionSyntaxId = node.id
-        activeFunctionStart = node.startByte
-        activeFunctionEnd = node.endByte
-        nextFunctionOrdinal = nextFunctionOrdinal + 1
-      } else {}
-      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (node.kind == "name" || node.kind == "assignment") && activeFunctionId != -1 && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd {
-        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
+  for node in nodes {
+    let inRange = startNode <= node.id && node.id + 1 <= endNode
+    if inRange && (node.kind == "name" || node.kind == "assignment") {
+      var ownerFound = false
+      var owner = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
+      for function in functions {
+        if !ownerFound && inside_function(node, function) {
+          ownerFound = true
+          owner = function
+        } else {}
+      }
+      if ownerFound {
+        let scopes = scope_chain(nodes, node, owner.syntaxId, owner.semanticId)
         var found = false
         var resolved = 0
         for scope in scopes {
           for binding in bindings {
-            if !found && binding.ownerFunctionId == activeFunctionId && binding.scopeId == scope && binding.name == node.text && binding.visibleFrom <= node.startByte {
+            if !found && binding.ownerFunctionId == owner.semanticId && binding.scopeId == scope && binding.name == node.text && binding.visibleFrom <= node.startByte {
               found = true
               resolved = binding.semanticId
             } else {}
@@ -715,34 +687,7 @@ fn resolve_names_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", "No visible variable has this name", node))
         }
       } else {}
-      nodeOffset = nodeOffset + 1
-    }
-    return NameResolution { references: reversedReferences, diagnostics: reversedDiagnostics }
-  } else {}
-  for function in functions {
-    var nodeOffset = 0
-    for node in nodes {
-      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
-        let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
-        var found = false
-        var resolved = 0
-        for scope in scopes {
-          for binding in bindings {
-            if !found && binding.ownerFunctionId == function.semanticId && binding.scopeId == scope && binding.name == node.text && binding.visibleFrom <= node.startByte {
-              found = true
-              resolved = binding.semanticId
-            } else {}
-          }
-        }
-
-        if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
-          let code = "PEP_UNKNOWN_VARIABLE"
-          let message = "No visible variable has this name"
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, message, node))
-        }
-      } else {}
-      nodeOffset = nodeOffset + 1
-    }
+    } else {}
   }
   return NameResolution { references: reversedReferences, diagnostics: reversedDiagnostics }
 }
@@ -1277,6 +1222,15 @@ fn infer_binding_types_chunk(nodes: List[CheckerNode], functions: List[CheckedFu
 fn infer_binding_types(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   let partial = infer_binding_types_chunk(nodes, functions, bindings, references, 0, length(bindings), [])
   return reverse(partial)
+}
+fn take_binding_prefix(bindings: List[BindingFact], count: Int) -> List[BindingFact] {
+  var reversedPrefix: List[BindingFact] = []
+  var offset = 0
+  for binding in bindings {
+    if !(count <= offset) { reversedPrefix = prepend(reversedPrefix, binding) } else {}
+    offset = offset + 1
+  }
+  return reverse(reversedPrefix)
 }
 fn drop_binding_prefix(bindings: List[BindingFact], count: Int) -> List[BindingFact] {
   var reversedRemaining: List[BindingFact] = []
@@ -2553,21 +2507,25 @@ fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   let cursor = make_checker_cursor(authority.document, authority.revision, "validation", false, retainedParser, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   return checker_cursor_with_validation(cursor, validation)
 }
-fn checker_type_chunk_end(nodes: List[CheckerNode], startNode: Int) -> Int {
-  let proposed = startNode + 4
-  return if proposed <= length(nodes) { proposed } else { length(nodes) }
+fn checker_type_chunk_end(totalCount: Int, startNode: Int) -> Int {
+  let proposed = startNode + 8
+  return if proposed <= totalCount { proposed } else { totalCount }
 }
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
-  return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
+  let next = make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
+  return checker_cursor_with_validation(next, cursor.validation)
+}
+fn checker_report_with_syntax_node_count(report: CheckerReport, count: Int) -> CheckerReport {
+  return CheckerReport { document: report.document, revision: report.revision, status: report.status, syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: report.calls, expressionTypes: [], holes: [], diagnostics: report.diagnostics }
 }
 fn checker_report_with_diagnostics(report: CheckerReport, diagnostics: List[CheckDiagnostic]) -> CheckerReport {
   return CheckerReport { document: report.document, revision: report.revision, status: report.status, syntaxNodeCount: report.syntaxNodeCount, functions: report.functions, bindings: report.bindings, references: report.references, calls: report.calls, expressionTypes: report.expressionTypes, holes: report.holes, diagnostics: diagnostics }
 }
 // Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive the full ordered node list. Every step rechecks document/revision authority.
-fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> CheckerCursor {
+fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTypedBindings: List[BindingFact]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", checker_empty_node()))
+    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", checker_empty_node()))
   } else {}
   if cursor.done { return cursor } else {}
 
@@ -2600,38 +2558,61 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
         reversed = prepend(reversed, checked_function(collected.state.node, collected.state.ordinal, collected.state.arity, collected.state.resultShape))
       } else {}
       let functions = resolve_checked_functions(reverse(reversed), collected.state.nominalTypes)
-      return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
       return checker_cursor_with_function_state(cursor, collected.reversedFunctions, collected.state, chunkEnd)
     }
   } else {}
   if cursor.phase == "bindings" {
-    if length(inputNodes) == 0 {
+    let totalCount = cursor.validation.totalCount
+    if totalCount == 0 && length(inputNodes) == 0 {
       let empty = BindingCollection { bindings: [], diagnostics: [] }
-      return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
-    if !(0 <= cursor.typeOffset) || length(inputNodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", checker_empty_node()))
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset + 1 <= totalCount) {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", checker_empty_node()))
     } else {}
     let proposed = cursor.typeOffset + 8
-    let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
+    let chunkEnd = if proposed <= totalCount { proposed } else { totalCount }
+    var rangeCount = 0
+    for node in inputNodes {
+      if cursor.typeOffset <= node.id && node.id + 1 <= chunkEnd { rangeCount = rangeCount + 1 } else {}
+    }
+    if rangeCount != chunkEnd - cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker binding chunk is missing requested source nodes", checker_empty_node()))
+    } else {}
     let chunk = collect_bindings_chunk(inputNodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
-    if length(inputNodes) <= chunkEnd {
+    if totalCount <= chunkEnd {
       let result = BindingCollection { bindings: reverse(chunk.bindings), diagnostics: reverse(chunk.diagnostics) }
-      return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
-      return checker_replace(cursor, "bindings", false, cursor.functions, chunk, cursor.nameResult, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
+      return checker_replace(cursor, "bindings", false, cursor.functions, chunk, cursor.nameResult, [], cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
     }
   } else {}
   if cursor.phase == "names" {
+    let totalCount = cursor.validation.totalCount
+    if totalCount == 0 && length(inputNodes) == 0 {
+      let empty = NameResolution { references: [], diagnostics: [] }
+      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, empty, externalTypedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {}
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset + 1 <= totalCount) {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name cursor offset is invalid", checker_empty_node()))
+    } else {}
     let proposed = cursor.typeOffset + 16
-    let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
+    let chunkEnd = if proposed <= totalCount { proposed } else { totalCount }
+    var rangeCount = 0
+    for node in inputNodes {
+      if cursor.typeOffset <= node.id && node.id + 1 <= chunkEnd { rangeCount = rangeCount + 1 } else {}
+    }
+    if rangeCount != chunkEnd - cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name chunk is missing requested source nodes", checker_empty_node()))
+    } else {}
     let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
-    if length(inputNodes) <= chunkEnd {
+    if totalCount <= chunkEnd {
       let result = NameResolution { references: reverse(chunk.references), diagnostics: reverse(chunk.diagnostics) }
-      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, externalTypedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
-      return checker_replace(cursor, "names", false, cursor.functions, cursor.bindingResult, chunk, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
+      return checker_replace(cursor, "names", false, cursor.functions, cursor.bindingResult, chunk, externalTypedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
     }
   } else {}
   if cursor.phase == "binding_types" {
@@ -2639,40 +2620,49 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
       return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
     if !(0 <= cursor.typeOffset) {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", checker_empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", checker_empty_node()))
     } else {}
     let chunkEnd = if length(cursor.bindingResult.bindings) <= 4 { length(cursor.bindingResult.bindings) } else { 4 }
-    let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
+    let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, externalTypedBindings)
+    let bindingTypeDelta = take_binding_prefix(chunk, chunkEnd)
     let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)
     let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics }
     if length(remainingBindings) == 0 {
-      return checker_replace(cursor, "type_analysis", false, cursor.functions, nextBindingResult, cursor.nameResult, reverse(chunk), cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "type_analysis", false, cursor.functions, nextBindingResult, cursor.nameResult, bindingTypeDelta, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
-      return checker_replace(cursor, "binding_types", false, cursor.functions, nextBindingResult, cursor.nameResult, chunk, cursor.typeResult, cursor.typeOffset + chunkEnd, cursor.holes, cursor.report)
+      return checker_replace(cursor, "binding_types", false, cursor.functions, nextBindingResult, cursor.nameResult, bindingTypeDelta, cursor.typeResult, cursor.typeOffset + chunkEnd, cursor.holes, cursor.report)
     }
   } else {}
   if cursor.phase == "type_analysis" {
-    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(inputNodes)) || length(inputNodes) != 0 && length(inputNodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", checker_empty_node()))
+    let totalCount = cursor.validation.totalCount
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= totalCount) || totalCount != 0 && !(cursor.typeOffset + 1 <= totalCount) {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", checker_empty_node()))
     } else {}
-    let chunkEnd = checker_type_chunk_end(inputNodes, cursor.typeOffset)
-    let result = type_analysis_chunk(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
+    let chunkEnd = checker_type_chunk_end(totalCount, cursor.typeOffset)
+    var rangeCount = 0
+    for node in inputNodes {
+      if cursor.typeOffset <= node.id && node.id + 1 <= chunkEnd { rangeCount = rangeCount + 1 } else {}
+    }
+    if rangeCount != chunkEnd - cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker type-analysis chunk is missing requested source nodes", checker_empty_node()))
+    } else {}
+    let result = type_analysis_chunk(inputNodes, cursor.functions, externalTypedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
     var reversedFacts = cursor.typeResult.expressionTypes
     for fact in result.expressionTypes { reversedFacts = prepend(reversedFacts, fact) }
     var reversedDiagnostics = cursor.typeResult.diagnostics
     for item in result.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
     let unreachable = if cursor.typeResult.unreachable.found { cursor.typeResult.unreachable } else { result.unreachable }
-    if length(inputNodes) <= chunkEnd {
+    if totalCount <= chunkEnd {
       let finalTypeResult = TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: select_type_diagnostics(reverse(reversedDiagnostics)), unreachable: unreachable }
-      return checker_replace(cursor, "holes", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypeResult, chunkEnd, cursor.holes, cursor.report)
+      return checker_replace(cursor, "holes", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], finalTypeResult, chunkEnd, cursor.holes, cursor.report)
     } else {
       let partialTypeResult = TypeAnalysis { expressionTypes: reversedFacts, diagnostics: reversedDiagnostics, unreachable: unreachable }
-      return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, partialTypeResult, chunkEnd, cursor.holes, cursor.report)
+      return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], partialTypeResult, chunkEnd, cursor.holes, cursor.report)
     }
   } else {}
   if cursor.phase == "holes" {
-    let holes = hole_facts(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
-    return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, holes, cursor.report)
+    let holes = hole_facts(inputNodes, cursor.functions, externalTypedBindings, cursor.nameResult.references)
+    return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, holes, cursor.report)
   } else {}
   if cursor.phase == "duplicate_functions" {
     let proposed = cursor.typeOffset + 16
@@ -2690,19 +2680,20 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
       var reversedTypeDiagnostics = reverse(cursor.typeResult.diagnostics)
       for item in reverse(reversedDuplicates) { reversedTypeDiagnostics = prepend(reversedTypeDiagnostics, item) }
       let finalTypes = TypeAnalysis { expressionTypes: cursor.typeResult.expressionTypes, diagnostics: reverse(reversedTypeDiagnostics), unreachable: cursor.typeResult.unreachable }
-      return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypes, 0, cursor.holes, checker_report_with_diagnostics(cursor.report, []))
+      return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], finalTypes, 0, cursor.holes, checker_report_with_diagnostics(cursor.report, []))
     } else {
-      return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, checker_report_with_diagnostics(cursor.report, reversedDuplicates))
+      return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, chunkEnd, cursor.holes, checker_report_with_diagnostics(cursor.report, reversedDuplicates))
     }
   } else {}
   if cursor.phase == "report" {
-    let report = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
+    let rawReport = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, externalTypedBindings, cursor.typeResult, cursor.holes)
+    let report = checker_report_with_syntax_node_count(rawReport, cursor.validation.totalCount)
     let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
     let emptyNames = NameResolution { references: [], diagnostics: [] }
     let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: checker_empty_node() } }
     return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   } else {}
-  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", checker_empty_node()))
+  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", checker_empty_node()))
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let authority = semantic_snapshot()
