@@ -458,6 +458,52 @@ reporting `Pep C23 parser AST node ids are not exactly 0..n-1` and later
 `Pep C23 emission inputs do not match the authorised source revision` for an
 unparseable program, instead of the parse error itself — a diagnostic-quality
 note for the emitter owner, not a correctness bug.
+
+## Exhaustive classifier differential — semantics verified, native sweep blocked by the emitter budget (Agent 3)
+
+The accepted slice samples five byte values. This attempts the whole domain: a Pep
+`while` loop over 0..255 accumulating a checksum per classifier, compared across
+three independent computations — a Python model of the classifier semantics, the
+Pep interpreter, and the emitted native binary.
+
+**Interpreter and Python agree exactly, over all 256 values:**
+
+| classifier | Python model | interpreter |
+| --- | --- | --- |
+| `ascii_letter` | 5010 | 5010 |
+| `ascii_digit` | 535 | 535 |
+| `ascii_continue` | 5545 | 5545 |
+
+That is a stronger statement about the classifiers than the five-case slice makes.
+
+**The native arm cannot run it.** Every variant fails with:
+
+```
+Pep C23 error: emit checked source: expected outcome='ok', received
+{'error': {'code': 'PEP_RUNTIME_STEP_LIMIT',
+           'message': 'Execution step budget exceeded at 7630:12'}}
+```
+
+Three things follow, each measured rather than inferred:
+
+1. **The wall has moved from the checker to the emitter.** The failing call is
+   `emit checked source` — the emitter tool invocation — not the checker. Agent 1's
+   bounded staging did its job; at this size the emitter stage is now the binding
+   constraint.
+2. **It is source-complexity dependent, not trip-count dependent.** The identical
+   ~512-byte program with `i <= 3`, `15`, `63` and `255` all fail with the same
+   code. A three-iteration loop does not help, so this is AST cost, not runtime
+   work. A minimal `while` program alone (three lines) emits fine.
+3. **Consequence for the milestone:** the ASCII-classifier closure cannot yet be
+   verified exhaustively for native execution, and the reason is the stage budget
+   rather than a missing language feature. That is worth stating explicitly next
+   to any "native-verified" claim.
+
+**A separate quirk found while isolating:** `var` plus assignment with no loop is
+rejected ("functions require local bindings and supported loops followed by one
+return"), while the same `var` inside a `while` is accepted. Mutable binding thus
+appears to require a surrounding supported loop — harmless, but surprising enough
+to be worth documenting for whoever writes Lucy's stateful functions.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
