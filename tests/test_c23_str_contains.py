@@ -329,11 +329,15 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
 
 
     def test_boolean_helper_calls_preserve_short_circuit_under_clang_and_gcc(self):
-        source_text = """fn bomb() -> Bool {
+        source_text = """fn identity(value: Bool) -> Bool { return value }
+fn bomb() -> Bool {
   return if 1 / 0 == 0 { true } else { false }
 }
+fn combine(value: Bool) -> Bool {
+  return identity(value) && bomb() || identity(true) || bomb()
+}
 fn main() -> Int {
-  return if (false && bomb()) || (true || bomb()) { 0 } else { 1 }
+  return if combine(false) { 0 } else { 1 }
 }
 """
         reference_text = source_text + "say(int_text(main()))\n"
