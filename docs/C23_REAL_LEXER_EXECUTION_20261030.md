@@ -1370,6 +1370,74 @@ constructs lower" are now mutually exclusive facts in the tree, and each was rep
 progress without the other. The emitter's per-node cost is the variable connecting them,
 and it deserves a standing regression gate — the slice test itself, at 9–12 seconds, is
 the natural one.
+
+## Two precise diagnoses: a stale validation vector (A1) and a persistent emitter cost (A2) (Agent 3)
+
+Both blockers now have a one-line-scale cause.
+
+### A1 `7628d6d` restored the bundle, but the staged path dies on an argument count
+
+`7628d6d` "Restore compiler bundle helper type boundaries" genuinely fixed the
+`CheckerNode` breakage: `FlatAstNode` is declared again in `examples/pep_parser.pep`
+(1 declaration, 19 references), and `test_a14_c23` returns from **11 failures to its 2
+known ones**. That part worked.
+
+What still fails is every path that goes through `pep_c23.emit`'s staged checker:
+
+| suite | at `7628d6d` |
+| --- | --- |
+| `test_a14_c23` (drives the emitter tool directly) | 11 tests, 2 known failures |
+| `test_c23_cli` | **8 tests, 5 FAILED** |
+| classifier slice | **5 errors** |
+| `test_a12` | 23/23 OK |
+
+The rejection is explicit:
+
+```
+validate pep-c23-checker-start: expected status='Validated', received
+{'outcome': 'rejected', ... 'signature': {'parameters': ['ParserProgress', 'Int'],
+ 'returns': 'CheckerCursor'}, 'status': 'Rejected',
+ 'error': 'PEP_TOOL_ARGUMENT_COUNT: Test vector argument count did not match the function signature'}
+```
+
+The checker now declares `fn checker_start(parsed: ParserProgress, totalNodeCount: Int)`
+(`tests/pep_checker_a13.pep:2470`), and the **production call already passes both**
+arguments (`pep_c23.py:489-490`: `[checker_progress_header(parsed), typed("Int", node_count)]`).
+Only the **validation test vector** is stale — `pep_c23.py:604` still passes one
+argument:
+
+```python
+("pep-c23-checker-start", "checker_start", [empty_parsed], ...)
+```
+
+So the fix is to add the second argument to that vector, mirroring the real call. One
+line.
+
+**Why `test_a14_c23` passes while the CLI fails:** they use different paths.
+`test_a14_c23` imports `JsonLineClient` from `tests/test_a11.py` and drives
+`tests/pep_c23_emitter.pep` directly through its own `_emit`, so it never validates
+`pep-c23-checker-start`. `run-c23` and the slice go through `pep_c23.emit` and its staged
+checker, so they hit the rejection. That also means `a14` alone is not a sufficient
+regression gate for the driver — the CLI suite or the slice is.
+
+### A2's emitter cost regression persists through the newest commit
+
+Re-tested the whole emitter series against fixed A1 `e0d1f89` (the last head whose bundle
+validates):
+
+| commit | emitter blob | classifier slice |
+| --- | --- | --- |
+| `7bfb819` | `23ef2b19` | **OK** |
+| `dea32c0` | `8ab5bf94` | FAILED — `INCONCLUSIVE` (budget) |
+| `c9751e5` | `44d4e0f1` | FAILED — `INCONCLUSIVE` (budget) |
+
+`c9751e5` "Isolate C23 emitter AST helper namespace" reorganised 338 lines of the emitter
+but did not recover the cost. So the trade-off identified above still stands: no emitter
+after `23ef2b19` can emit the accepted slice, and the newest one still cannot.
+
+**Net state:** the bundle is fixed (A1), the driver has a one-line stale vector (A1), and
+the emitter cost regression is unfixed (A2). The only combination measured to emit the
+slice today remains `e0d1f89` + emitter `23ef2b19`.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
