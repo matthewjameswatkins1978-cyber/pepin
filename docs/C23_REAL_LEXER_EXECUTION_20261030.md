@@ -598,6 +598,42 @@ line; no emitter change is required.
 contains `let next = byte_at(...)`, which the emitter rejects. The predicate work
 is genuine progress and the right decomposition, but the component remains gated
 on loop-body `let` support (or a deliberate rewrite of Lucy's source).
+
+## Reconciliation with the peer verification lane on the A14 delta (Agent 3)
+
+The peer lane published `verification/receipts/FINDING-a14-stale-expectations-fd5c5d5.md`
+at `06eb77e`, covering the same 11/11 → 9/11 delta I reported. We agree on the
+facts and differ only in emphasis, so recording both readings rather than
+defending mine:
+
+**Where I corroborate them independently.** Their claim that
+`test_a13 + test_a13_nested_records + test_c23_cli` is 95/95 at `fd5c5d5` matches
+my own runs at that head (76 + 13 + 6, all green). Their `emitter.pep` pin
+`4B129FA8…` matches mine. Their reading that `length([1, 2])` is now correctly
+emitted and returns `2` matches my compile-and-run.
+
+**Where they went further than I did.** They verified the parameterised
+recursion rejection on **gcc** as well (`-Werror=infinite-recursion`); I had only
+checked clang. That strengthens the fail-closed argument and I am adopting their
+datum.
+
+**Where I still think my framing adds something.** Their verdict is "stale test
+expectations, not safety regressions", and on safety that is correct: no binary is
+produced, and their three-layer model (emit-time for zero-arg, C-compile-time via
+strict warnings, runtime `PEP_RUNTIME_CALL_DEPTH`) is a fair description. My
+narrower point is about the *diagnostic layer*: pre-merge, parameterised
+recursion was rejected **at emit time with a Pep diagnostic**; post-merge a Pep
+user sees a raw C compiler error. The outcome is fail-closed either way, but the
+error surface moved out of Pep. That is worth either restoring or documenting
+deliberately, so that a `-Winfinite-recursion` line is not later mistaken for a
+codegen bug.
+
+**On their suggested fix.** They propose updating the assertion to pin the new
+capability (emit and execute to `2`), which is better than my earlier suggestion
+of swapping in a still-unsupported exemplar (`length(append([1], 2))`, verified
+unsupported): pinning new behaviour tests more than avoiding it. Both are
+compatible — pin the positive case, and keep a separate unsupported exemplar for
+the fail-closed path.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
