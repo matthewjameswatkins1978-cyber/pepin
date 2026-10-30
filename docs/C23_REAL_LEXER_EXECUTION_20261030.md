@@ -1304,6 +1304,37 @@ by updating the emitter's 150 `FlatAstNode` references to `CheckerNode` (and any
 signatures that cross the boundary). The `a14` 2→11 jump is the visible symptom; the
 real statement is that the emitter bundle does not typecheck, so every downstream
 measurement of A1's line in this window is meaningless until it is fixed.
+
+## Why the breakage survived four commits: Agent 1's suite cannot see the emitter (Agent 3)
+
+The breakage reported above persists at the newest head, `3d6774e` ("Split checker type
+analysis into smaller chunks") — the fifth commit on a broken base. Type census
+unchanged: checker declares `CheckerNode` only, emitter carries 150 `FlatAstNode`
+references and zero `CheckerNode`.
+
+Splitting the suites by what they actually exercise explains how that happened:
+
+| suite | at `3d6774e` | exercises emission? |
+| --- | --- | --- |
+| `test_a13` | **86/86 OK** (347 s) | **no** — `test_a13.py` contains zero mentions of "emit" |
+| `test_a12` | 23/23 OK | no |
+| `test_a14_c23` | **11/11 FAILED** — type mismatch | yes |
+| `test_c23_cli` | **8 tests, 5 FAILED** — bundle invalid | yes |
+| classifier slice | 5 errors — bundle invalid | yes |
+
+So Agent 1's own targeted suite is **green** — 86 tests, all passing, growing from 80 —
+while every emit path in the repository is dead. The checker work is genuinely landing;
+the signal simply does not include the thing that broke, because `test_a13` tests the
+checker and never hands a program to the emitter.
+
+That is the actionable part. It is not a discipline failure so much as a missing gate: a
+checker change can invalidate a shared bundle type and no test in the author's loop will
+say so. Concretely, `test_a14_c23` takes **7 seconds** to run and fails immediately with
+`PEP_TYPE_MISMATCH` when the bundle is broken — cheap enough to belong in Agent 1's
+pre-push loop, or in a shared pre-push hook alongside `test_a12`.
+
+**Totals at `3d6774e`:** 109 checker-side tests green, 16 emit-path tests failing plus 5
+slice errors, all from one unpropagated type rename.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
