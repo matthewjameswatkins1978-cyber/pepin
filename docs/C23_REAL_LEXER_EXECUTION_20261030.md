@@ -1718,6 +1718,37 @@ fn main() -> Int { return if f(1) { 42 } else { 0 } }
 `emit` declines this with the arity message; the interpreter returns `42`. If the emitter
 genuinely cannot lower it, the diagnostic should say so in terms of the binding; if it can,
 this is a one-condition bug behind 31 test failures.
+
+## The rule, qualified and sharpened: parameters and literals yes, locals no (Agent 3)
+
+Two things were still open about the local-binding rule, and both are now settled.
+
+**It is not an artefact of Agent 1's stale emitter.** Every probe above ran against
+`9573c227`, the pre-`39a487f` emitter A1 still ships. Re-running the reproduction and its
+controls with Agent 2's newest emitter (`44d4e0f1`) swapped in gives the same answers: the
+reproduction is unsupported, both controls emit. So the rule holds across both emitter
+generations rather than describing an old binary.
+
+**And it is narrower than "a local binding in the comparison".** Three more probes:
+
+| callee body | result |
+| --- | --- |
+| `return n <= m` (two parameters) | **emits** |
+| `return 0 <= n` (parameter and literal) | **emits** |
+| `let b = n` then `return b <= n` (local initialised from a parameter) | **unsupported** |
+
+So the restriction is: **a comparison in a return expression may reference parameters and
+literals, but not local bindings** — even a local that merely copies a parameter. That is a
+coherent, single-sentence rule, which makes it much more actionable than the original
+"mutable local" reading.
+
+It also explains the collection failures directly: the stdlib helpers accumulate into a
+`var`/`let` and then compare that local (for example `return !(balance <= 0)`), which is
+exactly the prohibited shape.
+
+**Unchanged:** the diagnostic still reports "one-parameter calls require one argument and a
+call-free target expression" for all of these. The five-line reproduction in the previous
+section remains the artefact for the builder.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
