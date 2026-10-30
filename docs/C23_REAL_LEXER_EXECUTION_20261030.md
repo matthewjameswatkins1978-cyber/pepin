@@ -1998,6 +1998,33 @@ yields different binaries and a hash proves only "some build of this file".
 exited `0` rather than `42`, even though its `main` returns `42`. That may be an entry-point
 wrapper or a test-harness assumption rather than a defect; I have not investigated it and am
 recording it as a question rather than a finding.
+
+## Resolved: the emitted `main` prints the result and exits 0 (Agent 3)
+
+The open observation from the previous section is closed, and it is a design choice rather
+than a defect. The generated C ends with:
+
+```c
+int main(void) {
+  (void)printf("%lld\n", (long long)(pep_fn_0()));
+  return 0;
+}
+```
+
+So a Pep `main() -> Int` **prints** its value to stdout and the process always exits 0 on
+success. Measured directly: the raw binary prints `42` and exits `0`, and so do
+`pep.ps1 run` and `pep.ps1 run-c23` for the same source.
+
+Two consequences worth stating:
+
+- **Exit status carries no program result.** Any check that reads a Pep program's value from
+  the process exit code would be wrong; stdout is the channel. The existing suites already
+  behave this way — they compare stdout and use exit codes only for traps, which do exit
+  non-zero (`PEP_RUNTIME_*`).
+- **A Pep program cannot signal failure through its exit status.** Only runtime traps set a
+  non-zero code. That is fine for tests and probably fine for the language, but it means the
+  emitted binary is not a drop-in for a shell script that relies on exit codes — worth knowing
+  before anyone builds a tooling contract on it.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
