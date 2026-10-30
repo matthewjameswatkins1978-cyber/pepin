@@ -1844,6 +1844,49 @@ characterised further.
 **Net attribution of the ~31 unsupported collection cases:**
 16 from the local-comparison rule (family A) and 14 from the four-parameter limit (family B),
 with one three-parameter return anomaly outstanding.
+
+## `ab79660` verified, and the direct-parameter-return anomaly characterised (Agent 3)
+
+**New Agent 1 head is non-regressive.** `ab79660` ("Stream checker function collection in
+bounded chunks"):
+
+| check | result |
+| --- | --- |
+| classifier slice | OK (19 s) |
+| `test_c23_cli` | 8/8 OK |
+| `test_a12` | 23/23 OK |
+| `test_a13` | **88/88 OK** (381 s) — grew from 87 |
+| `test_a13_nested_records` | 13/13 OK |
+| `test_a14_c23` | 11 tests, the 2 known failures |
+
+A third consecutive chunking round with no regression, and the suite keeps growing.
+
+**The direct-parameter-return anomaly, pinned down.** Last round I described it as "returning
+the third parameter of a three-parameter function". It is broader and stranger:
+
+| function | result |
+| --- | --- |
+| `fn f(n: Int) -> Int { return n }` | **emits** |
+| `fn f(a: Int, b: Int) -> Int { return a }` / `return b` | **emits both** |
+| `fn f(a: Int, b: Int, c: Int) -> Int { return a }` / `return c` | **unsupported both** |
+| `fn f(a: Int, b: Int, c: Int) -> Int { return 0 }` | **emits** |
+| `fn f(a: Int, b: Int, c: Int) -> Int { let x = 0; return x }` | **emits** |
+| `fn f(a: Int, b: Int, c: Int) -> Int { let x = a + b; return x }` | **emits** |
+
+So the condition is narrow and consistent: **a three-parameter function that returns a
+parameter directly is refused**, while the same function returning a literal, a local, or a
+local computed from parameters is fine, and one- and two-parameter functions can return a
+parameter directly. Both the first and third parameters trigger it, so it is not about which
+slot.
+
+I have no mechanism for this and am not going to invent one. It is recorded as a set of exact
+conditions with a minimal reproduction, which is the most useful thing available without
+instrumentation:
+
+```pep
+fn f(a: Int, b: Int, c: Int) -> Int { return c }
+fn main() -> Int { return f(1, 2, 3) }
+```
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
