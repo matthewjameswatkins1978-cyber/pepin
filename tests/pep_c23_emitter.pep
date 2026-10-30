@@ -1223,6 +1223,55 @@ fn pep_c23_union_payload_parts(subject: List[Str], variant: FlatAstNode,
   if dereference { parts = append(parts, ")") } else {}
   return parts
 }
+fn pep_c23_union_two_payload_operand(nodes: List[FlatAstNode],
+  subject: List[Str], declaration: FlatAstNode, variant: FlatAstNode,
+  firstPattern: FlatAstNode, secondPattern: FlatAstNode,
+  operand: FlatAstNode) -> PepC23Emission {
+  var bindingName = ""
+  var wantsLength = false
+  if operand.kind == "name" {
+    bindingName = operand.text
+  } else {
+    if operand.kind == "call" && operand.text == "length" {
+      let lengthArgument = pep_c23_child(nodes, operand.id, "argument", 0)
+      let extraArgument = pep_c23_child(nodes, operand.id, "argument", 1)
+      if !lengthArgument.found || lengthArgument.node.kind != "name" || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 recursive union addition requires a direct child-list length binding")
+      } else {}
+      bindingName = lengthArgument.node.text
+      wantsLength = true
+    } else {
+      return pep_c23_unsupported("Pep C23 recursive union addition requires a scalar binding or child-list length")
+    }
+  }
+  let firstMatches = firstPattern.kind == "binding_pattern" && firstPattern.text == bindingName
+  let secondMatches = secondPattern.kind == "binding_pattern" && secondPattern.text == bindingName
+  if firstMatches == secondMatches {
+    return pep_c23_unsupported("Pep C23 recursive union addition binding must identify exactly one pattern field")
+  } else {}
+  let payloadIndex = if firstMatches { 0 } else { 1 }
+  let payload = pep_c23_child(nodes, variant.id, "field_type", payloadIndex)
+  if !payload.found {
+    return pep_c23_unsupported("Pep C23 recursive union addition payload field is missing")
+  } else {}
+  if wantsLength {
+    if payload.node.kind != "type_list" ||
+       !pep_c23_union_payload_is_recursive(nodes, declaration, payload.node) {
+      return pep_c23_unsupported("Pep C23 recursive union addition length binding must be List[Self]")
+    } else {}
+  } else {
+    if pep_c23_c_scalar_type(payload.node) != "int64_t" {
+      return pep_c23_unsupported("Pep C23 recursive union addition scalar binding must be Int")
+    } else {}
+  }
+  var parts = pep_c23_union_payload_parts(subject, variant, 2, payloadIndex,
+    PepC23NodeLookup { found: false, node: empty_node() }, false)
+  if wantsLength {
+    parts = prepend(parts, "pep_checked_length(")
+    parts = append(parts, ".length)")
+  } else {}
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_union_payload_record_path_type(nodes: List[FlatAstNode],
   payloadRecord: FlatAstNode, bindingName: Str, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "name" {
@@ -1423,9 +1472,30 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                 resultParts = append(resultParts, int_text(field.node.childIndex))
               }
             } else {
-              let loweredResult = pep_c23_expression(nodes, function, result.node)
-              if loweredResult.status != "emitted" { return loweredResult } else {}
-              resultParts = loweredResult.sourceParts
+              if result.node.kind == "binary" && result.node.text == "+" {
+                let left = pep_c23_child(nodes, result.node.id, "left", 0)
+                let right = pep_c23_child(nodes, result.node.id, "right", 1)
+                if !left.found || !right.found {
+                  return pep_c23_unsupported("Pep C23 recursive union addition requires two operands")
+                } else {}
+                let loweredLeft = pep_c23_union_two_payload_operand(nodes,
+                  loweredSubject.sourceParts, declaration.node, variant,
+                  patternArgument.node, secondPatternArgument.node, left.node)
+                let loweredRight = pep_c23_union_two_payload_operand(nodes,
+                  loweredSubject.sourceParts, declaration.node, variant,
+                  patternArgument.node, secondPatternArgument.node, right.node)
+                if loweredLeft.status != "emitted" { return loweredLeft } else {}
+                if loweredRight.status != "emitted" { return loweredRight } else {}
+                resultParts = ["pep_add("]
+                for part in loweredLeft.sourceParts { resultParts = append(resultParts, part) }
+                resultParts = append(resultParts, ", ")
+                for part in loweredRight.sourceParts { resultParts = append(resultParts, part) }
+                resultParts = append(resultParts, ")")
+              } else {
+                let loweredResult = pep_c23_expression(nodes, function, result.node)
+                if loweredResult.status != "emitted" { return loweredResult } else {}
+                resultParts = loweredResult.sourceParts
+              }
             }
           }
         } else {

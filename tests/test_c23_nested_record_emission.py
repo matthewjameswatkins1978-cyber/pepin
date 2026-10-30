@@ -815,12 +815,12 @@ fn main() -> Int {
     @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
                          "Clang and GCC are required for native C23 verification")
     def test_recursive_union_zero_arg_helper_returns_through_match(self):
-        program = """type Tree = End() | Branch(Int, List[Tree])
-fn make() -> Tree { return Branch(39, [End()]) }
+        program = """type Tree = End() | Branch(List[Tree], Int)
+fn make() -> Tree { return Branch([End()], 39) }
 fn size(value: Tree) -> Int {
   return match value {
     End() => 0
-    Branch(label, children) => length(children)
+    Branch(children, label) => label + length(children)
   }
 }
 fn main() -> Int { return size(make()) }
@@ -833,10 +833,12 @@ fn main() -> Int { return size(make()) }
             reference.write_text(program + "say(int_text(main()))\n",
                                  encoding="utf-8", newline="\n")
             result = self.invoke("run", reference)
-            self.assertEqual((result.returncode, result.stdout), (0, "1\n"),
+            self.assertEqual((result.returncode, result.stdout), (0, "40\n"),
                              result.stdout + result.stderr)
             generated = emit(source.read_bytes())
             self.assertIn("pep_make_union_", generated)
+            self.assertIn("pep_add(", generated)
+            self.assertIn("pep_checked_length(", generated)
             self.assertRegex(generated, r"pep_fn_\d+\(pep_fn_\d+\(pep_arena\), pep_arena\)")
             c_file = folder / "recursive-return.c"
             c_file.write_text(generated, encoding="utf-8", newline="\n")
@@ -850,7 +852,7 @@ fn main() -> Int { return size(make()) }
                      "-o", str(exe)], cwd=ROOT, text=True, capture_output=True)
                 self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
                 native = subprocess.run([str(exe)], cwd=ROOT, text=True, capture_output=True)
-                self.assertEqual((native.returncode, native.stdout), (0, "1\n"),
+                self.assertEqual((native.returncode, native.stdout), (0, "40\n"),
                                  native.stdout + native.stderr)
 
 
