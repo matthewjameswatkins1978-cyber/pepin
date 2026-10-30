@@ -373,6 +373,7 @@ the integration took the emitter without the tests that guard it.
 line (or port it into the Agent 2 emitter); restore the recursion clause in the
 zero-argument diagnostic; update the `test_a14_c23.py:335` exemplar; carry
 `test_c23_str_contains.py`. None applied here — they are builder-owned files.
+
 ## Lean 4 proof validation — independently reproduced (Agent 3)
 
 The peer verification lane landed `a41d967` claiming a passing Lean 4 kernel
