@@ -516,6 +516,17 @@ fn pep_c23_union_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -
   } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_union_list_local_declaration(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  for binding in nodes {
+    if binding.parentId == function.id && binding.role == "statement" &&
+       binding.kind == "let" && binding.text == name {
+      let annotation = pep_c23_child(nodes, binding.id, "annotation", 0)
+      if annotation.found { return pep_c23_union_list_declaration(nodes, annotation.node) } else {}
+      return PepC23NodeLookup { found: false, node: empty_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for node in nodes {
     if node.parentId == record.id && node.role == "field" && node.kind == "field_declaration" && node.text == name {
@@ -642,7 +653,10 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
             if parameterType.found {
               return pep_c23_union_list_declaration(nodes, parameterType.node)
             } else {}
-          } else {}
+          } else {
+            let local = pep_c23_union_list_local_declaration(nodes, function, iterable.node.text)
+            if local.found { return local } else {}
+          }
         } else {}
         return PepC23NodeLookup { found: false, node: empty_node() }
       } else {}
@@ -1852,17 +1866,35 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
-          let recordList = pep_c23_record_list_declaration(nodes, initialValue.node)
-          var hasRecordElement = false
-          for item in nodes {
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
-            if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
-              return pep_c23_unsupported("Pep C23 immutable collection bindings require Int, Bool, or supported record list literals")
+          let recursiveUnionList = if statement.kind == "let" {
+            pep_c23_union_list_local_declaration(nodes, function, statement.text)
+          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          if recursiveUnionList.found {
+            if count_children(nodes, initialValue.node.id, "element") == 0 {
+              return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
+            } else {}
+            for item in nodes {
+              if item.parentId == initialValue.node.id && item.role == "element" {
+                let actual = pep_c23_union_value_type(nodes, function, item)
+                if !actual.found || actual.node.id != recursiveUnionList.node.id ||
+                   !pep_c23_union_list_element_supported(nodes, recursiveUnionList.node, item) {
+                  return pep_c23_unsupported("Pep C23 recursive union list locals require matching constructors with scalar literal payloads")
+                } else {}
+              } else {}
+            }
+          } else {
+            let recordList = pep_c23_record_list_declaration(nodes, initialValue.node)
+            var hasRecordElement = false
+            for item in nodes {
+              if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
+              if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
+                return pep_c23_unsupported("Pep C23 immutable collection bindings require Int, Bool, or supported record list literals")
+              } else {}
+            }
+            if hasRecordElement && !recordList.found {
+              return pep_c23_unsupported("Pep C23 immutable record list binding has no supported declared record type")
             } else {}
           }
-          if hasRecordElement && !recordList.found {
-            return pep_c23_unsupported("Pep C23 immutable record list binding has no supported declared record type")
-          } else {}
           // List descriptors have value semantics, so reassignment copies the descriptor.
         } else {
           let initial = pep_c23_expression(nodes, function, initialValue.node)
@@ -1906,14 +1938,29 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           } else {}
           if iterableList.found {
             let recordLiteral = pep_c23_record_list_declaration(nodes, iterableList.node)
+            let recursiveUnionList = if iterableList.found && iterable.found && iterable.node.kind == "name" {
+              pep_c23_union_list_local_declaration(nodes, function, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            if recursiveUnionList.found &&
+               count_children(nodes, iterableList.node.id, "element") == 0 {
+              return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
+            } else {}
             for item in nodes {
               if item.parentId == iterableList.node.id && item.role == "element" {
-                if recordLiteral.found {
-                  if item.kind != "record" { return pep_c23_unsupported("Pep C23 record list iteration requires record values") } else {}
-                } else {
-                  if item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
-                    return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
+                if recursiveUnionList.found {
+                  let actual = pep_c23_union_value_type(nodes, function, item)
+                  if !actual.found || actual.node.id != recursiveUnionList.node.id ||
+                     !pep_c23_union_list_element_supported(nodes, recursiveUnionList.node, item) {
+                    return pep_c23_unsupported("Pep C23 recursive union list locals require matching constructors with scalar literal payloads")
                   } else {}
+                } else {
+                  if recordLiteral.found {
+                    if item.kind != "record" { return pep_c23_unsupported("Pep C23 record list iteration requires record values") } else {}
+                  } else {
+                    if item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
+                      return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
+                    } else {}
+                  }
                 }
               } else {}
             }
@@ -2216,6 +2263,9 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             let iterableRecordLiteral = if iterableList.found {
               pep_c23_record_list_declaration(parsed.nodes, iterableList.node)
             } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableUnionLiteral = if iterableList.found && iterable.found && iterable.node.kind == "name" {
+              pep_c23_union_list_local_declaration(parsed.nodes, node, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
@@ -2241,7 +2291,15 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             if iterableList.found {
               for element in parsed.nodes {
                 if element.parentId == iterableList.node.id && element.role == "element" {
-                  if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) && (!iterableRecordLiteral.found || element.kind != "record") { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer, Bool, or supported record elements") } else {}
+                  if iterableUnionLiteral.found {
+                    let actual = pep_c23_union_value_type(parsed.nodes, node, element)
+                    if !actual.found || actual.node.id != iterableUnionLiteral.node.id ||
+                       !pep_c23_union_list_element_supported(parsed.nodes, iterableUnionLiteral.node, element) {
+                      return pep_c23_unsupported("Pep C23 recursive union list literals require matching constructors with scalar literal payloads")
+                    } else {}
+                  } else {
+                    if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) && (!iterableRecordLiteral.found || element.kind != "record") { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer, Bool, or supported record elements") } else {}
+                  }
                   elementCount = elementCount + 1
                 } else {}
               }
@@ -2288,10 +2346,14 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                     arrayDeclaration = append(arrayDeclaration, part)
                   }
                 } else {
-                  if iterableRecordLiteral.found {
-                    arrayDeclaration = ["  pep_record_", int_text(iterableRecordLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
+                  if iterableUnionLiteral.found {
+                    arrayDeclaration = ["  pep_union_", int_text(iterableUnionLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
                   } else {
-                    arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                    if iterableRecordLiteral.found {
+                      arrayDeclaration = ["  pep_record_", int_text(iterableRecordLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
+                    } else {
+                      arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                    }
                   }
                   for element in parsed.nodes {
                     if element.parentId == iterableList.node.id && element.role == "element" {
@@ -2314,10 +2376,15 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                   arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
                   arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
                   arrayDeclaration = append(arrayDeclaration, ") {\n    ")
-                  if iterableRecordLiteral.found {
-                    arrayDeclaration = append(arrayDeclaration, "pep_record_")
-                    arrayDeclaration = append(arrayDeclaration, int_text(iterableRecordLiteral.node.id))
-                  } else { arrayDeclaration = append(arrayDeclaration, "int64_t") }
+                  if iterableUnionLiteral.found {
+                    arrayDeclaration = append(arrayDeclaration, "pep_union_")
+                    arrayDeclaration = append(arrayDeclaration, int_text(iterableUnionLiteral.node.id))
+                  } else {
+                    if iterableRecordLiteral.found {
+                      arrayDeclaration = append(arrayDeclaration, "pep_record_")
+                      arrayDeclaration = append(arrayDeclaration, int_text(iterableRecordLiteral.node.id))
+                    } else { arrayDeclaration = append(arrayDeclaration, "int64_t") }
+                  }
                   arrayDeclaration = append(arrayDeclaration, " pep_local_")
                   arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
                   arrayDeclaration = append(arrayDeclaration, " = pep_iter_")

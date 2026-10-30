@@ -454,6 +454,38 @@ fn main() -> Int { return 0 }
         self.assertRegex(generated, r"pep_union_\d+ pep_local_\d+ = pep_arg_\d+\.data\[pep_index_\d+\]")
 
 
+    def test_recursive_union_local_list_literal_iteration(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn main() -> Int {
+  let values: List[Tree] = [Leaf(42)]
+  for item in values {
+    return match item {
+      Leaf(number) => number
+      Branch(_) => 0
+    }
+  }
+  return 0
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-union-local-list.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "42\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(generated,
+                             r"pep_union_\d+ pep_iter_\d+\[\] = \{")
+            self.assertRegex(generated,
+                             r"pep_union_\d+ pep_local_\d+ = pep_iter_\d+\[pep_index_\d+\]")
+
+
     def test_recursive_union_list_rejects_computed_constructor_payloads(self):
         source_text = """type Chain = End(Int) | Link(List[Chain])
 fn main() -> Int {
