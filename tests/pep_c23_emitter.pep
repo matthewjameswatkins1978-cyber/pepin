@@ -2041,11 +2041,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       nestedReturnTarget.found && nestedReturnTarget.node.id != target.node.id
     let directStrContainsTarget = targetStatement.found && targetStatement.node.kind == "return" &&
       targetValue.found && targetValue.node.kind == "call" && targetValue.node.text == "str_contains"
+    let booleanCallTarget = targetStatement.found && targetStatement.node.kind == "return" && targetValue.found &&
+      targetValue.node.kind == "binary" && (targetValue.node.text == "&&" || targetValue.node.text == "||")
     let conditionalTarget = (targetStatement.found && targetStatement.node.kind == "if_statement") ||
       (targetStatement.found && targetStatement.node.kind == "return" && targetValue.found && targetValue.node.kind == "if_expression") ||
       directLocalTarget ||
       directCallTarget ||
-      directStrContainsTarget
+      directStrContainsTarget ||
+      booleanCallTarget
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}

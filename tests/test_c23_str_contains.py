@@ -328,5 +328,55 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
                     self.assertEqual(result.stdout, "1\n1\n0\n")
 
 
+    def test_boolean_helper_calls_preserve_short_circuit_under_clang_and_gcc(self):
+        source_text = """fn bomb() -> Bool {
+  return if 1 / 0 == 0 { true } else { false }
+}
+fn main() -> Int {
+  return if (false && bomb()) || (true || bomb()) { 0 } else { 1 }
+}
+"""
+        reference_text = source_text + "say(int_text(main()))\n"
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "boolean-short-circuit.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "boolean-short-circuit-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "0\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn(" && ", generated)
+            self.assertIn(" || ", generated)
+            self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"boolean-short-circuit-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(generated_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+
 if __name__ == "__main__":
     unittest.main()
