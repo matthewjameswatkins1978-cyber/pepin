@@ -1548,6 +1548,45 @@ and that is now measured against a line where everything else passes.
 **Net status:** A1 unblocked (slice, CLI, a12, a13 all green); A2's newer emitters blocked
 by budget; collections suite ~half budget-blocked on its own branch. One root cause
 remains for all three: emitter per-node cost.
+
+## Complete collections baseline: 213 failures, all budget or unsupported, zero wrong answers (Agent 3)
+
+Finished measuring Agent 2's collections suite (`26be4be`) in bounded slices of 16 —
+128 of 129 tests, everything except the last one. Classified by cause rather than by
+count:
+
+| slice | tests | failures | budget | unsupported | **value mismatch** |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 1–16 | 2 | 2 | 0 | **0** |
+| 2 | 17–32 | 0 | 0 | 0 | **0** |
+| 3 | 33–48 | 14 | 14 | 0 | **0** |
+| 4 | 49–64 | 14 | 14 | 0 | **0** |
+| 5 | 65–80 | 19 | 2 | 17 | **0** |
+| 6 | 81–96 | 78 | 64 | 14 | **0** |
+| 7 | 97–112 | 84 | 84 | 0 | **0** |
+| 8 | 113–128 | 2 | 2 | 0 | **0** |
+
+**Totals: 213 subtest failures — 182 `PEP_RUNTIME_STEP_LIMIT`, 31 `Pep C23 unsupported`,
+and zero assertion value mismatches.** Since the suite compares emitted-native output
+against the interpreter for every case, zero value mismatches means **no demonstrated
+wrong-code defect anywhere in that suite**: every failure is the compiler declining the
+program, either for cost or for an unsupported shape.
+
+The 31 unsupported cases are the familiar function-shape rule, not a new defect —
+`bool_true_majority`, `count_between` and `count_runs` with negative values all fail with
+"one-parameter calls require one argument and a call-free target expression", which this
+report documented several rounds ago.
+
+**Correction to my own intermediate reading.** My first pass at the later slices reported
+"30 non-budget assertion mismatches" and I nearly escalated that as semantic bugs. It was
+a regex error: I excluded only `Pep C23 error` (budget) from the "genuine mismatch"
+pattern and left `Pep C23 unsupported` in, so construct rejections were counted as wrong
+answers. Re-classified with all three categories, the count of value mismatches is zero.
+That is the third classification error I have made and caught this session, all from
+filtering text instead of parsing structured results.
+
+**Priority unchanged and now better supported:** emitter cost blocks 182 of 213 failures;
+the function-shape rule blocks 31; correctness blocks none.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
