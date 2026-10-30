@@ -291,33 +291,41 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
       call = PepC23NodeLookup { found: true, node: candidate }
     } else {}
   }
-  let callArgument = if call.found {
-    pep_c23_child(nodes, call.node.id, "argument", node.childIndex)
-  } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  if !call.found || call.node.role != "result" || !callArgument.found ||
-     callArgument.node.id != node.id {
-    return pep_c23_unsupported("Pep C23 recursive union list binding must be passed by a direct call in its match arm")
-  } else {}
   var arm = PepC23NodeLookup { found: false, node: empty_node() }
+  var callArgument = PepC23NodeLookup { found: false, node: empty_node() }
   for candidate in nodes {
-    if candidate.id == call.node.parentId && candidate.kind == "match_arm" && candidate.role == "arm" {
+    if call.found && candidate.id == call.node.parentId &&
+       candidate.kind == "match_arm" && candidate.role == "arm" {
       arm = PepC23NodeLookup { found: true, node: candidate }
     } else {}
+    if call.found && candidate.id == node.id &&
+       candidate.parentId == call.node.id && candidate.role == "argument" &&
+       candidate.childIndex == node.childIndex {
+      callArgument = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
   }
+  if node.role != "argument" || !call.found || call.node.role != "result" ||
+     !callArgument.found || callArgument.node.id != node.id {
+    return pep_c23_unsupported("Pep C23 recursive union list binding must be passed by a direct call in its match arm")
+  } else {}
   if !arm.found {
     return pep_c23_unsupported("Pep C23 recursive union list binding must come from the enclosing match arm")
   } else {}
-  let armResult = pep_c23_child(nodes, arm.node.id, "result", 1)
-  if !armResult.found || armResult.node.id != call.node.id {
-    return pep_c23_unsupported("Pep C23 recursive union list binding must be the direct match-arm call argument")
-  } else {}
   var matched = PepC23NodeLookup { found: false, node: empty_node() }
+  var armResult = false
   for candidate in nodes {
     if candidate.id == arm.node.parentId && candidate.kind == "match" {
       matched = PepC23NodeLookup { found: true, node: candidate }
     } else {}
+    if candidate.parentId == arm.node.id && candidate.role == "result" &&
+       candidate.id == call.node.id {
+      armResult = true
+    } else {}
   }
   if !matched.found { return pep_c23_unsupported("Pep C23 recursive union list payload has no enclosing match") } else {}
+  if !armResult {
+    return pep_c23_unsupported("Pep C23 recursive union list binding must be the direct match-arm call argument")
+  } else {}
   let pattern = pep_c23_child(nodes, arm.node.id, "pattern", 0)
   let variant = if pattern.found && pattern.node.kind == "constructor_pattern" {
     pep_c23_union_variant(nodes, pattern.node.text)
