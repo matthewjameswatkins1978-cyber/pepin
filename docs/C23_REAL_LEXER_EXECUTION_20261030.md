@@ -1777,6 +1777,39 @@ methods I have not mapped to their helpers yet, so their attribution is unknown.
 **Corrected statement for the builder:** relaxing the local-binding restriction should
 convert **16 of the ~31 unsupported cases**; at least one has a different cause; the rest are
 unattributed. The five-line reproduction still stands as the smallest artefact.
+
+## The unsupported class is at least two distinct rules, not one (Agent 3)
+
+Mapped the remaining unsupported cases to their stdlib helpers. The result corrects the
+implication of the previous section: **none of them match the local-comparison rule.**
+
+| family | cases | helper shape | rule known? |
+| --- | --- | --- | --- |
+| `bool_true_majority` | 16 | `return !(balance <= 0)` — comparison of a local | **yes** (previous section) |
+| `count_between` | 1 | `return total` — local returned directly | **no** |
+| index/search family (16 methods) | 14 | `return first` / `foundAt` / `found` / `last` / `runs` / `changes` / `all` — all locals returned directly | **no** |
+
+The sixteen mapped helpers in the index/search family — `list_int_first_or`,
+`list_int_index_of`, `list_int_all_between`, `list_int_any_between`, `list_int_any_outside`,
+`list_int_count_between_runs`, `list_int_count_sign_changes`, `list_int_first_outside`,
+`list_int_index_of_between`, `list_int_index_of_outside`, `list_int_last_index_of`,
+`list_int_last_index_of_between`, `list_int_last_index_of_outside`, `list_int_last_outside` —
+all **return a local variable directly** and contain no comparison in their final return. The
+local-comparison rule permits exactly that shape, so it cannot be the cause.
+
+That also means the earlier counter-example was not an anomaly: `count_between` behaves like a
+whole family of fourteen further cases, not like one odd test.
+
+**What this establishes and what it does not.** The unsupported refusals are not one
+condition: at least one family is about comparing a local in a return (16 cases) and another
+family is about something else entirely, involving locals accumulated in loops across
+index/search helpers (15 cases). Outside that, the failure reasons remain unidentified, and I
+have not produced a minimal reproduction for family B.
+
+**Recommendation, sharpened:** rather than relaxing one rule, the emitter needs its refusal
+diagnostic to name the condition. Two different restrictions currently collapse into
+"one-parameter calls require one argument and a call-free target expression", and that message
+has now cost this lane four wrong hypotheses across three rounds.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
