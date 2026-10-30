@@ -518,6 +518,44 @@ fn main() -> Int {
             self.assertIn(".payload.payload_1.field_0.length", generated)
 
 
+    def test_nested_recursive_union_constructor_composition(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn main() -> Int {
+  let value: Tree = Branch([Branch([Leaf(42)])])
+  return match value {
+    Leaf(number) => number
+    Branch(children) => length(children)
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-union-nested-branch.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "1\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn("pep_arena_alloc", generated)
+            self.assertIn(".payload.payload_1.field_0.length", generated)
+
+
+    def test_nested_recursive_union_lists_reject_computed_child_payloads(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn main() -> Int {
+  let value: Tree = Branch([Leaf(1 + 2)])
+  return 0
+}
+"""
+        with self.assertRaisesRegex(ValueError, "recursive union list"):
+            emit(source_text.encode("utf-8"))
+
+
     def test_recursive_union_list_rejects_computed_constructor_payloads(self):
         source_text = """type Chain = End(Int) | Link(List[Chain])
 fn main() -> Int {
