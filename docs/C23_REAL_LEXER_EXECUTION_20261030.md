@@ -1196,6 +1196,58 @@ line will turn roughly 91 collections tests red, and the cause is the emitter's 
 budget against the newer checker's output — not the collections work. Whoever performs
 the merge should either reduce the emitter's per-node cost, revisit the per-invocation
 budget, or expect to integrate in stages with that suite quarantined until then.
+
+## RETRACTION: the "~91 collections errors" attribution was my own setup error (Agent 3)
+
+I have to withdraw the cross-lane attribution published two rounds ago. It was an
+artefact of an incomplete test tree, not a property of the merged code.
+
+**What I got wrong.** Agent 2's branch adds exactly four files that Agent 1's line does
+not have:
+
+```
+stdlib/collections.pep
+tests/test_c23_collections.py
+tests/test_c23_nested_record_emission.py
+tests/test_c23_str_contains.py
+```
+
+When I built the "combined tree" I copied the three test modules and **not**
+`stdlib/collections.pep`. Every collections test that loads that library therefore died
+with `FileNotFoundError` almost instantly, which is exactly what a 252-second run
+reporting "2 failures, 91 errors" looked like — and I read those as emitter budget
+failures because the handful of messages I sampled happened to be step limits from the
+tests that did not need the library.
+
+**What is actually true.** Rebuilt the tree with all four files present, and ran the
+cases that had "errored":
+
+| test | complete combined tree |
+| --- | --- |
+| `test_pep_list_sum_overflow_matches_interpreter_runtime_code` | **OK, 6 s** |
+| `test_pep_list_product_overflow_matches_interpreter_runtime_code` | **OK, 6 s** |
+| `test_pep_list_negative_sum_overflow_matches_interpreter_runtime_code` | **OK, 5 s** |
+| `test_pep_written_all_equal_helper_matches_interpreter_on_clang_and_gcc` | **OK, 15 s** |
+
+So there is **no demonstrated cross-lane collections regression**. My warning that
+"merging Agent 2's emitter onto Agent 1's line will turn roughly 91 collections tests
+red" was wrong and should not be acted on. I am sorry for the noise; that claim was the
+kind of confident, well-formatted error that is worse than no report.
+
+**What remains unestablished.** The full collections suite exceeds a 50-minute cap on
+the complete tree, because each case does real native compile-and-run work (5–16 s), so
+I cannot state its true pass/fail count. Four sampled cases pass. Whether *any*
+budget-stage failures remain in that suite is unknown.
+
+**What survives.** The emitter budget is still a real constraint — it is what makes
+`utf8_check` return `INCONCLUSIVE`, what the boundary ladder measures, and what
+chunk-size tuning trades against. But it is not, on the evidence I actually have, the
+cause of a collections test regression.
+
+**Process note for me:** the failure was trusting an error count without confirming the
+tree was complete, then sampling a few messages and generalising. The correct instinct
+was the one applied later — check what the branch adds relative to the base before
+attributing any failure to the code.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
