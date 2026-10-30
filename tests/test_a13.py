@@ -288,7 +288,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             for node in fields(parsed)["nodes"]["value"]
         )
         maximum_steps = min(4096, 8 + 2 * ((node_count + 31) // 32) +
-                            (node_count + 3) // 4 + (binding_count + 7) // 8)
+                            (node_count + 7) // 8 + (binding_count + 7) // 8)
         for _ in range(maximum_steps):
             current = fields(value)
             if scalar(current["done"]):
