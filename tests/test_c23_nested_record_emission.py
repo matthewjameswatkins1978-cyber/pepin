@@ -7,6 +7,8 @@ from pep_c23 import emit
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
+CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
+GCC = pathlib.Path(r"C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe")
 
 
 class PepC23NestedRecordEmissionTests(unittest.TestCase):
@@ -452,6 +454,89 @@ fn main() -> Int { return 0 }
         generated = emit(source_text.encode("utf-8"))
         self.assertRegex(generated, r"\.payload\.payload_1\.field_0\.length")
         self.assertRegex(generated, r"pep_union_\d+ pep_local_\d+ = pep_arg_\d+\.data\[pep_index_\d+\]")
+
+
+    def test_recursive_union_list_payload_passes_to_typed_helper(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn count_children(values: List[Tree]) -> Int { return length(values) }
+fn main() -> Int {
+  let node: Tree = Branch([Leaf(7)])
+  return match node {
+    Leaf(_) => 0
+    Branch(children) => count_children(children)
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            source = pathlib.Path(temp_dir) / "recursive-union-list-helper.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = pathlib.Path(temp_dir) / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "1\n")
+
+            generated = emit(source.read_bytes())
+            self.assertRegex(generated, r"pep_list_union_\d+ pep_arg_\d+")
+            self.assertRegex(
+                generated,
+                r"pep_fn_\d+\(pep_local_\d+\.payload\.payload_1\.field_0, pep_arena\)")
+            self.assertRegex(generated, r"pep_union_\d+ pep_local_\d+")
+
+
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_recursive_union_list_payload_helper_runs_with_clang_and_gcc(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn count_children(values: List[Tree]) -> Int { return length(values) }
+fn main() -> Int {
+  let node: Tree = Branch([Leaf(7)])
+  return match node {
+    Leaf(_) => 0
+    Branch(children) => count_children(children)
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "recursive-union-list-helper.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            generated_c = folder / "recursive-union-list-helper.c"
+            generated_c.write_text(emit(source.read_bytes()), encoding="utf-8", newline="\n")
+            arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
+            arena_include = ROOT / "runtime" / "pep_arena"
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / (compiler.stem + "-recursive-union-list.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", "-I", str(arena_include),
+                         str(generated_c), str(arena_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "1\n")
+
+
+    def test_recursive_union_local_list_forwarding_fails_closed(self):
+        source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
+fn count_children(values: List[Tree]) -> Int { return length(values) }
+fn main() -> Int {
+  let values: List[Tree] = [Leaf(7)]
+  return count_children(values)
+}
+"""
+        with self.assertRaisesRegex(ValueError, "direct call in its match arm"):
+            emit(source_text.encode("utf-8"))
 
 
     def test_recursive_union_local_list_literal_iteration(self):

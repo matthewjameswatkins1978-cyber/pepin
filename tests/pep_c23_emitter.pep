@@ -280,8 +280,80 @@ fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: F
   }
   return true
 }
+fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAstNode,
+  node: FlatAstNode, declaration: FlatAstNode) -> PepC23Emission {
+  if node.kind != "name" {
+    return pep_c23_unsupported("Pep C23 recursive union list arguments require a direct list literal or a matched payload binding")
+  } else {}
+  var call = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.id == node.parentId && candidate.kind == "call" {
+      call = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  let callArgument = if call.found {
+    pep_c23_child(nodes, call.node.id, "argument", node.childIndex)
+  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if !call.found || call.node.role != "result" || !callArgument.found ||
+     callArgument.node.id != node.id {
+    return pep_c23_unsupported("Pep C23 recursive union list binding must be passed by a direct call in its match arm")
+  } else {}
+  var arm = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.id == call.node.parentId && candidate.kind == "match_arm" && candidate.role == "arm" {
+      arm = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  if !arm.found {
+    return pep_c23_unsupported("Pep C23 recursive union list binding must come from the enclosing match arm")
+  } else {}
+  let armResult = pep_c23_child(nodes, arm.node.id, "result", 1)
+  if !armResult.found || armResult.node.id != call.node.id {
+    return pep_c23_unsupported("Pep C23 recursive union list binding must be the direct match-arm call argument")
+  } else {}
+  var matched = PepC23NodeLookup { found: false, node: empty_node() }
+  for candidate in nodes {
+    if candidate.id == arm.node.parentId && candidate.kind == "match" {
+      matched = PepC23NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  if !matched.found { return pep_c23_unsupported("Pep C23 recursive union list payload has no enclosing match") } else {}
+  let pattern = pep_c23_child(nodes, arm.node.id, "pattern", 0)
+  let binding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let extraBinding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 1) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if !pattern.found || pattern.node.kind != "constructor_pattern" ||
+     !binding.found || binding.node.kind != "binding_pattern" || binding.node.text != node.text || extraBinding.found {
+    return pep_c23_unsupported("Pep C23 recursive union list call requires its one-field constructor payload binding")
+  } else {}
+  let variant = pep_c23_union_variant(nodes, pattern.node.text)
+  let owner = if variant.found { pep_c23_union_of_variant(nodes, variant.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let payload = if variant.found { pep_c23_child(nodes, variant.node.id, "field_type", binding.node.childIndex) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let extraPayload = if variant.found { pep_c23_child(nodes, variant.node.id, "field_type", 1) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let listType = if payload.found { pep_c23_union_list_declaration(nodes, payload.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if !variant.found || !owner.found || owner.node.id != declaration.id || !payload.found || extraPayload.found ||
+     !listType.found || listType.node.id != declaration.id {
+    return pep_c23_unsupported("Pep C23 recursive union list match payload must be one List[Self] field")
+  } else {}
+  let subject = pep_c23_child(nodes, matched.node.id, "value", 0)
+  let subjectUnion = if subject.found { pep_c23_union_value_type(nodes, function, subject.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  if !subject.found || !subjectUnion.found || subjectUnion.node.id != declaration.id {
+    return pep_c23_unsupported("Pep C23 recursive union list match subject has an incompatible union type")
+  } else {}
+  let loweredSubject = pep_c23_expression(nodes, function, subject.node)
+  if loweredSubject.status != "emitted" { return loweredSubject } else {}
+  var parts: List[Str] = []
+  for part in loweredSubject.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ".payload.payload_")
+  parts = append(parts, int_text(variant.node.childIndex))
+  parts = append(parts, ".field_")
+  parts = append(parts, int_text(binding.node.childIndex))
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_union_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
   node: FlatAstNode, declaration: FlatAstNode) -> PepC23Emission {
+  if node.kind == "name" {
+    return pep_c23_union_list_match_argument(nodes, function, node, declaration)
+  } else {}
   if node.kind != "list" {
     return pep_c23_unsupported("Pep C23 recursive union lists currently require a direct list literal")
   } else {}
@@ -1447,6 +1519,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else { PepC23NodeLookup { found: false, node: empty_node() } }
       if recordListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(recordListParameter.node.id), ".length"], diagnostic: "" }
+      } else {}
+      let unionListParameter = if argument.node.kind == "name" {
+        pep_c23_union_list_parameter(nodes, function, argument.node.text)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      if unionListParameter.found {
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(unionListParameter.node.id), ".length"], diagnostic: "" }
       } else {}
       for binding in nodes {
         if binding.parentId == function.id && binding.role == "statement" && binding.kind == "var" && binding.text == argument.node.text {
