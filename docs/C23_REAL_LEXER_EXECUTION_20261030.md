@@ -2125,6 +2125,35 @@ not semantic (budget/construct); there was no order dependence; the `var` readin
 (the factor is a local in a returned comparison, and mutability is irrelevant); my "one-line"
 validation-vector fix was insufficient; and my first binary-determinism result was a
 same-second artefact. Each cost a round; each is documented above with the correction.
+
+## Correction: `LexProgress` has no separate condition — all three blocked types fail alike (Agent 3)
+
+I recorded `LexProgress` as "rejected at the checker — a different condition, unexplained". That
+was my own test design, not the compiler: I emitted each type **in isolation**, so
+`LexProgress` (which references `LexToken` and `LexCursor`) had undefined types.
+
+Tested properly:
+
+| program | checker | emitter |
+| --- | --- | --- |
+| `LexProgress` alone | **invalid** — undefined `LexToken`/`LexCursor` | "requires a valid Pep checker report" |
+| `LexToken` + `LexCursor` + `LexProgress` together | **valid** | **unsupported — "record fields require Int, Bool, or a preceding record declaration"** |
+| `SourcePosition` alone (no list fields) | valid | emits |
+
+So `LexProgress` is not a second condition at all. With its dependencies present it checks
+cleanly and fails for exactly the same reason as the other two: **a `List` field.**
+
+**This tightens the conclusion rather than complicating it.** All three blocked lexer types
+fail for **one** cause — list-valued record fields — not three. The census line becomes:
+
+- types emittable: **1 of 4**
+- blocked by list record fields: **3 of 4** (`LexToken`, `LexCursor`, `LexProgress`)
+- no other type-level condition identified
+
+That is the fourth time in this lane that "a separate condition" turned out to be my own
+measurement method. The pattern is consistent enough to state as guidance: when a probe reports
+a different error from its siblings, check whether the probe supplied the same context before
+concluding the compiler differs.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
