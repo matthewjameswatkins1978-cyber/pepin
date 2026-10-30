@@ -41,6 +41,7 @@ groups. **Current blocker map at the bottom.**
 
 | receipt | one-line |
 |---|---|
+| `RECOVERY-eda6a0f-depth-axis-cleared.md` | **Depth axis FIXED**: A1's arm-hoisting (direction #1) recovers heavy **26 → 4**, deep suite 22 → **0**; remaining 4 = a14 step-axis set (Wall B track). |
 | `REMEASURE-e37218a-persists-26.md` | A1's response `e37218a` (checker overhead): heavy still **26** — parser chains untouched, regression persists; their new driver tests **12/12 OK**; no new defect in heavy set. |
 | `MECHANISM-ae91bdc-match-chains.md` | **`ae91bdc` mechanism**: 3 parser dispatchers split into 19/29/19-way fallthrough chains; each hop = 1 host frame; death = `ast_value_span_part_1/part_3` braces (parser L138/152); one mechanism, two budgets (depth 128 + step 100k). |
 | `BISECT-ae91bdc-sole-breaker.md` | `bff9dad` = 124/2 green (report's 276/3 independently confirmed); **`ae91bdc` alone breaks** — fix scope = flattening commit only. |
@@ -62,11 +63,11 @@ groups. **Current blocker map at the bottom.**
 `PEER-REVIEW-ROUND2.md` … `ROUND6.md`, `A2-emitter-rerun-52f1b38.md`,
 `B0-CURRENCY-NOTE.md`, `B0-closure-agent1-95ab6c6-READONLY.json`.
 
-## Current blocker map (as of late 2026-10-30, pins A1 `ae91bdc` / A2 `26be4be`)
+## Current blocker map (as of late 2026-10-30, pins A1 `eda6a0f` / A2 `26be4be`)
 
 1. ~~Bundle typecheck~~ — **resolved** (both lines).
 2. ~~Validation adapter (blocker 2)~~ — **resolved**, recipe landed and verified.
-3. **TOP OPEN — A1 `ae91bdc` regression** (parsers match-chain split): heavy set 124/26; deep programs die at depth 128 inside `ast_value_span_part_N`, near-budget programs at steps 100k (a14 2→4 = Wall B crossed A1-own). Bisect + mechanism + 3 fix directions delivered (`BISECT`/`MECHANISM`/`REGRESSION` receipts); awaiting A1 fix/revert. `bff9dad` green (124/2, report's 276/3 double-sourced).
+3. **A1 `ae91bdc` regression — depth axis RESOLVED, step axis OPEN.** `eda6a0f` arm-hoisting (direction #1) recovered heavy **26 → 4** (deep 22 → 0 — `RECOVERY` receipt). Remaining 4 = a14 set: `source_backed`+`depth` (step-axis residue on the shared all-in-one budget) + 2 long-known stale expectations → the Wall B track. Mechanism/bisect/REGRESSION receipts above.
 4. **Wall A — classifier/`ascii_continue` staged emit cost: OPEN.** Hotspot `pep_c23_child` L25; fix = bucket-index; A2 parked at `26be4be` (test-only since).
 5. **Wall B — a14 all-in-one countdown contract decision: OPEN** — now with named mechanism (match-chain overhead adds to shared spend); owner/builder call (stage budgets or a14 → `emit_c23_checked`).
 6. Builder test files: a14 stale-expectation pair + recursion-contract decision (evidence both ways) + arena CRLF (#22 owner item).
