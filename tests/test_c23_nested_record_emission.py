@@ -814,6 +814,60 @@ fn main() -> Int {
 
     @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
                          "Clang and GCC are required for native C23 verification")
+    def test_recursive_union_zero_arg_helper_returns_through_match(self):
+        program = """type Tree = End() | Branch(Int, List[Tree])
+fn make() -> Tree { return Branch(39, [End()]) }
+fn size(value: Tree) -> Int {
+  return match value {
+    End() => 0
+    Branch(label, children) => length(children)
+  }
+}
+fn main() -> Int { return size(make()) }
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as directory:
+            folder = pathlib.Path(directory)
+            source = folder / "recursive-return.pep"
+            source.write_text(program, encoding="utf-8", newline="\n")
+            reference = folder / "reference.pep"
+            reference.write_text(program + "say(int_text(main()))\n",
+                                 encoding="utf-8", newline="\n")
+            result = self.invoke("run", reference)
+            self.assertEqual((result.returncode, result.stdout), (0, "1\n"),
+                             result.stdout + result.stderr)
+            generated = emit(source.read_bytes())
+            self.assertIn("pep_make_union_", generated)
+            self.assertRegex(generated, r"pep_fn_\d+\(pep_fn_\d+\(pep_arena\), pep_arena\)")
+            c_file = folder / "recursive-return.c"
+            c_file.write_text(generated, encoding="utf-8", newline="\n")
+            arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
+            include = ROOT / "runtime" / "pep_arena"
+            for compiler in (CLANG, GCC):
+                exe = folder / (compiler.stem + ".exe")
+                built = subprocess.run(
+                    [str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic",
+                     "-Werror", "-O2", "-I", str(include), str(c_file), str(arena_c),
+                     "-o", str(exe)], cwd=ROOT, text=True, capture_output=True)
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                native = subprocess.run([str(exe)], cwd=ROOT, text=True, capture_output=True)
+                self.assertEqual((native.returncode, native.stdout), (0, "1\n"),
+                                 native.stdout + native.stderr)
+
+
+    def test_nonrecursive_union_zero_arg_helper_remains_unsupported(self):
+        program = """type Maybe = None() | Some(Int)
+fn make() -> Maybe { return Some(7) }
+fn use(value: Maybe) -> Int {
+  return match value { None() => 0 Some(number) => number }
+}
+fn main() -> Int { return use(make()) }
+"""
+        with self.assertRaisesRegex(ValueError, "direct recursive-union constructor result"):
+            emit(program.encode("utf-8"))
+
+
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
     def test_two_field_recursive_union_list_length_passes_to_helper_natively(self):
         source_text = """type Tree = End() | Branch(Int, List[Tree])
 fn child_count(values: List[Tree]) -> Int { return length(values) }

@@ -1839,8 +1839,24 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
       }
     } else {
-      if argument.found || secondArgument.found || thirdArgument.found || (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) && !(recordResult && targetValue.found && targetValue.node.kind == "record" && !pep_c23_expression_may_fail(nodes, targetValue.node))) {
-        return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result or a safe record construction; recursive calls are unsupported")
+      let returnedUnion = if unionResult {
+        pep_c23_union_declaration(nodes, result.node.text)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      let constructorVariant = if targetValue.found && targetValue.node.kind == "call" {
+        pep_c23_union_variant(nodes, targetValue.node.text)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      let constructorUnion = if constructorVariant.found {
+        pep_c23_union_of_variant(nodes, constructorVariant.node)
+      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      let safeRecursiveUnionConstruction = returnedUnion.found && constructorUnion.found &&
+        returnedUnion.node.id == constructorUnion.node.id &&
+        pep_c23_union_is_recursive(nodes, returnedUnion.node)
+      if argument.found || secondArgument.found || thirdArgument.found ||
+         (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) &&
+          !(recordResult && targetValue.found && targetValue.node.kind == "record" &&
+            !pep_c23_expression_may_fail(nodes, targetValue.node)) &&
+          !safeRecursiveUnionConstruction) {
+        return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result, safe record construction, or direct recursive-union constructor result")
       } else {}
       var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
       parts = pep_c23_close_generated_call(nodes, parts, 0)
