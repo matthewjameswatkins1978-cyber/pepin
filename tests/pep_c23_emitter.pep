@@ -319,20 +319,56 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   }
   if !matched.found { return pep_c23_unsupported("Pep C23 recursive union list payload has no enclosing match") } else {}
   let pattern = pep_c23_child(nodes, arm.node.id, "pattern", 0)
-  let binding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let extraBinding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 1) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let variant = if pattern.found && pattern.node.kind == "constructor_pattern" {
     pep_c23_union_variant(nodes, pattern.node.text)
   } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let payloadCount = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { 0 }
-  let patternArgumentCount = if pattern.found { count_children(nodes, pattern.node.id, "argument") } else { 0 }
+  var binding = PepC23NodeLookup { found: false, node: empty_node() }
+  var extraBinding = PepC23NodeLookup { found: false, node: empty_node() }
+  var payload0 = PepC23NodeLookup { found: false, node: empty_node() }
+  var payload1 = PepC23NodeLookup { found: false, node: empty_node() }
+  var payloadCount = 0
+  var patternArgumentCount = 0
+  var indicesValid = true
+  for candidate in nodes {
+    if variant.found && candidate.parentId == variant.node.id &&
+       candidate.role == "field_type" {
+      payloadCount = payloadCount + 1
+      if candidate.childIndex == 0 {
+        if payload0.found { indicesValid = false } else {
+          payload0 = PepC23NodeLookup { found: true, node: candidate }
+        }
+      } else {
+        if candidate.childIndex == 1 {
+          if payload1.found { indicesValid = false } else {
+            payload1 = PepC23NodeLookup { found: true, node: candidate }
+          }
+        } else { indicesValid = false }
+      }
+    } else {}
+    if pattern.found && candidate.parentId == pattern.node.id &&
+       candidate.role == "argument" {
+      patternArgumentCount = patternArgumentCount + 1
+      if candidate.childIndex == 0 {
+        if binding.found { indicesValid = false } else {
+          binding = PepC23NodeLookup { found: true, node: candidate }
+        }
+      } else {
+        if candidate.childIndex == 1 {
+          if extraBinding.found { indicesValid = false } else {
+            extraBinding = PepC23NodeLookup { found: true, node: candidate }
+          }
+        } else { indicesValid = false }
+      }
+    } else {}
+  }
   let binding0Valid = binding.found &&
     (binding.node.kind == "binding_pattern" || binding.node.kind == "wildcard_pattern")
   let binding1Valid = extraBinding.found &&
     (extraBinding.node.kind == "binding_pattern" || extraBinding.node.kind == "wildcard_pattern")
   if !variant.found || (payloadCount != 1 && payloadCount != 2) ||
-     patternArgumentCount != payloadCount || !binding0Valid ||
-     (payloadCount == 2 && !binding1Valid) {
+     patternArgumentCount != payloadCount || !indicesValid || !payload0.found ||
+     (payloadCount == 2 && (!binding1Valid || !payload1.found)) ||
+     !binding0Valid {
     return pep_c23_unsupported("Pep C23 recursive union list call requires a supported one- or two-field constructor pattern")
   } else {}
   var listBinding = PepC23NodeLookup { found: false, node: empty_node() }
@@ -347,7 +383,7 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
     return pep_c23_unsupported("Pep C23 recursive union list call requires its List[Self] field to be a named pattern binding")
   } else {}
   let owner = pep_c23_union_of_variant(nodes, variant.node)
-  let payload = pep_c23_child(nodes, variant.node.id, "field_type", listBinding.node.childIndex)
+  let payload = if listBinding.node.childIndex == 0 { payload0 } else { payload1 }
   let listType = if payload.found { pep_c23_union_list_declaration(nodes, payload.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   if !owner.found || owner.node.id != declaration.id || !payload.found ||
      !listType.found || listType.node.id != declaration.id {
