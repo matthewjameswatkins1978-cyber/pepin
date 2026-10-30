@@ -642,6 +642,7 @@ class PepCliTests(unittest.TestCase):
         self.assertEqual(description["schemaVersion"], 2)
         self.assertEqual(description["types"], ["Int", "Bool", "Str", "SourceBytes", "Unit"])
         self.assertIn("query_holes", description["features"])
+        self.assertIn("generic_functions", description["features"])
         self.assertIn("jsonl_session", description["features"])
         self.assertIn("tool_hot_replacement", description["features"])
         self.assertEqual(description["session"]["schemaVersion"], 3)
@@ -786,6 +787,72 @@ class PepCliTests(unittest.TestCase):
         result = invoke("run", self.source(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "20\n")
+
+    def test_generic_functions_infer_scalar_and_nested_list_types(self):
+        source = (
+            "fn identity[T](value: T) -> T { let copy: T = value; return copy }\n"
+            "fn relay[T](value: T) -> T { return identity(value) }\n"
+            "fn first[T, U](left: T, right: U) -> T { return left }\n"
+            "fn choose[T](flag: Bool, left: T, right: T) -> T { if flag { return left } else { return right } }\n"
+            "let number: Int = relay(7)\n"
+            "let firstValue: Int = first(11, \"unused\")\n"
+            "let flag: Bool = relay(true)\n"
+            "let words: List[Str] = relay([\"λ\", \"pep\"])\n"
+            "let nested: List[List[Int]] = relay([[1, 2]])\n"
+            "let empty: List[Int] = choose(false, [], [3])\n"
+            "say(int_text(number))\n"
+            "say(int_text(firstValue))\n"
+            "say(int_text(if flag { 1 } else { 0 }))\n"
+            "say(int_text(length(words)))\n"
+            "say(int_text(length(nested)))\n"
+            "say(int_text(length(empty)))\n"
+        )
+        result = invoke("run", self.source(source))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "7\n11\n1\n2\n1\n1\n")
+
+    def test_generic_inference_rejects_conflicts_and_unconstrained_types(self):
+        conflicting = (
+            "fn same[T](left: T, right: T) -> T { return left }\n"
+            "fn main() -> Int { return same(1, true) }\n"
+        )
+        result = invoke("check", self.source(conflicting), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_TYPE_MISMATCH")
+
+        unconstrained = (
+            "fn empty[T]() -> List[T] { return [] }\n"
+            "fn main() -> Int { let values: List[Int] = empty(); return length(values) }\n"
+        )
+        result = invoke("check", self.source(unconstrained), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_GENERIC_TYPE_INFERENCE")
+
+        unsupported = (
+            "fn add_one[T](value: T) -> Int { return value + 1 }\n"
+            "fn main() -> Int { return add_one(1) }\n"
+        )
+        result = invoke("check", self.source(unsupported), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_TYPE_MISMATCH")
+
+        unbound = "fn bad(value: T) -> Int { return 0 }\n"
+        result = invoke("check", self.source(unbound), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_UNKNOWN_TYPE")
+
+        duplicate = "fn bad[T, T](value: T) -> T { return value }\n"
+        result = invoke("check", self.source(duplicate), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_DUPLICATE_TYPE_PARAMETER")
+
+        wrong_arity = (
+            "fn id[T](value: T) -> T { return value }\n"
+            "fn main() -> Int { return id() }\n"
+        )
+        result = invoke("check", self.source(wrong_arity), "--json")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertEqual(json.loads(result.stdout)["diagnostics"][0]["code"], "PEP_ARGUMENT_COUNT")
 
     def test_call_argument_hole_infers_parameter_type(self):
         source = 'fn square(n: Int) -> Int { return n * n }\nlet result: Int = square(?input)\n'

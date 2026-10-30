@@ -12,7 +12,7 @@ and pattern = PWildcard of span | PBind of string*span | PConstructor of string*
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
-type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
+type func = { fname:string; type_params:(string*span) list; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
 type top = TopFun of func | TopStmt of stmt | TopType of type_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
@@ -294,14 +294,22 @@ let rec parse_stmt p =
         ignore(accept_sym p ";");SAssign(name,value,sp)
     |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
 let parse_func p =
-  let start=(take p).at in let name=expect_id p in expect_sym p "(";
+  let start=(take p).at in let name=expect_id p in
+  let type_params=ref [] in
+  if accept_sym p "[" then (
+    let param () = match take p with
+      |{kind=Id parameter;at}->type_params:= !type_params@[parameter,at]
+      |token->fail "PEP_PARSE_TYPE_PARAMETER" "Expected a generic type parameter name" token.at () in
+    if symbol p "]" then fail "PEP_EMPTY_TYPE_PARAMETERS" "A generic parameter list cannot be empty" (at p) ();
+    param();while accept_sym p "," do param() done;expect_sym p "]");
+  expect_sym p "(";
   let params=ref [] in
   if not(symbol p ")") then (
     let param () = let n=expect_id p in let ns=p.ts.(p.p-1).at in expect_sym p ":";let t=parse_type p in params:= !params@[(n,t,ns)] in
     param();while accept_sym p "," do param() done);
   expect_sym p ")"; expect_sym p "->"; let result=parse_type p in
   let body=match parse_stmt p with SBlock(xs,_)->xs|s->fail "PEP_FUNCTION_BODY" "Expected a braced function body" (stmt_span s) () in
-  let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending}
+  let ending=p.ts.(p.p-1).at in {fname=name;type_params= !type_params;params= !params;result;body;fspan=combine start ending}
 let parse source =
   let p={ts=lex source;p=0;record_literals_allowed=true} and tops=ref [] in
   while (peek p).kind<>Eof do
@@ -377,7 +385,7 @@ let rec ast_stmt_json s=match s with
  |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
 let ast_json tops = "["^String.concat ","(List.map(function
- |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
+ |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"]"^(if f.type_params=[] then "" else ",\"typeParameters\":["^String.concat ","(List.map(fun(n,_)->json_string n)f.type_params)^"]")^",\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
  |TopStmt s->ast_stmt_json s
  |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
  |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
@@ -409,16 +417,24 @@ let check tops =
         let info={union_id=fresh_type();union_name=name;union_variants=resolved;union_span=sp} in
         Hashtbl.add type_table name (`Union info); unions:=info::!unions
     |_->()) tops;
-  let rec valid_type ty sp = match ty with
-    |Named name when not (Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
-    |List element -> valid_type element sp
+  let rec valid_type type_params ty sp = match ty with
+    |Named name when not (List.mem name type_params || Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
+    |List element -> valid_type type_params element sp
     |_ -> () in
   List.iter (function
-    |TopType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type ty sp) fields
-    |TopType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type ty sp) args) variants
-    |TopFun f->List.iter(fun(_,ty,sp)->valid_type ty sp)f.params;valid_type f.result f.fspan
+    |TopType (RecordDecl(_,fields,_))->List.iter(fun(_,ty,sp)->valid_type [] ty sp) fields
+    |TopType (UnionDecl(_,variants,_))->List.iter(fun(_,args,sp)->List.iter(fun ty->valid_type [] ty sp) args) variants
+    |TopFun f->
+       let seen=Hashtbl.create 8 in
+       List.iter(fun(name,sp)->
+         if Hashtbl.mem seen name then fail "PEP_DUPLICATE_TYPE_PARAMETER" ("Duplicate type parameter '"^name^"'") sp ();
+         Hashtbl.add seen name ();
+         if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] || Hashtbl.mem type_table name then
+           fail "PEP_TYPE_PARAMETER_SHADOWS_TYPE" ("Type parameter '"^name^"' conflicts with an existing type") sp ()) f.type_params;
+       let type_params=List.map fst f.type_params in
+       List.iter(fun(_,ty,sp)->valid_type type_params ty sp)f.params;valid_type type_params f.result f.fspan
     |TopStmt _->()) tops;
-  List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
+  List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type [] ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
   List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"str_contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
@@ -596,13 +612,50 @@ let check tops =
          let value=check_expr env scope (Some element) (List.nth args 1) in
          {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
        ) else (
-         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+         let params,result,fid,decl = if name="semantic_snapshot" then [],Named "ProgramInfo",None,None else if name="source_bytes" then [],SourceBytes,None,None else if name="say" then [Str],Unit,None,None else if name="int_text" then [Int],Str,None,None else
            match Hashtbl.find_opt signatures name with None->
              let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
              let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
              fail code ((if constructor_like then "Unknown constructor '" else "Unknown function '")^name^"'") s ()
-            |Some f->List.map snd f.params,f.result,Some f.fid in
+            |Some f->List.map snd f.params,f.result,Some f.fid,Some f.decl in
          if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Function '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
+         let params,result=match decl with
+          |None -> params,result
+          |Some declaration when declaration.type_params=[] -> params,result
+          |Some declaration ->
+             let type_params=List.map fst declaration.type_params in
+             let inferred=Hashtbl.create (List.length type_params) in
+             let rec actual_type expression = match expression with
+               |EList(items,_) when items<>[] ->
+                  let types=List.map actual_type items in
+                  (match types with Some first::rest when List.for_all ((=) (Some first)) rest -> Some(List first)|_->None)
+               |EList([],_) -> None
+               |_->(synth env scope expression).ety in
+             let rec infer_from_type formal actual argument = match formal with
+               |Named parameter when List.mem parameter type_params ->
+                  (match Hashtbl.find_opt inferred parameter with
+                   |None->Hashtbl.add inferred parameter actual
+                   |Some previous when previous=actual->()
+                   |Some previous->fail "PEP_TYPE_MISMATCH" ("Generic type parameter '"^parameter^"' is inferred as both "^type_name previous^" and "^type_name actual) (expr_span argument) ())
+               |List expected_element -> (match actual with List actual_element->infer_from_type expected_element actual_element argument|_->())
+               |_ -> ()
+             in
+             let rec infer_from_expression formal argument = match formal,argument with
+               |List expected_element,EList(items,_) -> List.iter(infer_from_expression expected_element)items
+               |List expected_element,_->(match actual_type argument with Some(List actual_element)->infer_from_type expected_element actual_element argument|_->())
+               |Named parameter,_ when List.mem parameter type_params -> (match actual_type argument with Some actual->infer_from_type formal actual argument|None->())
+               |_ -> ()
+             in
+             List.iter2 infer_from_expression (List.map(fun(_,ty,_)->ty) declaration.params) args;
+             List.iter(fun(parameter,parameter_span)->
+               if not(Hashtbl.mem inferred parameter) then
+                 fail "PEP_GENERIC_TYPE_INFERENCE" ("Cannot infer generic type parameter '"^parameter^"' for call to '"^name^"'") parameter_span ()) declaration.type_params;
+             let rec specialize = function
+               |Named parameter when List.mem parameter type_params -> Hashtbl.find inferred parameter
+               |List element -> List(specialize element)
+               |ty->ty in
+             List.map specialize params,specialize result
+         in
          let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg)args params in
          {node=XCall(fid,name,checked);ety=Some result;espan=s}
        )
@@ -644,13 +697,13 @@ let check tops =
       match List.find_opt(fun(_,result)->result.ety<>None)checked_arms with None->None|Some(_,result)->result.ety in
     {node=XMatch(checked_subject,List.map(fun(p,r)->{tpattern=p;tresult=r})checked_arms);ety=result_type;espan=sp}
   in
-  let rec check_stmts env scope expected xs =
+  let rec check_stmts env scope expected type_params xs =
     let rec loop env acc terminated = function
      |[]->List.rev acc,env,terminated
      |s::rest when terminated->fail "PEP_UNREACHABLE" "Statement follows an unconditional return" (stmt_span s) ()
      |SLet(name,annotation,e,sp)::rest ->
        if has_current env name then fail "PEP_DUPLICATE_BINDING" ("Duplicate binding '"^name^"' in this scope") sp ();
-       (match annotation with Some ty->valid_type ty sp|None->());
+       (match annotation with Some ty->valid_type type_params ty sp|None->());
        let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
        let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
        let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=false} in
@@ -658,7 +711,7 @@ let check tops =
        loop env' (TLet(b,te)::acc) false rest
      |SVar(name,annotation,e,sp)::rest ->
        if has_current env name then fail "PEP_DUPLICATE_BINDING" ("Duplicate binding '"^name^"' in this scope") sp ();
-       (match annotation with Some ty->valid_type ty sp|None->());
+       (match annotation with Some ty->valid_type type_params ty sp|None->());
        let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
        let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
        let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=true} in
@@ -676,21 +729,21 @@ let check tops =
        if expected=None then fail "PEP_RETURN_OUTSIDE_FUNCTION" "return is only valid inside a function" sp ();
        let te=check_expr env scope expected e in loop env (TReturn te::acc) true rest
      |SExpr(e,_)::rest->let te=synth env scope e in loop env (TExpr te::acc) false rest
-     |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected body in loop env (TBlock inner::acc) term rest
+     |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected type_params body in loop env (TBlock inner::acc) term rest
      |SIf(condition,yes,no,sp)::rest->
        let checked_condition=check_expr env scope (Some Bool) condition in
-       let checked_yes,_,yes_returns=check_stmts ([]::env) scope expected yes in
-       let checked_no,_,no_returns=check_stmts ([]::env) scope expected no in
+       let checked_yes,_,yes_returns=check_stmts ([]::env) scope expected type_params yes in
+       let checked_no,_,no_returns=check_stmts ([]::env) scope expected type_params no in
        loop env (TIf(checked_condition,checked_yes,checked_no,sp)::acc) (yes_returns && no_returns) rest
      |SFor(name,values,body,sp)::rest->
        let checked_values=synth env scope values in
        let element_type=match checked_values.ety with Some(List ty)->ty|Some ty->fail "PEP_FOR_REQUIRES_LIST" ("for-in requires a List, found "^type_name ty) (expr_span values) ()|None->fail "PEP_FOR_REQUIRES_LIST" "for-in requires a list with a known element type" (expr_span values) () in
        let binding={bid=fresh();bname=name;bty=Some element_type;bspan=sp;mutable_=false} in
-       let inner,_,_=check_stmts ([binding]::env) scope expected body in
+       let inner,_,_=check_stmts ([binding]::env) scope expected type_params body in
        loop env (TFor(binding,checked_values,inner,sp)::acc) false rest
      |SWhile(condition,body,sp)::rest->
        let checked_condition=check_expr env scope (Some Bool) condition in
-       let inner,_,_=check_stmts ([]::env) scope expected body in
+       let inner,_,_=check_stmts ([]::env) scope expected type_params body in
        loop env (TWhile(checked_condition,inner,sp)::acc) false rest
     in loop env [] false xs
   in
@@ -699,12 +752,13 @@ let check tops =
     let sig_=Hashtbl.find signatures f.fname in
     let seen=Hashtbl.create 8 in
     let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s;mutable_=false})f.params in
-    let typed,_,terminated=check_stmts [params] f.fname (Some f.result) f.body in
+    let type_params=List.map fst f.type_params in
+    let typed,_,terminated=check_stmts [params] f.fname (Some f.result) type_params f.body in
     if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
     functions:={sig_;tparams=params;tbody=typed}::!functions
    |_->()) tops;
   let global_env=ref [[]] and top_typed=ref [] in
-  List.iter(function TopStmt s->let typed,env,_=check_stmts !global_env "<top-level>" None [s] in global_env:=env;top_typed:=List.rev_append typed !top_typed|_->())tops;
+  List.iter(function TopStmt s->let typed,env,_=check_stmts !global_env "<top-level>" None [] [s] in global_env:=env;top_typed:=List.rev_append typed !top_typed|_->())tops;
   {functions=List.rev !functions;tops=List.rev !top_typed;holes=List.rev !holes;records=List.rev !records;unions=List.rev !unions}
 
 let rec typed_expr_json e =
@@ -2025,7 +2079,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"utf8_string_search\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"},{\"name\":\"str_contains\",\"parameters\":[\"Str\",\"Str\"],\"returns\":\"Bool\",\"complexity\":\"O(n+m)\",\"semantics\":\"exact UTF-8 substring\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"generic_functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"utf8_string_search\",\"mutable_bindings\",\"for_in\",\"while\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"},{\"name\":\"str_contains\",\"parameters\":[\"Str\",\"Str\"],\"returns\":\"Bool\",\"complexity\":\"O(n+m)\",\"semantics\":\"exact UTF-8 substring\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let source=read_file file in let tops=parse source in
