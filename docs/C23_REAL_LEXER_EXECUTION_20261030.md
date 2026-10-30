@@ -373,6 +373,35 @@ the integration took the emitter without the tests that guard it.
 line (or port it into the Agent 2 emitter); restore the recursion clause in the
 zero-argument diagnostic; update the `test_a14_c23.py:335` exemplar; carry
 `test_c23_str_contains.py`. None applied here — they are builder-owned files.
+## Lean 4 proof validation — independently reproduced (Agent 3)
+
+The peer verification lane landed `a41d967` claiming a passing Lean 4 kernel
+check (`MODEL_PROVED`, value-copy model DEC-001). Since "continue Lean 4 proof
+validation" sits in this lane's acceptance, it was reproduced rather than
+restated.
+
+| check | command | result |
+| --- | --- | --- |
+| build | `lake build` | exit 0, "Build completed successfully (5 jobs)", 3.9s |
+| positive model | `lake env lean Verification/AliasedCounterexample.lean` | exit 0 |
+| **negative control** | `lake env lean BrokenVariant.lean` | **exit 1, "Type mismatch"** — proof checking is real, not skipped |
+| token scan | `sorry` / `admit` / `native_decide` / leading `axiom` | 4 hits, **all documentation prose** ("do NOT add `sorry`/`admit`", "No `sorry`, `admit`, `axiom`, or `native_decide`"); 0 in code; 0 axiom declarations |
+| axioms | `#print axioms` on `idx_upd_same`, `idx_upd_other`, `editOrig_copy`, `edit_takes_effect`, `copy_preserved`, `pepDecEq` | every one: **`[propext]` only** |
+
+Toolchain: `leanprover/lean4:v4.35.0` in `~/.elan/toolchains`, via elan 4.2.4
+from the official `leanprover/elan` release (scoop manifest hash `fad2e980…`).
+No Defender detections during the install or the builds; protection on, no
+exclusions.
+
+**Scope caveat, which matters more than the label:** `MODEL_PROVED` covers the
+*model*, not the implementation. Correspondence between the Lean model and real
+Pep execution remains `TESTED` (OCaml interpreter probes), not proved. The
+negative control stays valuable precisely because the analogous property fails
+under shared-backing semantics.
+
+So the Lean strand of this lane's acceptance now has independent evidence, and
+the toolchain blocker recorded earlier in this report is genuinely resolved —
+resolved by the #22 clearance, not by weakening a control.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
