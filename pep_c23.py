@@ -104,12 +104,23 @@ def typed_record_value(type_name, fields):
     ]}
 
 
-def checker_node_value(node):
+def checker_node_value(node, source_length):
     fields = typed_fields(node, "FlatAstNode", "checker input node")
     line = int(typed_field_value(fields, "line", "Int", "checker input node"))
     column = int(typed_field_value(fields, "column", "Int", "checker input node"))
     if line < 1 or column < 1:
         raise PepToolError("checker input node has an invalid source position")
+    node_id = int(typed_field_value(fields, "id", "Int", "checker input node"))
+    parent_id = int(typed_field_value(fields, "parentId", "Int", "checker input node"))
+    child_index = int(typed_field_value(fields, "childIndex", "Int", "checker input node"))
+    radix = source_length + 1
+    if not (0 <= node_id < radix and -1 <= parent_id < radix and
+            -1 <= child_index < radix):
+        raise PepToolError("checker input node has an out-of-range identity")
+    start_byte = int(typed_field_value(fields, "startByte", "Int", "checker input node"))
+    end_byte = int(typed_field_value(fields, "endByte", "Int", "checker input node"))
+    if not 0 <= start_byte <= end_byte <= source_length:
+        raise PepToolError("checker input node has an out-of-range byte span")
     names = ("id", "parentId", "childIndex", "role", "kind", "text", "startByte", "endByte")
     return typed_record_value("CheckerNode", [(name, fields[name]) for name in names])
 
@@ -473,10 +484,22 @@ def checker_cursor_value(document, revision, parsed, phase, done=False):
             ("nextRoot", typed("Int", 0)), ("valid", typed("Bool", True)),
             ("stack", typed_list("ValidationFrame")), ("totalCount", typed("Int", 0)),
         ])),
+        ("functionState", typed_record_value("FunctionAssembly", [
+            ("active", typed("Bool", False)),
+            ("node", empty_node),
+            ("arity", typed("Int", 0)),
+            ("resultShape", typed_record_value("PepTypeShape", [
+                ("kind", typed("Str", "")), ("name", typed("Str", "")),
+                ("listDepth", typed("Int", 0)),
+            ])),
+            ("typeListNode", typed("Int", -1)),
+            ("typeListDepth", typed("Int", 0)),
+            ("ordinal", typed("Int", 0)), ("nominalTypes", typed_list("Str")),
+        ])),
     ])
 
 
-def check_target(session, parsed, target, tool_revision):
+def check_target(session, parsed, target, tool_revision, source_length):
     started = time.perf_counter_ns()
     request_bytes_before = session.request_bytes_total
     response_bytes_before = session.response_bytes_total
@@ -489,7 +512,9 @@ def check_target(session, parsed, target, tool_revision):
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
     max_request_bytes = session.last_request_bytes
     max_response_bytes = session.last_response_bytes
-    checker_nodes = [checker_node_value(node) for node in parser_nodes]
+    if 9 * node_count + 512 > MAX_TYPED_NODES:
+        raise RuntimeError("Pep C23 checker input exceeds the direct typed-node envelope; packed semantic checking is not implemented")
+    checker_nodes = [checker_node_value(node, source_length) for node in parser_nodes]
     binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
     binding_count = sum(
         typed_field_value(typed_fields(node, "FlatAstNode", "parser node"), "kind", "Str", "parser node")
@@ -497,7 +522,8 @@ def check_target(session, parsed, target, tool_revision):
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        9 + ((node_count + 31) // 32) + ((node_count + 7) // 8) + ((node_count + 15) // 16) + 2 * ((node_count + 3) // 4) + (binding_count + 3) // 4)
+                        9 + 2 * ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) +
+                        ((node_count + 7) // 8) + ((node_count + 3) // 4) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):
@@ -509,12 +535,16 @@ def check_target(session, parsed, target, tool_revision):
         previous_cursor = cursor
         step_nodes = checker_nodes
         phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
-        if phase == "validation":
-            validation_fields = typed_fields(cursor_fields.get("validation"), "TreeValidation", "checker validation")
-            next_node = int(typed_field_value(validation_fields, "nextNode", "Int", "checker validation"))
+        if phase in ("validation", "functions"):
+            if phase == "validation":
+                validation_fields = typed_fields(cursor_fields.get("validation"), "TreeValidation", "checker validation")
+                next_node = int(typed_field_value(validation_fields, "nextNode", "Int", "checker validation"))
+            else:
+                next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
         step_started = time.perf_counter_ns()
-        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("CheckerNode", step_nodes)], target,
+        cursor = invoke_tool(session, "pep-c23-checker-step",
+                             [cursor, typed_list("CheckerNode", step_nodes)], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
@@ -651,7 +681,7 @@ def emit(source_bytes, measurements=None):
         measurements.update(session.parser_measurements)
         checker_started = time.perf_counter_ns()
         checked_report, checker_measurements = check_target(
-            session, parsed_value, semantic_target, tool_revision)
+            session, parsed_value, semantic_target, tool_revision, len(source_bytes))
         measurements.update(checker_measurements)
         measurements["checker_stage_ms"] = (time.perf_counter_ns() - checker_started) / 1_000_000
         report_fields = typed_fields(checked_report, "CheckerReport", "checker report")

@@ -12,7 +12,9 @@ type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, sc
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
-type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport, validation: TreeValidation }
+type FunctionAssembly { active: Bool, node: CheckerNode, arity: Int, resultShape: PepTypeShape, typeListNode: Int, typeListDepth: Int, ordinal: Int, nominalTypes: List[Str] }
+type FunctionCollection { state: FunctionAssembly, reversedFunctions: List[CheckedFunction] }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport, validation: TreeValidation, functionState: FunctionAssembly }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: CheckerNode }
 type UnreachableLookup { found: Bool, node: CheckerNode }
@@ -31,6 +33,19 @@ type PatternValidation { valid: Bool, covers: Bool, code: Str, node: CheckerNode
 
 fn empty_type_shape() -> PepTypeShape {
   return PepTypeShape { kind: "", name: "", listDepth: 0 }
+}
+fn contains_nominal_type(typeNames: List[Str], typeName: Str) -> Bool {
+  for name in typeNames { if name == typeName { return true } else {} }
+  return false
+}
+fn resolved_named_shape(typeNames: List[Str], typeName: Str, listDepth: Int) -> PepTypeShape {
+  if typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" {
+    return PepTypeShape { kind: "builtin", name: typeName, listDepth: listDepth }
+  } else {}
+  if contains_nominal_type(typeNames, typeName) {
+    return PepTypeShape { kind: "nominal", name: typeName, listDepth: listDepth }
+  } else {}
+  return empty_type_shape()
 }
 fn known_type_shape(nodes: List[CheckerNode], typeName: Str) -> PepTypeShape {
   if typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" {
@@ -456,20 +471,25 @@ fn declared_binding_info(nodes: List[CheckerNode], node: CheckerNode) -> Declare
   return DeclaredBindingInfo { typeName: name, typeShape: storedShape }
 }
 fn checked_function(node: CheckerNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
-  let resultType = if resultShape.kind != "" { legacy_type_name(resultShape) } else { "" }
+  let resultType = if resultShape.kind != "" && resultShape.kind != "pending_named" { legacy_type_name(resultShape) } else { "" }
   let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
   return CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: arity, returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte }
 }
-fn collect_functions(nodes: List[CheckerNode]) -> List[CheckedFunction] {
-  var reversed: List[CheckedFunction] = []
-  var ordinal = 0
-  var active = false
-  var activeNode = checker_empty_node()
-  var activeArity = 0
-  var activeResultShape = empty_type_shape()
-  var activeTypeListNode = -1
-  var activeTypeListDepth = 0
+fn empty_function_assembly() -> FunctionAssembly {
+  return FunctionAssembly { active: false, node: checker_empty_node(), arity: 0, resultShape: empty_type_shape(), typeListNode: -1, typeListDepth: 0, ordinal: 0, nominalTypes: [] }
+}
+fn collect_functions_chunk(nodes: List[CheckerNode], initialState: FunctionAssembly, initialReversed: List[CheckedFunction]) -> FunctionCollection {
+  var active = initialState.active
+  var activeNode = initialState.node
+  var activeArity = initialState.arity
+  var activeResultShape = initialState.resultShape
+  var activeTypeListNode = initialState.typeListNode
+  var activeTypeListDepth = initialState.typeListDepth
+  var ordinal = initialState.ordinal
+  var nominalTypes = initialState.nominalTypes
+  var reversed = initialReversed
   for node in nodes {
+    if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") { nominalTypes = prepend(nominalTypes, node.text) } else {}
     if node.parentId == -1 && node.kind == "function" {
       if active {
         reversed = prepend(reversed, checked_function(activeNode, ordinal, activeArity, activeResultShape))
@@ -481,36 +501,64 @@ fn collect_functions(nodes: List[CheckerNode]) -> List[CheckedFunction] {
       activeResultShape = empty_type_shape()
       activeTypeListNode = -1
       activeTypeListDepth = 0
-    } else {}
-    if active && node.parentId == activeNode.id && node.kind == "parameter" {
-      activeArity = activeArity + 1
-    } else {}
-    if active && node.parentId == activeNode.id && node.role == "return_type" {
-      if node.kind == "type_scalar" {
-        activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }
-      } else { if node.kind == "type_named" {
-        activeResultShape = known_type_shape(nodes, node.text)
-      } else { if node.kind == "type_list" {
-        activeTypeListNode = node.id
-        activeTypeListDepth = 1
-      } else {} } }
-    } else { if activeTypeListNode == node.parentId {
-      if node.kind == "type_list" {
-        activeTypeListNode = node.id
-        activeTypeListDepth = activeTypeListDepth + 1
-      } else { if node.kind == "type_scalar" {
-        activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: activeTypeListDepth }
-        activeTypeListNode = -1
-      } else { if node.kind == "type_named" {
-        let baseShape = known_type_shape(nodes, node.text)
-        activeResultShape = if baseShape.kind == "" { empty_type_shape() } else { PepTypeShape { kind: baseShape.kind, name: baseShape.name, listDepth: activeTypeListDepth } }
-        activeTypeListNode = -1
-      } else {} } }
-    } else {} }
+    } else {
+      let directChild = active && node.parentId == activeNode.id
+      if directChild {
+        if node.kind == "parameter" {
+          activeArity = activeArity + 1
+        } else {
+          if node.role == "return_type" {
+            if node.kind == "type_scalar" {
+              activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }
+            } else { if node.kind == "type_named" {
+              activeResultShape = PepTypeShape { kind: "pending_named", name: node.text, listDepth: 0 }
+            } else { if node.kind == "type_list" {
+              activeTypeListNode = node.id
+              activeTypeListDepth = 1
+            } else {} } }
+          } else {}
+        }
+      } else {
+        if activeTypeListNode != -1 && activeTypeListNode == node.parentId {
+          if node.kind == "type_list" {
+            activeTypeListNode = node.id
+            activeTypeListDepth = activeTypeListDepth + 1
+          } else { if node.kind == "type_scalar" {
+            activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: activeTypeListDepth }
+            activeTypeListNode = -1
+          } else { if node.kind == "type_named" {
+            activeResultShape = PepTypeShape { kind: "pending_named", name: node.text, listDepth: activeTypeListDepth }
+            activeTypeListNode = -1
+          } else {} } }
+        } else {}
+      }
+    }
   }
-  if active { reversed = prepend(reversed, checked_function(activeNode, ordinal, activeArity, activeResultShape)) } else {}
+  let state = FunctionAssembly { active: active, node: activeNode, arity: activeArity, resultShape: activeResultShape, typeListNode: activeTypeListNode, typeListDepth: activeTypeListDepth, ordinal: ordinal, nominalTypes: nominalTypes }
+  return FunctionCollection { state: state, reversedFunctions: reversed }
+}
+fn resolve_checked_function(function: CheckedFunction, nominalTypes: List[Str]) -> CheckedFunction {
+  if function.returnShape.kind != "pending_named" { return function } else {}
+  let shape = resolved_named_shape(nominalTypes, function.returnShape.name, function.returnShape.listDepth)
+  let returnType = if shape.kind != "" { legacy_type_name(shape) } else { "" }
+  let returnShape = if returnType != "" { empty_type_shape() } else { shape }
+  return CheckedFunction { semanticId: function.semanticId, syntaxId: function.syntaxId, name: function.name, arity: function.arity, returnType: returnType, returnShape: returnShape, startByte: function.startByte, endByte: function.endByte }
+}
+fn resolve_checked_functions(functions: List[CheckedFunction], nominalTypes: List[Str]) -> List[CheckedFunction] {
+  var reversed: List[CheckedFunction] = []
+  for function in functions { reversed = prepend(reversed, resolve_checked_function(function, nominalTypes)) }
   return reverse(reversed)
 }
+fn collect_functions(nodes: List[CheckerNode]) -> List[CheckedFunction] {
+  let initial = empty_function_assembly()
+  let collected = collect_functions_chunk(nodes, initial, [])
+  var reversed = collected.reversedFunctions
+  if collected.state.active {
+    reversed = prepend(reversed, checked_function(collected.state.node, collected.state.ordinal, collected.state.arity, collected.state.resultShape))
+  } else {}
+  return resolve_checked_functions(reverse(reversed), collected.state.nominalTypes)
+}
+
 fn scope_key(node: CheckerNode, role: Str) -> Int {
   if node.kind == "if_statement" && role == "else" { return 3000001 + node.id * 2 } else {}
   return 3000000 + node.id * 2
@@ -2471,13 +2519,16 @@ fn empty_checker_report(document: Str, revision: Str) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "valid", syntaxNodeCount: 0, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [] }
 }
 fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
-  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report, validation: empty_tree_validation() }
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report, validation: empty_tree_validation(), functionState: empty_function_assembly() }
 }
 fn empty_tree_validation() -> TreeValidation {
   return TreeValidation { sourceLength: 0, nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: 0 }
 }
 fn checker_cursor_with_validation(cursor: CheckerCursor, validation: TreeValidation) -> CheckerCursor {
-  return CheckerCursor { document: cursor.document, revision: cursor.revision, phase: cursor.phase, done: cursor.done, parsed: cursor.parsed, nodes: cursor.nodes, functions: cursor.functions, bindingResult: cursor.bindingResult, nameResult: cursor.nameResult, typedBindings: cursor.typedBindings, typeResult: cursor.typeResult, typeOffset: cursor.typeOffset, holes: cursor.holes, report: cursor.report, validation: validation }
+  return CheckerCursor { document: cursor.document, revision: cursor.revision, phase: cursor.phase, done: cursor.done, parsed: cursor.parsed, nodes: cursor.nodes, functions: cursor.functions, bindingResult: cursor.bindingResult, nameResult: cursor.nameResult, typedBindings: cursor.typedBindings, typeResult: cursor.typeResult, typeOffset: cursor.typeOffset, holes: cursor.holes, report: cursor.report, validation: validation, functionState: cursor.functionState }
+}
+fn checker_cursor_with_function_state(cursor: CheckerCursor, functions: List[CheckedFunction], state: FunctionAssembly, typeOffset: Int) -> CheckerCursor {
+  return CheckerCursor { document: cursor.document, revision: cursor.revision, phase: cursor.phase, done: cursor.done, parsed: cursor.parsed, nodes: cursor.nodes, functions: functions, bindingResult: cursor.bindingResult, nameResult: cursor.nameResult, typedBindings: cursor.typedBindings, typeResult: cursor.typeResult, typeOffset: typeOffset, holes: cursor.holes, report: cursor.report, validation: cursor.validation, functionState: state }
 }
 fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   let authority = semantic_snapshot()
@@ -2519,20 +2570,40 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", checker_empty_node()))
   } else {}
   if cursor.done { return cursor } else {}
+
   if cursor.phase == "validation" {
     let validation = tree_validation_chunk(inputNodes, cursor.validation)
     if !validation.valid {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], invalid_report(authority.document, authority.revision, validation.totalCount, "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", checker_empty_node()))
     } else {}
     if validation.nextNode == validation.totalCount {
-      return make_checker_cursor(authority.document, authority.revision, "functions", false, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
+      let nextCursor = make_checker_cursor(authority.document, authority.revision, "functions", false, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
+      return checker_cursor_with_validation(nextCursor, validation)
     } else {}
     let nextCursor = make_checker_cursor(authority.document, authority.revision, "validation", false, cursor.parsed, cursor.nodes, [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
     return checker_cursor_with_validation(nextCursor, validation)
   } else {}
   if cursor.phase == "functions" {
-    let functions = collect_functions(inputNodes)
-    return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+    let totalCount = cursor.validation.totalCount
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= totalCount) {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, [], invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker function cursor offset is invalid", checker_empty_node()))
+    } else {}
+    let proposed = cursor.typeOffset + 32
+    let chunkEnd = if proposed <= totalCount { proposed } else { totalCount }
+    if length(inputNodes) != chunkEnd - cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, [], invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker function chunk does not match the requested contiguous range", checker_empty_node()))
+    } else {}
+    let collected = collect_functions_chunk(inputNodes, cursor.functionState, cursor.functions)
+    if chunkEnd == totalCount {
+      var reversed = collected.reversedFunctions
+      if collected.state.active {
+        reversed = prepend(reversed, checked_function(collected.state.node, collected.state.ordinal, collected.state.arity, collected.state.resultShape))
+      } else {}
+      let functions = resolve_checked_functions(reverse(reversed), collected.state.nominalTypes)
+      return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {
+      return checker_cursor_with_function_state(cursor, collected.reversedFunctions, collected.state, chunkEnd)
+    }
   } else {}
   if cursor.phase == "bindings" {
     if length(inputNodes) == 0 {
@@ -2604,7 +2675,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, holes, cursor.report)
   } else {}
   if cursor.phase == "duplicate_functions" {
-    let proposed = cursor.typeOffset + 4
+    let proposed = cursor.typeOffset + 16
     let chunkEnd = if proposed <= length(cursor.functions) { proposed } else { length(cursor.functions) }
     var reversedDuplicates = cursor.report.diagnostics
     var functionOffset = 0
