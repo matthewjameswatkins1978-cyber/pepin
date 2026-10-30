@@ -403,6 +403,61 @@ under shared-backing semantics.
 So the Lean strand of this lane's acceptance now has independent evidence, and
 the toolchain blocker recorded earlier in this report is genuinely resolved —
 resolved by the #22 clearance, not by weakening a control.
+
+## Adversarial differential on short-circuit lowering (Agent 3)
+
+Independent harness at `fd5c5d5`: for each program, compare the Pep interpreter
+(`pep.ps1 run`) against the emitted native binary (`pep.ps1 run-c23`), using a
+trap function (checked division by zero) so that evaluating the wrong side is
+observable.
+
+**Short-circuit semantics for literals are correct.** All four literal cases
+agree, including the ones that must trap:
+
+| program | interpreter | native |
+| --- | --- | --- |
+| `true \|\| trap()` | `1` | `1` |
+| `false \|\| trap()` | trap | trap |
+| `false && trap()` | `0` | `0` |
+| `true && trap()` | trap | trap |
+
+So nothing is eagerly evaluated. The lowering is not broken — it is **partial**,
+and the partiality is shape-dependent in a way that looks accidental:
+
+| expression shape | native |
+| --- | --- |
+| `identity(true) == true \|\| bomb()` | **agrees** |
+| `identity(true) == true \|\| identity(false) == true` | **agrees** |
+| `identity(true) \|\| bomb()` | **agrees** |
+| `identity(true) \|\| identity(false)` | **agrees** |
+| `p1(66) \|\| p2(66)` (one-param calls) | **agrees** |
+| `yes() \|\| no()` (all zero-arg) | **unsupported** |
+| `true \|\| yes()` (literal + zero-arg) | **unsupported** |
+| `yes() == true \|\| bomb()` (zero-arg as `==` target) | **unsupported** |
+| `(yes() == true) \|\| (no() == true)` | **unsupported** |
+
+**The rule:** a zero-argument Boolean call can appear as an operand of `&&`/`||`
+only if a *parameterised* call also appears in the same expression. An expression
+composed only of zero-argument calls, or a zero-argument call compared with `==`,
+or a literal beside a zero-argument call, is rejected as unsupported. That
+enabling condition is incidental rather than principled, and it matters: Lucy's
+own lexer composes zero-argument helpers such as `lexer_start()`.
+
+**Why Agent 2's own test did not catch this.** Their test is genuine — it emits
+and compiles under clang and gcc — but its shape is
+`identity(false) == true && bomb() || identity(true) == true || bomb()`, which
+contains parameterised calls throughout. I reproduced that exact shape and it
+agrees. It is simply not representative of plain helper composition, so the gap
+is outside what the test covers.
+
+**Two errors of mine, recorded rather than hidden.** Four probes in my first pass
+used `1 < 2`; Pep has no `<` operator (`PEP_UNEXPECTED_CHARACTER: Unexpected
+character '<'`), so those cases were invalid programs and their "divergence" was
+my mistake, not the compiler's. Separately, that pass showed the C23 path
+reporting `Pep C23 parser AST node ids are not exactly 0..n-1` and later
+`Pep C23 emission inputs do not match the authorised source revision` for an
+unparseable program, instead of the parse error itself — a diagnostic-quality
+note for the emitter owner, not a correctness bug.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
