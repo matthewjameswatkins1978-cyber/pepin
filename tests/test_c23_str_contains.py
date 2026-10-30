@@ -708,6 +708,84 @@ fn main() -> Int {
                     self.assertEqual(trap.stdout, interpreted_trap.stdout)
                     self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", trap.stderr)
 
+    def test_lucy_operator_pair_condition_runs_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        condition = (
+            "(byte == 60 && next == 61) || "
+            "(byte == 61 && (next == 61 || next == 62)) || "
+            "(byte == 33 && next == 61)")
+        self.assertIn("(byte == 60 && next == 61) ||", lexer)
+        self.assertIn("(byte == 61 && (next == 61 || next == 62)) ||", lexer)
+        self.assertIn("(byte == 33 && next == 61) ||", lexer)
+        source_text = (
+            "fn is_operator_pair(byte: Int, next: Int) -> Bool { return "
+            + condition + " }\n"
+            "fn main() -> Int { return 0 }\n")
+        pairs = ((60, 61), (61, 61), (61, 62), (33, 61), (38, 38),
+                 (124, 124), (45, 62), (60, 60), (38, 65), (124, 1240),
+                 (45, 0), (0, 0))
+        expected = "".join(
+            "1\n" if (left, right) in {
+                (60, 61), (61, 61), (61, 62), (33, 61)} else "0\n"
+            for left, right in pairs)
+        reference_text = source_text + "".join(
+            f"say(int_text(if is_operator_pair({left}, {right}) {{ 1 }} else {{ 0 }}))\n"
+            for left, right in pairs)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-operator-pair.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-operator-pair-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            predicate = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                generated)
+            self.assertIsNotNone(predicate, generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "lucy-operator-pair-harness.c"
+            calls = ", ".join(
+                f"pep_fn_{predicate.group(1)}({left}, {right})"
+                for left, right in pairs)
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                f"  printf(\"{''.join('%d\\n' for _ in pairs)}\", {calls});\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-operator-pair-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_lucy_ascii_whitespace_condition_runs_natively(self):
         lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
         condition = "byte == 32 || byte == 9 || byte == 13 || byte == 10"

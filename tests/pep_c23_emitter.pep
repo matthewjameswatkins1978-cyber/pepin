@@ -1,13 +1,29 @@
 type PepC23NodeLookup { found: Bool, node: FlatAstNode }
 type PepC23Emission { status: Str, sourceParts: List[Str], diagnostic: Str }
 
+fn pep_c23_empty_ast_node() -> FlatAstNode {
+  return FlatAstNode {
+    id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "",
+    integerValue: 0, booleanValue: false, stringParts: [],
+    startByte: 0, endByte: 0, line: 0, column: 0
+  }
+}
+
+fn pep_c23_count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
+  var count = 0
+  for node in nodes {
+    if node.parentId == parent && node.role == role { count = count + 1 } else {}
+  }
+  return count
+}
+
 fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex: Int) -> PepC23NodeLookup {
   for node in nodes {
     if node.parentId == parentId && node.role == role && node.childIndex == wantedIndex {
       return PepC23NodeLookup { found: true, node: node }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_is_negative_int_literal(nodes: List[FlatAstNode], value: FlatAstNode) -> Bool {
   if value.kind != "binary" || value.text != "neg" { return false } else {}
@@ -17,17 +33,17 @@ fn pep_c23_is_negative_int_literal(nodes: List[FlatAstNode], value: FlatAstNode)
 }
 fn pep_c23_list_literal(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "list" { return PepC23NodeLookup { found: true, node: value } } else {}
-  if value.kind != "name" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if value.kind != "name" { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   var matches = 0
-  var list = PepC23NodeLookup { found: false, node: empty_node() }
+  var list = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for binding in nodes {
     if binding.parentId == function.id && binding.role == "statement" && (binding.kind == "let" || binding.kind == "var") && binding.text == value.text {
       matches = matches + 1
       let initial = pep_c23_child(nodes, binding.id, "value", 0)
-      if initial.found && initial.node.kind == "list" { list = initial } else { return PepC23NodeLookup { found: false, node: empty_node() } }
+      if initial.found && initial.node.kind == "list" { list = initial } else { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     } else {}
   }
-  if matches != 1 { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if matches != 1 { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   return list
 }
 fn pep_c23_mutable_list_binding(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
@@ -39,7 +55,7 @@ fn pep_c23_mutable_list_binding(nodes: List[FlatAstNode], function: FlatAstNode,
       } else {}
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstNode) -> Str {
   let declared = pep_c23_child(nodes, binding.id, "annotation", 0)
@@ -49,7 +65,7 @@ fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstN
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" { return "boolean" } else {}
   } else {}
   let initial = pep_c23_child(nodes, binding.id, "value", 0)
-  let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   if first.found && (first.node.kind == "integer" || first.node.kind == "boolean") { return first.node.kind } else {}
   if first.found && first.node.kind == "binary" && first.node.text == "neg" {
     let zero = pep_c23_child(nodes, first.node.id, "left", 0)
@@ -77,7 +93,7 @@ fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, no
   } else {}
   if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Int] parameters currently require a direct integer list literal argument or direct parameter forwarding") } else {}
   var parts: List[Str] = ["(pep_list_int){ .data = "]
-  let elementCount = count_children(nodes, node.id, "element")
+  let elementCount = pep_c23_count_children(nodes, node.id, "element")
   if elementCount == 0 {
     parts = append(parts, "NULL")
   } else {
@@ -91,10 +107,10 @@ fn pep_c23_int_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, no
         } else {
           let zero = if element.kind == "binary" && element.text == "neg" {
             pep_c23_child(nodes, element.id, "left", 0)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let operand = if zero.found && zero.node.kind == "integer" && zero.node.integerValue == 0 {
             pep_c23_child(nodes, element.id, "right", 1)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           if !operand.found || operand.node.kind != "integer" {
             return pep_c23_unsupported("Pep C23 List[Int] parameter arguments currently require integer or negative integer literal elements")
           } else {}
@@ -127,7 +143,7 @@ fn pep_c23_int_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, n
       return secondParameter
     } else {}
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_bool_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
@@ -140,7 +156,7 @@ fn pep_c23_bool_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, 
     let parameterType = pep_c23_child(nodes, secondParameter.node.id, "type", 0)
     if parameterType.found && pep_c23_c_parameter_type(nodes, parameterType.node) == "pep_list_bool" { return secondParameter } else {}
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_record_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
   let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
@@ -153,7 +169,7 @@ fn pep_c23_record_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode
     let parameterType = pep_c23_child(nodes, secondParameter.node.id, "type", 0)
     if parameterType.found && pep_c23_record_list_declaration(nodes, parameterType.node).found { return secondParameter } else {}
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for parameter in nodes {
@@ -163,10 +179,10 @@ fn pep_c23_union_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode,
       if parameterType.found && pep_c23_union_list_declaration(nodes, parameterType.node).found {
         return PepC23NodeLookup { found: true, node: parameter }
       } else {}
-      return PepC23NodeLookup { found: false, node: empty_node() }
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_str_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for parameter in nodes {
@@ -177,10 +193,10 @@ fn pep_c23_str_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: 
          parameterType.node.text == "Str" {
         return PepC23NodeLookup { found: true, node: parameter }
       } else {}
-      return PepC23NodeLookup { found: false, node: empty_node() }
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
@@ -197,7 +213,7 @@ fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, n
   } else {}
   if node.kind != "list" { return pep_c23_unsupported("Pep C23 List[Bool] parameters require a Bool list literal or direct parameter forwarding") } else {}
   var parts: List[Str] = ["(pep_list_bool){ .data = "]
-  let elementCount = count_children(nodes, node.id, "element")
+  let elementCount = pep_c23_count_children(nodes, node.id, "element")
   if elementCount == 0 { parts = append(parts, "NULL") } else {
     parts = append(parts, "(const _Bool[]){")
     var count = 0
@@ -238,7 +254,7 @@ fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
     return pep_c23_unsupported("Pep C23 List[Record] arguments currently require a record list literal or direct parameter forwarding")
   } else {}
   var parts: List[Str] = ["(pep_list_record_", int_text(declaration.node.id), "){ .data = "]
-  let elementCount = count_children(nodes, node.id, "element")
+  let elementCount = pep_c23_count_children(nodes, node.id, "element")
   if elementCount == 0 { parts = append(parts, "NULL") } else {
     parts = append(parts, "(const pep_record_")
     parts = append(parts, int_text(declaration.node.id))
@@ -264,7 +280,7 @@ fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
 fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: FlatAstNode,
   element: FlatAstNode) -> Bool {
   if element.kind != "call" { return false } else {}
-  var variant = PepC23NodeLookup { found: false, node: empty_node() }
+  var variant = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for candidate in nodes {
     if candidate.parentId == declaration.id && candidate.role == "variant" &&
        candidate.kind == "variant_declaration" && candidate.text == element.text && !variant.found {
@@ -272,7 +288,7 @@ fn pep_c23_union_list_element_supported(nodes: List[FlatAstNode], declaration: F
     } else {}
   }
   if !variant.found ||
-     count_children(nodes, element.id, "argument") != count_children(nodes, variant.node.id, "field_type") {
+     pep_c23_count_children(nodes, element.id, "argument") != pep_c23_count_children(nodes, variant.node.id, "field_type") {
     return false
   } else {}
   for payload in nodes {
@@ -303,14 +319,14 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   if node.kind != "name" {
     return pep_c23_unsupported("Pep C23 recursive union list arguments require a direct list literal or a matched payload binding")
   } else {}
-  var call = PepC23NodeLookup { found: false, node: empty_node() }
+  var call = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for candidate in nodes {
     if candidate.id == node.parentId && candidate.kind == "call" {
       call = PepC23NodeLookup { found: true, node: candidate }
     } else {}
   }
-  var arm = PepC23NodeLookup { found: false, node: empty_node() }
-  var callArgument = PepC23NodeLookup { found: false, node: empty_node() }
+  var arm = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  var callArgument = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for candidate in nodes {
     if call.found && candidate.id == call.node.parentId &&
        candidate.kind == "match_arm" && candidate.role == "arm" {
@@ -329,7 +345,7 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   if !arm.found {
     return pep_c23_unsupported("Pep C23 recursive union list binding must come from the enclosing match arm")
   } else {}
-  var matched = PepC23NodeLookup { found: false, node: empty_node() }
+  var matched = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   var armResult = false
   for candidate in nodes {
     if candidate.id == arm.node.parentId && candidate.kind == "match" {
@@ -347,11 +363,11 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   let pattern = pep_c23_child(nodes, arm.node.id, "pattern", 0)
   let variant = if pattern.found && pattern.node.kind == "constructor_pattern" {
     pep_c23_union_variant(nodes, pattern.node.text)
-  } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  var binding = PepC23NodeLookup { found: false, node: empty_node() }
-  var extraBinding = PepC23NodeLookup { found: false, node: empty_node() }
-  var payload0 = PepC23NodeLookup { found: false, node: empty_node() }
-  var payload1 = PepC23NodeLookup { found: false, node: empty_node() }
+  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  var binding = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  var extraBinding = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  var payload0 = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  var payload1 = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   var payloadCount = 0
   var patternArgumentCount = 0
   var indicesValid = true
@@ -397,7 +413,7 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
      !binding0Valid {
     return pep_c23_unsupported("Pep C23 recursive union list call requires a supported one- or two-field constructor pattern")
   } else {}
-  var listBinding = PepC23NodeLookup { found: false, node: empty_node() }
+  var listBinding = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   if binding.node.kind == "binding_pattern" && binding.node.text == node.text {
     listBinding = binding
   } else {}
@@ -410,13 +426,13 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   } else {}
   let owner = pep_c23_union_of_variant(nodes, variant.node)
   let payload = if listBinding.node.childIndex == 0 { payload0 } else { payload1 }
-  let listType = if payload.found { pep_c23_union_list_declaration(nodes, payload.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let listType = if payload.found { pep_c23_union_list_declaration(nodes, payload.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   if !owner.found || owner.node.id != declaration.id || !payload.found ||
      !listType.found || listType.node.id != declaration.id {
     return pep_c23_unsupported("Pep C23 recursive union list match payload must be a List[Self] field")
   } else {}
   let subject = pep_c23_child(nodes, matched.node.id, "value", 0)
-  let subjectUnion = if subject.found { pep_c23_union_value_type(nodes, function, subject.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let subjectUnion = if subject.found { pep_c23_union_value_type(nodes, function, subject.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   if !subject.found || !subjectUnion.found || subjectUnion.node.id != declaration.id {
     return pep_c23_unsupported("Pep C23 recursive union list match subject has an incompatible union type")
   } else {}
@@ -438,7 +454,7 @@ fn pep_c23_union_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,
   if node.kind != "list" {
     return pep_c23_unsupported("Pep C23 recursive union lists currently require a direct list literal")
   } else {}
-  let elementCount = count_children(nodes, node.id, "element")
+  let elementCount = pep_c23_count_children(nodes, node.id, "element")
   var parts: List[Str] = ["(pep_list_union_", int_text(declaration.id), "){ .data = "]
   if elementCount == 0 {
     parts = append(parts, "NULL")
@@ -512,7 +528,7 @@ fn pep_c23_source_bytes_parameter(nodes: List[FlatAstNode], function: FlatAstNod
       } else {}
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 
 fn pep_c23_c_record_field_type(nodes: List[FlatAstNode], owner: FlatAstNode, node: FlatAstNode) -> Str {
@@ -530,7 +546,7 @@ fn pep_c23_record_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23Node
       return PepC23NodeLookup { found: true, node: node }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   for node in nodes {
@@ -538,7 +554,7 @@ fn pep_c23_union_declaration(nodes: List[FlatAstNode], name: Str) -> PepC23NodeL
       return PepC23NodeLookup { found: true, node: node }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_variant(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
   for declaration in nodes {
@@ -551,7 +567,7 @@ fn pep_c23_union_variant(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLooku
       }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_of_variant(nodes: List[FlatAstNode], variant: FlatAstNode) -> PepC23NodeLookup {
   for declaration in nodes {
@@ -560,7 +576,7 @@ fn pep_c23_union_of_variant(nodes: List[FlatAstNode], variant: FlatAstNode) -> P
       return PepC23NodeLookup { found: true, node: declaration }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_payload_type_supported(nodes: List[FlatAstNode], payload: FlatAstNode) -> Bool {
   if payload.kind == "type_scalar" {
@@ -625,11 +641,11 @@ fn pep_c23_node_by_id(nodes: List[FlatAstNode], wantedId: Int) -> PepC23NodeLook
   for node in nodes {
     if node.id == wantedId { return PepC23NodeLookup { found: true, node: node } } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_while_local_binding(nodes: List[FlatAstNode], ownerId: Int,
   beforeId: Int, name: Str) -> PepC23NodeLookup {
-  var best = PepC23NodeLookup { found: false, node: empty_node() }
+  var best = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   var bestId = -1
   for candidate in nodes {
     if candidate.parentId == ownerId && candidate.role == "body" &&
@@ -656,7 +672,7 @@ fn pep_c23_enclosing_while_binding(nodes: List[FlatAstNode], function: FlatAstNo
       depth = depth + 1
     } else { ancestorId = -1 }
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_requires_arena(nodes: List[FlatAstNode]) -> Bool {
   for payload in nodes {
@@ -701,26 +717,26 @@ fn pep_c23_record_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) 
         return pep_c23_record_declaration(nodes, element.text)
       } else {}
     }
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
-  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
   if !elementType.found || elementType.node.kind != "type_named" {
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   return pep_c23_record_declaration(nodes, elementType.node.text)
 }
 fn pep_c23_union_list_declaration(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23NodeLookup {
-  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if node.kind != "type_list" { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
   if !elementType.found || elementType.node.kind != "type_named" {
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   let declaration = pep_c23_union_declaration(nodes, elementType.node.text)
   if declaration.found && pep_c23_union_has_recursive_list_payload(nodes, declaration.node) {
     return declaration
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_union_list_local_declaration(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
   for binding in nodes {
@@ -728,10 +744,10 @@ fn pep_c23_union_list_local_declaration(nodes: List[FlatAstNode], function: Flat
        binding.kind == "let" && binding.text == name {
       let annotation = pep_c23_child(nodes, binding.id, "annotation", 0)
       if annotation.found { return pep_c23_union_list_declaration(nodes, annotation.node) } else {}
-      return PepC23NodeLookup { found: false, node: empty_node() }
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_local_recursive_union_list_is_iterated(nodes: List[FlatAstNode],
   function: FlatAstNode, name: Str) -> Bool {
@@ -752,29 +768,29 @@ fn pep_c23_record_field_declaration(nodes: List[FlatAstNode], record: FlatAstNod
       return PepC23NodeLookup { found: true, node: node }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "record" { return pep_c23_record_declaration(nodes, value.text) } else {}
   if value.kind == "call" {
     let target = pep_c23_function(nodes, value.text)
-    if !target.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !target.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
     if result.found && result.node.kind == "type_named" {
       return pep_c23_record_declaration(nodes, result.node.text)
     } else {}
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   if value.kind == "field_access" {
     let base = pep_c23_child(nodes, value.id, "value", 0)
-    if !base.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !base.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let parent = pep_c23_record_value_type(nodes, function, base.node)
-    if !parent.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !parent.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let field = pep_c23_record_field_declaration(nodes, parent.node, value.text)
-    if !field.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !field.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let fieldType = pep_c23_child(nodes, field.node.id, "type", 0)
     if !fieldType.found || fieldType.node.kind != "type_named" {
-      return PepC23NodeLookup { found: false, node: empty_node() }
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
     } else {}
     return pep_c23_record_declaration(nodes, fieldType.node.text)
   } else {}
@@ -785,7 +801,7 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
         if parameterType.found && parameterType.node.kind == "type_named" {
           return pep_c23_record_declaration(nodes, parameterType.node.text)
         } else {}
-        return PepC23NodeLookup { found: false, node: empty_node() }
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       } else {}
     }
     for binding in nodes {
@@ -799,7 +815,7 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
         if annotation.found && annotation.node.kind == "type_named" {
           return pep_c23_record_declaration(nodes, annotation.node.text)
         } else {}
-        return PepC23NodeLookup { found: false, node: empty_node() }
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       } else {}
     }
   } else {}
@@ -818,10 +834,10 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
           if parameterType.found { return pep_c23_record_list_declaration(nodes, parameterType.node) } else {}
         } else {}
       } else {}
-      return PepC23NodeLookup { found: false, node: empty_node() }
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "string" { return PepC23NodeLookup { found: true, node: value } } else {}
@@ -849,21 +865,21 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
       } else {}
     }
     if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   if value.kind == "field_access" {
     let owner = pep_c23_child(nodes, value.id, "value", 0)
-    if !owner.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !owner.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let record = pep_c23_record_value_type(nodes, function, owner.node)
-    if !record.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !record.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let field = pep_c23_record_field_declaration(nodes, record.node, value.text)
-    if !field.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !field.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let fieldType = pep_c23_child(nodes, field.node.id, "type", 0)
     if fieldType.found && fieldType.node.kind == "type_scalar" && fieldType.node.text == "Str" {
       return PepC23NodeLookup { found: true, node: value }
     } else {}
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emission {
   let source = source_bytes()
@@ -917,12 +933,12 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
     let variant = pep_c23_union_variant(nodes, value.text)
     if variant.found { return pep_c23_union_of_variant(nodes, variant.node) } else {}
     let target = pep_c23_function(nodes, value.text)
-    if !target.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    if !target.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
     if result.found && result.node.kind == "type_named" {
       return pep_c23_union_declaration(nodes, result.node.text)
     } else {}
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   if value.kind == "name" {
     for parameter in nodes {
@@ -932,7 +948,7 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
         if parameterType.found && parameterType.node.kind == "type_named" {
           return pep_c23_union_declaration(nodes, parameterType.node.text)
         } else {}
-        return PepC23NodeLookup { found: false, node: empty_node() }
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       } else {}
     }
     for binding in nodes {
@@ -947,7 +963,7 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
         if annotation.found && annotation.node.kind == "type_named" {
           return pep_c23_union_declaration(nodes, annotation.node.text)
         } else {}
-        return PepC23NodeLookup { found: false, node: empty_node() }
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       } else {}
     }
     for loop in nodes {
@@ -966,11 +982,11 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
             if local.found { return local } else {}
           }
         } else {}
-        return PepC23NodeLookup { found: false, node: empty_node() }
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       } else {}
     }
   } else {}
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str {
   if node.kind == "type_scalar" {
@@ -1035,10 +1051,10 @@ fn pep_c23_function(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
       return PepC23NodeLookup { found: true, node: node }
     } else {}
   }
-  return PepC23NodeLookup { found: false, node: empty_node() }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23NodeLookup {
-  var lastStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  var lastStatement = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for candidate in nodes {
     if candidate.parentId == function.id && candidate.role == "statement" {
       lastStatement = PepC23NodeLookup { found: true, node: candidate }
@@ -1107,10 +1123,10 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
     let value = pep_c23_child(nodes, node.id, "value", 0)
     let parentRecord = if value.found {
       pep_c23_record_value_type(nodes, function, value.node)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     let field = if parentRecord.found {
       pep_c23_record_field_declaration(nodes, parentRecord.node, node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     return value.found &&
       pep_c23_parameter_expression(nodes, function, parameterName, secondParameterName, value.node) &&
       parentRecord.found && field.found
@@ -1124,7 +1140,7 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
         let declared = pep_c23_record_field_declaration(nodes, declaration.node, supplied.text)
         let fieldType = if declared.found {
           pep_c23_child(nodes, declared.node.id, "type", 0)
-        } else { PepC23NodeLookup { found: false, node: empty_node() } }
+        } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
         if !declared.found || !fieldType.found ||
            pep_c23_c_record_field_type(nodes, declaration.node, fieldType.node) == "" ||
@@ -1148,7 +1164,7 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
     let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 2)
     let firstParameter = pep_c23_child(nodes, function.id, "parameter", 0)
-    let firstParameterType = if firstParameter.found { pep_c23_child(nodes, firstParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    let firstParameterType = if firstParameter.found { pep_c23_child(nodes, firstParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     let firstParameterIsBoolList = firstParameter.found && firstParameter.node.text == parameterName && firstParameterType.found &&
       pep_c23_c_parameter_type(nodes, firstParameterType.node) == "pep_list_bool"
     let secondArgumentMatches = (secondParameterName != "" && secondArgument.found &&
@@ -1191,8 +1207,8 @@ fn pep_c23_union_constructor(nodes: List[FlatAstNode], function: FlatAstNode,
   if !declaration.found || !pep_c23_union_supported_layout(nodes, declaration.node) {
     return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
   } else {}
-  let payloadCount = count_children(nodes, variant.id, "field_type")
-  let argumentCount = count_children(nodes, node.id, "argument")
+  let payloadCount = pep_c23_count_children(nodes, variant.id, "field_type")
+  let argumentCount = pep_c23_count_children(nodes, node.id, "argument")
   if payloadCount != argumentCount {
     return pep_c23_unsupported("Pep C23 payload constructor argument count must match the variant")
   } else {}
@@ -1440,7 +1456,7 @@ fn pep_c23_union_two_payload_operand(nodes: List[FlatAstNode],
     } else {}
   }
   var parts = pep_c23_union_payload_parts(subject, variant, 2, payloadIndex,
-    PepC23NodeLookup { found: false, node: empty_node() }, false)
+    PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, false)
   if wantsLength {
     parts = prepend(parts, "pep_checked_length(")
     parts = append(parts, ".length)")
@@ -1453,22 +1469,22 @@ fn pep_c23_union_payload_record_path_type(nodes: List[FlatAstNode],
     if value.text == bindingName {
       return PepC23NodeLookup { found: true, node: payloadRecord }
     } else {}
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   if value.kind != "field_access" {
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   let base = pep_c23_child(nodes, value.id, "value", 0)
-  if !base.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if !base.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   let parentRecord = pep_c23_union_payload_record_path_type(nodes, payloadRecord,
     bindingName, base.node)
-  if !parentRecord.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+  if !parentRecord.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
   let field = pep_c23_record_field_declaration(nodes, parentRecord.node, value.text)
   let fieldType = if field.found {
     pep_c23_child(nodes, field.node.id, "type", 0)
-  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   if !field.found || !fieldType.found || fieldType.node.kind != "type_named" {
-    return PepC23NodeLookup { found: false, node: empty_node() }
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   return pep_c23_record_declaration(nodes, fieldType.node.text)
 }
@@ -1499,7 +1515,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
   if !declaration.found || !pep_c23_union_supported_layout(nodes, declaration.node) {
     return pep_c23_unsupported("Pep C23 tagged-union match requires a supported layout")
   } else {}
-  let variantCount = count_children(nodes, declaration.node.id, "variant")
+  let variantCount = pep_c23_count_children(nodes, declaration.node.id, "variant")
   var armCount = 0
   for candidate in nodes {
     if candidate.parentId == node.id && candidate.role == "arm" && candidate.kind == "match_arm" {
@@ -1517,7 +1533,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
   for variant in nodes {
     if variant.parentId == declaration.node.id && variant.role == "variant" &&
        variant.kind == "variant_declaration" {
-      var arm = PepC23NodeLookup { found: false, node: empty_node() }
+      var arm = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
       for candidate in nodes {
         if candidate.parentId == node.id && candidate.role == "arm" && candidate.kind == "match_arm" {
           let pattern = pep_c23_child(nodes, candidate.id, "pattern", 0)
@@ -1584,7 +1600,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
             let recursiveBinding = bindingType.kind == "type_named" && bindingType.text == declaration.node.text
             resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
               variant, 2, bindingIndex,
-              PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
+              PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, recursiveBinding)
             if bindingIsLength {
               resultParts = prepend(resultParts, "pep_checked_length(")
               resultParts = append(resultParts, ".length)")
@@ -1593,22 +1609,22 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
             let base = pep_c23_child(nodes, result.node.id, "value", 0)
             let firstRecord = if payloadType.node.kind == "type_named" {
               pep_c23_record_declaration(nodes, payloadType.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let firstParentRecord = if result.node.kind == "field_access" && base.found && firstRecord.found {
               pep_c23_union_payload_record_path_type(nodes, firstRecord.node,
                 patternArgument.node.text, base.node)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let secondRecord = if secondPayloadType.node.kind == "type_named" {
               pep_c23_record_declaration(nodes, secondPayloadType.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let secondParentRecord = if result.node.kind == "field_access" && base.found && secondRecord.found {
               pep_c23_union_payload_record_path_type(nodes, secondRecord.node,
                 secondPatternArgument.node.text, base.node)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             var projectionIndex = -1
             var projectionBindingName = ""
-            var projectionRecord = PepC23NodeLookup { found: false, node: empty_node() }
-            var parentRecord = PepC23NodeLookup { found: false, node: empty_node() }
+            var projectionRecord = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+            var parentRecord = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
             if firstParentRecord.found {
               projectionIndex = 0
               projectionBindingName = patternArgument.node.text
@@ -1625,7 +1641,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
               let field = pep_c23_record_field_declaration(nodes, parentRecord.node, result.node.text)
               let fieldType = if field.found {
                 pep_c23_child(nodes, field.node.id, "type", 0)
-              } else { PepC23NodeLookup { found: false, node: empty_node() } }
+              } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
               if !field.found || !fieldType.found {
                 return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
               } else {}
@@ -1638,7 +1654,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                 } else {}
                 resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
                   variant, 2, projectionIndex,
-                  PepC23NodeLookup { found: false, node: empty_node() }, false)
+                  PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, false)
                 for pathPart in pep_c23_union_payload_record_path_parts(nodes,
                   projectionRecord.node, projectionBindingName, base.node) {
                   resultParts = append(resultParts, pathPart)
@@ -1690,14 +1706,14 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
               return pep_c23_unsupported("Pep C23 match length extraction requires its recursive list payload binding")
             } else {}
             resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 1, 0,
-              PepC23NodeLookup { found: false, node: empty_node() }, false)
+              PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, false)
             resultParts = prepend(resultParts, "pep_checked_length(")
             resultParts = append(resultParts, ".length)")
           } else {
             if result.node.kind == "name" && result.node.text == patternArgument.node.text {
               let recursiveBinding = payloadType.node.kind == "type_named" && payloadType.node.text == declaration.node.text
               resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 1, 0,
-                PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
+                PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, recursiveBinding)
             } else {
               if result.node.kind == "field_access" && payloadType.node.kind == "type_named" {
                 let base = pep_c23_child(nodes, result.node.id, "value", 0)
@@ -1705,7 +1721,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                   let record = pep_c23_record_declaration(nodes, payloadType.node.text)
                   let field = if record.found {
                     pep_c23_record_field_declaration(nodes, record.node, result.node.text)
-                  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                   if !record.found || !field.found {
                     return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
                   } else {}
@@ -1717,19 +1733,19 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                     let parentRecord = if record.found {
                       pep_c23_union_payload_record_path_type(nodes, record.node,
                         patternArgument.node.text, base.node)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                     let field = if parentRecord.found {
                       pep_c23_record_field_declaration(nodes, parentRecord.node, result.node.text)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                     let fieldType = if field.found {
                       pep_c23_child(nodes, field.node.id, "type", 0)
-                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                     if !record.found || !parentRecord.found || !field.found ||
                        !fieldType.found || pep_c23_c_scalar_type(fieldType.node) == "" {
                       return pep_c23_unsupported("Pep C23 nested record payload projection requires a scalar terminal field")
                     } else {}
                     resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
-                      variant, 1, 0, PepC23NodeLookup { found: false, node: empty_node() }, false)
+                      variant, 1, 0, PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }, false)
                     for pathPart in pep_c23_union_payload_record_path_parts(nodes,
                       record.node, patternArgument.node.text, base.node) {
                       resultParts = append(resultParts, pathPart)
@@ -1795,11 +1811,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     var loopFound = false
     var loopId = -1
     var parameterZeroFound = false
-    var parameterZero = empty_node()
+    var parameterZero = pep_c23_empty_ast_node()
     var parameterOneFound = false
-    var parameterOne = empty_node()
+    var parameterOne = pep_c23_empty_ast_node()
     var parameterTwoFound = false
-    var parameterTwo = empty_node()
+    var parameterTwo = pep_c23_empty_ast_node()
     var whileLocalCandidate = false
     for candidate in nodes {
       if candidate.kind == "let" && candidate.role == "body" &&
@@ -1833,7 +1849,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     }
     let whileLocal = if whileLocalCandidate {
       pep_c23_enclosing_while_binding(nodes, function, node, node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     if whileLocal.found {
       return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(whileLocal.node.id)], diagnostic: "" }
     } else {}
@@ -1906,15 +1922,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let variant = pep_c23_union_variant(nodes, node.text)
     if variant.found { return pep_c23_union_constructor(nodes, function, node, variant.node) } else {}
     var argumentFound = false
-    var argumentNode = empty_node()
+    var argumentNode = pep_c23_empty_ast_node()
     var secondArgumentFound = false
-    var secondArgumentNode = empty_node()
+    var secondArgumentNode = pep_c23_empty_ast_node()
     var thirdArgumentFound = false
-    var thirdArgumentNode = empty_node()
+    var thirdArgumentNode = pep_c23_empty_ast_node()
     var extraArgumentFound = false
-    var extraArgumentNode = empty_node()
+    var extraArgumentNode = pep_c23_empty_ast_node()
     var targetFound = false
-    var targetNode = empty_node()
+    var targetNode = pep_c23_empty_ast_node()
     for candidate in nodes {
       if candidate.parentId == node.id && candidate.role == "argument" {
         if candidate.childIndex == 0 && !argumentFound {
@@ -2009,7 +2025,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let listParameter = if argument.node.kind == "name" {
         pep_c23_int_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if listParameter.found {
         if secondArgument.node.kind != "integer" && secondArgument.node.kind != "name" && !pep_c23_is_negative_int_literal(nodes, secondArgument.node) {
           return pep_c23_unsupported("Pep C23 runtime List[Int] contains requires an integer literal or local needle")
@@ -2023,7 +2039,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let boolListParameter = if argument.node.kind == "name" {
         pep_c23_bool_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if boolListParameter.found {
         if secondArgument.node.kind != "boolean" && secondArgument.node.kind != "name" {
           return pep_c23_unsupported("Pep C23 runtime List[Bool] contains requires a Bool literal or local value")
@@ -2037,7 +2053,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let mutableList = if argument.node.kind == "name" {
         pep_c23_mutable_list_binding(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if mutableList.found {
         let elementKind = pep_c23_mutable_list_element_kind(nodes, mutableList.node)
         if elementKind != "integer" && elementKind != "boolean" {
@@ -2090,25 +2106,25 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let listParameter = if argument.node.kind == "name" {
         pep_c23_int_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if listParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(listParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let boolListParameter = if argument.node.kind == "name" {
         pep_c23_bool_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if boolListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(boolListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let recordListParameter = if argument.node.kind == "name" {
         pep_c23_record_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if recordListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(recordListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let unionListParameter = if argument.node.kind == "name" {
         pep_c23_union_list_parameter(nodes, function, argument.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if unionListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(unionListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
@@ -2122,7 +2138,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       }
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
-      return PepC23Emission { status: "emitted", sourceParts: [int_text(count_children(nodes, list.node.id, "element"))], diagnostic: "" }
+      return PepC23Emission { status: "emitted", sourceParts: [int_text(pep_c23_count_children(nodes, list.node.id, "element"))], diagnostic: "" }
     } else {}
     if !target.found || extraArgument.found {
       return pep_c23_unsupported("Pep C23 calls require a known target and at most three arguments")
@@ -2140,13 +2156,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let targetStatement = pep_c23_last_statement(nodes, target.node)
     let targetValue = if targetStatement.found {
       pep_c23_child(nodes, targetStatement.node.id, "value", 0)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     let directLocalTarget = targetStatement.found && targetStatement.node.kind == "return" &&
       targetValue.found && targetValue.node.kind == "name" &&
       pep_c23_direct_local(nodes, target.node, targetValue.node.text)
     let nestedReturnTarget = if targetValue.found && targetValue.node.kind == "call" {
       pep_c23_function(nodes, targetValue.node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     let directCallTarget = targetStatement.found && targetStatement.node.kind == "return" &&
       targetValue.found && targetValue.node.kind == "call" &&
       nestedReturnTarget.found && nestedReturnTarget.node.id != target.node.id
@@ -2222,13 +2238,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     } else {
       let returnedUnion = if unionResult {
         pep_c23_union_declaration(nodes, result.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       let constructorVariant = if targetValue.found && targetValue.node.kind == "call" {
         pep_c23_union_variant(nodes, targetValue.node.text)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       let constructorUnion = if constructorVariant.found {
         pep_c23_union_of_variant(nodes, constructorVariant.node)
-      } else { PepC23NodeLookup { found: false, node: empty_node() } }
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       let safeRecursiveUnionConstruction = returnedUnion.found && constructorUnion.found &&
         returnedUnion.node.id == constructorUnion.node.id &&
         pep_c23_union_is_recursive(nodes, returnedUnion.node)
@@ -2371,9 +2387,9 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
   let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
   let extraParameter = pep_c23_child(nodes, function.id, "parameter", 3)
-  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   let parameterIsScalar = parameterType.found && parameterType.node.kind == "type_scalar" &&
     (parameterType.node.text == "Int" || parameterType.node.text == "Bool")
   let secondParameterIsScalar = secondParameterType.found && secondParameterType.node.kind == "type_scalar" &&
@@ -2394,7 +2410,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
     (result.node.text == "Int" || result.node.text == "Bool")
   let recordResult = if result.found && result.node.kind == "type_named" {
     pep_c23_record_declaration(nodes, result.node.text)
-  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   let supportedResult = scalarResult || recordResult.found
   if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && !(parameterIsScalar || parameterIsRecord)) || (secondParameter.found && !(secondParameterIsScalar || secondParameterIsRecord)) || (thirdParameter.found && !(thirdParameterIsScalar || thirdParameterIsRecord)) || !supportedResult || (function.text == "main" && (!scalarResult || result.node.text != "Int")) {
     return pep_c23_unsupported("Pep C23 conditional-return functions require supported scalar parameters and scalar or record results")
@@ -2403,7 +2419,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   var statementCount = 0
   var conditionalCount = 0
   var prefixValid = true
-  var lastStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  var lastStatement = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for candidate in nodes {
     if candidate.parentId == function.id && candidate.role == "statement" {
       statementCount = statementCount + 1
@@ -2418,7 +2434,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   } else {}
   let statement = lastStatement
   let condition = pep_c23_child(nodes, statement.node.id, "condition", 0)
-  if !condition.found || count_children(nodes, statement.node.id, "then") != 1 || count_children(nodes, statement.node.id, "else") != 1 {
+  if !condition.found || pep_c23_count_children(nodes, statement.node.id, "then") != 1 || pep_c23_count_children(nodes, statement.node.id, "else") != 1 {
     return pep_c23_unsupported("Pep C23 conditional return requires one condition and one statement in each branch")
   } else {}
   let thenReturn = pep_c23_child(nodes, statement.node.id, "then", 0)
@@ -2460,7 +2476,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
     let scalarType = pep_c23_c_scalar_type(result.node)
     let recordType = if result.node.kind == "type_named" {
       pep_c23_record_declaration(nodes, result.node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     var cTypeParts: List[Str] = []
     if scalarType != "" {
       cTypeParts = [scalarType]
@@ -2549,7 +2565,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
 }
 fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode], result: PepC23NodeLookup) -> PepC23Emission {
   let condition = pep_c23_child(nodes, loop.id, "condition", 0)
-  if !condition.found || count_children(nodes, loop.id, "body") == 0 {
+  if !condition.found || pep_c23_count_children(nodes, loop.id, "body") == 0 {
     return pep_c23_unsupported("Pep C23 while lowering requires a condition and a non-empty assignment body")
   } else {}
   let loweredCondition = pep_c23_expression(nodes, function, condition.node)
@@ -2622,9 +2638,9 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
   let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
   let extraParameter = pep_c23_child(nodes, function.id, "parameter", 3)
-  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
   let parameterCType = if parameterType.found { pep_c23_c_parameter_type(nodes, parameterType.node) } else { "" }
   let secondParameterCType = if secondParameterType.found { pep_c23_c_parameter_type(nodes, secondParameterType.node) } else { "" }
@@ -2637,7 +2653,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   var localBindingsCollected = false
   var returned = false
   var statementCount = 0
-  var returnStatement = PepC23NodeLookup { found: false, node: empty_node() }
+  var returnStatement = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   for statement in nodes {
     if statement.parentId == function.id && statement.role == "statement" {
       statementCount = statementCount + 1
@@ -2653,10 +2669,10 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           let recursiveUnionList = if statement.kind == "let" {
             pep_c23_union_list_local_declaration(nodes, function, statement.text)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           if recursiveUnionList.found {
             if !pep_c23_local_recursive_union_list_is_iterated(nodes, function, statement.text) {
-              if count_children(nodes, initialValue.node.id, "element") == 0 {
+              if pep_c23_count_children(nodes, initialValue.node.id, "element") == 0 {
                 return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
               } else {}
               for item in nodes {
@@ -2706,35 +2722,35 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function parameters")
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
-          let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-          let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(nodes, function, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(nodes, function, iterable.node.text) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_int_list_parameter(nodes, function, iterable.node.text)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_bool_list_parameter(nodes, function, iterable.node.text)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_record_list_parameter(nodes, function, iterable.node.text)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
             pep_c23_union_list_parameter(nodes, function, iterable.node.text)
-          } else { PepC23NodeLookup { found: false, node: empty_node() } }
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
           let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
             if iterableBooleanParameter.found { iterableBooleanParameter } else {
               if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
             }
           }
-          if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || count_children(nodes, statement.id, "body") == 0 {
+          if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || pep_c23_count_children(nodes, statement.id, "body") == 0 {
             return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty supported body")
           } else {}
           if iterableList.found {
             let recordLiteral = pep_c23_record_list_declaration(nodes, iterableList.node)
             let recursiveUnionList = if iterableList.found && iterable.found && iterable.node.kind == "name" {
               pep_c23_union_list_local_declaration(nodes, function, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             if recursiveUnionList.found &&
-               count_children(nodes, iterableList.node.id, "element") == 0 {
+               pep_c23_count_children(nodes, iterableList.node.id, "element") == 0 {
               return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
             } else {}
             if !recursiveUnionList.found {
@@ -3043,7 +3059,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 } else {
                   if initialValue.node.kind == "field_access" {
                     pep_c23_str_expression(parsed.nodes, node, initialValue.node)
-                  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                 }
               }
               if initialValue.node.kind == "record" && !localRecord.found {
@@ -3082,26 +3098,26 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               localBindingsCollected = true
             } else {}
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
-            let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableRecordLiteral = if iterableList.found {
               pep_c23_record_list_declaration(parsed.nodes, iterableList.node)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableUnionLiteral = if iterableList.found && iterable.found && iterable.node.kind == "name" {
               pep_c23_union_list_local_declaration(parsed.nodes, node, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
-            let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+            let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_bool_list_parameter(parsed.nodes, node, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_record_list_parameter(parsed.nodes, node, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
               pep_c23_union_list_parameter(parsed.nodes, node, iterable.node.text)
-            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
             let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
               if iterableBooleanParameter.found { iterableBooleanParameter } else {
                 if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
@@ -3131,7 +3147,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             if iterableParameter.found {
               if iterableRecordParameter.found {
                 let recordParameterType = pep_c23_child(parsed.nodes, iterableRecordParameter.node.id, "type", 0)
-                let record = if recordParameterType.found { pep_c23_record_list_declaration(parsed.nodes, recordParameterType.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                let record = if recordParameterType.found { pep_c23_record_list_declaration(parsed.nodes, recordParameterType.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                 if !record.found { return pep_c23_unsupported("Pep C23 record list parameter has no declared record type") } else {}
                 for part in ["  if (pep_arg_", int_text(iterableRecordParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableRecordParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableRecordParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    pep_record_", int_text(record.node.id), " pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableRecordParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
                   arrayDeclaration = append(arrayDeclaration, part)
@@ -3141,7 +3157,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 let unionParameterType = pep_c23_child(parsed.nodes, iterableUnionParameter.node.id, "type", 0)
                 let unionType = if unionParameterType.found {
                   pep_c23_union_list_declaration(parsed.nodes, unionParameterType.node)
-                } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
                 if !unionType.found || !pep_c23_union_supported_layout(parsed.nodes, unionType.node) {
                   return pep_c23_unsupported("Pep C23 recursive union list parameter has an unsupported layout")
                 } else {}
