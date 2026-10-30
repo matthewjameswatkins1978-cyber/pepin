@@ -1945,6 +1945,29 @@ prioritisation, because it means no bisect will find a guilty commit and no reve
 
 It also means the earlier stage attribution holds cleanly: the *budget* wall (`39a487f`
 onward) and the *construct* refusals are different phenomena, changing on different schedules.
+
+## Emitted C is deterministic and path-clean (Agent 3)
+
+`AGENTS.md` requires machine-readable outputs to be deterministic, and reproducible native
+builds depend on it. Nothing in the builder suites checks it, so it was measured directly on
+Agent 1's current head (`bff9dad`):
+
+| check | result |
+| --- | --- |
+| same input, emitted 3× in one process (`classifier_slice`) | **identical** (`05996fcf…`) |
+| same input, emitted 3× in one process (`record_and_bool`) | **identical** (`dfd9f409…`) |
+| same input, emitted in two separate processes | **identical** for both programs |
+| same source under two different file names | **identical output** |
+| absolute paths, file names, `__DATE__`/`__TIME__`, date literals in the output | **none** |
+
+So the generator is a pure function of the source bytes: no path dependence, no clock
+dependence, no cross-process state. That is the property reproducible-build claims need, and
+it means a native artefact's identity can be tied to its source revision — which is exactly
+what the earlier hash-pinned work (and any subsequent Microsoft submission) relies on.
+
+This is a *positive* result recorded deliberately: most of this report is about what fails,
+and it is worth having the things that are actually right on the record too, with evidence
+rather than assumption.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
