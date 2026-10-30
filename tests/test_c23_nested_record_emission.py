@@ -1357,6 +1357,52 @@ fn main() -> Int {
 
     @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
                          "Clang and GCC are required for native C23 verification")
+    def test_record_parameter_conditional_record_return_runs_natively(self):
+        source_text = (
+            "type SourcePosition { line: Int, column: Int }\n"
+            "fn adjust_position(position: SourcePosition) -> SourcePosition {\n"
+            "  if position.column == 8 { return position } else {\n"
+            "    return SourcePosition { line: position.line, column: position.column + 1 }\n"
+            "  }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let input = SourcePosition { line: 2, column: 3 }\n"
+            "  let result = adjust_position(input)\n"
+            "  return result.line * 10 + result.column\n"
+            "}\n")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "record-parameter-conditional-result.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "record-parameter-conditional-result-reference.pep"
+            reference.write_text(source_text + "say(int_text(main()))\n",
+                                 encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "24\n")
+            generated = emit(source.read_bytes())
+            self.assertIn("if (!!(", generated)
+            self.assertIn("pep_record_", generated)
+            c_source = folder / "record-parameter-conditional-result.c"
+            c_source.write_text(generated, encoding="utf-8", newline="\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"record-parameter-conditional-result-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2",
+                         str(c_source), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_lucy_source_position_pass_return_round_trip_runs_natively(self):
         declaration = "type SourcePosition { line: Int, column: Int }"
         source_text = (

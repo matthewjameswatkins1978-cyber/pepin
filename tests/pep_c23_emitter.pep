@@ -2374,6 +2374,21 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let parameterIsScalar = parameterType.found && parameterType.node.kind == "type_scalar" &&
+    (parameterType.node.text == "Int" || parameterType.node.text == "Bool")
+  let secondParameterIsScalar = secondParameterType.found && secondParameterType.node.kind == "type_scalar" &&
+    (secondParameterType.node.text == "Int" || secondParameterType.node.text == "Bool")
+  let thirdParameterIsScalar = thirdParameterType.found && thirdParameterType.node.kind == "type_scalar" &&
+    (thirdParameterType.node.text == "Int" || thirdParameterType.node.text == "Bool")
+  let parameterIsRecord = if parameterType.found && parameterType.node.kind == "type_named" {
+    pep_c23_record_declaration(nodes, parameterType.node.text).found
+  } else { false }
+  let secondParameterIsRecord = if secondParameterType.found && secondParameterType.node.kind == "type_named" {
+    pep_c23_record_declaration(nodes, secondParameterType.node.text).found
+  } else { false }
+  let thirdParameterIsRecord = if thirdParameterType.found && thirdParameterType.node.kind == "type_named" {
+    pep_c23_record_declaration(nodes, thirdParameterType.node.text).found
+  } else { false }
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
   let scalarResult = result.found && result.node.kind == "type_scalar" &&
     (result.node.text == "Int" || result.node.text == "Bool")
@@ -2381,7 +2396,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
     pep_c23_record_declaration(nodes, result.node.text)
   } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let supportedResult = scalarResult || recordResult.found
-  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && (!parameterType.found || parameterType.node.kind != "type_scalar" || (parameterType.node.text != "Int" && parameterType.node.text != "Bool"))) || (secondParameter.found && (!secondParameterType.found || secondParameterType.node.kind != "type_scalar" || (secondParameterType.node.text != "Int" && secondParameterType.node.text != "Bool"))) || (thirdParameter.found && (!thirdParameterType.found || thirdParameterType.node.kind != "type_scalar" || (thirdParameterType.node.text != "Int" && thirdParameterType.node.text != "Bool"))) || !supportedResult || (function.text == "main" && (!scalarResult || result.node.text != "Int")) {
+  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && !(parameterIsScalar || parameterIsRecord)) || (secondParameter.found && !(secondParameterIsScalar || secondParameterIsRecord)) || (thirdParameter.found && !(thirdParameterIsScalar || thirdParameterIsRecord)) || !supportedResult || (function.text == "main" && (!scalarResult || result.node.text != "Int")) {
     return pep_c23_unsupported("Pep C23 conditional-return functions require supported scalar parameters and scalar or record results")
   } else {}
   let resultTypeParts = pep_c23_c_parameter_type_parts(nodes, result.node)
