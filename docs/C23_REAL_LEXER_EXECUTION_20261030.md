@@ -233,6 +233,7 @@ a valid Pep checker report", which looked like an emitter defect. It is not:
 argument with `PEP_LIST_EXPECTED: Builtin 'contains' expects a List, found Str`.
 The emitter message was accurate. The Str builtin is `str_contains`. My probe was
 wrong, not the compiler.
+
 ### Regression sweep at `e9abcd7`, and the size of the two remaining gaps
 
 Full sweep on the newest Agent 1 head, clean tree, no builder files touched:
