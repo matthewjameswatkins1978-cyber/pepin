@@ -1146,7 +1146,7 @@ def check_target(session, parsed, target, tool_revision, source_length,
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + node_count + ((node_count + 7) // 8) + (binding_count + 3) // 4)
+                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     external_typed_bindings = typed_list("BindingFact")
@@ -1251,7 +1251,7 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 external_typed_bindings["value"], owner_ids)
         elif phase == "type_analysis":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
-            end_node = min(next_node + 1, node_count)
+            end_node = min(next_node + 8, node_count)
             step_nodes = checker_type_context_nodes(checker_context_index, next_node, end_node)
             context_ids = {
                 int(typed_field_value(

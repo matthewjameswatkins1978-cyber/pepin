@@ -347,7 +347,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         )
         maximum_steps = min(4096, 9 + 2 * ((node_count + 31) // 32) +
                             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
-                            node_count + ((node_count + 7) // 8) +
+                            ((node_count + 7) // 8) + ((node_count + 7) // 8) +
                             (binding_count + 3) // 4)
         for _ in range(maximum_steps):
             current = fields(value)
@@ -391,7 +391,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     value, checker_name_result(context_references), fields(value)["typeResult"])
             elif scalar(current["phase"]) == "type_analysis":
                 offset = scalar(current["typeOffset"])
-                end_node = min(offset + 1, node_count)
+                end_node = min(offset + 8, node_count)
                 step_nodes = checker_type_context_nodes(
                     checker_context_index, offset, end_node)
                 active_ids = {
@@ -675,7 +675,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             4096,
             9 + 2 * ((node_count + 31) // 32) +
             ((node_count + 15) // 16) + ((node_count + 7) // 8) +
-            node_count + ((node_count + 7) // 8) + (binding_count + 3) // 4
+            ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 3) // 4
         )
         while not scalar(fields(cursor_value)["done"]) and step_count < maximum_steps:
             previous = fields(cursor_value)

@@ -2590,7 +2590,7 @@ fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   return checker_cursor_with_validation(cursor, validation)
 }
 fn checker_type_chunk_end(totalCount: Int, startNode: Int) -> Int {
-  let proposed = startNode + 1
+  let proposed = startNode + 8
   return if proposed <= totalCount { proposed } else { totalCount }
 }
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
