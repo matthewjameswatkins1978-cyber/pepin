@@ -119,6 +119,30 @@ are individually emittable; `ascii_continue`, which composes them, is not.
 4. Then move to `utf8_check`, as planned — but expect the same `||`-of-calls
    shape, since the lexer uses it throughout.
 
+No changes were made to the accepted release.
+## Follow-up — verified against both builder heads (Agent 3)
+
+After this report was pushed, the same test was carried unchanged into each
+builder head. The slice **passes only where two branches are combined**:
+
+| head | checker | emitter | slice |
+| --- | --- | --- | --- |
+| `c1a9f8a` (test only) | `PEP_RUNTIME_STEP_LIMIT` | not reached | FAIL x5 |
+| `codex/c23-chunked-parser@cb6a710` | `PEP_RUNTIME_STEP_LIMIT` | would pass | FAIL x5 |
+| `codex/agent1-compiler-integration@3ec4679` | passes | rejects | FAIL x5 |
+| `3ec4679` + `cb6a710` emitter file | passes | passes | **PASS** |
+
+Both halves of the diagnosis above are now independently confirmed:
+
+- **The `||`-of-calls limiter is fixed** by `cb6a710` on an unchanged budget.
+  My own isolated probes (`a(b) || a(b)`, `a(b) && a(b)`, `a(b) || d(b)`) emit
+  successfully there.
+- **The step-budget wall is cleared for this slice** by Agent 1 bounded checker
+  staging at `3ec4679`; the failure moves on to the emitter instead.
+
+So "native-verified" is legitimate only for the combination. Evidence pins and
+the exact integration instruction are recorded on issue #20.
+
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
