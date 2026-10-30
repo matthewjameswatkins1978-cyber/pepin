@@ -54,8 +54,11 @@ Matches the A4 arm-local typed-hole contract at the query layer.
 | 1,000,000 / 5,000,000 | `TESTED` PASS — `3:8: PEP_RUNTIME_STEP_LIMIT: Execution step budget exceeded`, rc 1, span at the loop condition |
 
 Fuel exhaustion is fail-closed with a byte span, like arithmetic faults
-(N4). Note: `<` is not in the seed operator set (`PEP_UNEXPECTED_CHARACTER`
-at the `<`); bounds must be written with `!=`/`==`.
+(N4). **Operator inventory (probe `X-op-*`):** of the six comparison
+operators only `==`, `!=`, `<=` are accepted — `<`, `>`, `>=` each fail
+with `PEP_UNEXPECTED_CHARACTER`, and `%` (modulo) is absent too. The
+set is asymmetric (`<=` exists without `<`), so bounds must be written
+with `<=` / `!=` / `==` and never with `<`, `>` or `>=`.
 
 ## E1b — entry-point divergence between backends (QUESTION, not defect)
 

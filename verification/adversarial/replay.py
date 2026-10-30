@@ -674,6 +674,17 @@ def main():
     check("X-pattern-arity",
           "type E = Number(Int) | B()\nfn main() -> Int { return match Number(1) { Number(a, b) => a B() => 0 } }",
           "invalid", ("PEP_PATTERN_ARITY",))
+    # Operator inventory (comparison + modulo token set)
+    for _opname, _op, _ost, _oc in (
+            ("eq", "==", "valid", ()), ("ne", "!=", "valid", ()),
+            ("le", "<=", "valid", ()),
+            ("lt", "<", "invalid", ("PEP_UNEXPECTED_CHARACTER",)),
+            ("gt", ">", "invalid", ("PEP_UNEXPECTED_CHARACTER",)),
+            ("ge", ">=", "invalid", ("PEP_UNEXPECTED_CHARACTER",)),
+            ("mod", "%", "invalid", ("PEP_UNEXPECTED_CHARACTER",))):
+        check("X-op-" + _opname,
+              "fn main() -> Int {\n  if 1 %s 2 { return 1 } else { return 0 }\n}\n" % _op,
+              _ost, _oc)
     _ht = sess([
         {"schemaVersion": 3, "op": "open", "name": "t",
          "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},
