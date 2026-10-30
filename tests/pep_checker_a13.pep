@@ -2690,7 +2690,8 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name chunk is missing requested source nodes", checker_empty_node()))
     } else {}
     let emptyNameResult = NameResolution { references: [], diagnostics: [] }
-    let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, emptyNameResult)
+    let activeBindings = if length(cursor.bindingResult.bindings) == 0 { externalTypedBindings } else { cursor.bindingResult.bindings }
+    let chunk = resolve_names_chunk(inputNodes, cursor.functions, activeBindings, cursor.typeOffset, chunkEnd, emptyNameResult)
     if totalCount <= chunkEnd {
       return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, chunk, externalTypedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
