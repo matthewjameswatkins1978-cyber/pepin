@@ -290,7 +290,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
                                    "arguments": [parsed], "semanticTarget": target})
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         value = cursor["result"]
-        node_count = len(fields(parsed)["nodes"]["value"])
+        parser_nodes = fields(parsed)["nodes"]["value"]
+        node_count = len(parser_nodes)
         binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
         binding_count = sum(
             scalar(fields(node)["kind"]) in binding_kinds
@@ -303,9 +304,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
             if scalar(current["done"]):
                 break
             previous = value
+            step_nodes = parser_nodes
+            if scalar(current["phase"]) == "validation":
+                next_node = scalar(fields(current["validation"])["nextNode"])
+                step_nodes = parser_nodes[next_node:min(next_node + 32, node_count)]
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [value, fields(parsed)["nodes"]], "semanticTarget": target})
+                                        "arguments": [value, typed_list("FlatAstNode", step_nodes)],
+                                        "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             value = stepped["result"]
@@ -1456,6 +1462,25 @@ class A13FunctionResolutionTests(unittest.TestCase):
             for item in report["functions"]["value"]
         ]
         self.assertEqual(actual, expected)
+
+    def test_staged_checker_rejects_empty_validation_chunk_without_progress(self):
+        source = "fn main() -> Int { return 1 }"
+        opened, parsed = self._parse_staged(source)
+        target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        self._register_checker_continuations()
+        started = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                    "op": "tool_invoke", "tool": "pep-a13-checker-start",
+                                    "arguments": [parsed], "semanticTarget": target})
+        self.assertEqual(started.get("outcome"), "ok", started)
+        stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                    "op": "tool_invoke", "tool": "pep-a13-checker-step",
+                                    "arguments": [started["result"], typed_list("FlatAstNode", [])],
+                                    "semanticTarget": target})
+        self.assertEqual(stepped.get("outcome"), "ok", stepped)
+        report = fields(fields(stepped["result"])["report"])
+        self.assertEqual(scalar(report["status"]), "invalid", report)
+        diagnostics = [fields(item) for item in report["diagnostics"]["value"]]
+        self.assertEqual([scalar(item["code"]) for item in diagnostics], ["A13_INVALID_SYNTAX_TREE"])
 
     def test_staged_checker_rejects_noncontiguous_node_ids(self):
         source = "fn main() -> Int { return 0 }"

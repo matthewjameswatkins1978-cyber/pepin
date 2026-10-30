@@ -484,8 +484,14 @@ def check_target(session, parsed, target, tool_revision):
         if typed_field_value(cursor_fields, "done", "Bool", "checker cursor"):
             break
         previous_cursor = cursor
+        step_nodes = parser_nodes
+        phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
+        if phase == "validation":
+            validation_fields = typed_fields(cursor_fields.get("validation"), "TreeValidation", "checker validation")
+            next_node = int(typed_field_value(validation_fields, "nextNode", "Int", "checker validation"))
+            step_nodes = parser_nodes[next_node:min(next_node + 32, node_count)]
         step_started = time.perf_counter_ns()
-        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("FlatAstNode", parser_nodes)], target,
+        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("FlatAstNode", step_nodes)], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)

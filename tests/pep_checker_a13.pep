@@ -396,6 +396,7 @@ fn tree_validation_chunk(nodes: List[FlatAstNode], validation: TreeValidation) -
       if valid { nextNode = nextNode + 1 } else {}
     } else {}
   }
+  if valid && nextNode == validation.nextNode && validation.nextNode + 1 <= validation.totalCount { valid = false } else {}
   if valid && validation.totalCount <= chunkEnd && nextNode != validation.totalCount { valid = false } else {}
   return TreeValidation { sourceLength: validation.sourceLength, nextNode: nextNode, nextRoot: nextRoot, valid: valid, stack: stack, totalCount: validation.totalCount }
 }
@@ -2459,7 +2460,7 @@ fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
   return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
 }
-// Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser node list and authorised document/revision is meaningful; every step rechecks document/revision authority.
+// Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive the full ordered node list. Every step rechecks document/revision authority.
 fn checker_step(cursor: CheckerCursor, inputNodes: List[FlatAstNode]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
