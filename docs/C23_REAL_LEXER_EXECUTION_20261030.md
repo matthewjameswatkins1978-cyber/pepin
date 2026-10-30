@@ -308,6 +308,71 @@ shows Lucy's own functions are already callable as tools over host-authorised
 source bytes, which is a step toward the self-hosting loop rather than merely a
 test convenience.
 
+## Post-merge verification at `fd5c5d5` — milestone reached, two regressions found
+
+Agent 1 landed `fd5c5d5` "Integrate verified lexer classifier C23 slice": it took
+Agent 2's emitter byte-identically (blob `9573c227…`), added the slice test, and
+updated the `test_c23_cli` exemplar. Post-merge sweep, clean worktree:
+
+| suite | result |
+| --- | --- |
+| `tests.test_c23_real_lexer_classifiers` | **OK — 1 test, 15.8s** |
+| `tests.test_c23_cli` | 6/6 OK |
+| `tests.test_a13` (pinned differential) | 76/76 OK (260.7s) |
+| `tests.test_a12` / `test_a13_nested_records` | 23/23, 13/13 OK |
+| `tests.test_a14_c23` | **11 tests, 2 FAILURES** |
+| `tests.test_c23_str_contains` | ModuleNotFoundError — not carried by the merge |
+
+**The milestone is real:** the ASCII-classifier slice now passes on a single
+branch, unassisted. That is the claim the packet made prematurely two turns ago,
+now true and verified.
+
+### Regression 1 — unbounded parameter recursion is no longer rejected before lowering
+
+A/B on the same programs, pre-merge versus post-merge:
+
+| program | `e9abcd7` (pre-merge) | `fd5c5d5` (post-merge) |
+| --- | --- | --- |
+| `fn loop() -> Int { return loop() }` (zero-arg) | rejected: "…; recursive calls are unsupported" | rejected, recursion clause **gone** |
+| `fn loop(value: Int) -> Int { return loop(value) }` (parameter) | rejected: "one-parameter calls require one argument and a call-free target expression" | **emitted**, then the C compiler fails |
+
+Post-merge, the parameter case emits C and clang rejects it:
+
+```
+error: all paths through this function will call itself [-Werror,-Winfinite-recursion]
+```
+
+Because Pepin compiles with `-Werror`, that surfaces as a raw C compiler error
+rather than a Pep diagnostic. No bad binary is produced — the compile fails — but
+the contract that the emitter rejects unsupported constructs before native
+lowering is broken, and the message is no longer Pep's. The `test_a14_c23`
+recursion guard is therefore a legitimate test, not a stale one.
+
+### Regression 2 (minor) — diagnostic precision for zero-argument recursion
+
+The zero-arg case is still rejected, but the message no longer mentions
+recursion: it now reads "zero-argument calls require a call-free scalar result,
+safe record construction, or direct recursive-union constructor result". A
+compiler author reading that is told about zero-argument calls, not the actual
+problem.
+
+### Stale exemplar in a second file
+
+`tests/test_a14_c23.py:335` still asserts that `return length([1, 2])` is
+unsupported. That program is now supported **and correct** (prints `2`, matching
+the interpreter). The integrator applied this fix to `test_c23_cli.py` but not to
+`test_a14_c23.py`, which carried the same assumption.
+
+### Also missing from the merge
+
+Agent 2's `tests/test_c23_str_contains.py` was not carried across, so its
+short-circuit tests do not run on the integrated line. Absence, not failure — but
+the integration took the emitter without the tests that guard it.
+
+**Recommended fixes, in order:** put Agent 1's recursion guard back on the merged
+line (or port it into the Agent 2 emitter); restore the recursion clause in the
+zero-argument diagnostic; update the `test_a14_c23.py:335` exemplar; carry
+`test_c23_str_contains.py`. None applied here — they are builder-owned files.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
