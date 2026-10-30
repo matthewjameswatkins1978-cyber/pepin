@@ -2294,6 +2294,23 @@ fn parser_start_control(cursor: ParserCursor, keyword: LexToken) -> ParserChunk 
   return parser_finish_step(cursor, parse_error("PEP_PARSER_INTERNAL", "Unknown control statement", keyword, consumed.stream))
 }
 
+fn parser_close_function(cursor: ParserCursor, close: TokenRead) -> ParserChunk {
+  let root = FlatAstNode {
+    id: cursor.functionRootId, parentId: -1, childIndex: cursor.topLevelChildIndex, role: "top_level",
+    kind: "function", text: cursor.functionName, integerValue: 0,
+    booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
+    endByte: close.token.endByte, line: cursor.functionLine, column: cursor.functionColumn
+  }
+  let doneCursor = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: close.stream,
+    nextNodeId: cursor.nextNodeId, done: false, functionActive: false,
+    functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
+    functionRootId: 0, functionChildIndex: 0,
+    topLevelChildIndex: cursor.topLevelChildIndex + 1, frames: []
+  }
+  return parser_chunk(doneCursor, "continuing", [root], false, "", "", 0, 0, 0, 0)
+}
+
 fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
   let next = stream_peek(cursor.stream, 0)
   if !next.ok { return parser_finish_step(cursor, parse_lex_error(next.stream)) } else { }
@@ -2304,21 +2321,7 @@ fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
     } else { }
   } else { }
   if length(cursor.frames) == 0 && next.token.kind == "symbol" && next.token.text == "}" {
-    let close = stream_take(next.stream)
-    let root = FlatAstNode {
-      id: cursor.functionRootId, parentId: -1, childIndex: cursor.topLevelChildIndex, role: "top_level",
-      kind: "function", text: cursor.functionName, integerValue: 0,
-      booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
-      endByte: close.token.endByte, line: cursor.functionLine, column: cursor.functionColumn
-    }
-    let doneCursor = ParserCursor {
-      document: cursor.document, revision: cursor.revision, stream: close.stream,
-      nextNodeId: cursor.nextNodeId, done: false, functionActive: false,
-      functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
-      functionRootId: 0, functionChildIndex: 0,
-      topLevelChildIndex: cursor.topLevelChildIndex + 1, frames: []
-    }
-    return parser_chunk(doneCursor, "continuing", [root], false, "", "", 0, 0, 0, 0)
+    return parser_close_function(cursor, stream_take(next.stream))
   } else { }
   if next.token.kind == "eof" {
     return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED", "Expected '}'", next.token, next.stream))
@@ -2350,6 +2353,16 @@ fn parser_step_function(cursor: ParserCursor) -> ParserChunk {
     functionRootId: consumed.functionRootId, functionChildIndex: consumed.functionChildIndex,
     topLevelChildIndex: consumed.topLevelChildIndex, frames: consumed.frames
   }
+  let following = stream_peek(nextCursor.stream, 0)
+  if nextCursor.functionActive && length(nextCursor.frames) == 0 &&
+     following.ok && following.token.kind == "symbol" && following.token.text == "}" {
+    let closed = parser_close_function(nextCursor, stream_take(following.stream))
+    var combinedNodes = nodes
+    for closedNode in closed.nodes { combinedNodes = append(combinedNodes, closedNode) }
+    return parser_chunk(closed.cursor, closed.status, combinedNodes, closed.done,
+      closed.errorCode, closed.message, closed.errorStart, closed.errorEnd,
+      closed.errorLine, closed.errorColumn)
+  } else { }
   return parser_chunk(nextCursor, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
 

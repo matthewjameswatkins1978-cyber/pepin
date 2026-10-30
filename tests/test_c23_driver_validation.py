@@ -1,6 +1,6 @@
 import unittest
 
-from pep_c23 import (checker_binding_context_nodes, checker_node_context_index, emit,
+from pep_c23 import (PepCompilerToolBudgetError, checker_binding_context_nodes, checker_node_context_index, emit,
                       typed, typed_record_value, validate_parser_final_outcome,
                       validate_parser_node_sequence, validate_parser_parent_links)
 
@@ -178,6 +178,27 @@ class PepC23CheckerDriverTests(unittest.TestCase):
         self.assertEqual(measurements["checker_status"], "valid")
         self.assertGreater(measurements["checker_step_count"], 0)
         self.assertLess(measurements["checker_max_request_bytes"], 1_048_576)
+
+
+    def test_parser_completes_before_checker_transport_limit_for_one_thousand_twenty_four_functions(self):
+        count = 1024
+        declarations = [
+            f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
+            for index in range(count)
+        ]
+        declarations.append("fn main() -> Int { return 0 }")
+        source = ("\n".join(declarations) + "\n").encode()
+        measurements = {}
+
+        with self.assertRaises(PepCompilerToolBudgetError) as raised:
+            emit(source, measurements)
+
+        self.assertEqual(raised.exception.stage, "checker")
+        self.assertEqual(raised.exception.code, "PEP_TOOL_VALUE_LIMIT")
+        self.assertEqual(measurements["parser_status"], "complete")
+        self.assertEqual(measurements["parser_node_count"], 8196)
+        self.assertLess(measurements["parser_step_count"], measurements["parser_host_step_limit"])
+        self.assertLess(len(source), 65_536)
 
 
 if __name__ == "__main__":
