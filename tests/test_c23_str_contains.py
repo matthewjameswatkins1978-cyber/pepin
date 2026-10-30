@@ -341,6 +341,7 @@ fn main() -> Int {
 }
 """
         reference_text = source_text + "say(int_text(main()))\n"
+        execute_rhs_text = source_text + "say(int_text(if combine(true) { 1 } else { 0 }))\n"
 
         (ROOT / "_build").mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
@@ -355,7 +356,13 @@ fn main() -> Int {
             interpreted = self.invoke("run", reference)
             self.assertEqual(interpreted.returncode, 0,
                              interpreted.stdout + interpreted.stderr)
-            self.assertEqual(interpreted.stdout, "0\n")
+            execute_rhs_reference = folder / "boolean-rhs-executes-reference.pep"
+            execute_rhs_reference.write_text(execute_rhs_text, encoding="utf-8", newline="\n")
+            interpreted_trap = self.invoke("run", execute_rhs_reference)
+            self.assertNotEqual(interpreted_trap.returncode, 0,
+                                interpreted_trap.stdout + interpreted_trap.stderr)
+            self.assertEqual(interpreted_trap.stdout, "")
+            self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", interpreted_trap.stderr)
 
             generated = emit(source.read_bytes())
             self.assertIn(" && ", generated)
@@ -363,6 +370,22 @@ fn main() -> Int {
             self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", generated)
             generated_path = folder / "generated.c"
             generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            main_match = re.search(r"int64_t pep_fn_(\d+)\(void\);", generated)
+            self.assertIsNotNone(main_match, generated)
+            bool_parameter_ids = re.findall(
+                r"_Bool pep_fn_(\d+)\(_Bool pep_arg_\d+\);", generated)
+            self.assertEqual(len(bool_parameter_ids), 2, generated)
+            harness_path = folder / "boolean-short-circuit-harness.c"
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(int argc, char **argv) {\n"
+                "  (void)argv;\n"
+                f"  if (argc > 1) (void)pep_fn_{bool_parameter_ids[1]}(1);\n"
+                f"  printf(\"%lld\\n\", (long long)pep_fn_{main_match.group(1)}());\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
 
             if not (CLANG.is_file() and GCC.is_file()):
                 self.skipTest("Clang and GCC are required for native C23 verification")
@@ -371,7 +394,7 @@ fn main() -> Int {
                     executable = folder / f"boolean-short-circuit-{compiler.stem}.exe"
                     compiled = subprocess.run(
                         [str(compiler), "-std=c23", "-Wall", "-Wextra",
-                         "-Wpedantic", "-Werror", "-O2", str(generated_path),
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
                          "-o", str(executable)],
                         cwd=folder, text=True, capture_output=True, check=False)
                     self.assertEqual(compiled.returncode, 0,
@@ -381,6 +404,81 @@ fn main() -> Int {
                         capture_output=True, check=False)
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, interpreted.stdout)
+
+                    trap = subprocess.run(
+                        [str(executable), "execute-rhs"], cwd=folder,
+                        text=True, capture_output=True, check=False)
+                    self.assertNotEqual(trap.returncode, 0,
+                                        trap.stdout + trap.stderr)
+                    self.assertEqual(trap.returncode, interpreted_trap.returncode)
+                    self.assertEqual(trap.stdout, interpreted_trap.stdout)
+                    self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", trap.stderr)
+
+    def test_lucy_ascii_whitespace_condition_runs_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        condition = "byte == 32 || byte == 9 || byte == 13 || byte == 10"
+        self.assertIn(f"if {condition} {{", lexer)
+        source_text = (
+            "fn is_ascii_space(byte: Int) -> Bool { return " + condition + " }\n"
+            "fn main() -> Int { return 0 }\n")
+        values = (32, 9, 13, 10, 65, 0)
+        expected = "1\n1\n1\n1\n0\n0\n"
+        reference_text = source_text + "".join(
+            f"say(int_text(if is_ascii_space({value}) {{ 1 }} else {{ 0 }}))\n"
+            for value in values)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-ascii-space.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-ascii-space-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            predicate = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+            self.assertIsNotNone(predicate, generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "lucy-ascii-space-harness.c"
+            call_ids = ", ".join(
+                f"pep_fn_{predicate.group(1)}({value})" for value in values)
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                f"  printf(\"%d\\n%d\\n%d\\n%d\\n%d\\n%d\\n\", {call_ids});\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-ascii-space-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
 
     def test_boolean_comparison_with_two_fallible_calls_fails_closed(self):
         source_text = """fn left() -> Bool { return true }
