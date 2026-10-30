@@ -54,15 +54,30 @@ def checker_report(document, source, *, status="valid", nodes=0, functions=(), c
     ])
 
 
-def empty_flat_ast_node():
-    return typed_record("FlatAstNode", [
+def empty_checker_node():
+    return typed_record("CheckerNode", [
         ("id", typed("Int", "-1")), ("parentId", typed("Int", "-1")),
         ("childIndex", typed("Int", "-1")), ("role", typed("Str", "")),
         ("kind", typed("Str", "")), ("text", typed("Str", "")),
-        ("integerValue", typed("Int", "0")), ("booleanValue", typed("Bool", False)),
-        ("stringParts", typed_list("Str", [])), ("startByte", typed("Int", "0")),
-        ("endByte", typed("Int", "0")), ("line", typed("Int", "1")),
-        ("column", typed("Int", "1")),
+        ("startByte", typed("Int", "0")), ("endByte", typed("Int", "0")),
+    ])
+
+
+def checker_node_value(node):
+    node_fields = fields(node)
+    names = ("id", "parentId", "childIndex", "role", "kind", "text", "startByte", "endByte")
+    return typed_record("CheckerNode", [(name, node_fields[name]) for name in names])
+
+
+def checker_progress_header(parsed):
+    parsed_fields = fields(parsed)
+    names = ("document", "revision", "status", "done", "errorCode", "message",
+             "errorStart", "errorEnd", "errorLine", "errorColumn")
+    values = {name: parsed_fields[name] for name in names}
+    return typed_record("ParserProgress", [
+        ("document", values["document"]), ("revision", values["revision"]),
+        ("status", values["status"]), ("nodes", typed_list("FlatAstNode", [])),
+        *[(name, values[name]) for name in names[3:]],
     ])
 
 
@@ -96,7 +111,7 @@ def checker_cursor(document, source, parsed, phase, *, done=False):
         ("diagnostics", typed_list("CheckDiagnostic", [])),
         ("unreachable", typed_record("UnreachableLookup", [
             ("found", typed("Bool", False)),
-            ("node", empty_flat_ast_node()),
+            ("node", empty_checker_node()),
         ])),
     ])
     return typed_record("CheckerCursor", [
@@ -105,7 +120,7 @@ def checker_cursor(document, source, parsed, phase, *, done=False):
         ("phase", typed("Str", phase)),
         ("done", typed("Bool", done)),
         ("parsed", parsed),
-        ("nodes", typed_list("FlatAstNode", [])),
+        ("nodes", typed_list("CheckerNode", [])),
         ("functions", typed_list("CheckedFunction", [])),
         ("bindingResult", empty_bindings),
         ("nameResult", empty_names),
@@ -177,8 +192,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         bindings = checker_cursor(empty["document"], "", parsed, "functions")
         tools = [
             ("pep-a13-parser", "parser_parse_program", [], parsed),
-            ("pep-a13-checker-start", "checker_start", [parsed], initial),
-            ("pep-a13-checker-step", "checker_step", [initial, typed_list("FlatAstNode", [])], bindings),
+            ("pep-a13-checker-start", "checker_start", [parsed, typed("Int", "0")], initial),
+            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", [])], bindings),
         ]
         for tool, function, arguments, expected in tools:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -285,12 +300,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
         else:
             opened, parsed = parser_result
         target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
+        parser_nodes = fields(parsed)["nodes"]["value"]
+        checker_nodes = [checker_node_value(node) for node in parser_nodes]
         cursor = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                    "op": "tool_invoke", "tool": "pep-a13-checker-start",
-                                   "arguments": [parsed], "semanticTarget": target})
+                                   "arguments": [checker_progress_header(parsed), typed("Int", str(len(parser_nodes)))], "semanticTarget": target})
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         value = cursor["result"]
-        parser_nodes = fields(parsed)["nodes"]["value"]
         node_count = len(parser_nodes)
         binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
         binding_count = sum(
@@ -304,15 +320,19 @@ class A13FunctionResolutionTests(unittest.TestCase):
             if scalar(current["done"]):
                 break
             previous = value
-            step_nodes = parser_nodes
+            step_nodes = checker_nodes
             if scalar(current["phase"]) == "validation":
                 next_node = scalar(fields(current["validation"])["nextNode"])
-                step_nodes = parser_nodes[next_node:min(next_node + 32, node_count)]
+                step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [value, typed_list("FlatAstNode", step_nodes)],
+                                        "arguments": [value, typed_list("CheckerNode", step_nodes)],
                                         "semanticTarget": target})
-            self.assertEqual(stepped.get("outcome"), "ok", stepped)
+            self.assertEqual(stepped.get("outcome"), "ok", {
+                "phase": scalar(current["phase"]),
+                "typeOffset": scalar(current["typeOffset"]),
+                "response": stepped,
+            })
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             value = stepped["result"]
             self.assertNotEqual(value, previous)
@@ -343,8 +363,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         initial = checker_cursor(opened["document"], source, parsed, "validation")
         after_first_step = checker_cursor(opened["document"], source, parsed, "functions")
         for tool, function, arguments, expected in [
-            ("pep-a13-checker-start", "checker_start", [parsed], initial),
-            ("pep-a13-checker-step", "checker_step", [initial, typed_list("FlatAstNode", [])], after_first_step),
+            ("pep-a13-checker-start", "checker_start", [parsed, typed("Int", "0")], initial),
+            ("pep-a13-checker-step", "checker_step", [initial, typed_list("CheckerNode", [])], after_first_step),
         ]:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                            "op": "tool_register", "tool": tool,
@@ -363,7 +383,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(activated.get("status"), "Active", activated)
 
         started = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-                                    "tool": "pep-a13-checker-start", "arguments": [parsed],
+                                    "tool": "pep-a13-checker-start", "arguments": [checker_progress_header(parsed), typed("Int", "0")],
                                     "semanticTarget": target})
         self.assertEqual(started.get("outcome"), "ok", started)
         self.assertEqual(started.get("revision"), self.tool_revision)
@@ -376,7 +396,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 break
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [cursor, fields(parsed)["nodes"]], "semanticTarget": target})
+                                        "arguments": [cursor, typed_list("CheckerNode", [])], "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             cursor = stepped["result"]
@@ -403,10 +423,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("pep-a13-parser-start", "parser_start", [], parser_start_cursor),
             ("pep-a13-parser-step", "parser_step", [parser_done_cursor],
              parser_chunk_value(empty["document"], empty["revision"], parser_done_cursor)),
-            ("pep-a13-checker-start", "checker_start", [empty_parsed],
+            ("pep-a13-checker-start", "checker_start", [empty_parsed, typed("Int", "0")],
              checker_cursor(empty["document"], "", empty_parsed, "validation")),
             ("pep-a13-checker-step", "checker_step",
-             [checker_cursor(empty["document"], "", empty_parsed, "validation"), typed_list("FlatAstNode", [])],
+             [checker_cursor(empty["document"], "", empty_parsed, "validation"), typed_list("CheckerNode", [])],
              checker_cursor(empty["document"], "", empty_parsed, "functions")),
         ]:
             registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -467,8 +487,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("errorColumn", final_parser_chunk["errorColumn"]),
         ])
         self.assertEqual(scalar(final_parser_chunk["status"]), "complete")
+        checker_nodes = [checker_node_value(node) for node in parser_nodes]
         cursor = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-                                   "tool": "pep-a13-checker-start", "arguments": [parsed_value],
+                                   "tool": "pep-a13-checker-start",
+                                   "arguments": [checker_progress_header(parsed_value), typed("Int", str(len(parser_nodes)))],
                                    "semanticTarget": target})
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         cursor_value = cursor["result"]
@@ -477,7 +499,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         while not scalar(fields(cursor_value)["done"]) and step_count < 32:
             previous = fields(cursor_value)
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-                                        "tool": "pep-a13-checker-step", "arguments": [cursor_value, typed_list("FlatAstNode", parser_nodes)],
+                                        "tool": "pep-a13-checker-step", "arguments": [cursor_value, typed_list("CheckerNode", checker_nodes)],
                                         "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
@@ -508,8 +530,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         source = ""
         opened = self._open(source)
         target = {"document": opened["document"], "revision": opened["revision"], "entryFunctions": []}
-        empty_nodes = typed_list("FlatAstNode", [])
-        empty_result = typed_list("FlatAstNode", [])
+        empty_nodes = typed_list("CheckerNode", [])
+        empty_result = typed_list("CheckerNode", [])
         registered = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                        "op": "tool_register", "tool": "pep-a13-node-range",
                                        "document": self.tool_document, "revision": self.tool_revision,
@@ -528,19 +550,16 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
         nodes = []
         for node_id in range(3):
-            nodes.append(typed_record("FlatAstNode", [
+            nodes.append(typed_record("CheckerNode", [
                 ("id", typed("Int", str(node_id))), ("parentId", typed("Int", "-1")),
                 ("childIndex", typed("Int", "-1")), ("role", typed("Str", "")),
                 ("kind", typed("Str", "synthetic")), ("text", typed("Str", "")),
-                ("integerValue", typed("Int", "0")), ("booleanValue", typed("Bool", False)),
-                ("stringParts", typed_list("Str", [])), ("startByte", typed("Int", "0")),
-                ("endByte", typed("Int", "0")), ("line", typed("Int", "1")),
-                ("column", typed("Int", "1")),
+                ("startByte", typed("Int", "0")), ("endByte", typed("Int", "0")),
             ]))
         def run_range(start, end):
             result = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                                       "tool": "pep-a13-node-range",
-                                      "arguments": [typed_list("FlatAstNode", nodes), typed("Int", str(start)), typed("Int", str(end))],
+                                      "arguments": [typed_list("CheckerNode", nodes), typed("Int", str(start)), typed("Int", str(end))],
                                       "semanticTarget": target})
             self.assertEqual(result.get("outcome"), "ok", result)
             return [scalar(fields(item)["id"]) for item in result["result"]["value"]]
@@ -1470,11 +1489,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self._register_checker_continuations()
         started = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                     "op": "tool_invoke", "tool": "pep-a13-checker-start",
-                                    "arguments": [parsed], "semanticTarget": target})
+                                    "arguments": [checker_progress_header(parsed), typed("Int", str(len(fields(parsed)["nodes"]["value"])))], "semanticTarget": target})
         self.assertEqual(started.get("outcome"), "ok", started)
         stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                     "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                    "arguments": [started["result"], typed_list("FlatAstNode", [])],
+                                    "arguments": [started["result"], typed_list("CheckerNode", [])],
                                     "semanticTarget": target})
         self.assertEqual(stepped.get("outcome"), "ok", stepped)
         report = fields(fields(stepped["result"])["report"])

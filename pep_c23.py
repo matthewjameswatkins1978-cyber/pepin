@@ -104,6 +104,28 @@ def typed_record_value(type_name, fields):
     ]}
 
 
+def checker_node_value(node):
+    fields = typed_fields(node, "FlatAstNode", "checker input node")
+    line = int(typed_field_value(fields, "line", "Int", "checker input node"))
+    column = int(typed_field_value(fields, "column", "Int", "checker input node"))
+    if line < 1 or column < 1:
+        raise PepToolError("checker input node has an invalid source position")
+    names = ("id", "parentId", "childIndex", "role", "kind", "text", "startByte", "endByte")
+    return typed_record_value("CheckerNode", [(name, fields[name]) for name in names])
+
+
+def checker_progress_header(parsed):
+    fields = typed_fields(parsed, "ParserProgress", "checker start input")
+    return typed_record_value("ParserProgress", [
+        ("document", fields["document"]), ("revision", fields["revision"]),
+        ("status", fields["status"]), ("nodes", typed_list("FlatAstNode", [])),
+        ("done", fields["done"]), ("errorCode", fields["errorCode"]),
+        ("message", fields["message"]), ("errorStart", fields["errorStart"]),
+        ("errorEnd", fields["errorEnd"]), ("errorLine", fields["errorLine"]),
+        ("errorColumn", fields["errorColumn"]),
+    ])
+
+
 def parser_cursor_value(document, revision, done=False, next_node_id=0,
                         lex_done=False, lex_stage="validate", top_level_child_index=0):
     lex_cursor = typed_record_value("LexCursor", [
@@ -461,14 +483,16 @@ def check_target(session, parsed, target, tool_revision):
     started = time.perf_counter_ns()
     request_bytes_before = session.request_bytes_total
     response_bytes_before = session.response_bytes_total
-    cursor = invoke_tool(session, "pep-c23-checker-start", [parsed], target,
+    parser_nodes = typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
+                                     "nodes", "List[FlatAstNode]", "parser result")
+    node_count = len(parser_nodes)
+    cursor = invoke_tool(session, "pep-c23-checker-start",
+                         [checker_progress_header(parsed), typed("Int", node_count)], target,
                          tool_revision, "start checker", stage="checker")
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
     max_request_bytes = session.last_request_bytes
     max_response_bytes = session.last_response_bytes
-    parser_nodes = typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
-                                     "nodes", "List[FlatAstNode]", "parser result")
-    node_count = len(parser_nodes)
+    checker_nodes = [checker_node_value(node) for node in parser_nodes]
     binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
     binding_count = sum(
         typed_field_value(typed_fields(node, "FlatAstNode", "parser node"), "kind", "Str", "parser node")
@@ -486,14 +510,14 @@ def check_target(session, parsed, target, tool_revision):
         if typed_field_value(cursor_fields, "done", "Bool", "checker cursor"):
             break
         previous_cursor = cursor
-        step_nodes = parser_nodes
+        step_nodes = checker_nodes
         phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
         if phase == "validation":
             validation_fields = typed_fields(cursor_fields.get("validation"), "TreeValidation", "checker validation")
             next_node = int(typed_field_value(validation_fields, "nextNode", "Int", "checker validation"))
-            step_nodes = parser_nodes[next_node:min(next_node + 32, node_count)]
+            step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
         step_started = time.perf_counter_ns()
-        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("FlatAstNode", step_nodes)], target,
+        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("CheckerNode", step_nodes)], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)

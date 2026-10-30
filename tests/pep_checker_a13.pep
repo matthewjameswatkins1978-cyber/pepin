@@ -1,5 +1,6 @@
 type PepTypeShape { kind: Str, name: Str, listDepth: Int }
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int }
+type CheckerNode { id: Int, parentId: Int, childIndex: Int, role: Str, kind: Str, text: Str, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
 type DiagnosticLookup { found: Bool, diagnostic: CheckDiagnostic }
@@ -11,12 +12,12 @@ type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, sc
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
-type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport, validation: TreeValidation }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport, validation: TreeValidation }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
-type NodeLookup { found: Bool, node: FlatAstNode }
-type UnreachableLookup { found: Bool, node: FlatAstNode }
+type NodeLookup { found: Bool, node: CheckerNode }
+type UnreachableLookup { found: Bool, node: CheckerNode }
 type ChildRoleCount { role: Str, count: Int }
-type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
+type ValidationFrame { nodeId: Int, node: CheckerNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
 type TreeValidation { sourceLength: Int, nextNode: Int, nextRoot: Int, valid: Bool, stack: List[ValidationFrame], totalCount: Int }
 type FunctionLookup { found: Bool, function: CheckedFunction }
@@ -25,13 +26,13 @@ type ReferenceLookup { found: Bool, reference: ResolvedName }
 type PatternKeyNestedPart { position: Int, kind: Str, constructor: Str, payloadArity: Int }
 type PatternKeyPart { position: Int, kind: Str, constructor: Str, payloadArity: Int, nestedParts: List[PatternKeyNestedPart] }
 type ConstructorPatternKey { name: Str, syntaxId: Int, argumentCount: Int, argumentPatterns: List[PatternKeyPart] }
-type PatternValidation { valid: Bool, covers: Bool, code: Str, node: FlatAstNode }
+type PatternValidation { valid: Bool, covers: Bool, code: Str, node: CheckerNode }
 
 
 fn empty_type_shape() -> PepTypeShape {
   return PepTypeShape { kind: "", name: "", listDepth: 0 }
 }
-fn known_type_shape(nodes: List[FlatAstNode], typeName: Str) -> PepTypeShape {
+fn known_type_shape(nodes: List[CheckerNode], typeName: Str) -> PepTypeShape {
   if typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" {
     return PepTypeShape { kind: "builtin", name: typeName, listDepth: 0 }
   } else {}
@@ -47,12 +48,12 @@ fn with_one_more_list(shape: PepTypeShape) -> PepTypeShape {
   if shape.kind == "" { return empty_type_shape() } else {}
   return PepTypeShape { kind: shape.kind, name: shape.name, listDepth: shape.listDepth + 1 }
 }
-fn legacy_type_shape(nodes: List[FlatAstNode], typeName: Str) -> PepTypeShape {
+fn legacy_type_shape(nodes: List[CheckerNode], typeName: Str) -> PepTypeShape {
   let element = list_element_type(typeName)
   if element != "" { return with_one_more_list(legacy_type_shape(nodes, element)) } else {}
   return known_type_shape(nodes, typeName)
 }
-fn type_shape_at(nodes: List[FlatAstNode], id: Int) -> PepTypeShape {
+fn type_shape_at(nodes: List[CheckerNode], id: Int) -> PepTypeShape {
   var active = false
   var nextId = id
   var depth = 0
@@ -67,14 +68,22 @@ fn type_shape_at(nodes: List[FlatAstNode], id: Int) -> PepTypeShape {
   }
   return empty_type_shape()
 }
-fn empty_node() -> FlatAstNode {
-  return FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: 0, endByte: 0, line: 1, column: 1 }
+fn compact_checker_node(node: FlatAstNode) -> CheckerNode {
+  return CheckerNode { id: node.id, parentId: node.parentId, childIndex: node.childIndex, role: node.role, kind: node.kind, text: node.text, startByte: node.startByte, endByte: node.endByte }
 }
-fn lookup_node(nodes: List[FlatAstNode], id: Int) -> NodeLookup {
+fn compact_checker_nodes(nodes: List[FlatAstNode]) -> List[CheckerNode] {
+  var reversed: List[CheckerNode] = []
+  for node in nodes { reversed = prepend(reversed, compact_checker_node(node)) }
+  return reverse(reversed)
+}
+fn empty_node() -> CheckerNode {
+  return CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: 0, endByte: 0 }
+}
+fn lookup_node(nodes: List[CheckerNode], id: Int) -> NodeLookup {
   for node in nodes { if node.id == id { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
-fn is_type_table_diagnostic(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -> Bool {
+fn is_type_table_diagnostic(nodes: List[CheckerNode], candidate: CheckDiagnostic) -> Bool {
   if candidate.code == "PEP_DUPLICATE_TYPE" || candidate.code == "PEP_DUPLICATE_CONSTRUCTOR" || candidate.code == "PEP_RESERVED_CONSTRUCTOR" {
     return true
   } else {}
@@ -84,7 +93,7 @@ fn is_type_table_diagnostic(nodes: List[FlatAstNode], candidate: CheckDiagnostic
   } else {}
   return false
 }
-fn first_type_table_diagnostic(nodes: List[FlatAstNode], diagnostics: List[CheckDiagnostic]) -> DiagnosticLookup {
+fn first_type_table_diagnostic(nodes: List[CheckerNode], diagnostics: List[CheckDiagnostic]) -> DiagnosticLookup {
   var found = false
   var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
   for candidate in diagnostics {
@@ -95,12 +104,12 @@ fn first_type_table_diagnostic(nodes: List[FlatAstNode], diagnostics: List[Check
   }
   return DiagnosticLookup { found: found, diagnostic: first }
 }
-fn count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
+fn count_children(nodes: List[CheckerNode], parent: Int, role: Str) -> Int {
   var count = 0
   for node in nodes { if node.parentId == parent && node.role == role { count = count + 1 } else {} }
   return count
 }
-fn child_at(nodes: List[FlatAstNode], parent: Int, role: Str, index: Int) -> NodeLookup {
+fn child_at(nodes: List[CheckerNode], parent: Int, role: Str, index: Int) -> NodeLookup {
   for node in nodes {
     if node.parentId == parent && node.role == role && node.childIndex == index {
       return NodeLookup { found: true, node: node }
@@ -108,11 +117,11 @@ fn child_at(nodes: List[FlatAstNode], parent: Int, role: Str, index: Int) -> Nod
   }
   return NodeLookup { found: false, node: empty_node() }
 }
-fn type_name_at(nodes: List[FlatAstNode], id: Int) -> Str {
+fn type_name_at(nodes: List[CheckerNode], id: Int) -> Str {
   return legacy_type_name(type_shape_at(nodes, id))
 }
-fn insert_sorted(nodes: List[FlatAstNode], item: FlatAstNode) -> List[FlatAstNode] {
-  var reversed: List[FlatAstNode] = []
+fn insert_sorted(nodes: List[CheckerNode], item: CheckerNode) -> List[CheckerNode] {
+  var reversed: List[CheckerNode] = []
   var inserted = false
   for node in nodes {
     if !inserted && item.id + 1 <= node.id { reversed = prepend(reversed, item); inserted = true } else {}
@@ -121,7 +130,7 @@ fn insert_sorted(nodes: List[FlatAstNode], item: FlatAstNode) -> List[FlatAstNod
   if !inserted { reversed = prepend(reversed, item) } else {}
   return reverse(reversed)
 }
-fn quick_sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
+fn quick_sort_nodes(nodes: List[CheckerNode]) -> List[CheckerNode] {
   if length(nodes) <= 1 { return nodes } else {}
   let pivotIndex = length(nodes) / 2
   var position = 0
@@ -130,21 +139,21 @@ fn quick_sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
     if position == pivotIndex { pivot = node } else {}
     position = position + 1
   }
-  var less: List[FlatAstNode] = []
-  var greater: List[FlatAstNode] = []
+  var less: List[CheckerNode] = []
+  var greater: List[CheckerNode] = []
   for node in nodes {
     if node.id + 1 <= pivot.id { less = prepend(less, node) } else {}
     if pivot.id + 1 <= node.id { greater = prepend(greater, node) } else {}
   }
   let sortedLess = quick_sort_nodes(less)
   let sortedGreater = quick_sort_nodes(greater)
-  var reversed: List[FlatAstNode] = []
+  var reversed: List[CheckerNode] = []
   for node in sortedLess { reversed = prepend(reversed, node) }
   reversed = prepend(reversed, pivot)
   for node in sortedGreater { reversed = prepend(reversed, node) }
   return reverse(reversed)
 }
-fn sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
+fn sort_nodes(nodes: List[CheckerNode]) -> List[CheckerNode] {
   var ascending = true
   var descending = true
   var previousId = -1
@@ -162,15 +171,15 @@ fn sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
 fn known_builtin(name: Str) -> Bool {
   return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains" || name == "str_contains"
 }
-fn is_constructor(nodes: List[FlatAstNode], name: Str) -> Bool {
+fn is_constructor(nodes: List[CheckerNode], name: Str) -> Bool {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return true } else {} }
   return false
 }
-fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+fn record_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "record_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
-fn diagnostic_order_byte(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -> Int {
+fn diagnostic_order_byte(nodes: List[CheckerNode], candidate: CheckDiagnostic) -> Int {
   if candidate.code != "PEP_MISSING_FIELD" { return candidate.startByte } else {}
   let missingField = lookup_node(nodes, candidate.syntaxId)
   if !missingField.found || missingField.node.kind != "field_declaration" { return candidate.startByte } else {}
@@ -194,34 +203,34 @@ fn diagnostic_order_byte(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -
   }
   if found { return firstRecordByte } else { return candidate.startByte }
 }
-fn union_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+fn union_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "union_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
-fn variant_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {
+fn variant_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
 }
-fn constructor_union_type(nodes: List[FlatAstNode], name: Str) -> Str {
+fn constructor_union_type(nodes: List[CheckerNode], name: Str) -> Str {
   let variant = variant_declaration(nodes, name)
   if variant.found {
     let owner = lookup_node(nodes, variant.node.parentId)
     if owner.found { return owner.node.text } else { return "" }
   } else { return "" }
 }
-fn variant_payload_type(nodes: List[FlatAstNode], variantName: Str, index: Int) -> Str {
+fn variant_payload_type(nodes: List[CheckerNode], variantName: Str, index: Int) -> Str {
   let variant = variant_declaration(nodes, variantName)
   if !variant.found { return "" } else {}
   let payload = child_at(nodes, variant.node.id, "field_type", index)
   if payload.found { return type_name_at(nodes, payload.node.id) } else { return "" }
 }
-fn variant_payload_shape(nodes: List[FlatAstNode], variantName: Str, index: Int) -> PepTypeShape {
+fn variant_payload_shape(nodes: List[CheckerNode], variantName: Str, index: Int) -> PepTypeShape {
   let variant = variant_declaration(nodes, variantName)
   if !variant.found { return empty_type_shape() } else {}
   let payload = child_at(nodes, variant.node.id, "field_type", index)
   if payload.found { return type_shape_at(nodes, payload.node.id) } else { return empty_type_shape() }
 }
-fn record_field_type(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) -> Str {
+fn record_field_type(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> Str {
   let record = record_declaration(nodes, recordName)
   if !record.found { return "" } else {}
   for field in nodes {
@@ -232,7 +241,7 @@ fn record_field_type(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) 
   }
   return ""
 }
-fn record_field_shape(nodes: List[FlatAstNode], recordName: Str, fieldName: Str) -> PepTypeShape {
+fn record_field_shape(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> PepTypeShape {
   let record = record_declaration(nodes, recordName)
   if !record.found { return empty_type_shape() } else {}
   for field in nodes {
@@ -259,7 +268,7 @@ fn find_reference(references: List[ResolvedName], syntaxId: Int) -> ReferenceLoo
   for reference in references { if reference.syntaxId == syntaxId { return ReferenceLookup { found: true, reference: reference } } else {} }
   return ReferenceLookup { found: false, reference: ResolvedName { syntaxId: -1, bindingId: -1, name: "", startByte: 0, endByte: 0 } }
 }
-fn inside_function(node: FlatAstNode, function: CheckedFunction) -> Bool {
+fn inside_function(node: CheckerNode, function: CheckedFunction) -> Bool {
   return node.id != function.syntaxId && function.startByte <= node.startByte && node.endByte <= function.endByte
 }
 fn fixed_child_index(parentKind: Str, role: Str) -> Int {
@@ -324,13 +333,18 @@ fn replace_validation_top(stack: List[ValidationFrame], replacement: ValidationF
   }
   return reverse(reversed)
 }
-fn tree_is_valid(nodes: List[FlatAstNode], sourceLength: Int) -> Bool {
+fn flat_source_positions_valid(nodes: List[FlatAstNode]) -> Bool {
+  var valid = true
+  for node in nodes { if node.line <= 0 || node.column <= 0 { valid = false } else {} }
+  return valid
+}
+fn tree_is_valid(nodes: List[CheckerNode], sourceLength: Int) -> Bool {
   var expectedId = 0
   var nextRoot = 0
   var valid = true
   var validationStack: List[ValidationFrame] = []
   for node in nodes {
-    if node.id != expectedId || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || sourceLength <= node.endByte && node.endByte != sourceLength || node.line <= 0 || node.column <= 0 { valid = false } else {}
+    if node.id != expectedId || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || sourceLength <= node.endByte && node.endByte != sourceLength { valid = false } else {}
     let frame = ValidationFrame { nodeId: node.id, node: node, roleCounts: [] }
     if node.parentId == -1 {
       validationStack = []
@@ -358,7 +372,7 @@ fn tree_is_valid(nodes: List[FlatAstNode], sourceLength: Int) -> Bool {
   }
   return valid
 }
-fn tree_validation_chunk(nodes: List[FlatAstNode], validation: TreeValidation) -> TreeValidation {
+fn tree_validation_chunk(nodes: List[CheckerNode], validation: TreeValidation) -> TreeValidation {
   let chunkEnd = validation.nextNode + 32
   var nextNode = validation.nextNode
   var nextRoot = validation.nextRoot
@@ -366,7 +380,7 @@ fn tree_validation_chunk(nodes: List[FlatAstNode], validation: TreeValidation) -
   var stack = validation.stack
   for node in nodes {
     if valid && nextNode <= node.id && node.id + 1 <= chunkEnd {
-      if node.id != nextNode || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || validation.sourceLength <= node.endByte && node.endByte != validation.sourceLength || node.line <= 0 || node.column <= 0 {
+      if node.id != nextNode || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || validation.sourceLength <= node.endByte && node.endByte != validation.sourceLength {
         valid = false
       } else {}
       let frame = ValidationFrame { nodeId: node.id, node: node, roleCounts: [] }
@@ -400,11 +414,11 @@ fn tree_validation_chunk(nodes: List[FlatAstNode], validation: TreeValidation) -
   if valid && validation.totalCount <= chunkEnd && nextNode != validation.totalCount { valid = false } else {}
   return TreeValidation { sourceLength: validation.sourceLength, nextNode: nextNode, nextRoot: nextRoot, valid: valid, stack: stack, totalCount: validation.totalCount }
 }
-fn declared_return_type(nodes: List[FlatAstNode], functionId: Int) -> Str {
+fn declared_return_type(nodes: List[CheckerNode], functionId: Int) -> Str {
   let declared = child_at(nodes, functionId, "return_type", 0)
   if declared.found { return type_name_at(nodes, declared.node.id) } else { return "" }
 }
-fn declared_binding_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str {
+fn declared_binding_type(nodes: List[CheckerNode], node: CheckerNode) -> Str {
   if node.kind == "parameter" {
     let declared = child_at(nodes, node.id, "type", 0)
     if declared.found { return type_name_at(nodes, declared.node.id) } else { return "" }
@@ -412,18 +426,18 @@ fn declared_binding_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str {
   let annotation = child_at(nodes, node.id, "annotation", 0)
   if annotation.found { return type_name_at(nodes, annotation.node.id) } else { return "" }
 }
-fn declared_return_shape(nodes: List[FlatAstNode], functionId: Int) -> PepTypeShape {
+fn declared_return_shape(nodes: List[CheckerNode], functionId: Int) -> PepTypeShape {
   if declared_return_type(nodes, functionId) != "" { return empty_type_shape() } else {}
   let declared = child_at(nodes, functionId, "return_type", 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
-fn declared_binding_shape(nodes: List[FlatAstNode], node: FlatAstNode) -> PepTypeShape {
+fn declared_binding_shape(nodes: List[CheckerNode], node: CheckerNode) -> PepTypeShape {
   if declared_binding_type(nodes, node) != "" { return empty_type_shape() } else {}
   let role = if node.kind == "parameter" { "type" } else { "annotation" }
   let declared = child_at(nodes, node.id, role, 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
-fn declared_binding_info(nodes: List[FlatAstNode], node: FlatAstNode) -> DeclaredBindingInfo {
+fn declared_binding_info(nodes: List[CheckerNode], node: CheckerNode) -> DeclaredBindingInfo {
   if node.kind == "binding_pattern" { return DeclaredBindingInfo { typeName: "", typeShape: empty_type_shape() } } else {}
   let role = if node.kind == "parameter" { "type" } else { "annotation" }
   let declared = child_at(nodes, node.id, role, 0)
@@ -433,12 +447,12 @@ fn declared_binding_info(nodes: List[FlatAstNode], node: FlatAstNode) -> Declare
   let storedShape = if name != "" { empty_type_shape() } else { shape }
   return DeclaredBindingInfo { typeName: name, typeShape: storedShape }
 }
-fn checked_function(node: FlatAstNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
+fn checked_function(node: CheckerNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
   let resultType = if resultShape.kind != "" { legacy_type_name(resultShape) } else { "" }
   let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
   return CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: arity, returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte }
 }
-fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
+fn collect_functions(nodes: List[CheckerNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
   var active = false
@@ -489,11 +503,11 @@ fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   if active { reversed = prepend(reversed, checked_function(activeNode, ordinal, activeArity, activeResultShape)) } else {}
   return reverse(reversed)
 }
-fn scope_key(node: FlatAstNode, role: Str) -> Int {
+fn scope_key(node: CheckerNode, role: Str) -> Int {
   if node.kind == "if_statement" && role == "else" { return 3000001 + node.id * 2 } else {}
   return 3000000 + node.id * 2
 }
-fn scope_chain(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxId: Int, functionSemanticId: Int) -> List[Int] {
+fn scope_chain(nodes: List[CheckerNode], node: CheckerNode, functionSyntaxId: Int, functionSemanticId: Int) -> List[Int] {
   var current = node
   var reversed: List[Int] = []
   var done = false
@@ -519,7 +533,7 @@ fn first_scope(scopes: List[Int], fallback: Int) -> Int {
   for scope in scopes { if !found { answer = scope; found = true } else {} }
   return answer
 }
-fn binding_scope_id(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxId: Int, functionSemanticId: Int) -> Int {
+fn binding_scope_id(nodes: List[CheckerNode], node: CheckerNode, functionSyntaxId: Int, functionSemanticId: Int) -> Int {
   if node.kind == "parameter" { return functionSemanticId } else {}
   if node.kind == "for_in" { return scope_key(node, "body") } else {}
   if (node.kind == "let" || node.kind == "var") && node.role == "statement" {
@@ -528,7 +542,7 @@ fn binding_scope_id(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxI
   } else {}
   return first_scope(scope_chain(nodes, node, functionSyntaxId, functionSemanticId), functionSemanticId)
 }
-fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) -> Int {
+fn pattern_binding_visible_from(nodes: List[CheckerNode], pattern: CheckerNode) -> Int {
   let arm = lookup_node(nodes, pattern.parentId)
   if arm.found {
     let result = child_at(nodes, arm.node.id, "result", 1)
@@ -544,7 +558,7 @@ fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) 
   } else {}
   return pattern.endByte
 }
-fn collect_bindings_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], startNode: Int, endNode: Int, previous: BindingCollection) -> BindingCollection {
+fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], startNode: Int, endNode: Int, previous: BindingCollection) -> BindingCollection {
   var reversed = previous.bindings
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var ordinal = length(previous.bindings)
@@ -601,12 +615,12 @@ fn collect_bindings_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunct
   }
   return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
 }
-fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) -> BindingCollection {
+fn collect_bindings(nodes: List[CheckerNode], functions: List[CheckedFunction]) -> BindingCollection {
   let empty = BindingCollection { bindings: [], diagnostics: [] }
   let partial = collect_bindings_chunk(nodes, functions, 0, length(nodes), empty)
   return BindingCollection { bindings: reverse(partial.bindings), diagnostics: reverse(partial.diagnostics) }
 }
-fn resolve_names_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], startNode: Int, endNode: Int, previous: NameResolution) -> NameResolution {
+fn resolve_names_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], startNode: Int, endNode: Int, previous: NameResolution) -> NameResolution {
   var reversedReferences = previous.references
   var reversedDiagnostics = previous.diagnostics
   if length(functions) != 1 {
@@ -671,34 +685,34 @@ fn resolve_names_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction
   }
   return NameResolution { references: reversedReferences, diagnostics: reversedDiagnostics }
 }
-fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
+fn resolve_names(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
   let empty = NameResolution { references: [], diagnostics: [] }
   let reversed = resolve_names_chunk(nodes, functions, bindings, 0, length(nodes), empty)
   return NameResolution { references: reverse(reversed.references), diagnostics: reverse(reversed.diagnostics) }
 }
-fn owner_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> FunctionLookup {
+fn owner_function(nodes: List[CheckerNode], node: CheckerNode, functions: List[CheckedFunction]) -> FunctionLookup {
   for function in functions { if inside_function(node, function) { return FunctionLookup { found: true, function: function } } else {} }
   return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
 }
-fn inside_any_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> Bool {
+fn inside_any_function(nodes: List[CheckerNode], node: CheckerNode, functions: List[CheckedFunction]) -> Bool {
   return owner_function(nodes, node, functions).found
 }
 fn is_expression_kind(kind: Str) -> Bool {
   return kind == "integer" || kind == "boolean" || kind == "string" || kind == "name" || kind == "call" || kind == "binary" || kind == "unary" || kind == "list" || kind == "if_expression" || kind == "record" || kind == "field_access" || kind == "match" || kind == "hole"
 }
-fn function_parameter_type(nodes: List[FlatAstNode], functionId: Int, index: Int) -> Str {
+fn function_parameter_type(nodes: List[CheckerNode], functionId: Int, index: Int) -> Str {
   let parameter = child_at(nodes, functionId, "parameter", index)
   if !parameter.found { return "" } else {}
   let declared = child_at(nodes, parameter.node.id, "type", 0)
   if declared.found { return type_name_at(nodes, declared.node.id) } else { return "" }
 }
-fn function_parameter_shape(nodes: List[FlatAstNode], functionId: Int, index: Int) -> PepTypeShape {
+fn function_parameter_shape(nodes: List[CheckerNode], functionId: Int, index: Int) -> PepTypeShape {
   let parameter = child_at(nodes, functionId, "parameter", index)
   if !parameter.found { return empty_type_shape() } else {}
   let declared = child_at(nodes, parameter.node.id, "type", 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
-fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+fn infer_expression_type(nodes: List[CheckerNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let found = lookup_node(nodes, id)
   if !found.found { return "" } else {}
   let node = found.node
@@ -781,7 +795,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   } else {}
   return ""
 }
-fn is_all_hole_if_expression(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+fn is_all_hole_if_expression(nodes: List[CheckerNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let found = lookup_node(nodes, id)
   if !found.found { return false } else {}
   if found.node.kind == "hole" { return true } else {}
@@ -794,7 +808,7 @@ fn is_all_hole_if_expression(nodes: List[FlatAstNode], id: Int, functions: List[
   return is_all_hole_if_expression(nodes, thenValue.node.id, functions, bindings, references) &&
     is_all_hole_if_expression(nodes, elseValue.node.id, functions, bindings, references)
 }
-fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
+fn expression_type_shape(nodes: List[CheckerNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let found = lookup_node(nodes, id)
   if !found.found { return empty_type_shape() } else {}
   if found.node.kind == "integer" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
@@ -883,7 +897,7 @@ fn has_extra_list_depth(actual: PepTypeShape, expected: PepTypeShape) -> Bool {
   if actual.listDepth == 0 { return false } else {}
   return has_extra_list_depth(without_one_list(actual), without_one_list(expected))
 }
-fn list_mismatch_node(nodes: List[FlatAstNode], expressionId: Int, expected: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> NodeLookup {
+fn list_mismatch_node(nodes: List[CheckerNode], expressionId: Int, expected: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> NodeLookup {
   let expression = lookup_node(nodes, expressionId)
   if !expression.found { return NodeLookup { found: false, node: empty_node() } } else {}
   if expression.node.kind == "list" && expected.listDepth != 0 {
@@ -940,7 +954,7 @@ fn list_element_type(typeName: Str) -> Str {
   if typeName == "List[List[SourceBytes]]" { return "List[SourceBytes]" } else {}
   return ""
 }
-fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+fn contextual_expected_type(nodes: List[CheckerNode], node: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, node.parentId)
   if !parent.found { return "" } else {}
   if parent.node.kind == "record_field" && node.role == "value" {
@@ -1001,7 +1015,7 @@ fn contextual_expected_type(nodes: List[FlatAstNode], node: FlatAstNode, functio
   } else {}
   return ""
 }
-fn pattern_binding_type(nodes: List[FlatAstNode], pattern: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+fn pattern_binding_type(nodes: List[CheckerNode], pattern: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, pattern.parentId)
   if !parent.found { return "" } else {}
   if parent.node.kind == "constructor_pattern" {
@@ -1016,7 +1030,7 @@ fn pattern_binding_type(nodes: List[FlatAstNode], pattern: FlatAstNode, function
   } else {}
   return ""
 }
-fn pattern_binding_shape(nodes: List[FlatAstNode], pattern: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
+fn pattern_binding_shape(nodes: List[CheckerNode], pattern: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let parent = lookup_node(nodes, pattern.parentId)
   if !parent.found { return empty_type_shape() } else {}
   if parent.node.kind == "constructor_pattern" {
@@ -1034,7 +1048,7 @@ fn pattern_binding_shape(nodes: List[FlatAstNode], pattern: FlatAstNode, functio
   } else {}
   return empty_type_shape()
 }
-fn union_variant_count(nodes: List[FlatAstNode], unionName: Str) -> Int {
+fn union_variant_count(nodes: List[CheckerNode], unionName: Str) -> Int {
   let union = union_declaration(nodes, unionName)
   if !union.found { return 0 } else {}
   var count = 0
@@ -1043,7 +1057,7 @@ fn union_variant_count(nodes: List[FlatAstNode], unionName: Str) -> Int {
   }
   return count
 }
-fn validate_nested_pattern(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> PatternValidation {
+fn validate_nested_pattern(nodes: List[CheckerNode], pattern: CheckerNode, expectedType: Str) -> PatternValidation {
   if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" {
     return PatternValidation { valid: true, covers: true, code: "", node: empty_node() }
   } else {}
@@ -1073,11 +1087,11 @@ fn validate_nested_pattern(nodes: List[FlatAstNode], pattern: FlatAstNode, expec
   }
   return PatternValidation { valid: true, covers: covers, code: "", node: empty_node() }
 }
-fn pattern_covers_payload(nodes: List[FlatAstNode], pattern: FlatAstNode, expectedType: Str) -> Bool {
+fn pattern_covers_payload(nodes: List[CheckerNode], pattern: CheckerNode, expectedType: Str) -> Bool {
   let checked = validate_nested_pattern(nodes, pattern, expectedType)
   return checked.valid && checked.covers
 }
-fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> List[PatternKeyNestedPart] {
+fn pattern_key_nested_parts(nodes: List[CheckerNode], pattern: CheckerNode) -> List[PatternKeyNestedPart] {
   var reversed: List[PatternKeyNestedPart] = []
   for payload in nodes {
     if payload.parentId == pattern.id && payload.role == "argument" {
@@ -1089,7 +1103,7 @@ fn pattern_key_nested_parts(nodes: List[FlatAstNode], pattern: FlatAstNode) -> L
   }
   return reverse(reversed)
 }
-fn pattern_has_unkeyed_constructor(nodes: List[FlatAstNode], rootId: Int) -> Bool {
+fn pattern_has_unkeyed_constructor(nodes: List[CheckerNode], rootId: Int) -> Bool {
   for top in nodes {
     if top.parentId == rootId && top.role == "argument" && top.kind == "constructor_pattern" {
       for nested in nodes {
@@ -1103,7 +1117,7 @@ fn pattern_has_unkeyed_constructor(nodes: List[FlatAstNode], rootId: Int) -> Boo
   }
   return false
 }
-fn same_pattern_structure(nodes: List[FlatAstNode], leftId: Int, rightId: Int) -> Bool {
+fn same_pattern_structure(nodes: List[CheckerNode], leftId: Int, rightId: Int) -> Bool {
   let left = lookup_node(nodes, leftId)
   let right = lookup_node(nodes, rightId)
   if !left.found || !right.found { return false } else {}
@@ -1147,14 +1161,14 @@ fn same_pattern_key_parts(left: List[PatternKeyPart], right: List[PatternKeyPart
   }
   return true
 }
-fn same_constructor_pattern_key(nodes: List[FlatAstNode], left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
+fn same_constructor_pattern_key(nodes: List[CheckerNode], left: ConstructorPatternKey, right: ConstructorPatternKey) -> Bool {
   if left.name != right.name || left.argumentCount != right.argumentCount { return false } else {}
   if pattern_has_unkeyed_constructor(nodes, left.syntaxId) || pattern_has_unkeyed_constructor(nodes, right.syntaxId) {
     return same_pattern_structure(nodes, left.syntaxId, right.syntaxId)
   } else {}
   return same_pattern_key_parts(left.argumentPatterns, right.argumentPatterns)
 }
-fn infer_binding_types_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startBinding: Int, endBinding: Int, previous: List[BindingFact]) -> List[BindingFact] {
+fn infer_binding_types_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startBinding: Int, endBinding: Int, previous: List[BindingFact]) -> List[BindingFact] {
   var typed = previous
   var bindingOffset = 0
   for binding in bindings {
@@ -1199,7 +1213,7 @@ fn infer_binding_types_chunk(nodes: List[FlatAstNode], functions: List[CheckedFu
   }
   return typed
 }
-fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
+fn infer_binding_types(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
   let partial = infer_binding_types_chunk(nodes, functions, bindings, references, 0, length(bindings), [])
   return reverse(partial)
 }
@@ -1212,14 +1226,14 @@ fn drop_binding_prefix(bindings: List[BindingFact], count: Int) -> List[BindingF
   }
   return reverse(reversedRemaining)
 }
-fn is_first_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+fn is_first_type_declaration(nodes: List[CheckerNode], name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
     if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name && node.id + 1 <= nodeId { earlierMatches = earlierMatches + 1 } else {}
   }
   return earlierMatches == 0
 }
-fn is_first_duplicate_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+fn is_first_duplicate_type_declaration(nodes: List[CheckerNode], name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
     if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == name && node.id + 1 <= nodeId {
@@ -1228,7 +1242,7 @@ fn is_first_duplicate_type_declaration(nodes: List[FlatAstNode], name: Str, node
   }
   return earlierMatches == 1
 }
-fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
+fn is_first_duplicate_occurrence(nodes: List[CheckerNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
     if node.parentId == parentId && node.kind == kind && node.text == name && node.id + 1 <= nodeId {
@@ -1237,7 +1251,7 @@ fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: 
   }
   return earlierMatches == 1
 }
-fn is_first_duplicate_constructor(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
+fn is_first_duplicate_constructor(nodes: List[CheckerNode], name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
     if node.kind == "variant_declaration" && node.text == name && node.id + 1 <= nodeId {
@@ -1249,16 +1263,16 @@ fn is_first_duplicate_constructor(nodes: List[FlatAstNode], name: Str, nodeId: I
 fn supported_primitive_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" || list_element_type(typeName) != ""
 }
-fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
+fn supported_type(nodes: List[CheckerNode], typeName: Str) -> Bool {
   return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found
 }
-fn supported_type_at(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Bool {
+fn supported_type_at(nodes: List[CheckerNode], id: Int, knownName: Str) -> Bool {
   if supported_type(nodes, knownName) { return true } else {}
   let shape = type_shape_at(nodes, id)
   if shape.kind == "" { return false } else {}
   return supported_type(nodes, shape.name)
 }
-fn unsupported_type_code(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Str {
+fn unsupported_type_code(nodes: List[CheckerNode], id: Int, knownName: Str) -> Str {
   if supported_type_at(nodes, id, knownName) { return "" } else {}
   let shape = type_shape_at(nodes, id)
   if shape.kind == "nominal" && !record_declaration(nodes, shape.name).found && !union_declaration(nodes, shape.name).found { return "PEP_UNKNOWN_TYPE" } else {}
@@ -1270,7 +1284,7 @@ fn equality_supported_type(typeName: Str) -> Bool {
 fn equality_supported_shape(shape: PepTypeShape) -> Bool {
   return shape.kind == "builtin" && shape.listDepth == 0 && equality_supported_type(shape.name)
 }
-fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+fn expected_hole_type(nodes: List[CheckerNode], hole: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
   if !parent.found { return "" } else {}
   if parent.node.kind == "return" && hole.role == "value" {
@@ -1343,7 +1357,7 @@ fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: Li
   if (parent.node.kind == "if_expression" || parent.node.kind == "if_statement" || parent.node.kind == "while") && hole.role == "condition" { return "Bool" } else {}
   return ""
 }
-fn hole_facts(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[HoleFact] {
+fn hole_facts(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[HoleFact] {
   var facts: List[HoleFact] = []
   var ordinal = 0
   for node in nodes {
@@ -1389,7 +1403,7 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if (name == "byte_slice" || name == "utf8_slice") && (index == 1 || index == 2) { return "Int" } else {}
   return ""
 }
-fn builtin_call_has_primary_failure(nodes: List[FlatAstNode], call: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+fn builtin_call_has_primary_failure(nodes: List[CheckerNode], call: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let requiredArity = fixed_builtin_arity(call.text)
   if requiredArity != -1 && count_children(nodes, call.id, "argument") != requiredArity { return true } else {}
   var index = 0
@@ -1423,14 +1437,14 @@ fn builtin_call_has_primary_failure(nodes: List[FlatAstNode], call: FlatAstNode,
   } else {}
   return false
 }
-fn branch_always_returns(nodes: List[FlatAstNode], parentId: Int, role: Str) -> Bool {
+fn branch_always_returns(nodes: List[CheckerNode], parentId: Int, role: Str) -> Bool {
   var covered = false
   for statement in nodes {
     if statement.parentId == parentId && statement.role == role && statement_always_returns(nodes, statement) { covered = true } else {}
   }
   return covered
 }
-fn statement_always_returns(nodes: List[FlatAstNode], statement: FlatAstNode) -> Bool {
+fn statement_always_returns(nodes: List[CheckerNode], statement: CheckerNode) -> Bool {
   if statement.kind == "return" { return true } else {}
   if statement.kind == "block" { return branch_always_returns(nodes, statement.id, "statement") } else {}
   if statement.kind == "if_statement" {
@@ -1439,7 +1453,7 @@ fn statement_always_returns(nodes: List[FlatAstNode], statement: FlatAstNode) ->
   } else {}
   return false
 }
-fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType: Str, expectedShape: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+fn if_expression_branch_mismatch(nodes: List[CheckerNode], id: Int, expectedType: Str, expectedShape: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let expression = lookup_node(nodes, id)
   if !expression.found || expression.node.kind != "if_expression" { return false } else {}
   let thenValue = child_at(nodes, id, "then", 1)
@@ -1454,7 +1468,7 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
   return false
 }
-fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+fn if_expression_tree_has_primary_failure(nodes: List[CheckerNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let expression = lookup_node(nodes, id)
   if !expression.found || expression.node.kind != "if_expression" { return false } else {}
   let condition = child_at(nodes, id, "condition", 0)
@@ -1473,7 +1487,7 @@ fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, fun
   return false
 }
 
-fn type_analysis_over_nodes_raw(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var firstActiveFound = false
@@ -2233,28 +2247,28 @@ fn select_type_diagnostics(orderedDiagnostics: List[CheckDiagnostic]) -> List[Ch
   }
   return reverse(selectedDiagnosticsReversed)
 }
-fn type_analysis_over_nodes(nodes: List[FlatAstNode], activeNodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis_over_nodes(nodes: List[CheckerNode], activeNodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   let raw = type_analysis_over_nodes_raw(nodes, activeNodes, functions, bindings, references)
   return TypeAnalysis { expressionTypes: raw.expressionTypes, diagnostics: select_type_diagnostics(raw.diagnostics), unreachable: raw.unreachable }
 }
-fn type_analysis_nodes_in_range(nodes: List[FlatAstNode], startNode: Int, endNode: Int) -> List[FlatAstNode] {
-  var reversedNodes: List[FlatAstNode] = []
+fn type_analysis_nodes_in_range(nodes: List[CheckerNode], startNode: Int, endNode: Int) -> List[CheckerNode] {
+  var reversedNodes: List[CheckerNode] = []
   for node in nodes {
     if startNode <= node.id && node.id + 1 <= endNode { reversedNodes = prepend(reversedNodes, node) } else {}
   }
   return reverse(reversedNodes)
 }
-fn type_analysis_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startNode: Int, endNode: Int) -> TypeAnalysis {
+fn type_analysis_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startNode: Int, endNode: Int) -> TypeAnalysis {
   let activeNodes = type_analysis_nodes_in_range(nodes, startNode, endNode)
   return type_analysis_over_nodes_raw(nodes, activeNodes, functions, bindings, references)
 }
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
   return type_analysis_over_nodes(nodes, nodes, functions, bindings, references)
 }
-fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
+fn diagnostic(code: Str, message: Str, node: CheckerNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
 }
-fn unknown_call_diagnostic(node: FlatAstNode) -> CheckDiagnostic {
+fn unknown_call_diagnostic(node: CheckerNode) -> CheckDiagnostic {
   let initialByte = byte_at(source_bytes(), node.startByte)
   if contains([65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90], initialByte) {
     return diagnostic("PEP_UNKNOWN_CONSTRUCTOR", "No declared constructor has this name", node)
@@ -2262,7 +2276,7 @@ fn unknown_call_diagnostic(node: FlatAstNode) -> CheckDiagnostic {
     return diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node)
   }
 }
-fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: FlatAstNode) -> CheckerReport {
+fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: CheckerNode) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [diagnostic(code, message, node)] }
 }
 fn analyze() -> CheckerReport {
@@ -2273,6 +2287,10 @@ fn analyze() -> CheckerReport {
   var parseStatus = "continuing"
   var errorCode = ""
   var errorMessage = ""
+  var errorStart = 0
+  var errorEnd = 0
+  var errorLine = 0
+  var errorColumn = 0
   var errorNode = empty_node()
   var attempts = 0
   let sourceLength = byte_length(source_bytes())
@@ -2290,12 +2308,16 @@ fn analyze() -> CheckerReport {
     parseStatus = chunk.status
     errorCode = chunk.errorCode
     errorMessage = chunk.message
-    errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: chunk.errorStart, endByte: chunk.errorEnd, line: chunk.errorLine, column: chunk.errorColumn }
+    errorStart = chunk.errorStart
+    errorEnd = chunk.errorEnd
+    errorLine = chunk.errorLine
+    errorColumn = chunk.errorColumn
+    errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: chunk.errorStart, endByte: chunk.errorEnd }
     attempts = attempts + 1
   }
   if !complete { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
   if parseStatus != "complete" { return invalid_report(authority.document, authority.revision, 0, errorCode, errorMessage, errorNode) } else {}
-  let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorNode.startByte, errorEnd: errorNode.endByte, errorLine: errorNode.line, errorColumn: errorNode.column }
+  let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorStart, errorEnd: errorEnd, errorLine: errorLine, errorColumn: errorColumn }
   return analyze_parsed(parsed)
 }
 fn is_first_function_declaration(functions: List[CheckedFunction], name: Str, syntaxId: Int) -> Bool {
@@ -2312,7 +2334,7 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
   }
   return earlierMatches == 1
 }
-fn checker_report_from_parts(document: Str, revision: Str, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact]) -> CheckerReport {
+fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact]) -> CheckerReport {
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   for item in bindingResult.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
@@ -2423,7 +2445,7 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[FlatAstNo
 fn empty_checker_report(document: Str, revision: Str) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "valid", syntaxNodeCount: 0, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [] }
 }
-fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
+fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
   return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report, validation: empty_tree_validation() }
 }
 fn empty_tree_validation() -> TreeValidation {
@@ -2432,7 +2454,7 @@ fn empty_tree_validation() -> TreeValidation {
 fn checker_cursor_with_validation(cursor: CheckerCursor, validation: TreeValidation) -> CheckerCursor {
   return CheckerCursor { document: cursor.document, revision: cursor.revision, phase: cursor.phase, done: cursor.done, parsed: cursor.parsed, nodes: cursor.nodes, functions: cursor.functions, bindingResult: cursor.bindingResult, nameResult: cursor.nameResult, typedBindings: cursor.typedBindings, typeResult: cursor.typeResult, typeOffset: cursor.typeOffset, holes: cursor.holes, report: cursor.report, validation: validation }
 }
-fn checker_start(parsed: ParserProgress) -> CheckerCursor {
+fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   let authority = semantic_snapshot()
   let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
   let emptyNames = NameResolution { references: [], diagnostics: [] }
@@ -2444,16 +2466,18 @@ fn checker_start(parsed: ParserProgress) -> CheckerCursor {
   if !parsed.done { return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node())) } else {}
   if parsed.status != "complete" || parsed.errorCode != "" {
     let code = if parsed.errorCode != "" { parsed.errorCode } else { "A13_PARSER_STATUS" }
-    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    let errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: parsed.errorStart, endByte: parsed.errorEnd }
     return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, code, parsed.message, errorNode))
   } else {}
-  let nodes = parsed.nodes
+  if totalNodeCount + 1 <= 0 {
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_CHECKER_CURSOR", "Checker node count must not be negative", empty_node()))
+  } else {}
   let retainedParser = ParserProgress { document: parsed.document, revision: parsed.revision, status: parsed.status, nodes: [], done: parsed.done, errorCode: parsed.errorCode, message: parsed.message, errorStart: parsed.errorStart, errorEnd: parsed.errorEnd, errorLine: parsed.errorLine, errorColumn: parsed.errorColumn }
-  let validation = TreeValidation { sourceLength: byte_length(source_bytes()), nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: length(nodes) }
+  let validation = TreeValidation { sourceLength: byte_length(source_bytes()), nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: totalNodeCount }
   let cursor = make_checker_cursor(authority.document, authority.revision, "validation", false, retainedParser, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   return checker_cursor_with_validation(cursor, validation)
 }
-fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
+fn checker_type_chunk_end(nodes: List[CheckerNode], startNode: Int) -> Int {
   let proposed = startNode + 8
   return if proposed <= length(nodes) { proposed } else { length(nodes) }
 }
@@ -2461,7 +2485,7 @@ fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: Lis
   return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
 }
 // Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive the full ordered node list. Every step rechecks document/revision authority.
-fn checker_step(cursor: CheckerCursor, inputNodes: List[FlatAstNode]) -> CheckerCursor {
+fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
     return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
@@ -2567,12 +2591,13 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   } else {}
   if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
   if parsed.status != "complete" {
-    let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
+    let errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: parsed.errorStart, endByte: parsed.errorEnd }
     return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
   } else {}
   let sourceLength = byte_length(source_bytes())
-  let nodes = sort_nodes(parsed.nodes)
-  if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
+  let originalNodes = parsed.nodes
+  let nodes = sort_nodes(compact_checker_nodes(originalNodes))
+  if !flat_source_positions_valid(originalNodes) || !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
   let functions = collect_functions(nodes)
   let bindingResult = collect_bindings(nodes, functions)
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
