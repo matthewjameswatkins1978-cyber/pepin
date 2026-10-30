@@ -1139,13 +1139,16 @@ def main():
                        "tool": nm, "document": _gtd, "revision": _gtr}
     _IV0 = {"type": "Int", "value": "0"}
     _gid_ok = True
-    for _tn, _st in (("forged-rev",
-                       {"document": _ggd,
-                        "revision": "sha256:" + "f" * 64,
-                        "entryFunctions": ["main"]}),
-                      ("wrong-doc",
-                       {"document": "doc-NOPE", "revision": _ggr,
-                        "entryFunctions": ["main"]})):
+    _gid_cases = (("forged-rev",
+                   {"document": _ggd,
+                    "revision": "sha256:" + "f" * 64,
+                    "entryFunctions": ["main"]},
+                   "PEP_REVISION_NOT_FOUND"),
+                  ("wrong-doc",
+                   {"document": "doc-NOPE", "revision": _ggr,
+                    "entryFunctions": ["main"]},
+                   "PEP_DOCUMENT_NOT_FOUND"))
+    for _tn, _st, _tcode in _gid_cases:
         _gr = sess([
             {"schemaVersion": 3, "op": "open", "name": "t",
              "source": _snt7},
@@ -1159,9 +1162,35 @@ def main():
         _ge = _gr[3].get("error")
         _gc = _ge.get("code") if isinstance(_ge, dict) else str(_ge)
         _gid_ok = (_gid_ok and _gr[3].get("outcome") == "rejected"
-                   and ("NOT_FOUND" in str(_gc)))
+                   and _tcode in str(_gc))
     results.append(("V7-grant-identity", PASS if _gid_ok else FAIL,
-                    "both-rejected"))
+                    "exact codes: rev-not-found + doc-not-found"))
+    # Semantic root unavailable: target retained but entry functions unresolvable
+    # (invalid bare target source, per SOURCE_BYTES.md citation)
+    _rur_pre = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _snt7},
+        {"schemaVersion": 3, "op": "open_bytes", "name": "bad",
+         "bytes": [104, 233, 108, 108, 111]},   # bare héllo, not a function
+    ])
+    _bd, _br = _rur_pre[1]["document"], _rur_pre[1]["revision"]
+    _rur = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": _snt7},
+        {"schemaVersion": 3, "op": "open_bytes", "name": "bad",
+         "bytes": [104, 233, 108, 108, 111]},
+        dict(_tok("nf"), op="tool_register", function="nfuncs"),
+        dict(_tok("nf"), op="tool_validate",
+             testVectors=[{"arguments": [], "expect": _IV0,
+                           "semanticTarget": {"document": _bd,
+                                              "revision": _br,
+                                              "entryFunctions": ["main"]}}]),
+    ])
+    _re = _rur[3].get("error")
+    _rok = (_rur[3].get("outcome") == "rejected"
+            and "PEP_SEMANTIC_ROOT_UNAVAILABLE" in str(_re))
+    results.append(("V7b-root-unavailable", PASS if _rok else FAIL,
+                    "invalid target, entries unresolvable"))
     # Tool hot-replacement (set 14)
     _hv1 = ("fn f(n: Int) -> Int { return n + 1 }\n"
             "fn main() -> Int { return 0 }\n")
