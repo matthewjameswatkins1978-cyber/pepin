@@ -41,6 +41,13 @@ step / 128 depth tool budget (not separately stressed here).
 
 - Incomplete (holey) source tool: registers fine (signature is derivable), but validation is refused. No holey program can ever become callable. (The rejection message names activation while surfacing at validation — a cosmetic mismatch in an otherwise correct fail-closed path.)
 
+## Validate-vector edges (checked before any execution)
+
+| probe | observed |
+|---|---|
+| validate with wrong argument **count** (2 args for 1-param `double`) | `TESTED` — outcome `rejected`, `PEP_TOOL_ARGUMENT_COUNT` — count is checked before decode; distinct from the invoke-path count probe above |
+| validate with correct args but wrong-typed **expect** (`Str` for an `Int` return) | `TESTED` — outcome `rejected`, `PEP_TOOL_ARGUMENT_TYPE` — the expect value passes through the SAME type check as arguments (basis of the 2026-10-30 adapter finding: a stale-typed expect rejects a vector whose arguments are perfect) |
+
 ## Status
 
-No findings. This closes the A5 tool-registry surface at the v1 protocol layer on the seed path. v2 typed transport, host grants, semantic snapshots, and the Pep-written checker/driver use of these ops are covered in the V-set, G-set, SN-set and X-set case files; native execution stays `BLOCKED_SECURITY`. (Validation diagnostics observed: wrong *type* in expect → `PEP_TOOL_ARGUMENT_TYPE`; wrong *value* with correct types → `PEP_TOOL_TEST_FAILED` ("Interpreter result did not match the expected test vector").)
+No findings. This closes the A5 tool-registry surface at the v1 protocol layer on the seed path. v2 typed transport, host grants, semantic snapshots, and the Pep-written checker/driver use of these ops are covered in the V-set, G-set, SN-set and X-set case files; native execution stays `BLOCKED_SECURITY`. (Validation diagnostics observed: wrong *type* in expect → `PEP_TOOL_ARGUMENT_TYPE` — now asserted by probe above; wrong *value* with correct types → `PEP_TOOL_TEST_FAILED` ("Interpreter result did not match the expected test vector").)

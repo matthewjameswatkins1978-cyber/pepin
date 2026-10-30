@@ -694,6 +694,36 @@ def main():
           and (isinstance(_we, dict) and _we.get("code") == "PEP_TOOL_TEST_FAILED" or "TEST_FAILED" in str(_we)))
     results.append(("T-wrong-expect", PASS if ok else FAIL,
                     "validate=%s" % _hw.get("outcome")))
+    # Validate-vector edges: count pre-check + expect shares ARGUMENT_TYPE
+    _hv = lambda nm: {"schemaVersion": 3, "toolProtocolVersion": 1,
+                      "tool": nm, "document": _hd4, "revision": _hr4}
+    _vcount = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},
+        dict(_hv("vc"), op="tool_register", function="double"),
+        dict(_hv("vc"), op="tool_validate",
+             testVectors=[{"arguments": [{"type": "Int", "value": "21"},
+                                          {"type": "Int", "value": "22"}],
+                           "expect": {"type": "Int", "value": "86"}}]),
+    ])[2]
+    _vce = _vcount.get("error") or {}
+    ok = (_vcount.get("outcome") == "rejected"
+          and "ARGUMENT_COUNT" in str(_vce))
+    results.append(("T-vector-count", PASS if ok else FAIL,
+                    "validate=%s" % _vcount.get("outcome")))
+    _vtype = sess([
+        {"schemaVersion": 3, "op": "open", "name": "t",
+         "source": "fn double(n: Int) -> Int { return n + n }\nfn main() -> Int { return 0 }\n"},
+        dict(_hv("vt"), op="tool_register", function="double"),
+        dict(_hv("vt"), op="tool_validate",
+             testVectors=[{"arguments": [{"type": "Int", "value": "21"}],
+                           "expect": {"type": "Str", "value": "42"}}]),
+    ])[2]
+    _vte = _vtype.get("error") or {}
+    ok = (_vtype.get("outcome") == "rejected"
+          and "ARGUMENT_TYPE" in str(_vte))
+    results.append(("T-vector-expect-type", PASS if ok else FAIL,
+                    "validate=%s" % _vtype.get("outcome")))
     # Session edges (set 11)
     _om = sess([{"schemaVersion": 3, "op": "metrics"}])[0]
     ok = _om.get("outcome") == "ok" and "metrics" in _om
