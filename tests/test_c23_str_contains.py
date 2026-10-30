@@ -1051,5 +1051,188 @@ fn main() -> Int { return 0 }
             with self.assertRaisesRegex(ValueError, "two fallible operands"):
                 emit(source.read_bytes())
 
+    def test_lucy_ascii_digit_composes_with_checked_native_byte_at(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        start = lexer.index("fn ascii_digit(byte: Int) -> Bool {")
+        end = lexer.index("\nfn ascii_continue", start)
+        ascii_digit = lexer[start:end].rstrip()
+        self.assertEqual(ascii_digit,
+                         "fn ascii_digit(byte: Int) -> Bool {\n"
+                         "  return 48 <= byte && byte <= 57\n"
+                         "}")
+
+        source_text = (
+            ascii_digit + "\n\n"
+            "fn classify(source: SourceBytes, offset: Int) -> Bool {\n"
+            "  return ascii_digit(byte_at(source, offset))\n"
+            "}\n"
+            "fn main() -> Int { return 0 }\n")
+        reference_text = source_text + (
+            "fn probe() -> Int {\n"
+            "  if classify(source_bytes(), 0) { return 1 } else { return 0 }\n"
+            "}\n")
+        vectors = [
+            ("nul", bytes([0]), 0),
+            ("below-digit", bytes([47]), 0),
+            ("zero", bytes([48]), 1),
+            ("nine", bytes([57]), 1),
+            ("above-digit", bytes([58]), 0),
+            ("ascii-max", bytes([127]), 0),
+            ("continuation", bytes([128]), 0),
+            ("byte-max", bytes([255]), 0),
+        ]
+
+        def digest(raw):
+            return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+        def req(op, **fields):
+            return {"schemaVersion": 3, "toolProtocolVersion": 2, "op": op, **fields}
+
+        def encoded(value):
+            return {"type": "Int", "value": str(value)}
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-ascii-digit-source-bytes.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+            generated = emit(source.read_bytes())
+            declaration = re.search(
+                r"_Bool pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+), "
+                r"int64_t pep_arg_(\d+)\);",
+                generated)
+            self.assertIsNotNone(declaration, generated)
+            function_id = declaration.group(1)
+            self.assertIn("typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;",
+                          generated)
+            self.assertIn("pep_byte_at(pep_arg_", generated)
+            self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES", generated)
+            self.assertIn("PEP_RUNTIME_BYTE_RANGE", generated)
+
+            reference_revision = digest(reference_text.encode("utf-8"))
+            requests = [req("open", source=reference_text, name="ascii-digit-program")]
+            targets = []
+            for name, raw, expected in vectors:
+                document = "doc-" + str(len(targets) + 2)
+                targets.append((name, raw, expected, document))
+                requests.append(req("open_bytes", bytes=list(raw)))
+            empty_document = "doc-" + str(len(targets) + 2)
+            requests.append(req("open_bytes", bytes=[]))
+            requests.append(req("tool_register", tool="ascii-digit-probe",
+                                document="doc-1", revision=reference_revision,
+                                function="probe"))
+            validate_index = len(requests)
+            requests.append(req("tool_validate", tool="ascii-digit-probe",
+                                document="doc-1", revision=reference_revision,
+                                testVectors=[
+                                    {"arguments": [], "expect": encoded(expected),
+                                     "semanticTarget": {"document": document,
+                                                        "revision": digest(raw),
+                                                        "entryFunctions": []}}
+                                    for _, raw, expected, document in targets
+                                ]))
+            activate_index = len(requests)
+            requests.append(req("tool_activate", tool="ascii-digit-probe",
+                                document="doc-1", revision=reference_revision))
+            invoke_start = len(requests)
+            for _, raw, _, document in targets:
+                requests.append(req("tool_invoke", tool="ascii-digit-probe", arguments=[],
+                                    semanticTarget={"document": document,
+                                                    "revision": digest(raw),
+                                                    "entryFunctions": []}))
+            requests.append(req("tool_invoke", tool="ascii-digit-probe", arguments=[],
+                                semanticTarget={"document": empty_document,
+                                                "revision": digest(b""),
+                                                "entryFunctions": []}))
+
+            session = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+                cwd=ROOT, text=True,
+                input="".join(json.dumps(item, ensure_ascii=True) + "\n" for item in requests),
+                capture_output=True, check=False)
+            self.assertEqual(session.returncode, 0, session.stderr)
+            responses = [json.loads(line) for line in session.stdout.splitlines()]
+            self.assertEqual(responses[validate_index]["status"], "Validated",
+                             responses[validate_index])
+            self.assertEqual(responses[activate_index]["status"], "Active",
+                             responses[activate_index])
+            interpreter_values = []
+            for index, (_, _, expected, _) in enumerate(targets):
+                response = responses[invoke_start + index]
+                self.assertNotIn("error", response, response)
+                result = response["result"]
+                self.assertEqual(result, encoded(expected), response)
+                interpreter_values.append(result["value"])
+            range_error = responses[invoke_start + len(targets)]
+            self.assertEqual(range_error["error"]["code"], "PEP_RUNTIME_BYTE_RANGE",
+                             range_error)
+
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            byte_rows = []
+            calls = []
+            for index, (_, raw, _) in enumerate(vectors):
+                byte_rows.append(
+                    f"  static const unsigned char input_{index}[] = "
+                    f"{{{', '.join(str(value) for value in raw)}}};\n")
+                calls.append(
+                    f"  (void)printf(\"%d\\n\", pep_fn_{function_id}("
+                    f"(pep_source_bytes){{input_{index}, sizeof input_{index}}}, 0));\n")
+            harness = (
+                "#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(int argc, char **argv) {\n" +
+                "".join(byte_rows) +
+                "  if (argc > 1) {\n"
+                f"    if (argv[1][0] == 'r') (void)pep_fn_{function_id}("
+                "(pep_source_bytes){input_0, sizeof input_0}, -1);\n"
+                f"    else if (argv[1][0] == 'u') (void)pep_fn_{function_id}("
+                "(pep_source_bytes){input_0, sizeof input_0}, 1);\n"
+                f"    else if (argv[1][0] == 'e') (void)pep_fn_{function_id}((pep_source_bytes){{NULL, 0}}, 0);\n"
+                f"    else (void)pep_fn_{function_id}((pep_source_bytes){{NULL, 1}}, 0);\n"
+                "    return 0;\n  }\n" +
+                "".join(calls) +
+                "  return 0;\n}\n")
+            harness_path = folder / "lucy-ascii-digit-source-bytes-harness.c"
+            harness_path.write_text(harness, encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-ascii-digit-source-bytes-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout.splitlines(), interpreter_values)
+                    for invalid_case in ("range", "upper", "empty"):
+                        with self.subTest(invalid_case=invalid_case):
+                            bad_offset = subprocess.run(
+                                [str(executable), invalid_case], cwd=folder,
+                                text=True, capture_output=True, check=False)
+                            self.assertNotEqual(bad_offset.returncode, 0)
+                            self.assertEqual(bad_offset.stdout, "")
+                            self.assertIn("PEP_RUNTIME_BYTE_RANGE", bad_offset.stderr)
+                    malformed = subprocess.run(
+                        [str(executable), "malformed"], cwd=folder,
+                        text=True, capture_output=True, check=False)
+                    self.assertNotEqual(malformed.returncode, 0)
+                    self.assertEqual(malformed.stdout, "")
+                    self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES",
+                                  malformed.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
