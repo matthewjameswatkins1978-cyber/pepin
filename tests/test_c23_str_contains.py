@@ -1,3 +1,4 @@
+import hashlib
 import json
 import pathlib
 import re
@@ -466,6 +467,100 @@ fn main() -> Int {
             for compiler in (CLANG, GCC):
                 with self.subTest(compiler=compiler.name):
                     executable = folder / f"lucy-ascii-space-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
+    def test_lucy_utf8_check_boolean_ranges_lower_natively(self):
+        lexer_bytes = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(f"blob {len(lexer_bytes)}\0".encode("ascii") + lexer_bytes).hexdigest()
+        self.assertEqual(blob, "12bd93a1dfc5dba3b1cab49abefffed5e406b17d",
+                         "Lucy lexer changed; review these source-derived predicates")
+        lexer = lexer_bytes.decode("utf-8")
+        continuation_condition = "!(128 <= next) || !(next <= 191)"
+        scalar_condition = (
+            "!(minimum <= codepoint) || !(codepoint <= 1114111) || "
+            "(55296 <= codepoint && codepoint <= 57343)")
+        self.assertIn(f"if {continuation_condition} {{", lexer)
+        self.assertIn(f"if {scalar_condition} {{", lexer)
+
+        source_text = (
+            "fn invalid_continuation(next: Int) -> Bool { return "
+            + continuation_condition + " }\n"
+            "fn invalid_scalar(minimum: Int, codepoint: Int) -> Bool { return "
+            + scalar_condition + " }\n"
+            "fn main() -> Int { return 0 }\n")
+        continuation_cases = ((127, 1), (128, 0), (191, 0), (192, 1))
+        scalar_cases = (
+            (128, 128, 0), (2048, 2047, 1), (2048, 2048, 0),
+            (0, 1114111, 0), (0, 1114112, 1), (0, 55296, 1),
+            (0, 57343, 1), (0, 55295, 0), (0, 57344, 0))
+        expected = "".join(
+            f"{answer}\n" for _, answer in continuation_cases) + "".join(
+            f"{answer}\n" for _, _, answer in scalar_cases)
+        reference_text = source_text + "".join(
+            f"say(int_text(if invalid_continuation({value}) {{ 1 }} else {{ 0 }}))\n"
+            for value, _ in continuation_cases) + "".join(
+            f"say(int_text(if invalid_scalar({minimum}, {codepoint}) "
+            f"{{ 1 }} else {{ 0 }}))\n"
+            for minimum, codepoint, _ in scalar_cases)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-utf8-ranges.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-utf8-ranges-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            continuation = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+            scalar = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                generated)
+            self.assertIsNotNone(continuation, generated)
+            self.assertIsNotNone(scalar, generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "lucy-utf8-ranges-harness.c"
+            calls = [
+                *(f"  printf(\"%d\\n\", pep_fn_{continuation.group(1)}({value}));"
+                  for value, _ in continuation_cases),
+                *(f"  printf(\"%d\\n\", pep_fn_{scalar.group(1)}({minimum}, {codepoint}));"
+                  for minimum, codepoint, _ in scalar_cases),
+            ]
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                + "\n".join(calls) + "\n"
+                + "  return 0;\n"
+                + "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-utf8-ranges-{compiler.stem}.exe"
                     compiled = subprocess.run(
                         [str(compiler), "-std=c23", "-Wall", "-Wextra",
                          "-Wpedantic", "-Werror", "-O2", str(harness_path),
