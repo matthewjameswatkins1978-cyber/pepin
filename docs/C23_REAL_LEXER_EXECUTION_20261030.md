@@ -1810,6 +1810,40 @@ have not produced a minimal reproduction for family B.
 diagnostic to name the condition. Two different restrictions currently collapse into
 "one-parameter calls require one argument and a call-free target expression", and that message
 has now cost this lane four wrong hypotheses across three rounds.
+
+## Family B isolated: functions with four or more parameters are refused (Agent 3)
+
+The unexplained family is a **parameter-count limit**, and the reproduction is one line.
+
+| function | result |
+| --- | --- |
+| `fn f(a: Int, b: Int, c: Int) -> Int { var x = c; return x }` | **emits** |
+| `fn f(a: Int, b: Int, c: Int, d: Int) -> Int { return 0 }` | **unsupported** |
+| `fn f(a: Int, b: Int, c: Int, d: Int) -> Int { var x = 0; return x }` | **unsupported** |
+| `fn f(a: Int, b: Int, c: Int, d: Int) -> Int { return d }`, never called | **unsupported** |
+| `fn f(a: Int, b: Int, c: Int, d: Int, e: Int) -> Int { return e }` | **unsupported** |
+
+So the rule is definition-side and body-independent: **a top-level function declared with four
+or more parameters is refused**, even when it is never called and its body is a constant
+return. Three parameters are fine. The diagnostic says "functions require supported parameters
+and scalar or record results", which at least gestures at parameters, though it does not say
+"too many".
+
+That settles the family: every helper in the affected group takes four parameters — for
+example `list_int_last_outside(values, lower, upper, fallback)` — and all fourteen of its
+subtest cases fail for this reason. It also corrects the previous section's guess: the common
+factor was never "locals accumulated in loops across index/search helpers", it was arity.
+
+### One remaining anomaly, recorded rather than smoothed
+
+`fn f(a: Int, b: Int, c: Int) -> Int { return c }` called with three arguments is **refused**,
+while the same three parameters with `var x = c` then `return x` emit. So returning the third
+parameter directly appears to be a separate, narrower restriction. One probe, not
+characterised further.
+
+**Net attribution of the ~31 unsupported collection cases:**
+16 from the local-comparison rule (family A) and 14 from the four-parameter limit (family B),
+with one three-parameter return anomaly outstanding.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
