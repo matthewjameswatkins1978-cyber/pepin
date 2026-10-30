@@ -763,8 +763,32 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind == "string" { return PepC23NodeLookup { found: true, node: value } } else {}
   if value.kind == "name" {
-    return pep_c23_str_parameter(nodes, function, value.text)
+    let parameter = pep_c23_str_parameter(nodes, function, value.text)
+    if parameter.found { return parameter } else {}
+    var matches = 0
+    for binding in nodes {
+      if binding.parentId == function.id && binding.role == "statement" &&
+         binding.kind == "let" && binding.text == value.text {
+        let initial = pep_c23_child(nodes, binding.id, "value", 0)
+        if initial.found && initial.node.kind == "string" {
+          matches = matches + 1
+        } else {
+          if initial.found && initial.node.kind == "field_access" &&
+             pep_c23_str_expression(nodes, function, initial.node).found {
+            matches = matches + 1
+          } else {
+            if initial.found && initial.node.kind == "name" &&
+               pep_c23_str_parameter(nodes, function, initial.node.text).found {
+              matches = matches + 1
+            } else {}
+          }
+        }
+      } else {}
+    }
+    if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
+    return PepC23NodeLookup { found: false, node: empty_node() }
   } else {}
   if value.kind == "field_access" {
     let owner = pep_c23_child(nodes, value.id, "value", 0)
@@ -779,6 +803,53 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
     } else {}
   } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
+}
+fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23Emission {
+  let source = source_bytes()
+  let sourceLength = byte_length(source)
+  if node.startByte <= -1 || node.endByte <= 0 ||
+     node.endByte - node.startByte <= 1 || sourceLength <= node.endByte - 1 {
+    return pep_c23_unsupported("Pep C23 string literal span is outside the authorized source")
+  } else {}
+  if byte_at(source, node.startByte) != 34 || byte_at(source, node.endByte - 1) != 34 {
+    return pep_c23_unsupported("Pep C23 string literal span does not include matching quotes")
+  } else {}
+  let contentEnd = node.endByte - 1
+  var offset = node.startByte + 1
+  var byteCount = 0
+  var parts: List[Str] = ["(pep_str){ .data = (const unsigned char[]){ "]
+  while !(contentEnd <= offset) {
+    var value = byte_at(source, offset)
+    if value == 92 {
+      offset = offset + 1
+      if contentEnd <= offset {
+        return pep_c23_unsupported("Pep C23 string literal ends with an incomplete escape")
+      } else {}
+      let escaped = byte_at(source, offset)
+      if escaped == 110 { value = 10 } else {
+        if escaped == 114 { value = 13 } else {
+          if escaped == 116 { value = 9 } else {
+            if escaped == 48 { value = 0 } else {
+              if escaped == 92 { value = 92 } else {
+                if escaped == 34 { value = 34 } else {
+                  return pep_c23_unsupported("Pep C23 string literal uses an unsupported escape")
+                }
+              }
+            }
+          }
+        }
+      }
+    } else {}
+    if byteCount != 0 { parts = append(parts, ", ") } else {}
+    parts = append(parts, int_text(value))
+    byteCount = byteCount + 1
+    offset = offset + 1
+  }
+  if byteCount == 0 { parts = append(parts, "0") } else {}
+  parts = append(parts, " }, .length = ")
+  parts = append(parts, int_text(byteCount))
+  parts = append(parts, " }")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "call" {
@@ -1648,6 +1719,7 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
 }
 fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "match" { return pep_c23_union_match_expression(nodes, function, node) } else {}
+  if node.kind == "string" { return pep_c23_string_literal(nodes, node) } else {}
   if node.kind == "integer" {
     return PepC23Emission { status: "emitted", sourceParts: [int_text(node.integerValue)], diagnostic: "" }
   } else {}
@@ -1803,7 +1875,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let haystack = pep_c23_str_expression(nodes, function, argument.node)
       let needle = pep_c23_str_expression(nodes, function, secondArgument.node)
       if !haystack.found || !needle.found {
-        return pep_c23_unsupported("Pep C23 str_contains arguments must resolve to Str parameters or declared record fields")
+        return pep_c23_unsupported("Pep C23 str_contains arguments must resolve to supported Str values")
       } else {}
       let loweredHaystack = pep_c23_expression(nodes, function, argument.node)
       let loweredNeedle = pep_c23_expression(nodes, function, secondArgument.node)
@@ -2374,11 +2446,11 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
       if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
-        let stringParameterValue = if initialValue.node.kind == "name" {
-          pep_c23_str_parameter(nodes, function, initialValue.node.text)
-        } else { PepC23NodeLookup { found: false, node: empty_node() } }
-        if initialValue.node.kind == "string" || stringParameterValue.found {
-          return pep_c23_unsupported("Pep C23 string literals and Str local bindings are not yet lowered")
+        if statement.kind == "var" {
+          let stringLocalValue = pep_c23_str_expression(nodes, function, initialValue.node)
+          if stringLocalValue.found {
+            return pep_c23_unsupported("Pep C23 mutable Str local bindings are not yet lowered")
+          } else {}
         } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           let recursiveUnionList = if statement.kind == "let" {
@@ -2767,19 +2839,34 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
               let localRecord = pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
               let localUnion = pep_c23_union_value_type(parsed.nodes, node, initialValue.node)
+              let localString = if initialValue.node.kind == "string" {
+                PepC23NodeLookup { found: true, node: initialValue.node }
+              } else {
+                if initialValue.node.kind == "name" {
+                  pep_c23_str_parameter(parsed.nodes, node, initialValue.node.text)
+                } else {
+                  if initialValue.node.kind == "field_access" {
+                    pep_c23_str_expression(parsed.nodes, node, initialValue.node)
+                  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                }
+              }
               if initialValue.node.kind == "record" && !localRecord.found {
                 return pep_c23_unsupported("Pep C23 record local has no declared record type")
               } else {}
-              if localRecord.found {
-                for part in ["  ", "pep_record_", int_text(localRecord.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+              if localString.found {
+                for part in ["  ", "pep_str", " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
               } else {
-                if localUnion.found {
-                  if !pep_c23_union_supported_layout(parsed.nodes, localUnion.node) {
-                    return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
-                  } else {}
-                  for part in ["  ", "pep_union_", int_text(localUnion.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                if localRecord.found {
+                  for part in ["  ", "pep_record_", int_text(localRecord.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
                 } else {
-                  for part in ["  ", "int64_t", " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                  if localUnion.found {
+                    if !pep_c23_union_supported_layout(parsed.nodes, localUnion.node) {
+                      return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
+                    } else {}
+                    for part in ["  ", "pep_union_", int_text(localUnion.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                  } else {
+                    for part in ["  ", "int64_t", " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                  }
                 }
               }
               for part in initial.sourceParts { bodyParts = append(bodyParts, part) }

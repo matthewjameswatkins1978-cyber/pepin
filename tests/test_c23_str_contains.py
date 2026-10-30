@@ -81,27 +81,6 @@ class PepC23StrContainsTests(unittest.TestCase):
                 f"pep_fn_{contains_id}(pep_arg_{haystack_id}, pep_arg_{needle_id})",
                 generated)
 
-            literal_source = folder / "str-contains-literal.pep"
-            literal_source.write_text(
-                'fn has() -> Bool { return str_contains("x", "x") }\n'
-                'fn main() -> Int { return 0 }\n',
-                encoding="utf-8", newline="\n")
-            with self.assertRaisesRegex(
-                    ValueError, "str_contains arguments must resolve to Str parameters or declared record fields"):
-                emit(literal_source.read_bytes())
-
-            local_source = folder / "str-contains-local.pep"
-            local_source.write_text(
-                "fn has(haystack: Str, needle: Str) -> Bool {\n"
-                "  let copy = haystack\n"
-                "  return str_contains(copy, needle)\n"
-                "}\n"
-                "fn main() -> Int { return 0 }\n",
-                encoding="utf-8", newline="\n")
-            with self.assertRaisesRegex(
-                    ValueError, "Str local bindings are not yet lowered"):
-                emit(local_source.read_bytes())
-
             equality_source = folder / "str-equality.pep"
             equality_source.write_text(
                 "fn equal(left: Str, right: Str) -> Bool { return left == right }\n"
@@ -168,6 +147,94 @@ class PepC23StrContainsTests(unittest.TestCase):
                     self.assertEqual(invalid.returncode, 1)
                     self.assertEqual(invalid.stdout, "")
                     self.assertEqual(invalid.stderr, "PEP_RUNTIME_INVALID_STR\n")
+
+    def test_native_string_literals_and_immutable_locals_preserve_source_bytes(self):
+        source_text = r'''fn empty_literals() -> Bool {
+  return str_contains("", "")
+}
+fn embedded_nul_literal() -> Bool {
+  return str_contains("x\0y", "\0y")
+}
+fn utf8_and_escaped_literal() -> Bool {
+  let value = "café\t\"\\"
+  return str_contains(value, "é\t\"\\")
+}
+fn main() -> Int { return 0 }
+'''
+        reference_text = source_text + r'''fn bool_int(value: Bool) -> Int {
+  if value { return 1 } else { return 0 }
+}
+say(int_text(bool_int(empty_literals())))
+say(int_text(bool_int(embedded_nul_literal())))
+say(int_text(bool_int(utf8_and_escaped_literal())))
+'''
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "str-literals.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertIn(checked.returncode, (0, 1), checked.stdout + checked.stderr)
+            report = json.loads(checked.stdout)
+            if report.get("status") == "invalid" and any(
+                    item.get("code") == "PEP_UNKNOWN_FUNCTION" and
+                    "str_contains" in item.get("message", "")
+                    for item in report.get("diagnostics", [])):
+                self.skipTest("the bundled checker predates Agent 1's str_contains contract")
+            self.assertEqual(report.get("status"), "valid", checked.stdout)
+
+            interpreted_source = folder / "str-literals-reference.pep"
+            interpreted_source.write_text(reference_text, encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", interpreted_source)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "1\n1\n1\n")
+
+            generated = emit(source.read_bytes())
+            self.assertEqual(generated.count("pep_str pep_local_"), 1, generated)
+            self.assertIn(".data = (const unsigned char[]){ 195, 169, 9, 34, 92 }", generated)
+            self.assertIn(".length = 0", generated)
+            ids = re.findall(r"_Bool pep_fn_(\d+)\(void\);", generated)
+            self.assertEqual(len(ids), 3, generated)
+
+            generated_path = folder / "generated.c"
+            harness_path = folder / "harness.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path.write_text(
+                "#include <stddef.h>\n#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                f"  printf(\"%d\\n%d\\n%d\\n\", pep_fn_{ids[0]}(), pep_fn_{ids[1]}(), pep_fn_{ids[2]}());\n"
+                "  return 0;\n}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"str-literals-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "1\n1\n1\n")
+
+            mutable_source = folder / "str-mutable-local.pep"
+            mutable_source.write_text(
+                'fn main() -> Int {\n  var text: Str = "x"\n  return 0\n}\n',
+                encoding="utf-8", newline="\n")
+            with self.assertRaisesRegex(
+                    ValueError, "Pep C23 mutable Str local bindings are not yet lowered"):
+                emit(mutable_source.read_bytes())
 
     def test_native_str_contains_reads_record_fields_through_helpers(self):
         source_text = (
