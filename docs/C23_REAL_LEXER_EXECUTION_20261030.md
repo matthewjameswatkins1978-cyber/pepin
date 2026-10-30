@@ -504,6 +504,53 @@ rejected ("functions require local bindings and supported loops followed by one
 return"), while the same `var` inside a `while` is accepted. Mutable binding thus
 appears to require a surrounding supported loop — harmless, but surprising enough
 to be worth documenting for whoever writes Lucy's stateful functions.
+
+## Loop-body support, and why `utf8_check` is further away than the budget (Agent 3)
+
+**Correction to the section above.** I recorded the exhaustive native sweep as
+blocked by the emitter step budget. That was only half right: my first harness
+also used an unsupported loop-body form, and in the larger variant the budget
+error *masked* it. With a supported body form the budget still binds, so both
+limits are real, but the construct limit had to be separated out first.
+
+Measured loop-body support at `fd5c5d5`:
+
+| loop body | native |
+| --- | --- |
+| `total = total + (i + 1)` (plain assignment) | **OK** (returns 10) |
+| `let n = i + 1` then assignment | **unsupported** — "while bodies support assignments, returns, and assignment-only conditionals" |
+| `if 1 <= i { total = total + i } else { }` | **unsupported** — "loop conditionals require non-empty assignment branches" |
+
+So the emitter's loop bodies accept assignments, returns, and conditionals whose
+*both* branches assign. A `let` inside a loop is not a supported form.
+
+### What that means for the next component
+
+Lucy's `utf8_check` uses exactly the unsupported shape:
+
+```
+while !(width <= j) {
+  let next = byte_at(source, offset + j)
+  if !(128 <= next) || !(next <= 191) { return Utf8Check { ... } } else { }
+  codepoint = codepoint * 64 + next - 128
+  j = j + 1
+}
+```
+
+I reproduced that shape with the `SourceBytes` call stubbed to a plain integer
+expression, and it is rejected with the same message. **Therefore `SourceBytes`
+lowering alone will not make `utf8_check` emittable.** Either the emitter must
+support `let` inside loop bodies — the language-preserving fix — or `utf8_check`
+must be restructured to hoist the binding (`var next = 0` outside, assignment
+inside), which changes Lucy's own source and should be a conscious decision, not a
+workaround invented to please the compiler.
+
+### Diagnostic note, second occurrence
+
+This is the second time a construct limitation has been hidden behind a budget
+error in a large program: the same masking happened earlier with the checker. It
+is a argument for finishing the labelling work across every stage — see the note
+below on the emitter being the one stage still unlabelled.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
