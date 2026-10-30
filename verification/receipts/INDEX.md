@@ -74,4 +74,4 @@ groups. **Current blocker map at the bottom.**
 8. **Watch: design reference corpus** — trigger: past acceptance steps 1–3 → step-4 four-way comparison becomes Agent 3 work (pinned-differential methodology).
 
 **Corpus:** `verification/adversarial/` — 24 case files, replay
-**170/170 PASS** at base `805062b` (exit 0; +7 operator-inventory probes). **Lean:** `MODEL_PROVED`.
+**171/171 PASS** at base `805062b` (exit 0; +7 operator-inventory, +1 breadth-budget probes). **Lean:** `MODEL_PROVED`.

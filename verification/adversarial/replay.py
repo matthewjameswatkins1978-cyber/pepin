@@ -1100,6 +1100,31 @@ def main():
                              or "PEP_TOOL_VALUE_DEPTH" in str(_e))
     results.append(("V6-depth16-17", PASS if v6ok else FAIL,
                     "boundary-16/17"))
+    # Breadth budget: tool_v2_max_nodes = 10_000 (1 charge per decoded list node)
+    _wfn = "fn wide(x: List[Int]) -> Int { return 0 }\nfn main() -> Int { return 0 }\n"
+    _wbok = True
+    for _wcount, _wwant in ((9999, "ok"), (10000, "rejected")):
+        _wval = {"type": "List[Int]",
+                 "value": [{"type": "Int", "value": "1"} for _ in range(_wcount)]}
+        _wo = vsess([{"schemaVersion": 3, "op": "open", "name": "d",
+                      "source": _wfn}])
+        _wd, _wr2 = _wo[0]["document"], _wo[0]["revision"]
+        _B2 = {"schemaVersion": 3, "toolProtocolVersion": 2,
+               "tool": "wide", "document": _wd, "revision": _wr2}
+        _rr = vsess([
+            {"schemaVersion": 3, "op": "open", "name": "d", "source": _wfn},
+            dict(_B2, op="tool_register", function="wide"),
+            dict(_B2, op="tool_validate",
+                 testVectors=[{"arguments": [_wval],
+                               "expect": {"type": "Int", "value": "0"}}]),
+        ])[2]
+        if _wwant == "ok":
+            _wbok = _wbok and _rr.get("outcome") == "ok"
+        else:
+            _we = _rr.get("error")
+            _wbok = _wbok and "PEP_TOOL_VALUE_LIMIT" in str(_we)
+    results.append(("V7-breadth9999-10000", PASS if _wbok else FAIL,
+                    "node-budget boundary"))
     _snt7 = ("fn nfuncs() -> Int { let p = semantic_snapshot() return length(p.functions) }\n"
              "fn main() -> Int { return 0 }\n")
     _gt = sess([

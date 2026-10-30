@@ -59,7 +59,19 @@ session"); unknown document id → `TESTED`: `rejected`,
 identities all fail closed with dedicated codes — completing the
 grant-identity side alongside the entry-name case above.
 
+## Breadth budget: `PEP_TOOL_VALUE_LIMIT` at 10,000 decoded nodes
+
+| probe | observed |
+|---|---|
+| v2 validate, `List[Int]` argument with **9,999** elements (`fn wide(x: List[Int])`) | `TESTED` — outcome `ok` (Validated) |
+| same with **10,000** elements | `TESTED` — `rejected`, `PEP_TOOL_VALUE_LIMIT` ("Typed tool value exceeds the element budget") |
+
+One charge per decoded list node (`tool_v2_max_nodes = 10_000` in the
+host); boundary exact at 9,999/10,000 — the breadth twin of the
+`VALUE_DEPTH` (16/17) probe above. A1's typed-value-ceiling finding
+(`PEP_TOOL_VALUE_LIMIT` at scale) now has a pinned protocol-level home.
+
 ## Status
 
 No findings: v2 transport is fail-closed at every probed transition
-(types, names, order, depth, host grants).
+(types, names, order, depth, breadth, host grants).
