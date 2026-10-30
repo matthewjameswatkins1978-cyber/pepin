@@ -1616,29 +1616,50 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   if node.kind == "name" {
     var localFound = false
     var localId = -1
+    var loopFound = false
+    var loopId = -1
+    var parameterZeroFound = false
+    var parameterZero = empty_node()
+    var parameterOneFound = false
+    var parameterOne = empty_node()
+    var parameterTwoFound = false
+    var parameterTwo = empty_node()
     for candidate in nodes {
-      if candidate.parentId == function.id && candidate.role == "statement" && (candidate.kind == "let" || candidate.kind == "var") && candidate.text == node.text {
-        localFound = true
-        localId = candidate.id
+      if candidate.parentId == function.id {
+        if candidate.role == "statement" && (candidate.kind == "let" || candidate.kind == "var") && candidate.text == node.text {
+          localFound = true
+          localId = candidate.id
+        } else {}
+        if candidate.role == "statement" && candidate.kind == "for_in" && candidate.text == node.text && !loopFound {
+          loopFound = true
+          loopId = candidate.id
+        } else {}
+        if candidate.role == "parameter" && candidate.kind == "parameter" && candidate.text == node.text {
+          if candidate.childIndex == 0 && !parameterZeroFound {
+            parameterZeroFound = true
+            parameterZero = candidate
+          } else {}
+          if candidate.childIndex == 1 && !parameterOneFound {
+            parameterOneFound = true
+            parameterOne = candidate
+          } else {}
+          if candidate.childIndex == 2 && !parameterTwoFound {
+            parameterTwoFound = true
+            parameterTwo = candidate
+          } else {}
+        } else {}
       } else {}
     }
     if localFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(localId)], diagnostic: "" } } else {}
-    for candidate in nodes {
-      if candidate.parentId == function.id && candidate.role == "statement" && candidate.kind == "for_in" && candidate.text == node.text {
-        return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(candidate.id)], diagnostic: "" }
-      } else {}
-    }
-    let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
-    let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
-    let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
-    if parameter.found && parameter.node.text == node.text {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
+    if loopFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(loopId)], diagnostic: "" } } else {}
+    if parameterZeroFound {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterZero.id)], diagnostic: "" }
     } else {}
-    if secondParameter.found && secondParameter.node.text == node.text {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(secondParameter.node.id)], diagnostic: "" }
+    if parameterOneFound {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterOne.id)], diagnostic: "" }
     } else {}
-    if thirdParameter.found && thirdParameter.node.text == node.text {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(thirdParameter.node.id)], diagnostic: "" }
+    if parameterTwoFound {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterTwo.id)], diagnostic: "" }
     } else {}
     return pep_c23_unsupported("Pep C23 name lowering requires a direct immutable local let or scalar parameter")
   } else {}
@@ -1693,11 +1714,46 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
   if node.kind == "call" {
     let variant = pep_c23_union_variant(nodes, node.text)
     if variant.found { return pep_c23_union_constructor(nodes, function, node, variant.node) } else {}
-    let argument = pep_c23_child(nodes, node.id, "argument", 0)
-    let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
-    let thirdArgument = pep_c23_child(nodes, node.id, "argument", 2)
-    let extraArgument = pep_c23_child(nodes, node.id, "argument", 3)
-    let target = pep_c23_function(nodes, node.text)
+    var argumentFound = false
+    var argumentNode = empty_node()
+    var secondArgumentFound = false
+    var secondArgumentNode = empty_node()
+    var thirdArgumentFound = false
+    var thirdArgumentNode = empty_node()
+    var extraArgumentFound = false
+    var extraArgumentNode = empty_node()
+    var targetFound = false
+    var targetNode = empty_node()
+    for candidate in nodes {
+      if candidate.parentId == node.id && candidate.role == "argument" {
+        if candidate.childIndex == 0 && !argumentFound {
+          argumentFound = true
+          argumentNode = candidate
+        } else {}
+        if candidate.childIndex == 1 && !secondArgumentFound {
+          secondArgumentFound = true
+          secondArgumentNode = candidate
+        } else {}
+        if candidate.childIndex == 2 && !thirdArgumentFound {
+          thirdArgumentFound = true
+          thirdArgumentNode = candidate
+        } else {}
+        if candidate.childIndex == 3 && !extraArgumentFound {
+          extraArgumentFound = true
+          extraArgumentNode = candidate
+        } else {}
+      } else {}
+      if candidate.parentId == -1 && candidate.kind == "function" &&
+         candidate.text == node.text && !targetFound {
+        targetFound = true
+        targetNode = candidate
+      } else {}
+    }
+    let argument = PepC23NodeLookup { found: argumentFound, node: argumentNode }
+    let secondArgument = PepC23NodeLookup { found: secondArgumentFound, node: secondArgumentNode }
+    let thirdArgument = PepC23NodeLookup { found: thirdArgumentFound, node: thirdArgumentNode }
+    let extraArgument = PepC23NodeLookup { found: extraArgumentFound, node: extraArgumentNode }
+    let target = PepC23NodeLookup { found: targetFound, node: targetNode }
     if node.text == "contains" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 contains lowering requires a list and an Int value")
