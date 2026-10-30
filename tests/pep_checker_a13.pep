@@ -436,16 +436,17 @@ fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) 
   } else {}
   return pattern.endByte
 }
-fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) -> BindingCollection {
-  var reversed: List[BindingFact] = []
+fn collect_bindings_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], startNode: Int, endNode: Int, previous: BindingCollection) -> BindingCollection {
+  var reversed = previous.bindings
   var reversedDiagnostics: List[CheckDiagnostic] = []
-  var ordinal = 0
+  var ordinal = length(previous.bindings)
   if length(functions) != 1 {
     var activeFunctionId = -1
     var activeFunctionSyntaxId = -1
     var activeFunctionStart = 0
     var activeFunctionEnd = 0
     var nextFunctionOrdinal = 0
+    var nodeOffset = 0
     for node in nodes {
       if node.parentId == -1 && node.kind == "function" {
         activeFunctionId = 100000 + nextFunctionOrdinal
@@ -456,7 +457,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
       } else {}
       let parameter = node.kind == "parameter" && node.parentId == activeFunctionSyntaxId
       let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd
-      if activeFunctionId != -1 && (parameter || local) {
+      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && activeFunctionId != -1 && (parameter || local) {
         let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
         let scope = if parameter { activeFunctionId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, activeFunctionId) } }
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
@@ -467,14 +468,16 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
       } else {}
+      nodeOffset = nodeOffset + 1
     }
-    return BindingCollection { bindings: reverse(reversed), diagnostics: reverse(reversedDiagnostics) }
+    return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
   } else {}
   for function in functions {
+    var nodeOffset = 0
     for node in nodes {
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
       let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(node, function)
-      if parameter || local {
+      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (parameter || local) {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         let scope = if parameter { function.semanticId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, function.semanticId) } }
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
@@ -485,19 +488,26 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
       } else {}
+      nodeOffset = nodeOffset + 1
     }
   }
-  return BindingCollection { bindings: reverse(reversed), diagnostics: reverse(reversedDiagnostics) }
+  return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
 }
-fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
-  var reversedReferences: List[ResolvedName] = []
-  var reversedDiagnostics: List[CheckDiagnostic] = []
+fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) -> BindingCollection {
+  let empty = BindingCollection { bindings: [], diagnostics: [] }
+  let partial = collect_bindings_chunk(nodes, functions, 0, length(nodes), empty)
+  return BindingCollection { bindings: reverse(partial.bindings), diagnostics: reverse(partial.diagnostics) }
+}
+fn resolve_names_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], startNode: Int, endNode: Int, previous: NameResolution) -> NameResolution {
+  var reversedReferences = previous.references
+  var reversedDiagnostics = previous.diagnostics
   if length(functions) != 1 {
     var activeFunctionId = -1
     var activeFunctionSyntaxId = -1
     var activeFunctionStart = 0
     var activeFunctionEnd = 0
     var nextFunctionOrdinal = 0
+    var nodeOffset = 0
     for node in nodes {
       if node.parentId == -1 && node.kind == "function" {
         activeFunctionId = 100000 + nextFunctionOrdinal
@@ -506,7 +516,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         activeFunctionEnd = node.endByte
         nextFunctionOrdinal = nextFunctionOrdinal + 1
       } else {}
-      if (node.kind == "name" || node.kind == "assignment") && activeFunctionId != -1 && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd {
+      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (node.kind == "name" || node.kind == "assignment") && activeFunctionId != -1 && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd {
         let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
         var found = false
         var resolved = 0
@@ -522,12 +532,14 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", "No visible variable has this name", node))
         }
       } else {}
+      nodeOffset = nodeOffset + 1
     }
-    return NameResolution { references: reverse(reversedReferences), diagnostics: reverse(reversedDiagnostics) }
+    return NameResolution { references: reversedReferences, diagnostics: reversedDiagnostics }
   } else {}
   for function in functions {
+    var nodeOffset = 0
     for node in nodes {
-      if (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
+      if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (node.kind == "name" || node.kind == "assignment") && inside_function(node, function) {
         let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
         var found = false
         var resolved = 0
@@ -546,9 +558,15 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, message, node))
         }
       } else {}
+      nodeOffset = nodeOffset + 1
     }
   }
-  return NameResolution { references: reverse(reversedReferences), diagnostics: reverse(reversedDiagnostics) }
+  return NameResolution { references: reversedReferences, diagnostics: reversedDiagnostics }
+}
+fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact]) -> NameResolution {
+  let empty = NameResolution { references: [], diagnostics: [] }
+  let reversed = resolve_names_chunk(nodes, functions, bindings, 0, length(nodes), empty)
+  return NameResolution { references: reverse(reversed.references), diagnostics: reverse(reversed.diagnostics) }
 }
 fn owner_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> FunctionLookup {
   for function in functions { if inside_function(node, function) { return FunctionLookup { found: true, function: function } } else {} }
@@ -2302,10 +2320,11 @@ fn checker_start(parsed: ParserProgress) -> CheckerCursor {
   if !tree_is_valid(nodes, byte_length(source_bytes())) {
     return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
   } else {}
-  return make_checker_cursor(authority.document, authority.revision, "functions", false, parsed, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
+  let retainedParser = ParserProgress { document: parsed.document, revision: parsed.revision, status: parsed.status, nodes: [], done: parsed.done, errorCode: parsed.errorCode, message: parsed.message, errorStart: parsed.errorStart, errorEnd: parsed.errorEnd, errorLine: parsed.errorLine, errorColumn: parsed.errorColumn }
+  return make_checker_cursor(authority.document, authority.revision, "functions", false, retainedParser, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
 }
 fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
-  let proposed = startNode + 16
+  let proposed = startNode + 12
   return if proposed <= length(nodes) { proposed } else { length(nodes) }
 }
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
@@ -2323,12 +2342,33 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
     return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
   } else {}
   if cursor.phase == "bindings" {
-    let result = collect_bindings(cursor.nodes, cursor.functions)
-    return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+    if length(cursor.nodes) == 0 {
+      let empty = BindingCollection { bindings: [], diagnostics: [] }
+      return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {}
+    if !(0 <= cursor.typeOffset) || length(cursor.nodes) <= cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", empty_node()))
+    } else {}
+    let proposed = cursor.typeOffset + 32
+    let chunkEnd = if proposed <= length(cursor.nodes) { proposed } else { length(cursor.nodes) }
+    let chunk = collect_bindings_chunk(cursor.nodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
+    if length(cursor.nodes) <= chunkEnd {
+      let result = BindingCollection { bindings: reverse(chunk.bindings), diagnostics: reverse(chunk.diagnostics) }
+      return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {
+      return checker_replace(cursor, "bindings", false, cursor.functions, chunk, cursor.nameResult, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
+    }
   } else {}
   if cursor.phase == "names" {
-    let result = resolve_names(cursor.nodes, cursor.functions, cursor.bindingResult.bindings)
-    return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
+    let proposed = cursor.typeOffset + 32
+    let chunkEnd = if proposed <= length(cursor.nodes) { proposed } else { length(cursor.nodes) }
+    let chunk = resolve_names_chunk(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
+    if length(cursor.nodes) <= chunkEnd {
+      let result = NameResolution { references: reverse(chunk.references), diagnostics: reverse(chunk.diagnostics) }
+      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {
+      return checker_replace(cursor, "names", false, cursor.functions, cursor.bindingResult, chunk, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
+    }
   } else {}
   if cursor.phase == "binding_types" {
     let bindings = infer_binding_types(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references)

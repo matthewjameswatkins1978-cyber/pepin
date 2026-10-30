@@ -459,7 +459,8 @@ def check_target(session, parsed, target, tool_revision):
     max_response_bytes = session.last_response_bytes
     node_count = len(typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
                                        "nodes", "List[FlatAstNode]", "parser result"))
-    maximum_steps = min(MAX_CHECKER_STEPS, 8 + (node_count + 7) // 8)
+    maximum_steps = min(MAX_CHECKER_STEPS,
+                        8 + 2 * ((node_count + 31) // 32) + (node_count + 11) // 12)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):
