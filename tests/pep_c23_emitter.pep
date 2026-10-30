@@ -988,6 +988,12 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
     return argument.found && secondArgumentMatches && !extraArgument.found &&
       argument.node.kind == "name" && argument.node.text == parameterName
   } else {}
+  if node.kind == "call" {
+    let argument = pep_c23_child(nodes, node.id, "argument", 0)
+    let extraArgument = pep_c23_child(nodes, node.id, "argument", 1)
+    return argument.found && !extraArgument.found && argument.node.kind == "name" &&
+      (argument.node.text == parameterName || (secondParameterName != "" && argument.node.text == secondParameterName))
+  } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
     let right = pep_c23_child(nodes, node.id, "right", 1)
@@ -2290,11 +2296,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
     return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
-  for local in nodes {
-    if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
-      localBindings = append(localBindings, local)
-    } else {}
-  }
+  var localBindingsCollected = false
   var returned = false
   var statementCount = 0
   var returnStatement = PepC23NodeLookup { found: false, node: empty_node() }
@@ -2341,6 +2343,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
         }
       } else {
         if statement.kind == "for_in" && !returned {
+          if !localBindingsCollected {
+            for local in nodes {
+              if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
+                localBindings = append(localBindings, local)
+              } else {}
+            }
+            localBindingsCollected = true
+          } else {}
           for local in nodes {
             if local.parentId == function.id && local.role == "statement" && local.id != statement.id && (local.kind == "let" || local.kind == "var" || local.kind == "for_in") && local.text == statement.text {
               return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function locals or other loop bindings")
@@ -2412,6 +2422,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           }
         } else {
           if statement.kind == "while" && !returned {
+            if !localBindingsCollected {
+              for local in nodes {
+                if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
+                  localBindings = append(localBindings, local)
+                } else {}
+              }
+              localBindingsCollected = true
+            } else {}
             let loweredWhile = pep_c23_while_body(nodes, function, statement, localBindings)
             if loweredWhile.status != "emitted" { return loweredWhile } else {}
           } else {
@@ -2452,9 +2470,11 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   var mainFound = false
   var mainId = -1
   var functionCount = 0
+  var topLevelFunctions: List[FlatAstNode] = []
   for node in parsed.nodes {
     if node.parentId == -1 && node.kind == "function" {
       functionCount = functionCount + 1
+      topLevelFunctions = append(topLevelFunctions, node)
       if node.text == "main" { mainFound = true; mainId = node.id } else {}
     } else {}
   }
@@ -2579,7 +2599,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       } else {}
     }
   } else {}
-  for node in parsed.nodes {
+  for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
       let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
@@ -2620,7 +2640,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       }
     } else {}
   }
-  for node in parsed.nodes {
+  for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
       let hasConditionalBody = conditionalBody.status == "emitted"
@@ -2647,11 +2667,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
         bodyParts = append(bodyParts, ";\n")
       } else {}
       var localBindings: List[FlatAstNode] = []
-      for local in parsed.nodes {
-        if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
-          localBindings = append(localBindings, local)
-        } else {}
-      }
+      var localBindingsCollected = false
       for statement in parsed.nodes {
         if statement.parentId == node.id && statement.role == "statement" && (statement.kind == "let" || statement.kind == "var") {
           let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
@@ -2697,6 +2713,14 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           }
         } else {
           if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
+            if !localBindingsCollected {
+              for local in parsed.nodes {
+                if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
+                  localBindings = append(localBindings, local)
+                } else {}
+              }
+              localBindingsCollected = true
+            } else {}
             let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
             let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
             let iterableRecordLiteral = if iterableList.found {
@@ -2845,6 +2869,14 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             bodyParts = append(bodyParts, "  }\n")
           } else {
             if statement.parentId == node.id && statement.role == "statement" && statement.kind == "while" {
+              if !localBindingsCollected {
+                for local in parsed.nodes {
+                  if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
+                    localBindings = append(localBindings, local)
+                  } else {}
+                }
+                localBindingsCollected = true
+              } else {}
               let loweredWhile = pep_c23_while_body(parsed.nodes, node, statement, localBindings)
               if loweredWhile.status != "emitted" { return loweredWhile } else {}
               for part in loweredWhile.sourceParts { bodyParts = append(bodyParts, part) }

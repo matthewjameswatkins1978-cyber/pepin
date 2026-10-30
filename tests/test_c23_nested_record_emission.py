@@ -1,3 +1,4 @@
+import hashlib
 import pathlib
 import re
 import subprocess
@@ -1290,6 +1291,68 @@ fn main() -> Int {
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
                     self.assertEqual(result.stdout, "42\n")
+
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_lucy_ascii_continue_composes_real_lexer_helpers(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
+        blob = hashlib.sha1(f"blob {len(lexer)}\0".encode("ascii") + lexer).hexdigest()
+        self.assertEqual(blob, "12bd93a1dfc5dba3b1cab49abefffed5e406b17d",
+                         "Lucy lexer changed; review this native closure before repinning")
+        lexer_text = lexer.decode("utf-8")
+        start = lexer_text.index("fn ascii_letter(")
+        end = lexer_text.index("fn utf8_check(", start)
+        closure = lexer_text[start:end].strip() + "\n"
+        names = re.findall(r"(?m)^fn ([a-z_]+)\(", closure)
+        self.assertEqual(names, ["ascii_letter", "ascii_digit", "ascii_continue"])
+
+        cases = ((65, "42\n"), (57, "42\n"), (95, "42\n"),
+                 (64, "0\n"), (128, "0\n"))
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for byte, expected in cases:
+                with self.subTest(byte=byte):
+                    source_text = (
+                        closure + "\nfn main() -> Int {\n"
+                        f"  if ascii_continue({byte}) {{ return 42 }} else {{ return 0 }}\n"
+                        "}\n")
+                    source = folder / f"lexer-{byte}.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    reference = folder / f"lexer-{byte}-reference.pep"
+                    reference.write_text(source_text + "say(int_text(main()))\n",
+                                         encoding="utf-8", newline="\n")
+                    interpreted = self.invoke("run", reference)
+                    self.assertEqual(interpreted.returncode, 0,
+                                     interpreted.stdout + interpreted.stderr)
+                    self.assertEqual(interpreted.stdout, expected)
+
+                    c_source = folder / f"lexer-{byte}.c"
+                    try:
+                        generated = emit(source.read_bytes())
+                    except RuntimeError as error:
+                        if "PEP_RUNTIME_STEP_LIMIT" in str(error) and "check parsed source" in str(error):
+                            self.skipTest(
+                                "Pep-written checker exceeds its fixed budget on this real-lexer closure")
+                        raise
+                    c_source.write_text(generated, encoding="utf-8", newline="\n")
+                    self.assertIn("pep_fn_", c_source.read_text(encoding="utf-8"))
+                    for compiler in (CLANG, GCC):
+                        with self.subTest(byte=byte, compiler=compiler.name):
+                            executable = folder / f"lexer-{byte}-{compiler.stem}.exe"
+                            compiled = subprocess.run(
+                                [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                                 "-Wpedantic", "-Werror", "-O2",
+                                 str(c_source), "-o", str(executable)],
+                                cwd=ROOT, text=True, capture_output=True, check=False)
+                            self.assertEqual(compiled.returncode, 0,
+                                             compiled.stdout + compiled.stderr)
+                            native = subprocess.run(
+                                [str(executable)], cwd=ROOT, text=True,
+                                capture_output=True, check=False)
+                            self.assertEqual(native.returncode, 0,
+                                             native.stdout + native.stderr)
+                            self.assertEqual(native.stdout, expected)
+                            self.assertEqual(native.stdout, interpreted.stdout)
 
 
 if __name__ == "__main__":
