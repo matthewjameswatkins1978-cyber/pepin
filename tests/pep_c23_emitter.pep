@@ -623,6 +623,37 @@ fn pep_c23_node_by_id(nodes: List[FlatAstNode], wantedId: Int) -> PepC23NodeLook
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_while_local_binding(nodes: List[FlatAstNode], ownerId: Int,
+  beforeId: Int, name: Str) -> PepC23NodeLookup {
+  var best = PepC23NodeLookup { found: false, node: empty_node() }
+  var bestId = -1
+  for candidate in nodes {
+    if candidate.parentId == ownerId && candidate.role == "body" &&
+       candidate.kind == "let" && candidate.text == name &&
+       !(beforeId <= candidate.id) && bestId <= candidate.id {
+      best = PepC23NodeLookup { found: true, node: candidate }
+      bestId = candidate.id
+    } else {}
+  }
+  return best
+}
+fn pep_c23_enclosing_while_binding(nodes: List[FlatAstNode], function: FlatAstNode,
+  node: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  var ancestorId = node.parentId
+  var depth = 0
+  while ancestorId != function.id && 0 <= ancestorId && !(32 <= depth) {
+    let ancestor = pep_c23_node_by_id(nodes, ancestorId)
+    if ancestor.found {
+      if ancestor.node.kind == "while" {
+        let local = pep_c23_while_local_binding(nodes, ancestor.node.id, node.id, name)
+        if local.found { return local } else {}
+      } else {}
+      ancestorId = ancestor.node.parentId
+      depth = depth + 1
+    } else { ancestorId = -1 }
+  }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_requires_arena(nodes: List[FlatAstNode]) -> Bool {
   for payload in nodes {
     if payload.role == "field_type" {
@@ -1778,6 +1809,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
       } else {}
     }
+    let whileLocal = pep_c23_enclosing_while_binding(nodes, function, node, node.text)
+    if whileLocal.found {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(whileLocal.node.id)], diagnostic: "" }
+    } else {}
     if localFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(localId)], diagnostic: "" } } else {}
     if loopFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(loopId)], diagnostic: "" } } else {}
     if parameterZeroFound {
@@ -2361,11 +2396,27 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
     let value = pep_c23_child(nodes, statement.id, "value", 0)
     let result = pep_c23_child(nodes, function.id, "return_type", 0)
     if !value.found || !result.found { return pep_c23_unsupported("Pep C23 loop return has no value or declared result type") } else {}
-    let cType = pep_c23_c_scalar_type(result.node)
-    if cType == "" { return pep_c23_unsupported("Pep C23 loop returns require a scalar result type") } else {}
+    let scalarType = pep_c23_c_scalar_type(result.node)
+    let recordType = if result.node.kind == "type_named" {
+      pep_c23_record_declaration(nodes, result.node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    var cTypeParts: List[Str] = []
+    if scalarType != "" {
+      cTypeParts = [scalarType]
+    } else {
+      if recordType.found {
+        cTypeParts = ["pep_record_", int_text(recordType.node.id)]
+      } else {
+        return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+      }
+    }
     let lowered = pep_c23_expression(nodes, function, value.node)
     if lowered.status != "emitted" { return lowered } else {}
-    var parts: List[Str] = [indent, cType, " pep_result_", int_text(statement.id), " = "]
+    var parts: List[Str] = [indent]
+    for part in cTypeParts { parts = append(parts, part) }
+    parts = append(parts, " pep_result_")
+    parts = append(parts, int_text(statement.id))
+    parts = append(parts, " = ")
     for part in lowered.sourceParts { parts = append(parts, part) }
     parts = append(parts, ";\n")
     parts = append(parts, indent)
@@ -2419,15 +2470,17 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
           } else {}
         }
       }
-      if !foundThen || !foundElse { return pep_c23_unsupported("Pep C23 loop conditionals require non-empty assignment branches") } else {}
+      if !foundThen { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
       var parts: List[Str] = [indent, "if (!!("]
       for part in loweredCondition.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")) {\n")
       for part in thenParts { parts = append(parts, part) }
       parts = append(parts, indent)
-      parts = append(parts, "} else {\n")
-      for part in elseParts { parts = append(parts, part) }
-      parts = append(parts, indent)
+      if foundElse {
+        parts = append(parts, "} else {\n")
+        for part in elseParts { parts = append(parts, part) }
+        parts = append(parts, indent)
+      } else {}
       parts = append(parts, "}\n")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments, returns, and conditionals with assignment sequences") }
@@ -2445,12 +2498,26 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   parts = append(parts, ")) {\n")
   for statement in nodes {
     if statement.parentId == loop.id && statement.role == "body" {
-      if statement.kind == "if_statement" || statement.kind == "return" {
-        let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings)
-        if loweredConditional.status != "emitted" { return loweredConditional } else {}
-        for part in loweredConditional.sourceParts { parts = append(parts, part) }
+      if statement.kind == "if_statement" || statement.kind == "return" || statement.kind == "let" {
+        if statement.kind == "let" {
+          let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+          if !initialValue.found || initialValue.node.kind != "call" ||
+             initialValue.node.text != "byte_at" {
+            return pep_c23_unsupported("Pep C23 while-local lets currently require a byte_at initializer")
+          } else {}
+          let loweredValue = pep_c23_expression(nodes, function, initialValue.node)
+          if loweredValue.status != "emitted" { return loweredValue } else {}
+          var bindingParts: List[Str] = ["    int64_t pep_local_", int_text(statement.id), " = "]
+          for part in loweredValue.sourceParts { bindingParts = append(bindingParts, part) }
+          bindingParts = append(bindingParts, ";\n")
+          for part in bindingParts { parts = append(parts, part) }
+        } else {
+          let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings)
+          if loweredConditional.status != "emitted" { return loweredConditional } else {}
+          for part in loweredConditional.sourceParts { parts = append(parts, part) }
+        }
       } else {
-        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support assignments, returns, and assignment-only conditionals") } else {}
+        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support byte_at lets, assignments, returns, and conditionals") } else {}
         let value = pep_c23_child(nodes, statement.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
         let loweredValue = pep_c23_expression(nodes, function, value.node)
@@ -2637,7 +2704,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             } else {}
           }
         } else {
-          if statement.kind == "while" && !returned {
+          if (statement.kind == "while" || statement.kind == "if_statement") && !returned {
             if !localBindingsCollected {
               for local in nodes {
                 if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
@@ -2646,8 +2713,10 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
               }
               localBindingsCollected = true
             } else {}
-            let loweredWhile = pep_c23_while_body(nodes, function, statement, localBindings)
-            if loweredWhile.status != "emitted" { return loweredWhile } else {}
+            let loweredControl = if statement.kind == "while" {
+              pep_c23_while_body(nodes, function, statement, localBindings)
+            } else { pep_c23_loop_statement(nodes, function, statement, 0, localBindings) }
+            if loweredControl.status != "emitted" { return loweredControl } else {}
           } else {
             if statement.kind == "return" && !returned {
               returned = true
@@ -3102,7 +3171,8 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             }
             bodyParts = append(bodyParts, "  }\n")
           } else {
-            if statement.parentId == node.id && statement.role == "statement" && statement.kind == "while" {
+            if statement.parentId == node.id && statement.role == "statement" &&
+               (statement.kind == "while" || (statement.kind == "if_statement" && !hasConditionalBody)) {
               if !localBindingsCollected {
                 for local in parsed.nodes {
                   if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
@@ -3111,9 +3181,11 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
                 }
                 localBindingsCollected = true
               } else {}
-              let loweredWhile = pep_c23_while_body(parsed.nodes, node, statement, localBindings)
-              if loweredWhile.status != "emitted" { return loweredWhile } else {}
-              for part in loweredWhile.sourceParts { bodyParts = append(bodyParts, part) }
+              let loweredControl = if statement.kind == "while" {
+                pep_c23_while_body(parsed.nodes, node, statement, localBindings)
+              } else { pep_c23_loop_statement(parsed.nodes, node, statement, 0, localBindings) }
+              if loweredControl.status != "emitted" { return loweredControl } else {}
+              for part in loweredControl.sourceParts { bodyParts = append(bodyParts, part) }
             } else {}
           }
         }

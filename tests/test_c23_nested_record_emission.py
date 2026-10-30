@@ -1355,5 +1355,50 @@ fn main() -> Int {
                             self.assertEqual(native.stdout, interpreted.stdout)
 
 
+    def test_while_byte_at_local_and_conditional_assignment_emit_c23(self):
+        source_text = """fn scan(source: SourceBytes, limit: Int) -> Int {
+  var result = 0
+  var index = 0
+  while index <= limit {
+    let byte = byte_at(source, index)
+    if byte <= 127 { result = result + byte } else {}
+    index = index + 1
+  }
+  return result
+}
+fn main() -> Int { return 0 }
+"""
+        generated = emit(source_text.encode("utf-8"))
+        self.assertIn("while (!!((pep_local_", generated)
+        self.assertRegex(generated, r"int64_t pep_local_\d+ = pep_byte_at\(pep_arg_\d+, pep_local_\d+\);")
+        self.assertIn("if (!!((pep_local_", generated)
+
+    def test_single_conditional_return_emits_each_branch_once(self):
+        source_text = """fn choose(flag: Bool) -> Int {
+  if flag { return 7 } else { return 9 }
+}
+fn main() -> Int { return choose(true) }
+"""
+        generated = emit(source_text.encode("utf-8"))
+        self.assertEqual(generated.count("if (!!(pep_arg_1))"), 1, generated)
+        self.assertIn("pep_result = 7", generated)
+        self.assertIn("pep_result = 9", generated)
+
+
+    def test_while_local_unsupported_initializer_fails_closed(self):
+        source_text = """fn scan(limit: Int) -> Int {
+  var index = 0
+  while index <= limit {
+    let next = index + 1
+    index = next
+  }
+  return index
+}
+fn main() -> Int { return 0 }
+"""
+        with self.assertRaisesRegex(ValueError, "byte_at initializer"):
+            emit(source_text.encode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
