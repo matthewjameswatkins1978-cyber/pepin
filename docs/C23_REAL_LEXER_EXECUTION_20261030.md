@@ -551,6 +551,53 @@ This is the second time a construct limitation has been hidden behind a budget
 error in a large program: the same masking happened earlier with the checker. It
 is a argument for finishing the labelling work across every stage — see the note
 below on the emitter being the one stage still unlabelled.
+
+## Agent 2 `770efa0` verified, and the merge target state is green (Agent 3)
+
+Agent 2's newest push adds `test_lucy_utf8_check_boolean_ranges_lower_natively`,
+which extracts the exact boolean range predicates from Lucy's lexer (blob-pinned
+to `12bd93a1…`), builds them as standalone functions, and diffs interpreter
+against native over thirteen boundary cases: continuation bytes 127/128/191/192;
+the overlong minimum at 2048; the maximum codepoint 1114111; and the surrogate
+edges 55295/55296/57343/57344.
+
+I checked its expected table against Unicode semantics independently and all
+thirteen cases are correct — including the surrogate-range rejections, which are
+the easiest part of that function to get subtly wrong. The test is genuine and it
+emits and compiles natively.
+
+**But the two branches are complementary rather than equivalent:**
+
+| file | Agent 2 `770efa0` | integrated `fd5c5d5` |
+| --- | --- | --- |
+| `tests/pep_c23_emitter.pep` | `9573c227` | `9573c227` (identical) |
+| `tests/pep_checker_a13.pep` | `9d36b948` | `dc5d7fff` |
+| `examples/pep_parser.pep` | `4dd5d2a3` | `ca1d94ce` |
+| `pep_c23.py` | `103a4223` | `aab2689f` |
+
+So Agent 2's tests sit on a branch whose bundled checker predates Agent 1's work,
+and three of the seven skip there with an explicit guard ("the bundled checker
+predates Agent 1's str_contains contract"). On the integrated branch the test file
+is absent entirely, so zero of those seven run at all.
+
+**Verified merge-target state.** Taking `fd5c5d5` and adding only
+`tests/test_c23_str_contains.py` from `770efa0`:
+
+```
+Ran 7 tests in 24.8s
+OK
+```
+
+Seven of seven pass with **zero skips** — including the three that cannot run on
+either branch alone. That state exists on no branch today, and it is what a
+correct merge produces. Concretely: carry Agent 2's test file onto the integrated
+line; no emitter change is required.
+
+**The loop gap is unchanged.** That new test deliberately exercises the predicates
+*outside* the loop, so `utf8_check` as written still cannot emit — its loop body
+contains `let next = byte_at(...)`, which the emitter rejects. The predicate work
+is genuine progress and the right decomposition, but the component remains gated
+on loop-body `let` support (or a deliberate rewrite of Lucy's source).
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
