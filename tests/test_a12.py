@@ -692,6 +692,32 @@ class A12ParserDifferentialTests(unittest.TestCase):
         )
         self.assert_differential("fn unfinished() -> Int { return ?result }")
 
+    def test_many_union_variants_are_parsed_across_continuations(self):
+        variants = " | ".join(f"Variant{index:02d}()" for index in range(38))
+        source = f"type Many = {variants}\nfn main() -> Int {{ return 0 }}"
+        actual = self.assert_differential(source)
+        self.assertEqual(sum(kind == "variant_declaration" for kind, _, _ in actual), 38)
+        self.assertGreater(self.last_parser_steps, 38)
+
+    def test_parser_ast_union_declaration_uses_continuations(self):
+        lines = PARSER.read_text(encoding="utf-8").splitlines()
+        source = "\n".join(lines[:2]) + "\nfn main() -> Int { return 0 }"
+        actual = self.assert_differential(source)
+        self.assertGreater(sum(kind == "variant_declaration" for kind, _, _ in actual), 30)
+        self.assertGreater(self.last_parser_steps, 30)
+
+    def test_wide_record_field_flattening_preserves_order(self):
+        names = [f"field{index:02d}" for index in range(24)]
+        declarations = ", ".join(f"{name}: Int" for name in names)
+        values = ", ".join(f"{name}: {index}" for index, name in enumerate(names))
+        source = (
+            f"type Wide {{ {declarations} }}\n"
+            f"fn main() -> Int {{ let row = Wide {{ {values} }}; return row.field00 }}"
+        )
+        actual = self.assert_differential(source)
+        record_fields = [text for kind, text, _ in actual if kind == "record_field"]
+        self.assertEqual(record_fields, names)
+
     def test_record_type_literal_and_field_access(self):
         self.assert_differential(
             "type Point { x: Int, y: Int }\n"

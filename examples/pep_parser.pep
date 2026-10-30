@@ -122,44 +122,145 @@ fn ast_combine(left: AstSpan, right: AstSpan) -> AstSpan {
 
 fn ast_value_span(value: AstValue) -> AstSpan {
   return match value {
-    AstInteger(number, span) => span
-    AstBoolean(value, span) => span
-    AstString(parts, span) => span
-    AstName(name, span) => span
-    AstHole(name, span) => span
     AstCall(name, args, span) => span
     AstBinary(op, left, right, span) => span
     AstUnary(op, operand, span) => span
+    AstName(name, span) => span
+    AstFunction(name, typeParameters, parameters, result, body, span) => span
+    _ => ast_value_span_part_1(value)
+  }
+}
+fn ast_value_span_part_1(value: AstValue) -> AstSpan {
+  return match value {
+    AstInteger(number, span) => span
+    AstBoolean(flag, span) => span
+    _ => ast_value_span_part_2(value)
+  }
+}
+fn ast_value_span_part_2(value: AstValue) -> AstSpan {
+  return match value {
+    AstString(parts, span) => span
+    AstName(name, span) => span
+    _ => ast_value_span_part_3(value)
+  }
+}
+fn ast_value_span_part_3(value: AstValue) -> AstSpan {
+  return match value {
+    AstHole(name, span) => span
+    AstCall(name, args, span) => span
+    _ => ast_value_span_part_4(value)
+  }
+}
+fn ast_value_span_part_4(value: AstValue) -> AstSpan {
+  return match value {
+    AstBinary(op, left, right, span) => span
+    AstUnary(op, operand, span) => span
+    _ => ast_value_span_part_5(value)
+  }
+}
+fn ast_value_span_part_5(value: AstValue) -> AstSpan {
+  return match value {
     AstList(items, span) => span
     AstIfExpression(condition, yes, no, span) => span
+    _ => ast_value_span_part_6(value)
+  }
+}
+fn ast_value_span_part_6(value: AstValue) -> AstSpan {
+  return match value {
     AstRecordField(name, value, span) => span
     AstRecordExpression(name, fields, span) => span
+    _ => ast_value_span_part_7(value)
+  }
+}
+fn ast_value_span_part_7(value: AstValue) -> AstSpan {
+  return match value {
     AstFieldAccess(value, field, span) => span
     AstMatchExpression(value, arms, span) => span
+    _ => ast_value_span_part_8(value)
+  }
+}
+fn ast_value_span_part_8(value: AstValue) -> AstSpan {
+  return match value {
     AstWildcardPattern(span) => span
     AstBindingPattern(name, span) => span
+    _ => ast_value_span_part_9(value)
+  }
+}
+fn ast_value_span_part_9(value: AstValue) -> AstSpan {
+  return match value {
     AstConstructorPattern(name, args, span) => span
     AstMatchArm(pattern, result, span) => span
+    _ => ast_value_span_part_10(value)
+  }
+}
+fn ast_value_span_part_10(value: AstValue) -> AstSpan {
+  return match value {
     AstTypeScalar(name, span) => span
     AstTypeNamed(name, span) => span
+    _ => ast_value_span_part_11(value)
+  }
+}
+fn ast_value_span_part_11(value: AstValue) -> AstSpan {
+  return match value {
     AstTypeList(element, span) => span
     AstTypeParameter(name, span) => span
+    _ => ast_value_span_part_12(value)
+  }
+}
+fn ast_value_span_part_12(value: AstValue) -> AstSpan {
+  return match value {
     AstParameter(name, ty, span) => span
     AstFieldDeclaration(name, ty, span) => span
+    _ => ast_value_span_part_13(value)
+  }
+}
+fn ast_value_span_part_13(value: AstValue) -> AstSpan {
+  return match value {
     AstVariantDeclaration(name, args, span) => span
     AstRecordDeclaration(name, fields, span) => span
+    _ => ast_value_span_part_14(value)
+  }
+}
+fn ast_value_span_part_14(value: AstValue) -> AstSpan {
+  return match value {
     AstUnionDeclaration(name, variants, span) => span
     AstLet(name, annotation, value, span) => span
+    _ => ast_value_span_part_15(value)
+  }
+}
+fn ast_value_span_part_15(value: AstValue) -> AstSpan {
+  return match value {
     AstVar(name, annotation, value, span) => span
     AstAssignment(name, value, span) => span
+    _ => ast_value_span_part_16(value)
+  }
+}
+fn ast_value_span_part_16(value: AstValue) -> AstSpan {
+  return match value {
     AstReturn(value, span) => span
     AstBlock(statements, span) => span
+    _ => ast_value_span_part_17(value)
+  }
+}
+fn ast_value_span_part_17(value: AstValue) -> AstSpan {
+  return match value {
     AstIfStatement(condition, yes, no, span) => span
     AstForIn(name, values, body, span) => span
+    _ => ast_value_span_part_18(value)
+  }
+}
+fn ast_value_span_part_18(value: AstValue) -> AstSpan {
+  return match value {
     AstWhile(condition, body, span) => span
     AstExpressionStatement(value, span) => span
+    _ => ast_value_span_part_19(value)
+  }
+}
+fn ast_value_span_part_19(value: AstValue) -> AstSpan {
+  return match value {
     AstFunction(name, typeParameters, parameters, result, body, span) => span
     AstAbsent() => AstSpan { startByte: 0, endByte: 0, line: 1, column: 1 }
+    _ => AstSpan { startByte: 0, endByte: 0, line: 1, column: 1 }
   }
 }
 fn flat_make(
@@ -280,47 +381,267 @@ fn flat_function(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   let withResult = flat_node(result, nodeId, 0, "return_type", withParameters)
   return flat_children(body, nodeId, "statement", withResult)
 }
+fn flat_record_field_value(value: AstValue, parentId: Int, childIndex: Int,
+  role: Str, name: Str, fieldValue: AstValue, state: FlatState) -> FlatState {
+  let parent = flat_plain(value, parentId, childIndex, role, "record_field", name, 0, false, [], state)
+  return flat_node(fieldValue, parent.nextId - 1, 0, "value", parent)
+}
+fn flat_record_field(value: AstValue, parentId: Int, childIndex: Int,
+  role: Str, state: FlatState) -> FlatState {
+  return match value {
+    AstRecordField(name, fieldValue, span) => flat_record_field_value(value, parentId, childIndex, role, name, fieldValue, state)
+    _ => flat_node(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_record_children(fields: List[AstValue], parentId: Int,
+  state: FlatState) -> FlatState {
+  var current = state
+  var index = 0
+  for field in fields {
+    current = flat_record_field(field, parentId, index, "field", current)
+    index = index + 1
+  }
+  return current
+}
+fn flat_record_expression(value: AstValue, parentId: Int, childIndex: Int,
+  role: Str, name: Str, fields: List[AstValue], state: FlatState) -> FlatState {
+  let parent = flat_plain(value, parentId, childIndex, role, "record", name, 0, false, [], state)
+  return flat_record_children(fields, parent.nextId - 1, parent)
+}
+
 fn flat_node(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return flat_node_fast_1(value, parentId, childIndex, role, state)
+}
+fn flat_node_fast_1(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstAbsent() => state
+    AstName(name, span) => flat_plain(value, parentId, childIndex, role, "name", name, 0, false, [], state)
+    _ => flat_node_fast_2(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_2(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstCall(name, args, span) => flat_composite(value, parentId, childIndex, role, "call", name, args, "argument", state)
+    AstFieldAccess(base, field, span) => flat_composite(value, parentId, childIndex, role, "field_access", field, [base], "value", state)
+    _ => flat_node_fast_3(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_3(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstBinary(op, left, right, span) => flat_binary(value, parentId, childIndex, role, op, left, right, state)
+    AstRecordField(name, fieldValue, span) => flat_record_field(value, parentId, childIndex, role, state)
+    _ => flat_node_fast_4(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_4(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstRecordExpression(name, fields, span) => flat_record_expression(value, parentId, childIndex, role, name, fields, state)
+    AstFunction(name, typeParameters, parameters, result, body, span) => flat_function(value, parentId, childIndex, role, name, typeParameters, parameters, result, body, state)
+    _ => flat_node_fast_5(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_5(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstIfStatement(condition, yes, no, span) => flat_if_statement(value, parentId, childIndex, role, condition, yes, no, state)
+    AstIfExpression(condition, yes, no, span) => flat_if_expression(value, parentId, childIndex, role, condition, yes, no, state)
+    _ => flat_node_fast_6(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_6(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstLet(name, annotation, expression, span) => flat_binding(value, parentId, childIndex, role, "let", name, annotation, expression, state)
+    AstVar(name, annotation, expression, span) => flat_binding(value, parentId, childIndex, role, "var", name, annotation, expression, state)
+    _ => flat_node_fast_7(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_7(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstReturn(expression, span) => flat_composite(value, parentId, childIndex, role, "return", "", [expression], "value", state)
+    AstUnary(op, operand, span) => flat_composite(value, parentId, childIndex, role, "unary", op, [operand], "operand", state)
+    _ => flat_node_fast_8(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_8(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstInteger(number, span) => flat_plain(value, parentId, childIndex, role, "integer", "", number, false, [], state)
+    AstBoolean(flag, span) => flat_plain(value, parentId, childIndex, role, "boolean", "", 0, flag, [], state)
+    _ => flat_node_fast_9(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_9(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstString(parts, span) => flat_plain(value, parentId, childIndex, role, "string", "", 0, false, parts, state)
+    AstMatchExpression(subject, arms, span) => flat_match_expression(value, parentId, childIndex, role, subject, arms, state)
+    _ => flat_node_fast_10(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_fast_10(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstMatchArm(pattern, result, span) => flat_match_arm(value, parentId, childIndex, role, pattern, result, state)
+    _ => flat_node_part_1(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_1(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
     AstAbsent() => state
     AstInteger(number, span) => flat_plain(value, parentId, childIndex, role, "integer", "", number, false, [], state)
+    _ => flat_node_part_2(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_2(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstBoolean(flag, span) => flat_plain(value, parentId, childIndex, role, "boolean", "", 0, flag, [], state)
     AstString(parts, span) => flat_plain(value, parentId, childIndex, role, "string", "", 0, false, parts, state)
+    _ => flat_node_part_3(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_3(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstName(name, span) => flat_plain(value, parentId, childIndex, role, "name", name, 0, false, [], state)
     AstHole(name, span) => flat_plain(value, parentId, childIndex, role, "hole", name, 0, false, [], state)
+    _ => flat_node_part_4(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_4(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstCall(name, args, span) => flat_composite(value, parentId, childIndex, role, "call", name, args, "argument", state)
     AstBinary(op, left, right, span) => flat_binary(value, parentId, childIndex, role, op, left, right, state)
+    _ => flat_node_part_5(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_5(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstUnary(op, operand, span) => flat_composite(value, parentId, childIndex, role, "unary", op, [operand], "operand", state)
     AstList(items, span) => flat_composite(value, parentId, childIndex, role, "list", "", items, "element", state)
+    _ => flat_node_part_6(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_6(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstIfExpression(condition, yes, no, span) => flat_if_expression(value, parentId, childIndex, role, condition, yes, no, state)
-    AstRecordField(name, fieldValue, span) => flat_composite(value, parentId, childIndex, role, "record_field", name, [fieldValue], "value", state)
-    AstRecordExpression(name, fields, span) => flat_composite(value, parentId, childIndex, role, "record", name, fields, "field", state)
+    AstRecordField(name, fieldValue, span) => flat_record_field(value, parentId, childIndex, role, state)
+    _ => flat_node_part_7(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_7(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
+    AstRecordExpression(name, fields, span) => flat_record_expression(value, parentId, childIndex, role, name, fields, state)
     AstFieldAccess(base, field, span) => flat_composite(value, parentId, childIndex, role, "field_access", field, [base], "value", state)
+    _ => flat_node_part_8(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_8(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstMatchExpression(subject, arms, span) => flat_match_expression(value, parentId, childIndex, role, subject, arms, state)
     AstWildcardPattern(span) => flat_plain(value, parentId, childIndex, role, "wildcard_pattern", "", 0, false, [], state)
+    _ => flat_node_part_9(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_9(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstBindingPattern(name, span) => flat_plain(value, parentId, childIndex, role, "binding_pattern", name, 0, false, [], state)
     AstConstructorPattern(name, args, span) => flat_composite(value, parentId, childIndex, role, "constructor_pattern", name, args, "argument", state)
+    _ => flat_node_part_10(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_10(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstMatchArm(pattern, result, span) => flat_match_arm(value, parentId, childIndex, role, pattern, result, state)
     AstTypeScalar(name, span) => flat_plain(value, parentId, childIndex, role, "type_scalar", name, 0, false, [], state)
+    _ => flat_node_part_11(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_11(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstTypeNamed(name, span) => flat_plain(value, parentId, childIndex, role, "type_named", name, 0, false, [], state)
     AstTypeList(element, span) => flat_composite(value, parentId, childIndex, role, "type_list", "", [element], "element_type", state)
+    _ => flat_node_part_12(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_12(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstTypeParameter(name, span) => flat_plain(value, parentId, childIndex, role, "type_parameter", name, 0, false, [], state)
     AstParameter(name, ty, span) => flat_composite(value, parentId, childIndex, role, "parameter", name, [ty], "type", state)
+    _ => flat_node_part_13(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_13(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstFieldDeclaration(name, ty, span) => flat_composite(value, parentId, childIndex, role, "field_declaration", name, [ty], "type", state)
     AstVariantDeclaration(name, args, span) => flat_composite(value, parentId, childIndex, role, "variant_declaration", name, args, "field_type", state)
+    _ => flat_node_part_14(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_14(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstRecordDeclaration(name, fields, span) => flat_composite(value, parentId, childIndex, role, "record_declaration", name, fields, "field", state)
     AstUnionDeclaration(name, variants, span) => flat_composite(value, parentId, childIndex, role, "union_declaration", name, variants, "variant", state)
+    _ => flat_node_part_15(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_15(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstLet(name, annotation, expression, span) => flat_binding(value, parentId, childIndex, role, "let", name, annotation, expression, state)
     AstVar(name, annotation, expression, span) => flat_binding(value, parentId, childIndex, role, "var", name, annotation, expression, state)
+    _ => flat_node_part_16(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_16(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstAssignment(name, expression, span) => flat_composite(value, parentId, childIndex, role, "assignment", name, [expression], "value", state)
     AstReturn(expression, span) => flat_composite(value, parentId, childIndex, role, "return", "", [expression], "value", state)
+    _ => flat_node_part_17(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_17(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstBlock(statements, span) => flat_composite(value, parentId, childIndex, role, "block", "", statements, "statement", state)
     AstIfStatement(condition, yes, no, span) => flat_if_statement(value, parentId, childIndex, role, condition, yes, no, state)
+    _ => flat_node_part_18(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_18(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstForIn(name, iterable, body, span) => flat_loop(value, parentId, childIndex, role, "for_in", name, iterable, body, "iterable", "body", state)
     AstWhile(condition, body, span) => flat_loop(value, parentId, childIndex, role, "while", "", condition, body, "condition", "body", state)
+    _ => flat_node_part_19(value, parentId, childIndex, role, state)
+  }
+}
+fn flat_node_part_19(value: AstValue, parentId: Int, childIndex: Int, role: Str,
+  state: FlatState) -> FlatState {
+  return match value {
     AstExpressionStatement(expression, span) => flat_composite(value, parentId, childIndex, role, "expression_statement", "", [expression], "value", state)
     AstFunction(name, typeParameters, parameters, result, body, span) => flat_function(value, parentId, childIndex, role, name, typeParameters, parameters, result, body, state)
+    _ => state
   }
 }
 fn token_at(tokens: List[LexToken], index: Int) -> LexToken {
@@ -1347,45 +1668,139 @@ fn parse_record_field(stream: ParserStream, depth: Int) -> AstParse {
 }
 
 fn ast_set_span(value: AstValue, span: AstSpan) -> AstValue {
+  return ast_set_span_part_1(value, span)
+}
+fn ast_set_span_part_1(value: AstValue, span: AstSpan) -> AstValue {
   return match value {
     AstInteger(number, oldSpan) => AstInteger(number, span)
     AstBoolean(flag, oldSpan) => AstBoolean(flag, span)
+    _ => ast_set_span_part_2(value, span)
+  }
+}
+fn ast_set_span_part_2(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstString(parts, oldSpan) => AstString(parts, span)
     AstName(name, oldSpan) => AstName(name, span)
+    _ => ast_set_span_part_3(value, span)
+  }
+}
+fn ast_set_span_part_3(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstHole(name, oldSpan) => AstHole(name, span)
     AstCall(name, args, oldSpan) => AstCall(name, args, span)
+    _ => ast_set_span_part_4(value, span)
+  }
+}
+fn ast_set_span_part_4(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstBinary(op, left, right, oldSpan) => AstBinary(op, left, right, span)
     AstUnary(op, operand, oldSpan) => AstUnary(op, operand, span)
+    _ => ast_set_span_part_5(value, span)
+  }
+}
+fn ast_set_span_part_5(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstList(items, oldSpan) => AstList(items, span)
     AstIfExpression(condition, yes, no, oldSpan) => AstIfExpression(condition, yes, no, span)
+    _ => ast_set_span_part_6(value, span)
+  }
+}
+fn ast_set_span_part_6(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstRecordField(name, fieldValue, oldSpan) => AstRecordField(name, fieldValue, span)
     AstRecordExpression(name, fields, oldSpan) => AstRecordExpression(name, fields, span)
+    _ => ast_set_span_part_7(value, span)
+  }
+}
+fn ast_set_span_part_7(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstFieldAccess(base, field, oldSpan) => AstFieldAccess(base, field, span)
     AstMatchExpression(subject, arms, oldSpan) => AstMatchExpression(subject, arms, span)
+    _ => ast_set_span_part_8(value, span)
+  }
+}
+fn ast_set_span_part_8(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstWildcardPattern(oldSpan) => AstWildcardPattern(span)
     AstBindingPattern(name, oldSpan) => AstBindingPattern(name, span)
+    _ => ast_set_span_part_9(value, span)
+  }
+}
+fn ast_set_span_part_9(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstConstructorPattern(name, args, oldSpan) => AstConstructorPattern(name, args, span)
     AstMatchArm(pattern, result, oldSpan) => AstMatchArm(pattern, result, span)
+    _ => ast_set_span_part_10(value, span)
+  }
+}
+fn ast_set_span_part_10(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstTypeScalar(name, oldSpan) => AstTypeScalar(name, span)
     AstTypeNamed(name, oldSpan) => AstTypeNamed(name, span)
+    _ => ast_set_span_part_11(value, span)
+  }
+}
+fn ast_set_span_part_11(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstTypeList(element, oldSpan) => AstTypeList(element, span)
     AstTypeParameter(name, oldSpan) => AstTypeParameter(name, span)
+    _ => ast_set_span_part_12(value, span)
+  }
+}
+fn ast_set_span_part_12(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstParameter(name, ty, oldSpan) => AstParameter(name, ty, span)
     AstFieldDeclaration(name, ty, oldSpan) => AstFieldDeclaration(name, ty, span)
+    _ => ast_set_span_part_13(value, span)
+  }
+}
+fn ast_set_span_part_13(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstVariantDeclaration(name, args, oldSpan) => AstVariantDeclaration(name, args, span)
     AstRecordDeclaration(name, fields, oldSpan) => AstRecordDeclaration(name, fields, span)
+    _ => ast_set_span_part_14(value, span)
+  }
+}
+fn ast_set_span_part_14(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstUnionDeclaration(name, variants, oldSpan) => AstUnionDeclaration(name, variants, span)
     AstLet(name, annotation, expression, oldSpan) => AstLet(name, annotation, expression, span)
+    _ => ast_set_span_part_15(value, span)
+  }
+}
+fn ast_set_span_part_15(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstVar(name, annotation, expression, oldSpan) => AstVar(name, annotation, expression, span)
     AstAssignment(name, expression, oldSpan) => AstAssignment(name, expression, span)
+    _ => ast_set_span_part_16(value, span)
+  }
+}
+fn ast_set_span_part_16(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstReturn(expression, oldSpan) => AstReturn(expression, span)
     AstBlock(statements, oldSpan) => AstBlock(statements, span)
+    _ => ast_set_span_part_17(value, span)
+  }
+}
+fn ast_set_span_part_17(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstIfStatement(condition, yes, no, oldSpan) => AstIfStatement(condition, yes, no, span)
     AstForIn(name, iterable, body, oldSpan) => AstForIn(name, iterable, body, span)
+    _ => ast_set_span_part_18(value, span)
+  }
+}
+fn ast_set_span_part_18(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstWhile(condition, body, oldSpan) => AstWhile(condition, body, span)
     AstExpressionStatement(expression, oldSpan) => AstExpressionStatement(expression, span)
+    _ => ast_set_span_part_19(value, span)
+  }
+}
+fn ast_set_span_part_19(value: AstValue, span: AstSpan) -> AstValue {
+  return match value {
     AstFunction(name, typeParameters, parameters, result, body, oldSpan) => AstFunction(name, typeParameters, parameters, result, body, span)
     AstAbsent() => AstAbsent()
+    _ => AstAbsent()
   }
 }
 fn flatten_ast(value: AstValue, topLevelChildIndex: Int) -> List[FlatAstNode] {
@@ -1477,6 +1892,25 @@ fn parser_emit_item(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
   return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
 
+fn parser_value_is_absent(value: AstValue) -> Bool {
+  return match value {
+    AstAbsent() => true
+    _ => false
+  }
+}
+
+fn parser_complete_absent(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
+  let next = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: parsed.stream,
+    nextNodeId: cursor.nextNodeId, done: true,
+    functionActive: false, functionName: "", functionStartByte: 0,
+    functionLine: 1, functionColumn: 1,
+    functionRootId: 0, functionChildIndex: 0,
+    topLevelChildIndex: cursor.topLevelChildIndex, frames: []
+  }
+  return parser_chunk(next, "complete", [], true, "", "", 0, 0, 0, 0)
+}
+
 fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
   if !parsed.ok {
     let failed = ParserCursor {
@@ -1492,19 +1926,12 @@ fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
       parsed.errorCode, parsed.message, parsed.errorStart, parsed.errorEnd,
       parsed.errorLine, parsed.errorColumn)
   } else { }
-  return match parsed.value {
-    AstAbsent() => parser_chunk(ParserCursor {
-      document: cursor.document, revision: cursor.revision, stream: parsed.stream,
-      nextNodeId: cursor.nextNodeId, done: true,
-      functionActive: false, functionName: "", functionStartByte: 0,
-      functionLine: 1, functionColumn: 1,
-      functionRootId: 0, functionChildIndex: 0,
-      topLevelChildIndex: cursor.topLevelChildIndex, frames: []
-    }, "complete", [], true, "", "", 0, 0, 0, 0)
-    _ => parser_emit_item(cursor, parsed)
+  if parser_value_is_absent(parsed.value) {
+    return parser_complete_absent(cursor, parsed)
+  } else {
+    return parser_emit_item(cursor, parsed)
   }
 }
-
 fn parser_validation_chunk(cursor: ParserCursor) -> ParserChunk {
   var stream = cursor.stream
   var count = 0
@@ -1549,6 +1976,73 @@ fn parser_validation_chunk(cursor: ParserCursor) -> ParserChunk {
   }
 }
 
+fn parser_union_variant(cursor: ParserCursor, frame: ParserFrame, parsed: AstParse) -> ParserChunk {
+  if !parsed.ok { return parser_finish_step(cursor, parsed) } else { }
+  let variantSpan = ast_value_span(parsed.value)
+  let state = flat_node(parsed.value, frame.nodeId, frame.bodyChildIndex, "variant",
+    FlatState { nextId: cursor.nextNodeId, nodesReversed: [] })
+  let nodes = reverse(state.nodesReversed)
+  let after = stream_peek(parsed.stream, 0)
+  if !after.ok { return parser_finish_step(cursor, parse_lex_error(after.stream)) } else { }
+  if after.token.kind == "symbol" && after.token.text == "|" {
+    let separator = stream_take(after.stream)
+    let updated = ParserFrame { kind: frame.kind, nodeId: frame.nodeId,
+      parentId: frame.parentId, rootChildIndex: frame.rootChildIndex,
+      rootRole: frame.rootRole, startByte: frame.startByte, line: frame.line,
+      column: frame.column, text: frame.text, bodyChildIndex: frame.bodyChildIndex + 1 }
+    let next = ParserCursor {
+      document: cursor.document, revision: cursor.revision, stream: separator.stream,
+      nextNodeId: state.nextId, done: false, functionActive: false,
+      functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
+      functionRootId: 0, functionChildIndex: 0,
+      topLevelChildIndex: cursor.topLevelChildIndex, frames: [updated]
+    }
+    return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
+  } else { }
+  let root = flat_make(frame.nodeId, frame.parentId, frame.rootChildIndex,
+    frame.rootRole, "union_declaration", frame.text, 0, false, [],
+    AstSpan { startByte: frame.startByte, endByte: variantSpan.endByte,
+      line: frame.line, column: frame.column })
+  let completedNodes = prepend(nodes, root)
+  let next = ParserCursor {
+    document: cursor.document, revision: cursor.revision, stream: after.stream,
+    nextNodeId: state.nextId, done: false, functionActive: false,
+    functionName: "", functionStartByte: 0, functionLine: 1, functionColumn: 1,
+    functionRootId: 0, functionChildIndex: 0,
+    topLevelChildIndex: cursor.topLevelChildIndex + 1, frames: []
+  }
+  return parser_chunk(next, "continuing", completedNodes, false, "", "", 0, 0, 0, 0)
+}
+
+fn parser_begin_union(cursor: ParserCursor, first: LexToken, name: LexToken,
+  equals: ParserStream) -> ParserChunk {
+  let rootId = cursor.nextNodeId
+  let frame = ParserFrame { kind: "union", nodeId: rootId, parentId: -1,
+    rootChildIndex: cursor.topLevelChildIndex, rootRole: "top_level",
+    startByte: first.startByte, line: first.line, column: first.column,
+    text: name.text, bodyChildIndex: 0 }
+  let variant = parse_variant_declaration(equals, 1)
+  return parser_union_variant(
+    ParserCursor { document: cursor.document, revision: cursor.revision,
+      stream: cursor.stream, nextNodeId: rootId + 1, done: false,
+      functionActive: false, functionName: "", functionStartByte: 0,
+      functionLine: 1, functionColumn: 1, functionRootId: 0,
+      functionChildIndex: 0, topLevelChildIndex: cursor.topLevelChildIndex,
+      frames: [frame] }, frame, variant)
+}
+
+fn parser_begin_type_union_or_fallback(cursor: ParserCursor, firstRead: TokenRead) -> ParserChunk {
+  let first = stream_take(firstRead.stream)
+  let name = stream_take(first.stream)
+  if name.ok && name.token.kind == "identifier" {
+    let equals = stream_take(name.stream)
+    if equals.ok && equals.token.kind == "symbol" && equals.token.text == "=" {
+      return parser_begin_union(cursor, first.token, name.token, equals.stream)
+    } else { }
+  } else { }
+  return parser_finish_step(cursor, parse_top_level_item(cursor.stream, 0))
+}
+
 fn parser_step(cursor: ParserCursor) -> ParserChunk {
   let info = semantic_snapshot()
   if cursor.document != info.document || cursor.revision != info.revision {
@@ -1560,6 +2054,12 @@ fn parser_step(cursor: ParserCursor) -> ParserChunk {
     return parser_validation_chunk(cursor)
   } else { }
   if cursor.functionActive { return parser_step_function(cursor) } else { }
+  if !(length(cursor.frames) <= 0) {
+    let frame = parser_frame_top(cursor.frames)
+    if frame.kind == "union" {
+      return parser_union_variant(cursor, frame, parse_variant_declaration(cursor.stream, 1))
+    } else { }
+  } else { }
   let next = stream_peek(cursor.stream, 0)
   if !next.ok { return parser_finish_step(cursor, parse_lex_error(next.stream)) } else { }
   if next.token.kind == "eof" { return parser_finish_step(cursor, parse_ok(AstAbsent(), next.stream)) } else { }
@@ -1568,6 +2068,9 @@ fn parser_step(cursor: ParserCursor) -> ParserChunk {
     let header = parse_function_header_after(keyword.token, keyword.stream, 1)
     if !header.ok { return parser_finish_step(cursor, header) } else { }
     return parser_begin_function(cursor, header)
+  } else { }
+  if next.token.kind == "identifier" && next.token.text == "type" {
+    return parser_begin_type_union_or_fallback(cursor, next)
   } else { }
   let parsed = parse_top_level_item(cursor.stream, 0)
   return parser_finish_step(cursor, parsed)
