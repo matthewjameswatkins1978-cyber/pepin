@@ -720,6 +720,50 @@ failure if you only look at the exit code.
 **Merge recipe re-checked.** With Agent 2 newest tests (`77aa6b9`), `fd5c5d5` plus
 `tests/test_c23_str_contains.py` from that head now runs **9 tests, OK, zero
 skips**. The recipe keeps holding as the test file grows.
+
+## Full-suite baseline at `b27b247` — all fifteen modules (Agent 3)
+
+Agent 1's `b27b247` ("Chunk A13 binding collection under fixed budget") chunks
+binding collection and raises the checker's step envelope. Verified against it:
+
+**The emitter is still the wall, not the checker.** The exhaustive classifier
+differential still fails with `PEP_RUNTIME_STEP_LIMIT` at the *`emit checked
+source`* stage, exactly as at `fd5c5d5`. So the chunking did what it claimed for
+the checker and did not move the emitter ceiling — consistent with the
+stage-attribution reported earlier.
+
+**Loop-body support is unchanged** at this head: `let` inside `while` still
+rejected, `else { }` still requires an assignment branch, and the `utf8_check`
+loop shape is still unsupported.
+
+**Every test module in the repository, run at this head:**
+
+| module | tests | result |
+| --- | --- | --- |
+| `test_a6` / `test_a7` / `test_a8` | 13 / 5 / 5 | OK |
+| `test_a10` / `test_a11` | 9 / 7 | OK |
+| `test_a12` | 23 | OK |
+| `test_a13` | **78** | OK (289 s) |
+| `test_a13_nested_records` | 13 | OK |
+| `test_a14_c23` | 11 | **2 FAIL** (both known) |
+| `test_c23_cli` | 6 | OK |
+| `test_c23_driver_validation` | 10 | OK |
+| `test_c23_real_lexer_classifiers` | 1 | OK |
+| `test_cli` | 47 | OK |
+| `test_textbuf_native` | 22 | **1 FAIL** (known arena CRLF) |
+| `test_moonbit_cli` | 11 | OK |
+
+261 tests, 3 failures, and all three are previously identified: the recursion
+diagnostic wording and the stale `length([1, 2])` exemplar in `test_a14_c23`, plus
+the pre-existing `test_arena_demo_builds_and_runs` CRLF expectation recorded at the
+start of this report.
+
+**No regression from the chunking.** `test_a13` grew from 76 to 78 tests, all
+passing, including the new chunked-path cases. No Defender detections across the
+whole sweep.
+
+This is the first complete fifteen-module baseline at a post-merge head, so future
+pushes can be diffed against it rather than re-litigated.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
