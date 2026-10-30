@@ -11,13 +11,14 @@ type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, sc
 type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
-type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport }
+type CheckerCursor { document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport, validation: TreeValidation }
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
+type TreeValidation { sourceLength: Int, nextNode: Int, nextRoot: Int, valid: Bool, stack: List[ValidationFrame], totalCount: Int }
 type FunctionLookup { found: Bool, function: CheckedFunction }
 type BindingLookup { found: Bool, binding: BindingFact }
 type ReferenceLookup { found: Bool, reference: ResolvedName }
@@ -356,6 +357,47 @@ fn tree_is_valid(nodes: List[FlatAstNode], sourceLength: Int) -> Bool {
     expectedId = expectedId + 1
   }
   return valid
+}
+fn tree_validation_chunk(nodes: List[FlatAstNode], validation: TreeValidation) -> TreeValidation {
+  let chunkEnd = validation.nextNode + 32
+  var nextNode = validation.nextNode
+  var nextRoot = validation.nextRoot
+  var valid = validation.valid
+  var stack = validation.stack
+  for node in nodes {
+    if valid && nextNode <= node.id && node.id + 1 <= chunkEnd {
+      if node.id != nextNode || node.startByte <= -1 || node.endByte <= node.startByte && node.endByte != node.startByte || validation.sourceLength <= node.endByte && node.endByte != validation.sourceLength || node.line <= 0 || node.column <= 0 {
+        valid = false
+      } else {}
+      let frame = ValidationFrame { nodeId: node.id, node: node, roleCounts: [] }
+      if valid && node.parentId == -1 {
+        if node.role != "top_level" || node.childIndex != nextRoot { valid = false } else {}
+        if valid { nextRoot = nextRoot + 1; stack = [frame] } else {}
+      } else {}
+      if valid && node.parentId != -1 {
+        let parent = validation_parent(stack, node.parentId)
+        if !parent.found || node.id <= node.parentId || node.childIndex <= -1 { valid = false } else {}
+        if valid {
+          let fixedIndex = fixed_child_index(parent.parent.node.kind, node.role)
+          if fixedIndex != -1 {
+            if node.childIndex != fixedIndex { valid = false } else {}
+            if valid { stack = prepend(parent.frames, frame) } else {}
+          } else {
+            let expectedChild = role_child_count(parent.parent.roleCounts, node.role)
+            if node.childIndex != expectedChild { valid = false } else {}
+            if valid {
+              let updatedParent = ValidationFrame { nodeId: parent.parent.nodeId, node: parent.parent.node, roleCounts: increment_role_count(parent.parent.roleCounts, node.role) }
+              stack = replace_validation_top(parent.frames, updatedParent)
+              stack = prepend(stack, frame)
+            } else {}
+          }
+        } else {}
+      } else {}
+      if valid { nextNode = nextNode + 1 } else {}
+    } else {}
+  }
+  if valid && validation.totalCount <= chunkEnd && nextNode != validation.totalCount { valid = false } else {}
+  return TreeValidation { sourceLength: validation.sourceLength, nextNode: nextNode, nextRoot: nextRoot, valid: valid, stack: stack, totalCount: validation.totalCount }
 }
 fn declared_return_type(nodes: List[FlatAstNode], functionId: Int) -> Str {
   let declared = child_at(nodes, functionId, "return_type", 0)
@@ -2340,7 +2382,13 @@ fn empty_checker_report(document: Str, revision: Str) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "valid", syntaxNodeCount: 0, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [] }
 }
 fn make_checker_cursor(document: Str, revision: Str, phase: Str, done: Bool, parsed: ParserProgress, nodes: List[FlatAstNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
-  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report }
+  return CheckerCursor { document: document, revision: revision, phase: phase, done: done, parsed: parsed, nodes: nodes, functions: functions, bindingResult: bindingResult, nameResult: nameResult, typedBindings: typedBindings, typeResult: typeResult, typeOffset: typeOffset, holes: holes, report: report, validation: empty_tree_validation() }
+}
+fn empty_tree_validation() -> TreeValidation {
+  return TreeValidation { sourceLength: 0, nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: 0 }
+}
+fn checker_cursor_with_validation(cursor: CheckerCursor, validation: TreeValidation) -> CheckerCursor {
+  return CheckerCursor { document: cursor.document, revision: cursor.revision, phase: cursor.phase, done: cursor.done, parsed: cursor.parsed, nodes: cursor.nodes, functions: cursor.functions, bindingResult: cursor.bindingResult, nameResult: cursor.nameResult, typedBindings: cursor.typedBindings, typeResult: cursor.typeResult, typeOffset: cursor.typeOffset, holes: cursor.holes, report: cursor.report, validation: validation }
 }
 fn checker_start(parsed: ParserProgress) -> CheckerCursor {
   let authority = semantic_snapshot()
@@ -2357,12 +2405,11 @@ fn checker_start(parsed: ParserProgress) -> CheckerCursor {
     let errorNode = FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: parsed.errorStart, endByte: parsed.errorEnd, line: parsed.errorLine, column: parsed.errorColumn }
     return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, code, parsed.message, errorNode))
   } else {}
-  let nodes = sort_nodes(parsed.nodes)
-  if !tree_is_valid(nodes, byte_length(source_bytes())) {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
-  } else {}
+  let nodes = parsed.nodes
   let retainedParser = ParserProgress { document: parsed.document, revision: parsed.revision, status: parsed.status, nodes: [], done: parsed.done, errorCode: parsed.errorCode, message: parsed.message, errorStart: parsed.errorStart, errorEnd: parsed.errorEnd, errorLine: parsed.errorLine, errorColumn: parsed.errorColumn }
-  return make_checker_cursor(authority.document, authority.revision, "functions", false, retainedParser, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
+  let validation = TreeValidation { sourceLength: byte_length(source_bytes()), nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: length(nodes) }
+  let cursor = make_checker_cursor(authority.document, authority.revision, "validation", false, retainedParser, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
+  return checker_cursor_with_validation(cursor, validation)
 }
 fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
   let proposed = startNode + 8
@@ -2371,29 +2418,40 @@ fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
   return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
 }
-// Cursor fields are caller-carried, not authenticated proof of earlier checks. Only the host's cooperative start -> step sequence is meaningful; every step rechecks document/revision authority.
-fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
+// Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser node list and authorised document/revision is meaningful; every step rechecks document/revision authority.
+fn checker_step(cursor: CheckerCursor, inputNodes: List[FlatAstNode]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
+    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
   } else {}
   if cursor.done { return cursor } else {}
+  if cursor.phase == "validation" {
+    let validation = tree_validation_chunk(inputNodes, cursor.validation)
+    if !validation.valid {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], invalid_report(authority.document, authority.revision, validation.totalCount, "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
+    } else {}
+    if validation.nextNode == validation.totalCount {
+      return make_checker_cursor(authority.document, authority.revision, "functions", false, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
+    } else {}
+    let nextCursor = make_checker_cursor(authority.document, authority.revision, "validation", false, cursor.parsed, cursor.nodes, [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
+    return checker_cursor_with_validation(nextCursor, validation)
+  } else {}
   if cursor.phase == "functions" {
-    let functions = collect_functions(cursor.nodes)
+    let functions = collect_functions(inputNodes)
     return checker_replace(cursor, "bindings", false, functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, cursor.report)
   } else {}
   if cursor.phase == "bindings" {
-    if length(cursor.nodes) == 0 {
+    if length(inputNodes) == 0 {
       let empty = BindingCollection { bindings: [], diagnostics: [] }
       return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
-    if !(0 <= cursor.typeOffset) || length(cursor.nodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", empty_node()))
+    if !(0 <= cursor.typeOffset) || length(inputNodes) <= cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", empty_node()))
     } else {}
     let proposed = cursor.typeOffset + 32
-    let chunkEnd = if proposed <= length(cursor.nodes) { proposed } else { length(cursor.nodes) }
-    let chunk = collect_bindings_chunk(cursor.nodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
-    if length(cursor.nodes) <= chunkEnd {
+    let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
+    let chunk = collect_bindings_chunk(inputNodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
+    if length(inputNodes) <= chunkEnd {
       let result = BindingCollection { bindings: reverse(chunk.bindings), diagnostics: reverse(chunk.diagnostics) }
       return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
@@ -2402,9 +2460,9 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
   } else {}
   if cursor.phase == "names" {
     let proposed = cursor.typeOffset + 32
-    let chunkEnd = if proposed <= length(cursor.nodes) { proposed } else { length(cursor.nodes) }
-    let chunk = resolve_names_chunk(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
-    if length(cursor.nodes) <= chunkEnd {
+    let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
+    let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
+    if length(inputNodes) <= chunkEnd {
       let result = NameResolution { references: reverse(chunk.references), diagnostics: reverse(chunk.diagnostics) }
       return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
@@ -2416,10 +2474,10 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
       return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
     if !(0 <= cursor.typeOffset) {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", empty_node()))
     } else {}
     let chunkEnd = if length(cursor.bindingResult.bindings) <= 8 { length(cursor.bindingResult.bindings) } else { 8 }
-    let chunk = infer_binding_types_chunk(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
+    let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
     let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)
     let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics }
     if length(remainingBindings) == 0 {
@@ -2429,17 +2487,17 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
     }
   } else {}
   if cursor.phase == "type_analysis" {
-    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(cursor.nodes)) || length(cursor.nodes) != 0 && length(cursor.nodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", empty_node()))
+    if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(inputNodes)) || length(inputNodes) != 0 && length(inputNodes) <= cursor.typeOffset {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", empty_node()))
     } else {}
-    let chunkEnd = checker_type_chunk_end(cursor.nodes, cursor.typeOffset)
-    let result = type_analysis_chunk(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
+    let chunkEnd = checker_type_chunk_end(inputNodes, cursor.typeOffset)
+    let result = type_analysis_chunk(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
     var reversedFacts = cursor.typeResult.expressionTypes
     for fact in result.expressionTypes { reversedFacts = prepend(reversedFacts, fact) }
     var reversedDiagnostics = cursor.typeResult.diagnostics
     for item in result.diagnostics { reversedDiagnostics = prepend(reversedDiagnostics, item) }
     let unreachable = if cursor.typeResult.unreachable.found { cursor.typeResult.unreachable } else { result.unreachable }
-    if length(cursor.nodes) <= chunkEnd {
+    if length(inputNodes) <= chunkEnd {
       let finalTypeResult = TypeAnalysis { expressionTypes: reverse(reversedFacts), diagnostics: select_type_diagnostics(reverse(reversedDiagnostics)), unreachable: unreachable }
       return checker_replace(cursor, "holes", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypeResult, chunkEnd, cursor.holes, cursor.report)
     } else {
@@ -2448,17 +2506,17 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
     }
   } else {}
   if cursor.phase == "holes" {
-    let holes = hole_facts(cursor.nodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
+    let holes = hole_facts(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
     return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, holes, cursor.report)
   } else {}
   if cursor.phase == "report" {
-    let report = checker_report_from_parts(cursor.document, cursor.revision, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
+    let report = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
     let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
     let emptyNames = NameResolution { references: [], diagnostics: [] }
     let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
     return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   } else {}
-  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
+  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let authority = semantic_snapshot()

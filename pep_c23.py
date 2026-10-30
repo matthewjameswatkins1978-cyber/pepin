@@ -445,6 +445,11 @@ def checker_cursor_value(document, revision, parsed, phase, done=False):
         ("nameResult", empty_names), ("typedBindings", typed_list("BindingFact")),
         ("typeResult", empty_types), ("typeOffset", typed("Int", 0)),
         ("holes", typed_list("HoleFact")), ("report", checker_report(document, revision)),
+        ("validation", typed_record_value("TreeValidation", [
+            ("sourceLength", typed("Int", 0)), ("nextNode", typed("Int", 0)),
+            ("nextRoot", typed("Int", 0)), ("valid", typed("Bool", True)),
+            ("stack", typed_list("ValidationFrame")), ("totalCount", typed("Int", 0)),
+        ])),
     ])
 
 
@@ -467,7 +472,7 @@ def check_target(session, parsed, target, tool_revision):
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        8 + 2 * ((node_count + 31) // 32) + (node_count + 7) // 8 + (binding_count + 7) // 8)
+                        8 + 3 * ((node_count + 31) // 32) + (node_count + 7) // 8 + (binding_count + 7) // 8)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):
@@ -478,7 +483,7 @@ def check_target(session, parsed, target, tool_revision):
             break
         previous_cursor = cursor
         step_started = time.perf_counter_ns()
-        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor], target,
+        cursor = invoke_tool(session, "pep-c23-checker-step", [cursor, typed_list("FlatAstNode", parser_nodes)], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
@@ -563,10 +568,10 @@ def emit(source_bytes, measurements=None):
         empty_expected = [
             ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
             ("pep-c23-checker-start", "checker_start", [empty_parsed],
-             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")),
+             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation")),
             ("pep-c23-checker-step", "checker_step",
-             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")],
-             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "bindings")),
+             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation"), typed_list("FlatAstNode")],
+             checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")),
         ]
         for tool, function, arguments, expected in empty_expected:
             registered = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
