@@ -661,6 +661,37 @@ conditionals whose branch is a `return` rather than only an assignment, (3) brin
 the emitter's step cost down enough that a real function fits. Only after all
 three does `utf8_check` become emittable, with `SourceBytes` lowering as a fourth
 dependency on top.
+
+## Sanitizer check: the emitted C is UB-free, and the one UB-prone case is refused (Agent 3)
+
+Output correctness is already covered by the builder suites. This asks a different
+question: does the generated C rely on undefined behaviour that merely happens to
+work? Every case below was emitted, compiled with
+`-fsanitize=undefined -fno-sanitize-recover=all` (so any UB aborts rather than
+warns), and run.
+
+| program | result under UBSan |
+| --- | --- |
+| `return 42` | clean, prints `42` |
+| `9223372036854775807 + 1` | Pep's own `PEP_RUNTIME_OVERFLOW` trap — no UBSan report |
+| `0 - 9223372036854775807 - 2` | `PEP_RUNTIME_OVERFLOW` — no UBSan report |
+| `9223372036854775807 * 2` | `PEP_RUNTIME_OVERFLOW` — no UBSan report |
+| `1 / 0` | `PEP_RUNTIME_DIVISION_BY_ZERO` — no UBSan report |
+| while-loop accumulation to 385 | clean |
+
+**No sanitizer report fired anywhere.** Checked arithmetic is doing real work
+rather than catching UB after the fact, which is the claim the backend makes and
+now has independent evidence for.
+
+The one case that *is* C-level UB — `INT64_MIN / -1` — is **refused at emit time**
+with "Pep C23 rejects two fallible operands because C operand evaluation order is
+unspecified". That is a good design decision rather than a gap: the single UB-prone
+construct is rejected before lowering instead of being relied upon.
+
+Scope: UBSan only (AddressSanitizer was not exercised), and seven programs is a
+sample rather than a proof. But it is a different axis from everything else
+reported here, and it is the first evidence that the checker's arithmetic contract
+survives into the generated C.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
