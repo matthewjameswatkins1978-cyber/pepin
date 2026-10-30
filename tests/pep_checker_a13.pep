@@ -34,6 +34,28 @@ type PatternValidation { valid: Bool, covers: Bool, code: Str, node: CheckerNode
 fn empty_type_shape() -> PepTypeShape {
   return PepTypeShape { kind: "", name: "", listDepth: 0 }
 }
+fn builtin_record_field_shape(recordName: Str, fieldName: Str) -> PepTypeShape {
+  if recordName != "ProgramInfo" { return empty_type_shape() } else {}
+  if fieldName == "document" || fieldName == "revision" || fieldName == "status" {
+    return PepTypeShape { kind: "builtin", name: "Str", listDepth: 0 }
+  } else {}
+  if fieldName == "roots" {
+    return PepTypeShape { kind: "builtin", name: "Int", listDepth: 1 }
+  } else {}
+  if fieldName == "functions" {
+    return PepTypeShape { kind: "nominal", name: "FunctionInfo", listDepth: 1 }
+  } else {}
+  if fieldName == "calls" {
+    return PepTypeShape { kind: "nominal", name: "CallEdge", listDepth: 1 }
+  } else {}
+  if fieldName == "diagnostics" {
+    return PepTypeShape { kind: "nominal", name: "SemanticDiagnostic", listDepth: 1 }
+  } else {}
+  return empty_type_shape()
+}
+fn builtin_record_type(typeName: Str) -> Bool {
+  return typeName == "ProgramInfo"
+}
 fn contains_nominal_type(typeNames: List[Str], typeName: Str) -> Bool {
   for name in typeNames { if name == typeName { return true } else {} }
   return false
@@ -50,6 +72,9 @@ fn resolved_named_shape(typeNames: List[Str], typeName: Str, listDepth: Int) -> 
 fn known_type_shape(nodes: List[CheckerNode], typeName: Str) -> PepTypeShape {
   if typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit" || typeName == "SourceBytes" {
     return PepTypeShape { kind: "builtin", name: typeName, listDepth: 0 }
+  } else {}
+  if builtin_record_type(typeName) || typeName == "FunctionInfo" || typeName == "CallEdge" || typeName == "SemanticDiagnostic" {
+    return PepTypeShape { kind: "nominal", name: typeName, listDepth: 0 }
   } else {}
   if record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found {
     return PepTypeShape { kind: "nominal", name: typeName, listDepth: 0 }
@@ -73,7 +98,7 @@ fn type_shape_at(nodes: List[CheckerNode], id: Int) -> PepTypeShape {
   var nextId = id
   var depth = 0
   for node in nodes {
-    if !active && node.id == id { active = true } else {}
+    if !active && node.id == id { active = true } else { if !active && id + 1 <= node.id { return empty_type_shape() } else {} }
     if active && node.id == nextId {
       if node.kind == "type_list" { depth = depth + 1; nextId = node.id + 1 } else {}
       if node.kind == "type_scalar" { return PepTypeShape { kind: "builtin", name: node.text, listDepth: depth } } else {}
@@ -191,7 +216,7 @@ fn sort_nodes(nodes: List[CheckerNode]) -> List[CheckerNode] {
   return quick_sort_nodes(nodes)
 }
 fn known_builtin(name: Str) -> Bool {
-  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains" || name == "str_contains"
+  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains" || name == "str_contains" || name == "semantic_snapshot"
 }
 fn is_constructor(nodes: List[CheckerNode], name: Str) -> Bool {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return true } else {} }
@@ -252,27 +277,24 @@ fn variant_payload_shape(nodes: List[CheckerNode], variantName: Str, index: Int)
   let payload = child_at(nodes, variant.node.id, "field_type", index)
   if payload.found { return type_shape_at(nodes, payload.node.id) } else { return empty_type_shape() }
 }
-fn record_field_type(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> Str {
-  let record = record_declaration(nodes, recordName)
-  if !record.found { return "" } else {}
+fn record_field_shape_at(nodes: List[CheckerNode], recordId: Int, fieldName: Str) -> PepTypeShape {
   for field in nodes {
-    if field.parentId == record.node.id && field.kind == "field_declaration" && field.text == fieldName {
-      let fieldType = child_at(nodes, field.id, "type", 0)
-      if fieldType.found { return type_name_at(nodes, fieldType.node.id) } else { return "" }
-    } else {}
-  }
-  return ""
-}
-fn record_field_shape(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> PepTypeShape {
-  let record = record_declaration(nodes, recordName)
-  if !record.found { return empty_type_shape() } else {}
-  for field in nodes {
-    if field.parentId == record.node.id && field.kind == "field_declaration" && field.text == fieldName {
-      let fieldType = child_at(nodes, field.id, "type", 0)
+    if field.parentId == recordId && field.kind == "field_declaration" && field.text == fieldName {
+      let fieldType = first_child_at(nodes, field.id, "type")
       if fieldType.found { return type_shape_at(nodes, fieldType.node.id) } else { return empty_type_shape() }
     } else {}
   }
   return empty_type_shape()
+}
+fn record_field_type(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> Str {
+  return legacy_type_name(record_field_shape(nodes, recordName, fieldName))
+}
+fn record_field_shape(nodes: List[CheckerNode], recordName: Str, fieldName: Str) -> PepTypeShape {
+  let builtinShape = builtin_record_field_shape(recordName, fieldName)
+  if builtinShape.kind != "" { return builtinShape } else {}
+  let record = record_declaration(nodes, recordName)
+  if !record.found { return empty_type_shape() } else {}
+  return record_field_shape_at(nodes, record.node.id, fieldName)
 }
 fn find_function_by_syntax(functions: List[CheckedFunction], syntaxId: Int) -> FunctionLookup {
   for function in functions { if function.syntaxId == syntaxId { return FunctionLookup { found: true, function: function } } else {} }
@@ -734,6 +756,7 @@ fn infer_expression_type(nodes: List[CheckerNode], id: Int, functions: List[Chec
   if node.kind == "call" {
     let target = find_function(functions, node.text)
     if target.found { return target.function.returnType } else {}
+    if node.text == "semantic_snapshot" { return "ProgramInfo" } else {}
     if node.text == "source_bytes" { return "SourceBytes" } else {}
     if node.text == "int_text" || node.text == "utf8_slice" { return "Str" } else {}
     if node.text == "say" { return "Unit" } else {}
@@ -865,6 +888,7 @@ fn expression_type_shape(nodes: List[CheckerNode], id: Int, functions: List[Chec
       let collection = child_at(nodes, found.node.id, "argument", 0)
       if collection.found { return expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { return empty_type_shape() }
     } else {}
+    if found.node.text == "semantic_snapshot" { return PepTypeShape { kind: "nominal", name: "ProgramInfo", listDepth: 0 } } else {}
     if found.node.text == "length" || found.node.text == "byte_length" || found.node.text == "byte_at" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
     if found.node.text == "contains" || found.node.text == "str_contains" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
     let inferredName = infer_expression_type(nodes, id, functions, bindings, references)
@@ -873,7 +897,11 @@ fn expression_type_shape(nodes: List[CheckerNode], id: Int, functions: List[Chec
   if found.node.kind == "field_access" {
     let value = child_at(nodes, found.node.id, "value", 0)
     if !value.found { return empty_type_shape() } else {}
-    let record = record_declaration(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references))
+    let receiverType = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+    if builtin_record_type(receiverType) {
+      return builtin_record_field_shape(receiverType, found.node.text)
+    } else {}
+    let record = record_declaration(nodes, receiverType)
     if !record.found { return empty_type_shape() } else {}
     for field in nodes {
       if field.parentId == record.node.id && field.kind == "field_declaration" && field.text == found.node.text {
@@ -883,6 +911,15 @@ fn expression_type_shape(nodes: List[CheckerNode], id: Int, functions: List[Chec
     }
   } else {}
   if found.node.kind == "list" {
+    let firstElement = first_child_at(nodes, found.node.id, "element")
+    if firstElement.found && firstElement.node.kind != "hole" {
+      let elementShape = expression_type_shape(nodes, firstElement.node.id, functions, bindings, references)
+      if elementShape.kind != "" { return with_one_more_list(elementShape) } else {}
+    } else {}
+    if !firstElement.found {
+      let expectedShape = contextual_expected_shape(nodes, found.node, functions, bindings, references)
+      if expectedShape.listDepth != 0 { return expectedShape } else {}
+    } else {}
     var elementShape = empty_type_shape()
     for element in nodes {
       if element.parentId == found.node.id && element.role == "element" && element.kind != "hole" && elementShape.kind == "" {
@@ -938,6 +975,7 @@ fn list_type_name(elementType: Str) -> Str {
   if elementType == "List[Str]" { return "List[List[Str]]" } else {}
   if elementType == "List[Unit]" { return "List[List[Unit]]" } else {}
   if elementType == "List[SourceBytes]" { return "List[List[SourceBytes]]" } else {}
+
   return ""
 }
 fn legacy_type_name(shape: PepTypeShape) -> Str {
@@ -1020,6 +1058,49 @@ fn contextual_expected_type(nodes: List[CheckerNode], node: CheckerNode, functio
     return list_element_type(expectedList)
   } else {}
   return ""
+}
+fn contextual_expected_shape(nodes: List[CheckerNode], node: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
+  let parent = lookup_node(nodes, node.parentId)
+  if !parent.found { return empty_type_shape() } else {}
+  if parent.node.kind == "record_field" && node.role == "value" {
+    let record = lookup_node(nodes, parent.node.parentId)
+    if record.found && record.node.kind == "record" {
+      return record_field_shape(nodes, record.node.text, parent.node.text)
+    } else { return empty_type_shape() }
+  } else {}
+  if (parent.node.kind == "let" || parent.node.kind == "var") && node.role == "value" {
+    let annotation = child_at(nodes, parent.node.id, "annotation", 0)
+    if annotation.found { return type_shape_at(nodes, annotation.node.id) } else { return empty_type_shape() }
+  } else {}
+  if parent.node.kind == "return" && node.role == "value" {
+    let owner = owner_function(nodes, node, functions)
+    if owner.found { return owner.function.returnShape } else { return empty_type_shape() }
+  } else {}
+  if parent.node.kind == "call" && node.role == "argument" {
+    let target = find_function(functions, parent.node.text)
+    if target.found { return function_parameter_shape(nodes, target.function.syntaxId, node.childIndex) } else {}
+    if is_constructor(nodes, parent.node.text) { return variant_payload_shape(nodes, parent.node.text, node.childIndex) } else {}
+    if (parent.node.text == "append" || parent.node.text == "prepend") && node.childIndex == 1 {
+      let collection = child_at(nodes, parent.node.id, "argument", 0)
+      if collection.found { return expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { return empty_type_shape() }
+    } else {}
+  } else {}
+  if parent.node.kind == "list" && node.role == "element" {
+    let listShape = contextual_expected_shape(nodes, parent.node, functions, bindings, references)
+    return without_one_list(listShape)
+  } else {}
+  if (parent.node.kind == "if_expression" || parent.node.kind == "match_arm") && node.role != "condition" && node.role != "pattern" {
+    let enclosing = contextual_expected_shape(nodes, parent.node, functions, bindings, references)
+    if enclosing.kind != "" { return enclosing } else {}
+  } else {}
+  if parent.node.kind == "assignment" && node.role == "value" {
+    let target = find_reference(references, parent.node.id)
+    if target.found {
+      let binding = find_binding(bindings, target.reference.bindingId)
+      if binding.found { return binding.binding.typeShape } else { return empty_type_shape() }
+    } else { return empty_type_shape() }
+  } else {}
+  return empty_type_shape()
 }
 fn pattern_binding_type(nodes: List[CheckerNode], pattern: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, pattern.parentId)
@@ -1260,6 +1341,7 @@ fn is_first_duplicate_type_declaration(nodes: List[CheckerNode], name: Str, node
 fn is_first_duplicate_occurrence(nodes: List[CheckerNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
+    if node.id == nodeId { return earlierMatches == 1 } else {}
     if node.parentId == parentId && node.kind == kind && node.text == name && node.id + 1 <= nodeId {
       earlierMatches = earlierMatches + 1
     } else {}
@@ -1646,7 +1728,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
           if known_builtin(node.text) && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
           if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
-          if node.kind == "list" && checker_count_children(nodes, node.id, "element") == 0 {
+          if node.kind == "list" && checker_count_children(nodes, node.id, "element") == 0 && shape.kind == "" {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node))
           } else {
             if node.kind != "name" && node.kind != "if_expression" && node.kind != "field_access" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
@@ -1672,20 +1754,18 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 duplicateFound = true
                 duplicateNode = field
               } else {}
-              if !unknownFieldFound {
-                let knownFieldType = record_field_type(nodes, node.text, field.text)
-                let knownFieldShape = record_field_shape(nodes, node.text, field.text)
-                if knownFieldType == "" && knownFieldShape.kind == "" {
-                  unknownFieldFound = true
-                  unknownFieldNode = field
-                } else {}
+              let expectedShape = record_field_shape_at(nodes, declaration.node.id, field.text)
+              let expected = legacy_type_name(expectedShape)
+              if !unknownFieldFound && expected == "" && expectedShape.kind == "" {
+                unknownFieldFound = true
+                unknownFieldNode = field
               } else {}
               if !fieldDiagnosticFound {
-                let expected = record_field_type(nodes, node.text, field.text)
-                let expectedShape = record_field_shape(nodes, node.text, field.text)
                 let value = child_at(nodes, field.id, "value", 0)
-                let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
                 let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
+                let actual = if actualShape.kind != "" { legacy_type_name(actualShape) } else {
+                  if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+                }
                 let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
                 if expected == "" && expectedShape.kind == "" {
                   fieldDiagnosticFound = true
@@ -1769,14 +1849,15 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         let value = child_at(nodes, node.id, "value", 0)
         let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
         let receiverRecord = record_declaration(nodes, receiverType)
+        let receiverIsRecord = receiverRecord.found || builtin_record_type(receiverType)
         let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
-        let receiverUnknownField = value.found && receiverRecord.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
-        let receiverMayHaveFieldError = receiverType != "" && !receiverRecord.found || receiverUnknownField
+        let receiverUnknownField = value.found && receiverIsRecord && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
+        let receiverMayHaveFieldError = receiverType != "" && !receiverIsRecord || receiverUnknownField
         let receiverIfMismatch = value.found && value.node.kind == "if_expression" && receiverMayHaveFieldError && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
         if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
         } else {
-          if value.found && receiverType != "" && !receiverRecord.found && !receiverIfMismatch {
+          if value.found && receiverType != "" && !receiverIsRecord && !receiverIfMismatch {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_NON_RECORD", "Field selection requires a record value", node))
           } else {
             if receiverUnknownField && !receiverIfMismatch {
@@ -1855,12 +1936,13 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
           let value = child_at(nodes, subject.node.id, "value", 0)
           let valueType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
           let record = record_declaration(nodes, valueType)
+          let receiverIsRecord = record.found || builtin_record_type(valueType)
           let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
           let receiverIfFailure = value.found && value.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
           let receiverUntyped = value.found && (value.node.kind == "hole" || receiverIfUntyped)
-          let receiverNonRecord = valueType != "" && !record.found
+          let receiverNonRecord = valueType != "" && !receiverIsRecord
           let receiverHasPrimaryFailure = receiverIfFailure || receiverUntyped || receiverNonRecord
-          let fieldUnknown = record.found && record_field_type(nodes, valueType, subject.node.text) == ""
+          let fieldUnknown = receiverIsRecord && record_field_shape(nodes, valueType, subject.node.text).kind == ""
           if receiverHasPrimaryFailure || fieldUnknown { subjectHasPrimaryError = true } else {}
         } else {}
         if !union.found && matchArmCount != 0 {
@@ -2382,7 +2464,7 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNo
             if checker_count_children(nodes, node.id, "argument") == target.function.arity {
               reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
             } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
-          } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
+          } else { if known_builtin(node.text) || is_constructor(nodes, node.text) { } else {
             reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
           } }
         } else {}
@@ -2408,7 +2490,7 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNo
           if checker_count_children(nodes, node.id, "argument") == target.function.arity {
             reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
           } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
-        } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
+        } else { if known_builtin(node.text) || is_constructor(nodes, node.text) { } else {
           reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
         } }
       } else {}
@@ -2508,7 +2590,7 @@ fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   return checker_cursor_with_validation(cursor, validation)
 }
 fn checker_type_chunk_end(totalCount: Int, startNode: Int) -> Int {
-  let proposed = startNode + 8
+  let proposed = startNode + 1
   return if proposed <= totalCount { proposed } else { totalCount }
 }
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
@@ -2521,7 +2603,7 @@ fn checker_report_with_syntax_node_count(report: CheckerReport, count: Int) -> C
 fn checker_report_with_diagnostics(report: CheckerReport, diagnostics: List[CheckDiagnostic]) -> CheckerReport {
   return CheckerReport { document: report.document, revision: report.revision, status: report.status, syntaxNodeCount: report.syntaxNodeCount, functions: report.functions, bindings: report.bindings, references: report.references, calls: report.calls, expressionTypes: report.expressionTypes, holes: report.holes, diagnostics: diagnostics }
 }
-// Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive the full ordered node list. Every step rechecks document/revision authority.
+// Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive scoped context. In the names phase each response contains only the current chunk's reversed name-resolution delta; the host accumulates deltas and restores source order once before binding_types. Every step rechecks document/revision authority.
 fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTypedBindings: List[BindingFact]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
@@ -2598,7 +2680,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     if !(0 <= cursor.typeOffset) || !(cursor.typeOffset + 1 <= totalCount) {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name cursor offset is invalid", checker_empty_node()))
     } else {}
-    let proposed = cursor.typeOffset + 16
+    let proposed = cursor.typeOffset + 2
     let chunkEnd = if proposed <= totalCount { proposed } else { totalCount }
     var rangeCount = 0
     for node in inputNodes {
@@ -2607,10 +2689,10 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     if rangeCount != chunkEnd - cursor.typeOffset {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name chunk is missing requested source nodes", checker_empty_node()))
     } else {}
-    let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, cursor.nameResult)
+    let emptyNameResult = NameResolution { references: [], diagnostics: [] }
+    let chunk = resolve_names_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.typeOffset, chunkEnd, emptyNameResult)
     if totalCount <= chunkEnd {
-      let result = NameResolution { references: reverse(chunk.references), diagnostics: reverse(chunk.diagnostics) }
-      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, result, externalTypedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+      return checker_replace(cursor, "binding_types", false, cursor.functions, cursor.bindingResult, chunk, externalTypedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
       return checker_replace(cursor, "names", false, cursor.functions, cursor.bindingResult, chunk, externalTypedBindings, cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
     }

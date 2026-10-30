@@ -9,10 +9,14 @@ import unittest
 from tests.test_a11 import JsonLineClient, revision, typed, typed_list, typed_record
 from pep_c23 import (checker_binding_context_nodes, checker_binding_type_context_nodes,
                       checker_node_context_index, checker_node_value, checker_scope_context_nodes,
-                      checker_type_context_nodes, checker_hole_context_nodes,
+                      checker_type_context_nodes, checker_active_subtree_ids,
+                      checker_bindings_for_references, checker_binding_type_names,
+                      checker_hole_context_nodes,
                       checker_duplicate_context_nodes, checker_report_context_nodes,
                       checker_report_diagnostic_codes, checker_complete_report,
                       checker_cursor_without_typed_bindings,
+                      checker_name_result, checker_empty_type_result,
+                      checker_type_result, checker_cursor_with_results,
                       parser_cursor_value, parser_chunk_value)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -327,6 +331,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         value = cursor["result"]
         external_typed_bindings = typed_list("BindingFact", [])
+        external_name_references = []
+        external_name_diagnostics = []
         report_source_fields = None
         node_count = len(parser_nodes)
         binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
@@ -335,7 +341,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             for node in fields(parsed)["nodes"]["value"]
         )
         maximum_steps = min(4096, 9 + 2 * ((node_count + 31) // 32) +
-                            2 * ((node_count + 15) // 16) + ((node_count + 7) // 8) + ((node_count + 3) // 4) +
+                            ((node_count + 15) // 16) + ((node_count + 7) // 8) +
+                            node_count + ((node_count + 1) // 2) +
                             (binding_count + 3) // 4)
         for _ in range(maximum_steps):
             current = fields(value)
@@ -343,6 +350,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 break
             previous = value
             step_nodes = checker_nodes
+            step_bindings = external_typed_bindings
             if scalar(current["phase"]) == "validation":
                 next_node = scalar(fields(current["validation"])["nextNode"])
                 step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
@@ -364,8 +372,31 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
             elif scalar(current["phase"]) == "type_analysis":
                 offset = scalar(current["typeOffset"])
+                end_node = min(offset + 1, node_count)
                 step_nodes = checker_type_context_nodes(
-                    checker_context_index, offset, min(offset + 8, node_count))
+                    checker_context_index, offset, end_node)
+                active_ids = {
+                    scalar(fields(node)["id"]) for node in step_nodes
+                }
+                context_references = [
+                    reference for reference in external_name_references
+                    if scalar(fields(reference)["syntaxId"]) in active_ids
+                ]
+                step_bindings = checker_bindings_for_references(
+                    external_typed_bindings, context_references)
+                extra_type_names = checker_binding_type_names(step_bindings)
+                if extra_type_names:
+                    step_nodes = checker_type_context_nodes(
+                        checker_context_index, offset, end_node, extra_type_names)
+                    active_ids = {
+                        scalar(fields(node)["id"]) for node in step_nodes
+                    }
+                    context_references = [
+                        reference for reference in external_name_references
+                        if scalar(fields(reference)["syntaxId"]) in active_ids
+                    ]
+                    step_bindings = checker_bindings_for_references(
+                        external_typed_bindings, context_references)
             elif scalar(current["phase"]) == "holes":
                 step_nodes = checker_hole_context_nodes(checker_context_index)
             elif scalar(current["phase"]) == "duplicate_functions":
@@ -375,7 +406,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     checker_context_index, checker_report_diagnostic_codes(current))
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                         "op": "tool_invoke", "tool": "pep-a13-checker-step",
-                                        "arguments": [value, typed_list("CheckerNode", step_nodes), external_typed_bindings],
+                                        "arguments": [value, typed_list("CheckerNode", step_nodes), step_bindings],
                                         "semanticTarget": target})
             self.assertEqual(stepped.get("outcome"), "ok", {
                 "phase": scalar(current["phase"]),
@@ -386,6 +417,18 @@ class A13FunctionResolutionTests(unittest.TestCase):
             if scalar(current["phase"]) == "report":
                 report_source_fields = current
             value = stepped["result"]
+            if scalar(current["phase"]) == "names":
+                name_fields = fields(value)["nameResult"]
+                external_name_references.extend(
+                    reversed(name_fields["fields"][0]["value"]["value"]))
+                external_name_diagnostics.extend(
+                    reversed(name_fields["fields"][1]["value"]["value"]))
+                next_phase = scalar(fields(value)["phase"])
+                name_result = checker_name_result(
+                    external_name_references if next_phase != "names" else (),
+                    external_name_diagnostics if next_phase != "names" else ())
+                value = checker_cursor_with_results(
+                    value, name_result, fields(value)["typeResult"])
             if scalar(current["phase"]) == "binding_types":
                 delta = fields(value)["typedBindings"]["value"]
                 external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
@@ -555,9 +598,22 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         cursor_value = cursor["result"]
         external_typed_bindings = typed_list("BindingFact", [])
+        external_name_references = []
+        external_name_diagnostics = []
         step_count = 0
         type_analysis_steps = 0
-        while not scalar(fields(cursor_value)["done"]) and step_count < 40:
+        node_count = len(parser_nodes)
+        binding_count = sum(
+            scalar(fields(node)["kind"]) in {"parameter", "let", "var", "for_in", "binding_pattern"}
+            for node in parser_nodes
+        )
+        maximum_steps = min(
+            4096,
+            9 + 2 * ((node_count + 31) // 32) +
+            ((node_count + 15) // 16) + ((node_count + 7) // 8) +
+            node_count + ((node_count + 1) // 2) + (binding_count + 3) // 4
+        )
+        while not scalar(fields(cursor_value)["done"]) and step_count < maximum_steps:
             previous = fields(cursor_value)
             phase = scalar(previous["phase"])
             step_nodes = checker_nodes
@@ -575,6 +631,18 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(stepped.get("outcome"), "ok", stepped)
             self.assertEqual(stepped.get("revision"), self.tool_revision)
             cursor_value = stepped["result"]
+            if phase == "names":
+                name_fields = fields(cursor_value)["nameResult"]
+                external_name_references.extend(
+                    reversed(name_fields["fields"][0]["value"]["value"]))
+                external_name_diagnostics.extend(
+                    reversed(name_fields["fields"][1]["value"]["value"]))
+                next_phase = scalar(fields(cursor_value)["phase"])
+                name_result = checker_name_result(
+                    external_name_references if next_phase != "names" else (),
+                    external_name_diagnostics if next_phase != "names" else ())
+                cursor_value = checker_cursor_with_results(
+                    cursor_value, name_result, fields(cursor_value)["typeResult"])
             if phase == "binding_types":
                 delta = fields(cursor_value)["typedBindings"]["value"]
                 external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
@@ -1380,6 +1448,56 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", report)
             codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
             self.assertIn(expected_code, codes)
+
+    def test_empty_list_uses_nominal_record_field_context_matches_ocaml(self):
+        source = (
+            "type Item { value: Int }" + NL +
+            "type Bag { items: List[Item] }" + NL +
+            "fn main() -> Int { let bag = Bag { items: [] }; return 0 }"
+        )
+        reference = self._reference_check("empty-nominal-record-list", source)
+        _, report = self._analyze(source)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(report["diagnostics"]["value"], [], report)
+        empty_offset = source.encode("utf-8").index(b"[]")
+        empty_list = next(
+            fields(item) for item in report["expressionTypes"]["value"]
+            if scalar(fields(item)["startByte"]) == empty_offset
+        )
+        shape = fields(empty_list["typeShape"])
+        self.assertEqual(scalar(shape["kind"]), "nominal")
+        self.assertEqual(scalar(shape["name"]), "Item")
+        self.assertEqual(scalar(shape["listDepth"]), 1)
+
+    def test_nominal_call_result_field_access_matches_ocaml(self):
+        source = (
+            "type Utf8Check { width: Int, invalidOffset: Int }" + NL +
+            "fn utf8_check() -> Utf8Check { return Utf8Check { width: 1, invalidOffset: -1 } }" + NL +
+            "fn sample() -> Int { let check = utf8_check(); return check.invalidOffset }"
+        )
+        reference = self._reference_check("nominal-call-field-access", source)
+        _, report = self._analyze_staged(source)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(report["diagnostics"]["value"], [], report)
+
+    def test_semantic_snapshot_program_info_matches_ocaml(self):
+        source = "fn main() -> Str { let info = semantic_snapshot(); return info.document }"
+        reference = self._reference_check("semantic-snapshot-program-info", source)
+        _, report = self._analyze(source)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(report["diagnostics"]["value"], [], report)
+        expression_types = {
+            scalar(fields(item)["typeName"])
+            for item in report["expressionTypes"]["value"]
+        }
+        self.assertIn("ProgramInfo", expression_types, report)
+        self.assertIn("Str", expression_types, report)
 
     def test_str_contains_checker_contract_matches_ocaml(self):
         cases = [

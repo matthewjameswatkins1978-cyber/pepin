@@ -104,10 +104,17 @@ def typed_record_value(type_name, fields):
     ]}
 
 
-def checker_complete_report(summary, source_cursor_fields, typed_bindings):
+def checker_complete_report(summary, source_cursor_fields, typed_bindings,
+                            name_references=None, expression_types=None):
     summary_fields = typed_fields(summary, "CheckerReport", "checker report summary")
     names = typed_fields(source_cursor_fields.get("nameResult"), "NameResolution", "checker name result")
     types = typed_fields(source_cursor_fields.get("typeResult"), "TypeAnalysis", "checker type result")
+    if name_references is None:
+        name_references = typed_field_value(
+            names, "references", "List[ResolvedName]", "checker name result")
+    if expression_types is None:
+        expression_types = typed_field_value(
+            types, "expressionTypes", "List[ExpressionTypeFact]", "checker type result")
     return typed_record_value("CheckerReport", [
         ("document", summary_fields["document"]),
         ("revision", summary_fields["revision"]),
@@ -115,9 +122,9 @@ def checker_complete_report(summary, source_cursor_fields, typed_bindings):
         ("syntaxNodeCount", summary_fields["syntaxNodeCount"]),
         ("functions", source_cursor_fields["functions"]),
         ("bindings", typed_bindings),
-        ("references", names["references"]),
+        ("references", typed_list("ResolvedName", name_references)),
         ("calls", summary_fields["calls"]),
-        ("expressionTypes", types["expressionTypes"]),
+        ("expressionTypes", typed_list("ExpressionTypeFact", expression_types)),
         ("holes", source_cursor_fields["holes"]),
         ("diagnostics", summary_fields["diagnostics"]),
     ])
@@ -144,6 +151,57 @@ def checker_cursor_without_typed_bindings(cursor):
     typed_fields(cursor, "CheckerCursor", "checker cursor")
     return typed_record_value("CheckerCursor", [
         (item["name"], typed_list("BindingFact") if item["name"] == "typedBindings" else item["value"])
+        for item in cursor["fields"]
+    ])
+
+
+def checker_name_result(references=(), diagnostics=()):
+    return typed_record_value("NameResolution", [
+        ("references", typed_list("ResolvedName", list(references))),
+        ("diagnostics", typed_list("CheckDiagnostic", list(diagnostics))),
+    ])
+
+
+def checker_cursor_with_name_result(cursor, name_result):
+    typed_fields(cursor, "CheckerCursor", "checker cursor")
+    return typed_record_value("CheckerCursor", [
+        (item["name"], name_result if item["name"] == "nameResult" else item["value"])
+        for item in cursor["fields"]
+    ])
+
+
+def checker_empty_type_result():
+    empty_node = typed_record_value("CheckerNode", [
+        ("id", typed("Int", -1)), ("parentId", typed("Int", -1)),
+        ("childIndex", typed("Int", -1)), ("role", typed("Str", "")),
+        ("kind", typed("Str", "")), ("text", typed("Str", "")),
+        ("startByte", typed("Int", 0)), ("endByte", typed("Int", 0)),
+    ])
+    unreachable = typed_record_value("UnreachableLookup", [
+        ("found", typed("Bool", False)), ("node", empty_node),
+    ])
+    return typed_record_value("TypeAnalysis", [
+        ("expressionTypes", typed_list("ExpressionTypeFact")),
+        ("diagnostics", typed_list("CheckDiagnostic")),
+        ("unreachable", unreachable),
+    ])
+
+
+def checker_type_result(expression_types=(), diagnostics=(), unreachable=None):
+    if unreachable is None:
+        unreachable = checker_empty_type_result()["fields"][2]["value"]
+    return typed_record_value("TypeAnalysis", [
+        ("expressionTypes", typed_list("ExpressionTypeFact", list(expression_types))),
+        ("diagnostics", typed_list("CheckDiagnostic", list(diagnostics))),
+        ("unreachable", unreachable),
+    ])
+
+
+def checker_cursor_with_results(cursor, name_result, type_result):
+    typed_fields(cursor, "CheckerCursor", "checker cursor")
+    return typed_record_value("CheckerCursor", [
+        (item["name"], name_result if item["name"] == "nameResult" else
+         type_result if item["name"] == "typeResult" else item["value"])
         for item in cursor["fields"]
     ])
 
@@ -189,7 +247,7 @@ def checker_node_context_index(checker_nodes):
     return values, metadata, children
 
 
-def checker_type_context_nodes(index, start_node, end_node):
+def checker_type_context_nodes(index, start_node, end_node, extra_type_names=()):
     values, metadata, children = index
     included = set(range(start_node, end_node))
 
@@ -213,17 +271,191 @@ def checker_type_context_nodes(index, start_node, end_node):
             pending.extend(child_id for child_id in children.get(node_id, ())
                            if child_id not in included)
 
+    def include_contextual_siblings(node_id):
+        current = node_id
+        while current in metadata:
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0 or parent_id not in metadata:
+                break
+            parent = metadata[parent_id]
+            if parent["kind"] in ("let", "var"):
+                for sibling_id in children.get(parent_id, ()):
+                    sibling = metadata[sibling_id]
+                    if sibling["role"] == "annotation":
+                        include_subtree(sibling_id)
+            current = parent_id
+
+    def include_return_flow(node_id):
+        included.add(node_id)
+        kind = metadata[node_id]["kind"]
+        for child_id in children.get(node_id, ()):
+            child = metadata[child_id]
+            if kind == "block" and child["role"] == "statement":
+                include_return_flow(child_id)
+            elif kind == "if_statement" and child["role"] in ("then", "else"):
+                include_return_flow(child_id)
+            elif kind == "if_statement" and child["role"] == "condition":
+                include_subtree(child_id)
+
+    def include_function_context(function_id):
+        included.add(function_id)
+        for child_id in children.get(function_id, ()):
+            child = metadata[child_id]
+            if child["kind"] == "parameter":
+                include_subtree(child_id)
+            elif child["role"] == "return_type":
+                include_subtree(child_id)
+            elif child["role"] == "statement":
+                include_return_flow(child_id)
+
     for node_id in range(start_node, end_node):
         if node_id not in metadata:
             raise RuntimeError("checker type slice is missing a validated node id")
         include_ancestors(node_id)
-        include_subtree(node_id)
-
-    for node_id, node in metadata.items():
-        if node["parent"] == -1 and node["kind"] in ("record_declaration", "union_declaration"):
+        include_contextual_siblings(node_id)
+        kind = metadata[node_id]["kind"]
+        if kind == "function":
+            include_function_context(node_id)
+        elif kind == "while":
+            included.add(node_id)
+            for child_id in children.get(node_id, ()):
+                if metadata[child_id]["role"] == "condition":
+                    include_subtree(child_id)
+        elif kind in ("block", "if_statement"):
+            parent_id = metadata[node_id]["parent"]
+            if parent_id in children:
+                included.update(children[parent_id])
+            include_return_flow(node_id)
+        else:
             include_subtree(node_id)
 
+    def node_text(node_id):
+        return typed_field_value(
+            typed_fields(values[node_id], "CheckerNode", "checker type context"),
+            "text", "Str", "checker type context")
+
+    requested_names = {node_text(node_id) for node_id in included if node_text(node_id)}
+    requested_names.update(name for name in extra_type_names if name)
+    type_declarations = [
+        node_id for node_id, node in metadata.items()
+        if node["parent"] == -1 and
+        node["kind"] in ("record_declaration", "union_declaration")
+    ]
+    function_declarations = [
+        node_id for node_id, node in metadata.items()
+        if node["parent"] == -1 and node["kind"] == "function"
+    ]
+    added_declarations = set()
+    added_functions = set()
+    changed = True
+    while changed:
+        changed = False
+        before_names = len(requested_names)
+        for function_id in function_declarations:
+            if function_id in added_functions or node_text(function_id) not in requested_names:
+                continue
+            added_functions.add(function_id)
+            before = len(included)
+            included.add(function_id)
+            for child_id in children.get(function_id, ()):
+                child = metadata[child_id]
+                if child["kind"] == "parameter" or child["role"] == "return_type":
+                    include_subtree(child_id)
+            changed = changed or len(included) != before
+        for declaration_id in type_declarations:
+            if declaration_id in added_declarations:
+                continue
+            declaration_names = {node_text(declaration_id)}
+            pending = list(children.get(declaration_id, ()))
+            while pending:
+                child_id = pending.pop()
+                if metadata[child_id]["kind"] == "variant_declaration":
+                    declaration_names.add(node_text(child_id))
+                pending.extend(children.get(child_id, ()))
+            if declaration_names.isdisjoint(requested_names):
+                continue
+            added_declarations.add(declaration_id)
+            before = len(included)
+            include_subtree(declaration_id)
+            changed = changed or len(included) != before
+        requested_names.update(
+            node_text(node_id) for node_id in included
+            if metadata[node_id]["kind"] == "type_named" and node_text(node_id))
+        changed = changed or len(requested_names) != before_names
+
     return [values[node_id] for node_id in sorted(included)]
+
+
+def checker_active_subtree_ids(index, checker_nodes, start_node, end_node):
+    _, metadata, _ = index
+    result = set()
+    for value in checker_nodes:
+        node_id = int(typed_field_value(
+            typed_fields(value, "CheckerNode", "checker type context"),
+            "id", "Int", "checker type context"))
+        current = node_id
+        while current in metadata:
+            if start_node <= current < end_node:
+                result.add(node_id)
+                break
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0:
+                break
+            current = parent_id
+    return result
+
+
+def checker_bindings_for_references(bindings, references):
+    referenced_ids = {
+        int(typed_field_value(typed_fields(reference, "ResolvedName", "checker name context"),
+                              "bindingId", "Int", "checker name context"))
+        for reference in references
+    }
+    return typed_list("BindingFact", [
+        binding for binding in bindings.get("value", ())
+        if int(typed_field_value(typed_fields(binding, "BindingFact", "checker binding context"),
+                                 "semanticId", "Int", "checker binding context"))
+        in referenced_ids
+    ])
+
+
+def checker_binding_type_names(bindings):
+    names = set()
+    for binding in bindings.get("value", ()):
+        fields = typed_fields(binding, "BindingFact", "checker binding type context")
+        type_name = typed_field_value(fields, "typeName", "Str", "checker binding type context")
+        if type_name:
+            names.add(type_name)
+        shape = fields.get("typeShape")
+        if shape is not None:
+            shape_fields = typed_fields(shape, "PepTypeShape", "checker binding type context")
+            shape_name = typed_field_value(
+                shape_fields, "name", "Str", "checker binding type context")
+            if shape_name:
+                names.add(shape_name)
+    return tuple(sorted(names))
+
+
+def checker_prioritize_type_context_nodes(index, checker_nodes, start_node, end_node):
+    _, metadata, _ = index
+    focused = []
+    remaining = []
+    for value in checker_nodes:
+        node_id = int(typed_field_value(
+            typed_fields(value, "CheckerNode", "checker type context"),
+            "id", "Int", "checker type context"))
+        current = node_id
+        belongs_to_active_subtree = False
+        while current in metadata:
+            if start_node <= current < end_node:
+                belongs_to_active_subtree = True
+                break
+            parent_id = metadata[current]["parent"]
+            if parent_id < 0:
+                break
+            current = parent_id
+        (focused if belongs_to_active_subtree else remaining).append(value)
+    return focused + remaining
 
 
 def checker_scope_context_nodes(index, start_node, end_node):
@@ -339,6 +571,12 @@ def checker_duplicate_context_nodes(index):
 def checker_report_context_nodes(index, diagnostic_codes=()):
     values, metadata, children = index
     codes = set(diagnostic_codes)
+    function_names = {
+        typed_field_value(typed_fields(values[node_id], "CheckerNode", "checker function context"),
+                         "text", "Str", "checker function context")
+        for node_id, node in metadata.items()
+        if node["parent"] == -1 and node["kind"] == "function"
+    }
     has_calls = any(node["kind"] == "call" for node in metadata.values())
     keep = set()
     if has_calls:
@@ -348,7 +586,11 @@ def checker_report_context_nodes(index, diagnostic_codes=()):
                node["kind"] in ("call", "variant_declaration")
         )
         for node_id in tuple(keep):
-            if metadata[node_id]["kind"] == "call":
+            node = metadata[node_id]
+            node_text = typed_field_value(
+                typed_fields(values[node_id], "CheckerNode", "checker call context"),
+                "text", "Str", "checker call context")
+            if node["kind"] == "call" and node_text in function_names:
                 keep.update(child_id for child_id in children.get(node_id, ())
                             if metadata[child_id]["role"] == "argument")
     if "PEP_DUPLICATE_FIELD" in codes:
@@ -812,14 +1054,15 @@ def checker_cursor_value(document, revision, parsed, phase, done=False):
     ])
 
 
-def check_target(session, parsed, target, tool_revision, source_length):
+def check_target(session, parsed, target, tool_revision, source_length,
+                 checker_tool_prefix="pep-c23"):
     started = time.perf_counter_ns()
     request_bytes_before = session.request_bytes_total
     response_bytes_before = session.response_bytes_total
     parser_nodes = typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
                                      "nodes", "List[FlatAstNode]", "parser result")
     node_count = len(parser_nodes)
-    cursor = invoke_tool(session, "pep-c23-checker-start",
+    cursor = invoke_tool(session, f"{checker_tool_prefix}-checker-start",
                          [checker_progress_header(parsed), typed("Int", node_count)], target,
                          tool_revision, "start checker", stage="checker")
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
@@ -834,11 +1077,15 @@ def check_target(session, parsed, target, tool_revision, source_length):
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        9 + 2 * ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) +
-                        ((node_count + 7) // 8) + ((node_count + 3) // 4) + (binding_count + 3) // 4)
+                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + node_count + ((node_count + 1) // 2) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     external_typed_bindings = typed_list("BindingFact")
+    external_name_references = []
+    external_name_diagnostics = []
+    external_type_facts = []
+    external_type_diagnostics = []
+    external_type_unreachable = None
     report_source_fields = None
     for _ in range(maximum_steps):
         if typed_field_value(cursor_fields, "document", "Str", "checker cursor") != target["document"] or \
@@ -846,8 +1093,9 @@ def check_target(session, parsed, target, tool_revision, source_length):
             raise RuntimeError("Pep checker cursor changed the authorised source revision")
         if typed_field_value(cursor_fields, "done", "Bool", "checker cursor"):
             break
-        previous_cursor = cursor
+        step_cursor = cursor
         step_nodes = checker_nodes
+        step_bindings = external_typed_bindings
         phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
         if phase in ("validation", "functions"):
             if phase == "validation":
@@ -863,7 +1111,7 @@ def check_target(session, parsed, target, tool_revision, source_length):
         elif phase == "names":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_scope_context_nodes(
-                checker_context_index, next_node, min(next_node + 16, node_count))
+                checker_context_index, next_node, min(next_node + 2, node_count))
         elif phase == "binding_types":
             binding_result = typed_fields(cursor_fields.get("bindingResult"), "BindingCollection", "checker bindings")
             pending_bindings = typed_field_value(binding_result, "bindings", "List[BindingFact]", "checker bindings")
@@ -876,25 +1124,129 @@ def check_target(session, parsed, target, tool_revision, source_length):
             step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
         elif phase == "type_analysis":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
-            step_nodes = checker_type_context_nodes(
-                checker_context_index, next_node, min(next_node + 8, node_count))
+            end_node = min(next_node + 1, node_count)
+            step_nodes = checker_type_context_nodes(checker_context_index, next_node, end_node)
+            context_ids = {
+                int(typed_field_value(
+                    typed_fields(node, "CheckerNode", "checker type context"),
+                    "id", "Int", "checker type context"))
+                for node in step_nodes
+            }
+            context_references = [
+                reference for reference in external_name_references
+                if int(typed_field_value(typed_fields(reference, "ResolvedName", "checker name result"),
+                                         "syntaxId", "Int", "checker name result")) in context_ids
+            ]
+            step_names = checker_name_result(context_references)
+            step_bindings = checker_bindings_for_references(
+                external_typed_bindings, context_references)
+            extra_type_names = checker_binding_type_names(step_bindings)
+            if extra_type_names:
+                step_nodes = checker_type_context_nodes(
+                    checker_context_index, next_node, end_node, extra_type_names)
+                context_ids = {
+                    int(typed_field_value(
+                        typed_fields(node, "CheckerNode", "checker type context"),
+                        "id", "Int", "checker type context"))
+                    for node in step_nodes
+                }
+                context_references = [
+                    reference for reference in external_name_references
+                    if int(typed_field_value(
+                        typed_fields(reference, "ResolvedName", "checker name result"),
+                        "syntaxId", "Int", "checker name result")) in context_ids
+                ]
+                step_names = checker_name_result(context_references)
+                step_bindings = checker_bindings_for_references(
+                    external_typed_bindings, context_references)
+            if end_node == node_count:
+                step_types = checker_type_result(
+                    (), reversed(external_type_diagnostics), external_type_unreachable)
+            else:
+                step_types = checker_empty_type_result()
+            step_cursor = checker_cursor_with_results(cursor, step_names, step_types)
         elif phase == "holes":
             step_nodes = checker_hole_context_nodes(checker_context_index)
+            hole_context_ids = {
+                int(typed_field_value(typed_fields(node, "CheckerNode", "checker hole context"),
+                                      "id", "Int", "checker hole context"))
+                for node in step_nodes
+            }
+            hole_references = [
+                reference for reference in external_name_references
+                if int(typed_field_value(typed_fields(reference, "ResolvedName", "checker name result"),
+                                         "syntaxId", "Int", "checker name result")) in hole_context_ids
+            ]
+            step_cursor = checker_cursor_with_results(
+                cursor, checker_name_result(hole_references), checker_empty_type_result())
         elif phase == "duplicate_functions":
             step_nodes = checker_duplicate_context_nodes(checker_context_index)
+            step_cursor = checker_cursor_with_results(
+                cursor, checker_name_result(),
+                checker_type_result((), external_type_diagnostics, external_type_unreachable))
         elif phase == "report":
+            step_cursor = checker_cursor_with_results(
+                cursor, checker_name_result((), external_name_diagnostics),
+                cursor_fields["typeResult"])
+            cursor_fields = typed_fields(step_cursor, "CheckerCursor", "checker report cursor")
             step_nodes = checker_report_context_nodes(
                 checker_context_index, checker_report_diagnostic_codes(cursor_fields))
         if phase == "report":
             report_source_fields = cursor_fields
+        previous_cursor = step_cursor
         step_started = time.perf_counter_ns()
-        cursor = invoke_tool(session, "pep-c23-checker-step",
-                             [cursor, typed_list("CheckerNode", step_nodes), external_typed_bindings], target,
+        cursor = invoke_tool(session, f"{checker_tool_prefix}-checker-step",
+                             [step_cursor, typed_list("CheckerNode", step_nodes), step_bindings], target,
                              tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
         cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "names":
+            name_fields = typed_fields(cursor_fields.get("nameResult"), "NameResolution", "checker name delta")
+            external_name_references.extend(reversed(typed_field_value(
+                name_fields, "references", "List[ResolvedName]", "checker name delta")))
+            external_name_diagnostics.extend(reversed(typed_field_value(
+                name_fields, "diagnostics", "List[CheckDiagnostic]", "checker name delta")))
+            next_phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
+            if next_phase == "names":
+                name_result = checker_name_result()
+            else:
+                name_result = checker_name_result(external_name_references, external_name_diagnostics)
+            cursor = checker_cursor_with_name_result(cursor, name_result)
+            cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "type_analysis":
+            next_phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
+            if next_phase == "type_analysis":
+                type_fields = typed_fields(cursor_fields.get("typeResult"), "TypeAnalysis", "checker type delta")
+                external_type_facts.extend(reversed(typed_field_value(
+                    type_fields, "expressionTypes", "List[ExpressionTypeFact]", "checker type delta")))
+                external_type_diagnostics.extend(reversed(typed_field_value(
+                    type_fields, "diagnostics", "List[CheckDiagnostic]", "checker type delta")))
+                unreachable = typed_fields(type_fields.get("unreachable"), "UnreachableLookup", "checker type delta")
+                if external_type_unreachable is None and typed_field_value(
+                        unreachable, "found", "Bool", "checker type delta"):
+                    external_type_unreachable = type_fields["unreachable"]
+                cursor = checker_cursor_with_results(cursor, checker_name_result(), checker_empty_type_result())
+                cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+            elif next_phase == "holes":
+                type_fields = typed_fields(cursor_fields.get("typeResult"), "TypeAnalysis", "checker type result")
+                final_facts = typed_field_value(
+                    type_fields, "expressionTypes", "List[ExpressionTypeFact]", "checker type result")
+                final_diagnostics = typed_field_value(
+                    type_fields, "diagnostics", "List[CheckDiagnostic]", "checker type result")
+                external_type_facts.extend(final_facts)
+                external_type_diagnostics.clear()
+                external_type_diagnostics.extend(final_diagnostics)
+                external_type_unreachable = type_fields["unreachable"]
+                cursor = checker_cursor_with_results(
+                    cursor, checker_name_result(), checker_empty_type_result())
+                cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "holes" and typed_field_value(
+                cursor_fields, "phase", "Str", "checker cursor") == "duplicate_functions":
+            cursor = checker_cursor_with_results(
+                cursor, checker_name_result(), checker_empty_type_result())
+            cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
         if phase == "binding_types":
             delta = typed_field_value(cursor_fields, "typedBindings", "List[BindingFact]", "checker binding delta")
             external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
@@ -908,7 +1260,9 @@ def check_target(session, parsed, target, tool_revision, source_length):
         raise RuntimeError(f"Pep checker exceeded the host continuation limit of {maximum_steps} steps")
     report = cursor_fields.get("report")
     if report_source_fields is not None:
-        report = checker_complete_report(report, report_source_fields, external_typed_bindings)
+        report = checker_complete_report(
+            report, report_source_fields, external_typed_bindings,
+            external_name_references, external_type_facts)
     report_fields = typed_fields(report, "CheckerReport", "checker report")
     if typed_field_value(report_fields, "document", "Str", "checker report") != target["document"] or \
        typed_field_value(report_fields, "revision", "Str", "checker report") != target["revision"]:
