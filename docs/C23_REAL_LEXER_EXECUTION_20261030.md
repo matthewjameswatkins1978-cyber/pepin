@@ -764,6 +764,53 @@ whole sweep.
 
 This is the first complete fifteen-module baseline at a post-merge head, so future
 pushes can be diffed against it rather than re-litigated.
+
+## Two updates: the recursion reading corrected, and the merge recipe now needs the emitter (Agent 3)
+
+### The recursion finding, corrected in the peer's favour
+
+The peer lane's `1910025` refined this and they are right. I reproduced their A/B
+myself:
+
+| arm | result |
+| --- | --- |
+| interpreter | exit 1, `PEP_RUNTIME_CALL_DEPTH` |
+| strict (`-Werror`) | compile fails `-Winfinite-recursion`, no binary produced |
+| lenient (no `-Werror`) | compiles, runs, exit 1, **`PEP_RUNTIME_CALL_DEPTH`** |
+| lenient + `-Wno-infinite-recursion` | same |
+
+So the emitted code for unbounded parameter recursion is **semantically correct**:
+under lenient flags it traps with exactly the interpreter's code. My earlier
+phrasing — that the emitter's rejection contract was "broken" — overstated it. The
+accurate statement is narrower: emit-time rejection with a Pep diagnostic was lost,
+the generated code is right, and under project flags a compile-time guard catches
+it before a binary exists. The A14 expectation is stale about *where* rejection
+happens, not about whether the program is safe.
+
+### Agent 2 has moved the emitter, and the merge recipe changed with it
+
+`46c5af6` ("Exercise Lucy string stage guards natively") is **not** test-only:
+`tests/pep_c23_emitter.pep` moved from blob `9573c227` to `8493e9d3`, adding Str
+comparison and binary-operation lowering.
+
+That breaks the previous recipe. `fd5c5d5` plus only the newest *test file* now
+fails 2 of 11 with "Pep C23 Str comparison and binary operations are not yet
+lowered", because the integrated emitter predates the feature.
+
+The correct merge target is both files from `46c5af6`:
+
+| state | result |
+| --- | --- |
+| `fd5c5d5` + `46c5af6` emitter (blob `8493e9d3`) + `46c5af6` tests | **11 tests, OK, zero skips** |
+| accepted classifier slice, same emitter | 1 test, OK |
+| `test_a14_c23`, same emitter | 11 tests, 2 known failures (unchanged) |
+
+On Agent 2 own branch the suite is 11 tests with 3 skipped; combined with Agent 1
+checker the skips disappear and everything passes.
+
+**Practical consequence for the integrator:** the "carry the test file across"
+recipe is finished. The next integration must take `tests/pep_c23_emitter.pep` and
+`tests/test_c23_str_contains.py` together from `46c5af6`, on top of Agent 1 line.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
