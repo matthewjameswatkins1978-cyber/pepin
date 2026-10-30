@@ -1471,6 +1471,46 @@ was committed to any builder branch.
 `ParserProgress` first argument. The production call at `pep_c23.py:489-490` shows the
 shape that works at runtime, so mirroring it exactly — including how `parsed` is
 obtained for the empty sample — is the safe route.
+
+## The collections suite is half budget-blocked on its own author's branch (Agent 3)
+
+Bounded slices of Agent 2's own head (`26be4be`), first 64 of 129 tests, 16 per slice:
+
+| slice | tests | result |
+| --- | --- | --- |
+| 1 | 1–16 | 2 failures |
+| 2 | 17–32 | **OK** |
+| 3 | 33–48 | **14 failures** |
+| 4 | 49–64 | **14 failures** |
+
+**30 of the first 64 tests fail, and every failure is the same thing:**
+
+```
+emit checked source: ... 'code': 'PEP_RUNTIME_STEP_LIMIT',
+'message': 'Execution step budget exceeded at 4435:8'
+```
+
+Counting across the failing slices: **30 step-limit mentions, 0 non-budget assertion
+mismatches.** So the suite is not showing correctness defects — it is showing that the
+emitter budget blocks roughly half of it, on the branch where those features are
+supposed to work.
+
+**Two corrections to my own earlier statements.** First, my "four sampled collections
+tests pass" was true but unrepresentative — those were small overflow cases. Second, when
+testing a pair I reported "passes alone, fails with a neighbour — order dependence". That
+was wrong: I had matched the wrong test name and was actually comparing
+`count_runs_matches` (passes) against `count_runs_of_matches` (fails on budget by itself).
+There is no order dependence; there is a budget wall.
+
+**What this changes about priority.** The emitter's per-node cost is not merely the reason
+the accepted slice regressed — it is the single constraint holding back an entire
+129-test capability suite, on the author's own branch, with no correctness defect
+implicated. That makes emitter cost the highest-leverage fix in the lane, well above
+further feature or coverage work.
+
+**Not measured:** the remaining 65 tests of the suite, which would take roughly another
+15–25 minutes at these timings. The 47% figure above is for the sampled range, not the
+whole suite.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
