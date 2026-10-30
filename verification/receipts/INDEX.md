@@ -37,10 +37,11 @@ groups. **Current blocker map at the bottom.**
 | `PINNED-ROUND-20261030-eb8f7c0-784050c.md` | Recipe change after emitter move; first 15-module baseline: **262 tests / 3 known failures**. |
 | `PINNED-ROUND-20261030-f7efa23-7bfb819.md` | A1 claim 109/109 + skipped native arm; SourceBytes seam verified (combined 14/14). |
 
-## Late rounds (turns 23–35 — baselines, cross-lane verification, report-claim audits, `ae91bdc` analysis)
+## Late rounds (turns 23–37 — baselines, cross-lane verification, report-claim audits, `ae91bdc` analysis)
 
 | receipt | one-line |
 |---|---|
+| `REMEASURE-e37218a-persists-26.md` | A1's response `e37218a` (checker overhead): heavy still **26** — parser chains untouched, regression persists; their new driver tests **12/12 OK**; no new defect in heavy set. |
 | `MECHANISM-ae91bdc-match-chains.md` | **`ae91bdc` mechanism**: 3 parser dispatchers split into 19/29/19-way fallthrough chains; each hop = 1 host frame; death = `ast_value_span_part_1/part_3` braces (parser L138/152); one mechanism, two budgets (depth 128 + step 100k). |
 | `BISECT-ae91bdc-sole-breaker.md` | `bff9dad` = 124/2 green (report's 276/3 independently confirmed); **`ae91bdc` alone breaks** — fix scope = flattening commit only. |
 | `REGRESSION-a1-ae91bdc-scale-work.md` | First measurement of `ae91bdc`: heavy 120/2 → **124/26** (deep-suite `CALL_DEPTH` ×22, a14 2→4 = Wall B on A1-own). |
