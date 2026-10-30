@@ -314,7 +314,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             for node in fields(parsed)["nodes"]["value"]
         )
         maximum_steps = min(4096, 8 + ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) +
-                            (node_count + 7) // 8 + (binding_count + 7) // 8)
+                            (node_count + 3) // 4 + (binding_count + 7) // 8)
         for _ in range(maximum_steps):
             current = fields(value)
             if scalar(current["done"]):
@@ -1452,6 +1452,29 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(scalar(report["status"]), "valid", report)
         self.assertEqual(len(report["bindings"]["value"]), count, report)
         self.assertEqual(len(report["references"]["value"]), count, report)
+
+    def test_staged_checker_composes_ninety_six_function_roots(self):
+        count = 96
+        declarations = [
+            f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
+            for index in range(count)
+        ]
+        declarations.append("fn main() -> Int { return 0 }")
+        source = NL.join(declarations)
+
+        reference = self._reference_check("staged-96-function-roots", source)
+        parser_result = self._parse_staged(source)
+        _, report = self._analyze_staged(source, parser_result=parser_result)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        actual = [
+            (scalar(fields(item)["name"]), scalar(fields(item)["arity"]), scalar(fields(item)["returnType"]))
+            for item in report["functions"]["value"]
+        ]
+        self.assertEqual(len(actual), count + 1)
+        self.assertEqual(actual[0], ("f0", 1, "Int"))
+        self.assertEqual(actual[-1], ("main", 0, "Int"))
 
     def test_staged_checker_composes_thirty_two_function_signatures(self):
         declarations = []
