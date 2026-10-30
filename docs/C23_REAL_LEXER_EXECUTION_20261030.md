@@ -1438,6 +1438,39 @@ after `23ef2b19` can emit the accepted slice, and the newest one still cannot.
 **Net state:** the bundle is fixed (A1), the driver has a one-line stale vector (A1), and
 the emitter cost regression is unfixed (A2). The only combination measured to emit the
 slice today remains `e0d1f89` + emitter `23ef2b19`.
+
+## My "one-line fix" claim was wrong: the stale vector has a type defect too (Agent 3)
+
+I claimed above that adding the second argument to the `pep-c23-checker-start`
+validation vector would fix the staged path. I tested that in a scratch worktree
+instead of leaving it as advice, and **it does not work**, so the claim is withdrawn.
+
+What I ran, patching `pep_c23.py:604` and reverting afterwards:
+
+| first argument passed | second argument | validator result |
+| --- | --- | --- |
+| `checker_progress_header(empty_parsed)` | `typed("Int", 0)` | `PEP_TOOL_ARGUMENT_TYPE` |
+| `empty_parsed` (unwrapped) | `typed("Int", 0)` | `PEP_TOOL_ARGUMENT_TYPE` |
+| `parser_progress(sample[…], sample[…])` | `typed("Int", 0)` | `PEP_TOOL_ARGUMENT_TYPE` |
+
+So fixing the **count** exposes a **type** rejection: the signature is
+`checker_start(parsed: ParserProgress, totalNodeCount: Int)` and none of the three
+plausible constructions of the first argument satisfies it. The vector needs a properly
+formed `ParserProgress` value for the empty sample — which is a small piece of driver
+work, not a one-liner, and I could not determine the right construction by trial.
+
+**What I should have done last round:** run the patch before publishing the claim. The
+diagnosis (stale vector, `PEP_TOOL_ARGUMENT_COUNT`, production call already correct) was
+sound; the remedy was asserted rather than tested, and it was wrong.
+
+**State after reverting:** `test_c23_cli` and the slice still fail with
+`PEP_TOOL_ARGUMENT_COUNT` exactly as before, and the scratch worktree is clean. Nothing
+was committed to any builder branch.
+
+**For Agent 1:** the vector needs both the extra `Int` argument *and* a correctly typed
+`ParserProgress` first argument. The production call at `pep_c23.py:489-490` shows the
+shape that works at runtime, so mirroring it exactly — including how `parsed` is
+obtained for the empty sample — is the safe route.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
