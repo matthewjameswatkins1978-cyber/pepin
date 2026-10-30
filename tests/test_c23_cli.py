@@ -1,3 +1,4 @@
+import json
 import pathlib
 import subprocess
 import tempfile
@@ -103,8 +104,12 @@ class PepC23CliTests(unittest.TestCase):
             too_deep = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertNotEqual(too_deep.returncode, 0)
             self.assertIn("PEP_RUNTIME_CALL_DEPTH", too_deep.stderr)
-            source.write_text("fn main() -> Int { return length([1, 2]) }\n",
+            source.write_text(
+                "fn main() -> Int { let same: Bool = \"a\" == \"a\"; return 0 }\n",
                               encoding="utf-8", newline="\n")
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            self.assertEqual(json.loads(checked.stdout)["status"], "valid")
             rejected = self.invoke("run-c23", source, "--compiler", CLANG)
             self.assertEqual(rejected.returncode, 2, rejected.stdout + rejected.stderr)
             self.assertIn("Pep C23 unsupported:", rejected.stderr)
