@@ -1207,7 +1207,7 @@ def check_target(session, parsed, target, tool_revision, source_length,
         elif phase == "names":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_scope_context_nodes(
-                checker_context_index, next_node, min(next_node + 16, node_count))
+                checker_context_index, next_node, min(next_node + 32, node_count))
             name_functions = checker_functions_for_context(external_functions, step_nodes)
             owner_ids = {
                 int(typed_field_value(

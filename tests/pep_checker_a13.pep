@@ -2680,7 +2680,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     if !(0 <= cursor.typeOffset) || !(cursor.typeOffset + 1 <= totalCount) {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, totalCount, "A13_CHECKER_CURSOR", "Checker name cursor offset is invalid", checker_empty_node()))
     } else {}
-    let proposed = cursor.typeOffset + 16
+    let proposed = cursor.typeOffset + 32
     let chunkEnd = if proposed <= totalCount { proposed } else { totalCount }
     var rangeCount = 0
     for node in inputNodes {

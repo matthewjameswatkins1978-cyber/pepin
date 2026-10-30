@@ -373,7 +373,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
             elif scalar(current["phase"]) == "names":
                 offset = scalar(current["typeOffset"])
                 step_nodes = checker_scope_context_nodes(
-                    checker_context_index, offset, min(offset + 16, node_count))
+                    checker_context_index, offset, min(offset + 32, node_count))
                 step_value = checker_cursor_with_functions(
                     value, checker_functions_for_context(external_functions, step_nodes))
             elif scalar(current["phase"]) == "binding_types":
