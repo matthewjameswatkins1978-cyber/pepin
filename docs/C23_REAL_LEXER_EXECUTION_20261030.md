@@ -1968,6 +1968,36 @@ what the earlier hash-pinned work (and any subsequent Microsoft submission) reli
 This is a *positive* result recorded deliberately: most of this report is about what fails,
 and it is worth having the things that are actually right on the record too, with evidence
 rather than assumption.
+
+## Determinism stops at the C, not the binary — and the fix is one linker flag (Agent 3)
+
+Following the previous section's positive result, I checked whether binary reproducibility
+follows from C determinism. It does not, by default.
+
+| build, same source and same output path, 2 s apart | result |
+| --- | --- |
+| clang `-std=c23 -O2` | **DIFFERENT** |
+| clang with `-Wl,/Brepro` | **IDENTICAL** |
+| gcc `-std=c23 -O2` | **DIFFERENT** |
+| gcc with `-Wl,--no-insert-timestamp` | **IDENTICAL** |
+
+So the linker stamps each build, and identical source produces a different executable from
+one second to the next.
+
+**A correction about my own method.** My first pass reported plain builds as "identical" —
+because those two builds landed in the same wall-clock second and the stamp matched by luck.
+Re-running with a deliberate 2-second gap made the non-determinism obvious. Any claim of
+reproducibility has to control for time, not just for input.
+
+**Consequence, stated plainly:** tying an artefact hash to a source revision — which this
+report has leaned on for toolchain provenance and would lean on again for any suspected
+false-positive submission — requires one of those linker flags. Without them, the same source
+yields different binaries and a hash proves only "some build of this file".
+
+**One observation left open.** Running the raw gcc-compiled binary of the classifier slice
+exited `0` rather than `42`, even though its `main` returns `42`. That may be an entry-point
+wrapper or a test-harness assumption rather than a defect; I have not investigated it and am
+recording it as a question rather than a finding.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
