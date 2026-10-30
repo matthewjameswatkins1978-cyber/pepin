@@ -1385,6 +1385,22 @@ fn main() -> Int { return choose(true) }
         self.assertIn("pep_result = 9", generated)
 
 
+    def test_multiple_top_level_conditionals_preserve_order(self):
+        source_text = """fn classify(value: Int) -> Int {
+  var result = 0
+  if value <= 0 { result = 1 } else {}
+  if value <= 1 { result = 2 } else {}
+  return result
+}
+fn main() -> Int { return classify(0) }
+"""
+        generated = emit(source_text.encode("utf-8"))
+        self.assertEqual(generated.count("if (!!"), 2, generated)
+        self.assertLess(generated.index("pep_arg_1 <= 0"),
+                        generated.index("pep_arg_1 <= 1"))
+        self.assertIn("pep_local_", generated)
+
+
     def test_while_local_unsupported_initializer_fails_closed(self):
         source_text = """fn scan(limit: Int) -> Int {
   var index = 0
