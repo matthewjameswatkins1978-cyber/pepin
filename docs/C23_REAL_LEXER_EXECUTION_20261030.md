@@ -2154,6 +2154,50 @@ That is the fourth time in this lane that "a separate condition" turned out to b
 measurement method. The pattern is consistent enough to state as guidance: when a probe reports
 a different error from its siblings, check whether the probe supplied the same context before
 concluding the compiler differs.
+
+## Receipt run — and a correction to my own headline metric (Agent 3)
+
+Consolidated every number this lane reports into one reproducible run at Agent 1 `bff9dad`.
+
+**Type census (each type with the dependencies it needs) — definitive:**
+
+| type | result |
+| --- | --- |
+| `SourcePosition` | **emits** |
+| `LexToken` | UNSUPPORTED — list record field |
+| `LexCursor` | UNSUPPORTED — list record field |
+| `LexProgress` | UNSUPPORTED — list record field |
+
+**Reproducers — all four reproduce, both controls emit:**
+
+| reproduction | result |
+| --- | --- |
+| A — local compared in a return | UNSUPPORTED — "one-parameter calls require one argument and …" |
+| B — four parameters | UNSUPPORTED — "functions require supported parameters and …" |
+| C — three-parameter function returning a parameter | UNSUPPORTED — "three-parameter calls require three arguments …" |
+| D — `List` record field | UNSUPPORTED — list record field |
+| control — two parameters, literal return | **EMITS** |
+| control — literal comparison, no local | **EMITS** |
+
+**Correction to the metric I published.** I reported "3 of 9 functions emittable". That count
+came from the classifier **slice**, where the functions appear without the lexer's types. In
+context — each function compiled alongside the type declarations it uses — the result is
+different:
+
+| function | in-context result |
+| --- | --- |
+| `ascii_letter`, `ascii_digit`, `advance_position`, `make_token` | blocked by the **type** block (list record field) |
+| `make_cursor`, `make_progress` | budget |
+| `ascii_continue`, `lexer_start`, `lexer_step` | checker rejected / checker envelope |
+
+So in-context **0 of 9 functions can be emitted**, and the reason is not the functions at all —
+it is that their types do not compile. My "3 of 9" was measuring the slice, not the lexer.
+
+**Revised headline metric, which is also the sharper conclusion:** of Lucy's four types, one
+emits and three are blocked by list-valued record fields; and because every lexer function
+references at least one blocked type, **no lexer function is in emittable territory until that
+one feature lands**. The single-cause conclusion gets stronger, not weaker, under the corrected
+measurement.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
