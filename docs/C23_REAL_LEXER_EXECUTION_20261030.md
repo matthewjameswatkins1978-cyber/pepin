@@ -268,6 +268,46 @@ through. Extending that mapper plus the record struct emission is a bounded
 change, but it is the gate standing between Lucy AST records and native
 emission.
 
+### Reference oracle for `utf8_check` — found, and verified on multi-byte input
+
+The blocker reported earlier ("`source_bytes()` is gated to a v2 semanticTarget,
+so `pep.ps1 run` cannot serve as the oracle") is real but **not** the end of the
+matter. `describe` lists the session operations and there is no `run` among them
+(`open`, `open_bytes`, `query`, `inspect`, `apply_edit`, `fill_hole`,
+`tool_register`, `tool_validate`, `tool_activate`, `tool_list`, `tool_invoke`,
+`metrics`). `source_bytes()` is supplied only inside a **tool invocation**
+(`pep_ocaml.ml:901-903`, `1725`, `1804`). So the reference path is to call
+Lucy's own function *as a tool* against a semanticTarget.
+
+Verified recipe, all four steps observed working:
+
+1. `open_bytes` the tool document: `type Utf8Check` + `fn utf8_check` verbatim,
+   plus an entry function taking the offset as an argument, e.g.
+   `fn width_at(offset: Int) -> Utf8Check { return utf8_check(source_bytes(),
+   offset, byte_length(source_bytes())) }`.
+2. `open_bytes` the target document — the revision whose bytes `source_bytes()`
+   will see.
+3. `tool_validate` with `testVectors[{arguments, expect, semanticTarget}]`,
+   where `expect` is a typed record and `semanticTarget` is
+   `{document, revision, entryFunctions: []}` for the target. Validation compares
+   real execution against `expect`, so it is itself a revision-pinned oracle.
+4. `tool_register` → `tool_activate` → `tool_invoke` with the same arguments and
+   semanticTarget, returning a typed `Utf8Check`.
+
+Results observed:
+
+| case | result |
+| --- | --- |
+| target beginning `f`, offset 0 | `{"type":"Int","value":"1"}`, `Validated` |
+| target `fn main() -> Int { say("café") }`, offset 28 (lead byte 0xC3) | `Utf8Check { width: 2, invalidOffset: -1 }`, `Validated` |
+
+So Lucy's real `utf8_check` can be reference-executed deterministically against
+a pinned revision, including multi-byte sequences, without `pep.ps1 run` and
+without any compiler change. That is the testing route for Agent 2 — and it also
+shows Lucy's own functions are already callable as tools over host-authorised
+source bytes, which is a step toward the self-hosting loop rather than merely a
+test convenience.
+
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
