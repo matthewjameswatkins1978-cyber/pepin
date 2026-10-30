@@ -321,18 +321,37 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   let pattern = pep_c23_child(nodes, arm.node.id, "pattern", 0)
   let binding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 0) } else { PepC23NodeLookup { found: false, node: empty_node() } }
   let extraBinding = if pattern.found { pep_c23_child(nodes, pattern.node.id, "argument", 1) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  if !pattern.found || pattern.node.kind != "constructor_pattern" ||
-     !binding.found || binding.node.kind != "binding_pattern" || binding.node.text != node.text || extraBinding.found {
-    return pep_c23_unsupported("Pep C23 recursive union list call requires its one-field constructor payload binding")
+  let variant = if pattern.found && pattern.node.kind == "constructor_pattern" {
+    pep_c23_union_variant(nodes, pattern.node.text)
+  } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  let payloadCount = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { 0 }
+  let patternArgumentCount = if pattern.found { count_children(nodes, pattern.node.id, "argument") } else { 0 }
+  let binding0Valid = binding.found &&
+    (binding.node.kind == "binding_pattern" || binding.node.kind == "wildcard_pattern")
+  let binding1Valid = extraBinding.found &&
+    (extraBinding.node.kind == "binding_pattern" || extraBinding.node.kind == "wildcard_pattern")
+  if !variant.found || (payloadCount != 1 && payloadCount != 2) ||
+     patternArgumentCount != payloadCount || !binding0Valid ||
+     (payloadCount == 2 && !binding1Valid) {
+    return pep_c23_unsupported("Pep C23 recursive union list call requires a supported one- or two-field constructor pattern")
   } else {}
-  let variant = pep_c23_union_variant(nodes, pattern.node.text)
-  let owner = if variant.found { pep_c23_union_of_variant(nodes, variant.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let payload = if variant.found { pep_c23_child(nodes, variant.node.id, "field_type", binding.node.childIndex) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  let extraPayload = if variant.found { pep_c23_child(nodes, variant.node.id, "field_type", 1) } else { PepC23NodeLookup { found: false, node: empty_node() } }
+  var listBinding = PepC23NodeLookup { found: false, node: empty_node() }
+  if binding.node.kind == "binding_pattern" && binding.node.text == node.text {
+    listBinding = binding
+  } else {}
+  if extraBinding.found && extraBinding.node.kind == "binding_pattern" &&
+     extraBinding.node.text == node.text {
+    listBinding = extraBinding
+  } else {}
+  if !listBinding.found {
+    return pep_c23_unsupported("Pep C23 recursive union list call requires its List[Self] field to be a named pattern binding")
+  } else {}
+  let owner = pep_c23_union_of_variant(nodes, variant.node)
+  let payload = pep_c23_child(nodes, variant.node.id, "field_type", listBinding.node.childIndex)
   let listType = if payload.found { pep_c23_union_list_declaration(nodes, payload.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
-  if !variant.found || !owner.found || owner.node.id != declaration.id || !payload.found || extraPayload.found ||
+  if !owner.found || owner.node.id != declaration.id || !payload.found ||
      !listType.found || listType.node.id != declaration.id {
-    return pep_c23_unsupported("Pep C23 recursive union list match payload must be one List[Self] field")
+    return pep_c23_unsupported("Pep C23 recursive union list match payload must be a List[Self] field")
   } else {}
   let subject = pep_c23_child(nodes, matched.node.id, "value", 0)
   let subjectUnion = if subject.found { pep_c23_union_value_type(nodes, function, subject.node) } else { PepC23NodeLookup { found: false, node: empty_node() } }
@@ -346,7 +365,7 @@ fn pep_c23_union_list_match_argument(nodes: List[FlatAstNode], function: FlatAst
   parts = append(parts, ".payload.payload_")
   parts = append(parts, int_text(variant.node.childIndex))
   parts = append(parts, ".field_")
-  parts = append(parts, int_text(binding.node.childIndex))
+  parts = append(parts, int_text(listBinding.node.childIndex))
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 fn pep_c23_union_list_argument(nodes: List[FlatAstNode], function: FlatAstNode,

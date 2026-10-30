@@ -812,6 +812,61 @@ fn main() -> Int {
                     self.assertEqual(result.stdout, "1\n")
 
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_two_field_recursive_union_list_payload_passes_to_helper_natively(self):
+        source_text = """type Tree = Leaf(Int) | Branch(Int, List[Tree])
+fn child_marker(values: List[Tree]) -> Int { return 7 }
+fn main() -> Int {
+  let node: Tree = Branch(39, [Leaf(7)])
+  return match node {
+    Leaf(number) => number
+    Branch(label, children) => child_marker(children)
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "recursive-union-two-field-helper.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "7\n")
+
+            generated = emit(source.read_bytes())
+            self.assertIn("field_1 = (pep_list_union_", generated)
+            self.assertRegex(
+                generated,
+                r"pep_fn_\d+\(pep_local_\d+\.payload\.payload_1\.field_1, pep_arena\)")
+            generated_c = folder / "recursive-union-two-field-helper.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
+            arena_include = ROOT / "runtime" / "pep_arena"
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / (compiler.stem + "-recursive-union-two-field.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", "-I", str(arena_include),
+                         str(generated_c), str(arena_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "7\n")
+
+
     def test_recursive_union_local_list_forwarding_fails_closed(self):
         source_text = """type Tree = Leaf(Int) | Branch(List[Tree])
 fn count_children(values: List[Tree]) -> Int { return length(values) }
