@@ -1466,6 +1466,13 @@ fn statement_always_returns(nodes: List[CheckerNode], statement: CheckerNode) ->
   } else {}
   return false
 }
+fn function_has_returning_statement(nodes: List[CheckerNode], function: CheckerNode) -> Bool {
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" && statement_always_returns(nodes, statement) { return true } else {}
+    if function.endByte + 1 <= statement.startByte { return false } else {}
+  }
+  return false
+}
 fn if_expression_branch_mismatch(nodes: List[CheckerNode], id: Int, expectedType: Str, expectedShape: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let expression = lookup_node(nodes, id)
   if !expression.found || expression.node.kind != "if_expression" { return false } else {}
@@ -1531,8 +1538,9 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
     } else {}
     if node.kind == "function" {
       let returnType = child_at(nodes, node.id, "return_type", 0)
-      if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
-        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, returnType.node.id, declared_return_type(nodes, node.id)), "Function result type is outside the implemented primitive checker subset", node))
+      let returnName = if returnType.found { if returnType.node.kind == "type_scalar" || returnType.node.kind == "type_named" { returnType.node.text } else { type_name_at(nodes, returnType.node.id) } } else { "" }
+      if !returnType.found || !supported_type_at(nodes, returnType.node.id, returnName) {
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, returnType.node.id, returnName), "Function result type is outside the implemented primitive checker subset", node))
       } else {}
       if (known_builtin(node.text) || is_constructor(nodes, node.text)) && is_first_function_declaration(functions, node.text, node.id) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_RESERVED_FUNCTION", "Function name is reserved for a builtin or constructor", node))
@@ -1540,16 +1548,14 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
       for parameter in nodes {
         if parameter.parentId == node.id && parameter.kind == "parameter" {
           let parameterType = child_at(nodes, parameter.id, "type", 0)
-          if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)) {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)), "Parameter type is outside the implemented primitive checker subset", parameter))
+          let parameterTypeName = if parameterType.found { if parameterType.node.kind == "type_scalar" || parameterType.node.kind == "type_named" { parameterType.node.text } else { type_name_at(nodes, parameterType.node.id) } } else { "" }
+          if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, parameterTypeName) {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, parameterType.node.id, parameterTypeName), "Parameter type is outside the implemented primitive checker subset", parameter))
           } else {}
         } else {}
       }
-      if declared_return_type(nodes, node.id) != "Unit" {
-        var returnsOnAllPaths = false
-        for statement in nodes {
-          if statement.parentId == node.id && statement.role == "statement" && statement_always_returns(nodes, statement) { returnsOnAllPaths = true } else {}
-        }
+      if returnName != "Unit" {
+        let returnsOnAllPaths = function_has_returning_statement(nodes, node)
         if !returnsOnAllPaths {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_RETURN", "Non-Unit function does not return a value on every path", node))
         } else {}
@@ -2336,6 +2342,7 @@ fn analyze() -> CheckerReport {
 fn is_first_function_declaration(functions: List[CheckedFunction], name: Str, syntaxId: Int) -> Bool {
   var earlierMatches = 0
   for prior in functions {
+    if prior.syntaxId == syntaxId { return earlierMatches == 0 } else {}
     if prior.name == name && prior.syntaxId + 1 <= syntaxId { earlierMatches = earlierMatches + 1 } else {}
   }
   return earlierMatches == 0
@@ -2343,9 +2350,20 @@ fn is_first_function_declaration(functions: List[CheckedFunction], name: Str, sy
 fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, syntaxId: Int) -> Bool {
   var earlierMatches = 0
   for prior in functions {
+    if prior.syntaxId == syntaxId { return earlierMatches == 1 } else {}
     if prior.name == name && prior.syntaxId + 1 <= syntaxId { earlierMatches = earlierMatches + 1 } else {}
   }
   return earlierMatches == 1
+}
+fn duplicate_function_diagnostics(nodes: List[CheckerNode], functions: List[CheckedFunction]) -> List[CheckDiagnostic] {
+  var reversedDuplicates: List[CheckDiagnostic] = []
+  for function in functions {
+    if is_first_duplicate_function(functions, function.name, function.syntaxId) && !known_builtin(function.name) && !is_constructor(nodes, function.name) {
+      let declaration = lookup_node(nodes, function.syntaxId)
+      if declaration.found { reversedDuplicates = prepend(reversedDuplicates, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
+    } else {}
+  }
+  return reverse(reversedDuplicates)
 }
 fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNode], functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, holes: List[HoleFact]) -> CheckerReport {
   var reversedCalls: List[ResolvedCall] = []
@@ -2393,12 +2411,6 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNo
         } }
       } else {}
     }
-  }
-  for function in functions {
-    if is_first_duplicate_function(functions, function.name, function.syntaxId) && !known_builtin(function.name) && !is_constructor(nodes, function.name) {
-      let declaration = lookup_node(nodes, function.syntaxId)
-      if declaration.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
-    } else {}
   }
   let calls = reverse(reversedCalls)
   let collectedDiagnostics = reverse(reversedDiagnostics)
@@ -2497,6 +2509,9 @@ fn checker_type_chunk_end(nodes: List[CheckerNode], startNode: Int) -> Int {
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
   return make_checker_cursor(cursor.document, cursor.revision, phase, done, cursor.parsed, cursor.nodes, functions, bindingResult, nameResult, typedBindings, typeResult, typeOffset, holes, report)
 }
+fn checker_report_with_diagnostics(report: CheckerReport, diagnostics: List[CheckDiagnostic]) -> CheckerReport {
+  return CheckerReport { document: report.document, revision: report.revision, status: report.status, syntaxNodeCount: report.syntaxNodeCount, functions: report.functions, bindings: report.bindings, references: report.references, calls: report.calls, expressionTypes: report.expressionTypes, holes: report.holes, diagnostics: diagnostics }
+}
 // Cursor fields and inputNodes are caller-carried typed data, not authenticated proof of earlier checks. Only the host's cooperative start -> step chain with the same ordered completed parser output and authorised document/revision is meaningful. During validation, each step supplies the next contiguous node slice (at most 32); later checker phases receive the full ordered node list. Every step rechecks document/revision authority.
 fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> CheckerCursor {
   let authority = semantic_snapshot()
@@ -2527,7 +2542,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     if !(0 <= cursor.typeOffset) || length(inputNodes) <= cursor.typeOffset {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", checker_empty_node()))
     } else {}
-    let proposed = cursor.typeOffset + 16
+    let proposed = cursor.typeOffset + 8
     let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
     let chunk = collect_bindings_chunk(inputNodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
     if length(inputNodes) <= chunkEnd {
@@ -2555,7 +2570,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     if !(0 <= cursor.typeOffset) {
       return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", checker_empty_node()))
     } else {}
-    let chunkEnd = if length(cursor.bindingResult.bindings) <= 8 { length(cursor.bindingResult.bindings) } else { 8 }
+    let chunkEnd = if length(cursor.bindingResult.bindings) <= 4 { length(cursor.bindingResult.bindings) } else { 4 }
     let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
     let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)
     let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics }
@@ -2586,7 +2601,28 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
   } else {}
   if cursor.phase == "holes" {
     let holes = hole_facts(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references)
-    return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, holes, cursor.report)
+    return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, holes, cursor.report)
+  } else {}
+  if cursor.phase == "duplicate_functions" {
+    let proposed = cursor.typeOffset + 4
+    let chunkEnd = if proposed <= length(cursor.functions) { proposed } else { length(cursor.functions) }
+    var reversedDuplicates = cursor.report.diagnostics
+    var functionOffset = 0
+    for function in cursor.functions {
+      if cursor.typeOffset <= functionOffset && functionOffset + 1 <= chunkEnd && is_first_duplicate_function(cursor.functions, function.name, function.syntaxId) && !known_builtin(function.name) && !is_constructor(inputNodes, function.name) {
+        let declaration = lookup_node(inputNodes, function.syntaxId)
+        if declaration.found { reversedDuplicates = prepend(reversedDuplicates, diagnostic("PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", declaration.node)) } else {}
+      } else {}
+      functionOffset = functionOffset + 1
+    }
+    if length(cursor.functions) <= chunkEnd {
+      var reversedTypeDiagnostics = reverse(cursor.typeResult.diagnostics)
+      for item in reverse(reversedDuplicates) { reversedTypeDiagnostics = prepend(reversedTypeDiagnostics, item) }
+      let finalTypes = TypeAnalysis { expressionTypes: cursor.typeResult.expressionTypes, diagnostics: reverse(reversedTypeDiagnostics), unreachable: cursor.typeResult.unreachable }
+      return checker_replace(cursor, "report", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, finalTypes, 0, cursor.holes, checker_report_with_diagnostics(cursor.report, []))
+    } else {
+      return checker_replace(cursor, "duplicate_functions", false, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, chunkEnd, cursor.holes, checker_report_with_diagnostics(cursor.report, reversedDuplicates))
+    }
   } else {}
   if cursor.phase == "report" {
     let report = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
@@ -2617,5 +2653,9 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
   let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
   let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
-  return checker_report_from_parts(authority.document, authority.revision, nodes, functions, bindingResult, nameResult, typedBindings, typeResult, holes)
+  let duplicateDiagnostics = duplicate_function_diagnostics(nodes, functions)
+  var reversedTypeDiagnostics = reverse(typeResult.diagnostics)
+  for item in duplicateDiagnostics { reversedTypeDiagnostics = prepend(reversedTypeDiagnostics, item) }
+  let typeResultWithDuplicates = TypeAnalysis { expressionTypes: typeResult.expressionTypes, diagnostics: reverse(reversedTypeDiagnostics), unreachable: typeResult.unreachable }
+  return checker_report_from_parts(authority.document, authority.revision, nodes, functions, bindingResult, nameResult, typedBindings, typeResultWithDuplicates, holes)
 }

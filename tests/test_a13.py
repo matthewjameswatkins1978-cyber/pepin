@@ -313,8 +313,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
             scalar(fields(node)["kind"]) in binding_kinds
             for node in fields(parsed)["nodes"]["value"]
         )
-        maximum_steps = min(4096, 8 + ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) +
-                            (node_count + 3) // 4 + (binding_count + 7) // 8)
+        maximum_steps = min(4096, 9 + ((node_count + 31) // 32) + ((node_count + 7) // 8) +
+                            ((node_count + 15) // 16) + 2 * ((node_count + 3) // 4) + (binding_count + 3) // 4)
         for _ in range(maximum_steps):
             current = fields(value)
             if scalar(current["done"]):
@@ -388,9 +388,9 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(started.get("outcome"), "ok", started)
         self.assertEqual(started.get("revision"), self.tool_revision)
         cursor = started["result"]
-        phases = ["validation", "functions", "bindings", "names", "binding_types", "type_analysis", "holes", "report", "done"]
+        phases = ["validation", "functions", "bindings", "names", "binding_types", "type_analysis", "holes", "duplicate_functions", "report", "done"]
         seen = [scalar(fields(cursor)["phase"])]
-        for _ in range(8):
+        for _ in range(9):
             cursor_fields = fields(cursor)
             if scalar(cursor_fields["done"]):
                 break
@@ -496,7 +496,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         cursor_value = cursor["result"]
         step_count = 0
         type_analysis_steps = 0
-        while not scalar(fields(cursor_value)["done"]) and step_count < 32:
+        while not scalar(fields(cursor_value)["done"]) and step_count < 40:
             previous = fields(cursor_value)
             stepped = self.client.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                                         "tool": "pep-a13-checker-step", "arguments": [cursor_value, typed_list("CheckerNode", checker_nodes)],
@@ -1466,8 +1466,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(opened.get("outcome"), "ok", opened)
         self.assertEqual(opened.get("status"), "valid", opened)
 
-    def test_staged_checker_composes_ninety_six_function_roots(self):
-        count = 96
+    def test_staged_checker_composes_one_hundred_twenty_eight_function_roots(self):
+        count = 128
         declarations = [
             f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
             for index in range(count)
@@ -1475,7 +1475,7 @@ class A13FunctionResolutionTests(unittest.TestCase):
         declarations.append("fn main() -> Int { return 0 }")
         source = NL.join(declarations)
 
-        reference = self._reference_check("staged-96-function-roots", source)
+        reference = self._reference_check("staged-128-function-roots", source)
         parser_result = self._parse_staged(source)
         _, report = self._analyze_staged(source, parser_result=parser_result)
 

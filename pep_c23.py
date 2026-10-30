@@ -441,14 +441,11 @@ def checker_report(document, revision):
 
 
 def checker_cursor_value(document, revision, parsed, phase, done=False):
-    empty_node = typed_record_value("FlatAstNode", [
+    empty_node = typed_record_value("CheckerNode", [
         ("id", typed("Int", -1)), ("parentId", typed("Int", -1)),
         ("childIndex", typed("Int", -1)), ("role", typed("Str", "")),
         ("kind", typed("Str", "")), ("text", typed("Str", "")),
-        ("integerValue", typed("Int", 0)), ("booleanValue", typed("Bool", False)),
-        ("stringParts", typed_list("Str")), ("startByte", typed("Int", 0)),
-        ("endByte", typed("Int", 0)), ("line", typed("Int", 1)),
-        ("column", typed("Int", 1)),
+        ("startByte", typed("Int", 0)), ("endByte", typed("Int", 0)),
     ])
     empty_bindings = typed_record_value("BindingCollection", [
         ("bindings", typed_list("BindingFact")), ("diagnostics", typed_list("CheckDiagnostic")),
@@ -466,7 +463,7 @@ def checker_cursor_value(document, revision, parsed, phase, done=False):
     return typed_record_value("CheckerCursor", [
         ("document", typed("Str", document)), ("revision", typed("Str", revision)),
         ("phase", typed("Str", phase)), ("done", typed("Bool", done)),
-        ("parsed", parsed), ("nodes", typed_list("FlatAstNode")),
+        ("parsed", parsed), ("nodes", typed_list("CheckerNode")),
         ("functions", typed_list("CheckedFunction")), ("bindingResult", empty_bindings),
         ("nameResult", empty_names), ("typedBindings", typed_list("BindingFact")),
         ("typeResult", empty_types), ("typeOffset", typed("Int", 0)),
@@ -500,7 +497,7 @@ def check_target(session, parsed, target, tool_revision):
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        8 + ((node_count + 31) // 32) + 2 * ((node_count + 15) // 16) + (node_count + 3) // 4 + (binding_count + 7) // 8)
+                        9 + ((node_count + 31) // 32) + ((node_count + 7) // 8) + ((node_count + 15) // 16) + 2 * ((node_count + 3) // 4) + (binding_count + 3) // 4)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):
@@ -601,10 +598,10 @@ def emit(source_bytes, measurements=None):
 
         empty_expected = [
             ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
-            ("pep-c23-checker-start", "checker_start", [empty_parsed],
+            ("pep-c23-checker-start", "checker_start", [empty_parsed, typed("Int", 0)],
              checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation")),
             ("pep-c23-checker-step", "checker_step",
-             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation"), typed_list("FlatAstNode")],
+             [checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "validation"), typed_list("CheckerNode")],
              checker_cursor_value(sample["document"], sample["revision"], empty_parsed, "functions")),
         ]
         for tool, function, arguments, expected in empty_expected:
