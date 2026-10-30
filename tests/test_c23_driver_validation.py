@@ -102,6 +102,19 @@ class PepC23CheckerDriverTests(unittest.TestCase):
         self.assertGreater(measurements["checker_step_count"], 1)
         self.assertLess(measurements["checker_step_count"], measurements["checker_host_step_limit"])
 
+    def test_staged_driver_emits_composed_recursive_calls(self):
+        source = (
+            b"fn main() -> Int { return countdown(6) }\n"
+            b"fn countdown(value: Int) -> Int { if value <= 0 { return 42 } else { return countdown(value - 1) } }\n"
+        )
+        measurements = {}
+        c_source = emit(source, measurements)
+
+        self.assertIn("pep_fn_", c_source)
+        self.assertEqual(measurements["checker_status"], "valid")
+        self.assertEqual(measurements["emitter_status"], "emitted")
+        self.assertGreater(measurements["parser_node_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
