@@ -558,6 +558,13 @@ fn pattern_binding_visible_from(nodes: List[CheckerNode], pattern: CheckerNode) 
   } else {}
   return pattern.endByte
 }
+fn duplicate_binding_exists(bindings: List[BindingFact], ownerFunctionId: Int, scopeId: Int, name: Str) -> Bool {
+  for prior in bindings {
+    if prior.ownerFunctionId != ownerFunctionId { return false } else {}
+    if prior.scopeId == scopeId && prior.name == name { return true } else {}
+  }
+  return false
+}
 fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], startNode: Int, endNode: Int, previous: BindingCollection) -> BindingCollection {
   var reversed = previous.bindings
   var reversedDiagnostics: List[CheckDiagnostic] = []
@@ -582,8 +589,7 @@ fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunct
       if startNode <= nodeOffset && nodeOffset + 1 <= endNode && activeFunctionId != -1 && (parameter || local) {
         let scope = binding_scope_id(nodes, node, activeFunctionSyntaxId, activeFunctionId)
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
-        var duplicate = false
-        for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
+        let duplicate = duplicate_binding_exists(reversed, activeFunctionId, scope, node.text)
         let declaredInfo = declared_binding_info(nodes, node)
         let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
@@ -602,8 +608,7 @@ fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunct
       if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (parameter || local) {
         let scope = binding_scope_id(nodes, node, function.syntaxId, function.semanticId)
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
-        var duplicate = false
-        for prior in reversed { if prior.ownerFunctionId == function.semanticId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
+        let duplicate = duplicate_binding_exists(reversed, function.semanticId, scope, node.text)
         let declaredInfo = declared_binding_info(nodes, node)
         let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}

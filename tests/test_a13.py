@@ -2409,6 +2409,20 @@ class A13FunctionResolutionTests(unittest.TestCase):
                 self.assertEqual(actual, expected, (name, expected, actual, report))
                 self.assertEqual([item[0] for item in actual], [expected_code])
 
+    def test_duplicate_binding_search_stops_at_function_boundary(self):
+        source = NL.join([
+            "fn first(value: Int) -> Int { let local = value; return local }",
+            "fn second(value: Int) -> Int { let local = value; return local }",
+            "fn main() -> Int { return 0 }",
+        ])
+        reference = self._reference_check("same-bindings-in-separate-functions", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
+        self.assertNotIn("PEP_DUPLICATE_PARAMETER", codes)
+        self.assertNotIn("PEP_DUPLICATE_BINDING", codes)
+
     def test_match_subject_diagnostics_match_ocaml(self):
         cases = [
             ("integer-literal", "fn f() -> Int { return match 1 { _ => 0 } }", "PEP_MATCH_NON_UNION"),
