@@ -107,6 +107,7 @@ def checker_cursor(document, source, parsed, phase, *, done=False):
     empty_bindings = typed_record("BindingCollection", [
         ("bindings", typed_list("BindingFact", [])),
         ("diagnostics", typed_list("CheckDiagnostic", [])),
+        ("nextOrdinal", typed("Int", "0")),
     ])
     empty_names = typed_record("NameResolution", [
         ("references", typed_list("ResolvedName", [])),

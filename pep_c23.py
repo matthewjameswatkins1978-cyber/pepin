@@ -178,10 +178,11 @@ def checker_cursor_with_functions(cursor, functions):
     ])
 
 
-def checker_binding_result(bindings, diagnostics):
+def checker_binding_result(bindings, diagnostics, next_ordinal=0):
     return typed_record_value("BindingCollection", [
         ("bindings", typed_list("BindingFact", list(bindings))),
         ("diagnostics", typed_list("CheckDiagnostic", list(diagnostics))),
+        ("nextOrdinal", typed("Int", next_ordinal)),
     ])
 
 
@@ -1084,6 +1085,7 @@ def checker_cursor_value(document, revision, parsed, phase, done=False):
     ])
     empty_bindings = typed_record_value("BindingCollection", [
         ("bindings", typed_list("BindingFact")), ("diagnostics", typed_list("CheckDiagnostic")),
+        ("nextOrdinal", typed("Int", 0)),
     ])
     empty_names = typed_record_value("NameResolution", [
         ("references", typed_list("ResolvedName")), ("diagnostics", typed_list("CheckDiagnostic")),
@@ -1178,11 +1180,30 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_nodes[next_node:min(next_node + 32, node_count)]
         elif phase == "bindings":
+            if external_pending_bindings is None:
+                external_pending_bindings = []
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_binding_context_nodes(
                 checker_context_index, next_node, min(next_node + 8, node_count))
-            step_cursor = checker_cursor_with_functions(
-                cursor, checker_functions_for_context(external_functions, step_nodes))
+            step_functions = checker_functions_for_context(external_functions, step_nodes)
+            owner_ids = {
+                int(typed_field_value(
+                    typed_fields(function, "CheckedFunction", "checker binding context"),
+                    "semanticId", "Int", "checker binding context"))
+                for function in step_functions["value"]
+            }
+            binding_fields = typed_fields(
+                cursor_fields.get("bindingResult"), "BindingCollection", "checker binding context")
+            carried_bindings = typed_field_value(
+                binding_fields, "bindings", "List[BindingFact]", "checker binding context")
+            next_ordinal = int(typed_field_value(
+                binding_fields, "nextOrdinal", "Int", "checker binding context"))
+            step_cursor = checker_cursor_with_functions(cursor, step_functions)
+            step_cursor = checker_cursor_with_binding_result(
+                step_cursor,
+                checker_binding_result(
+                    checker_binding_facts_for_owners(carried_bindings, owner_ids)["value"], [],
+                    next_ordinal))
         elif phase == "names":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             step_nodes = checker_scope_context_nodes(
@@ -1296,6 +1317,15 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 step_cursor, checker_functions_for_context(external_functions, step_nodes))
         elif phase == "holes":
             step_nodes = checker_hole_context_nodes(checker_context_index)
+            hole_functions = checker_functions_for_context(external_functions, step_nodes)
+            hole_owner_ids = {
+                int(typed_field_value(
+                    typed_fields(function, "CheckedFunction", "checker hole context"),
+                    "semanticId", "Int", "checker hole context"))
+                for function in hole_functions["value"]
+            }
+            step_bindings = checker_binding_facts_for_owners(
+                external_typed_bindings["value"], hole_owner_ids)
             hole_context_ids = {
                 int(typed_field_value(typed_fields(node, "CheckerNode", "checker hole context"),
                                       "id", "Int", "checker hole context"))
@@ -1309,11 +1339,25 @@ def check_target(session, parsed, target, tool_revision, source_length,
             step_cursor = checker_cursor_with_results(
                 cursor, checker_name_result(hole_references), checker_empty_type_result())
         elif phase == "duplicate_functions":
-            step_nodes = checker_duplicate_context_nodes(checker_context_index)
+            function_names = [
+                typed_field_value(
+                    typed_fields(function, "CheckedFunction", "checker duplicate summary"),
+                    "name", "Str", "checker duplicate summary")
+                for function in external_functions
+            ]
+            has_duplicate_names = len(function_names) != len(set(function_names))
+            if has_duplicate_names:
+                step_nodes = checker_duplicate_context_nodes(checker_context_index)
+            else:
+                step_cursor = checker_cursor_with_functions(
+                    cursor, typed_list("CheckedFunction"))
+                step_nodes = []
+            step_bindings = typed_list("BindingFact")
             step_cursor = checker_cursor_with_results(
-                cursor, checker_name_result(),
+                step_cursor, checker_name_result(),
                 checker_type_result((), external_type_diagnostics, external_type_unreachable))
         elif phase == "report":
+            step_bindings = typed_list("BindingFact")
             step_cursor = checker_cursor_with_results(
                 cursor, checker_name_result((), external_name_diagnostics),
                 cursor_fields["typeResult"])
@@ -1331,11 +1375,32 @@ def check_target(session, parsed, target, tool_revision, source_length,
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
         cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+        if phase == "bindings":
+            binding_fields = typed_fields(
+                cursor_fields.get("bindingResult"), "BindingCollection", "checker binding delta")
+            returned_bindings = typed_field_value(
+                binding_fields, "bindings", "List[BindingFact]", "checker binding delta")
+            known_binding_ids = {
+                int(typed_field_value(
+                    typed_fields(binding, "BindingFact", "checker binding delta"),
+                    "semanticId", "Int", "checker binding delta"))
+                for binding in external_pending_bindings
+            }
+            new_bindings = [
+                binding for binding in returned_bindings
+                if int(typed_field_value(
+                    typed_fields(binding, "BindingFact", "checker binding delta"),
+                    "semanticId", "Int", "checker binding delta")) not in known_binding_ids
+            ]
+            external_pending_bindings.extend(reversed(new_bindings))
+            binding_deltas = typed_field_value(
+                binding_fields, "diagnostics", "List[CheckDiagnostic]", "checker binding delta")
+            external_binding_diagnostics.extend(reversed(binding_deltas))
         if phase == "functions" and typed_field_value(
                 cursor_fields, "phase", "Str", "checker cursor") != "functions":
             external_functions = typed_field_value(
                 cursor_fields, "functions", "List[CheckedFunction]", "checker cursor")
-        if phase in ("bindings", "names", "type_analysis"):
+        if phase in ("bindings", "names", "type_analysis", "duplicate_functions"):
             cursor = checker_cursor_with_functions(
                 cursor, typed_list("CheckedFunction", external_functions))
             cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
@@ -1343,10 +1408,11 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 cursor_fields, "phase", "Str", "checker cursor") == "names":
             binding_fields = typed_fields(
                 cursor_fields.get("bindingResult"), "BindingCollection", "checker name bindings")
-            external_pending_bindings = typed_field_value(
-                binding_fields, "bindings", "List[BindingFact]", "checker name bindings")
-            external_binding_diagnostics = typed_field_value(
-                binding_fields, "diagnostics", "List[CheckDiagnostic]", "checker name bindings")
+            if external_pending_bindings is None:
+                external_pending_bindings = typed_field_value(
+                    binding_fields, "bindings", "List[BindingFact]", "checker name bindings")
+                external_binding_diagnostics = typed_field_value(
+                    binding_fields, "diagnostics", "List[CheckDiagnostic]", "checker name bindings")
             binding_work_offset = 0
             cursor = checker_cursor_with_binding_result(
                 cursor, checker_binding_result([], external_binding_diagnostics))

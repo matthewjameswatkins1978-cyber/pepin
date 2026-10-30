@@ -9,7 +9,7 @@ type DeclaredBindingInfo { typeName: Str, typeShape: PepTypeShape }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape, startByte: Int, endByte: Int }
 type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
-type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic] }
+type BindingCollection { bindings: List[BindingFact], diagnostics: List[CheckDiagnostic], nextOrdinal: Int }
 type NameResolution { references: List[ResolvedName], diagnostics: List[CheckDiagnostic] }
 type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List[CheckDiagnostic], unreachable: UnreachableLookup }
 type FunctionAssembly { active: Bool, node: CheckerNode, arity: Int, resultShape: PepTypeShape, typeListNode: Int, typeListDepth: Int, ordinal: Int, nominalTypes: List[Str] }
@@ -646,7 +646,7 @@ fn duplicate_binding_exists(bindings: List[BindingFact], ownerFunctionId: Int, s
 fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], startNode: Int, endNode: Int, previous: BindingCollection) -> BindingCollection {
   var reversed = previous.bindings
   var reversedDiagnostics: List[CheckDiagnostic] = []
-  var ordinal = length(previous.bindings)
+  var ordinal = previous.nextOrdinal
   for node in nodes {
     let inRange = startNode <= node.id && node.id + 1 <= endNode
     let parameter = node.kind == "parameter"
@@ -672,12 +672,12 @@ fn collect_bindings_chunk(nodes: List[CheckerNode], functions: List[CheckedFunct
       ordinal = ordinal + 1
     } else {}
   }
-  return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics }
+  return BindingCollection { bindings: reversed, diagnostics: reversedDiagnostics, nextOrdinal: ordinal }
 }
 fn collect_bindings(nodes: List[CheckerNode], functions: List[CheckedFunction]) -> BindingCollection {
-  let empty = BindingCollection { bindings: [], diagnostics: [] }
+  let empty = BindingCollection { bindings: [], diagnostics: [], nextOrdinal: 0 }
   let partial = collect_bindings_chunk(nodes, functions, 0, length(nodes), empty)
-  return BindingCollection { bindings: reverse(partial.bindings), diagnostics: reverse(partial.diagnostics) }
+  return BindingCollection { bindings: reverse(partial.bindings), diagnostics: reverse(partial.diagnostics), nextOrdinal: partial.nextOrdinal }
 }
 fn resolve_names_chunk(nodes: List[CheckerNode], functions: List[CheckedFunction], bindings: List[BindingFact], startNode: Int, endNode: Int, previous: NameResolution) -> NameResolution {
   var reversedReferences = previous.references
@@ -2568,7 +2568,7 @@ fn checker_cursor_with_function_state(cursor: CheckerCursor, functions: List[Che
 }
 fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   let authority = semantic_snapshot()
-  let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
+  let emptyBindings = BindingCollection { bindings: [], diagnostics: [], nextOrdinal: 0 }
   let emptyNames = NameResolution { references: [], diagnostics: [] }
   let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: checker_empty_node() } }
   let report = empty_checker_report(authority.document, authority.revision)
@@ -2648,7 +2648,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
   if cursor.phase == "bindings" {
     let totalCount = cursor.validation.totalCount
     if totalCount == 0 && length(inputNodes) == 0 {
-      let empty = BindingCollection { bindings: [], diagnostics: [] }
+      let empty = BindingCollection { bindings: [], diagnostics: [], nextOrdinal: 0 }
       return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
     if !(0 <= cursor.typeOffset) || !(cursor.typeOffset + 1 <= totalCount) {
@@ -2665,7 +2665,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     } else {}
     let chunk = collect_bindings_chunk(inputNodes, cursor.functions, cursor.typeOffset, chunkEnd, cursor.bindingResult)
     if totalCount <= chunkEnd {
-      let result = BindingCollection { bindings: reverse(chunk.bindings), diagnostics: reverse(chunk.diagnostics) }
+      let result = BindingCollection { bindings: reverse(chunk.bindings), diagnostics: reverse(chunk.diagnostics), nextOrdinal: chunk.nextOrdinal }
       return checker_replace(cursor, "names", false, cursor.functions, result, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
       return checker_replace(cursor, "bindings", false, cursor.functions, chunk, cursor.nameResult, [], cursor.typeResult, chunkEnd, cursor.holes, cursor.report)
@@ -2709,7 +2709,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
     let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, externalTypedBindings)
     let bindingTypeDelta = take_binding_prefix(chunk, chunkEnd)
     let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)
-    let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics }
+    let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics, nextOrdinal: cursor.bindingResult.nextOrdinal }
     if length(remainingBindings) == 0 {
       return checker_replace(cursor, "type_analysis", false, cursor.functions, nextBindingResult, cursor.nameResult, bindingTypeDelta, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {
@@ -2771,7 +2771,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode], externalTy
   if cursor.phase == "report" {
     let rawReport = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, externalTypedBindings, cursor.typeResult, cursor.holes)
     let report = checker_report_with_syntax_node_count(rawReport, cursor.validation.totalCount)
-    let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
+    let emptyBindings = BindingCollection { bindings: [], diagnostics: [], nextOrdinal: 0 }
     let emptyNames = NameResolution { references: [], diagnostics: [] }
     let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: checker_empty_node() } }
     return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
