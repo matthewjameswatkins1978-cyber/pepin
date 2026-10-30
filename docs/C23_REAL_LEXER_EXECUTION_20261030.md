@@ -886,6 +886,43 @@ The honest summary of distance: the accepted slice passes because it is written 
 the narrow dialect the emitter accepts. Lucy's actual lexer is written in a
 different dialect — `let` inside loops and `else { }` throughout — and closing that
 stylistic gap matters far more than adding further expression forms.
+
+## Straight-line boundary extension blocked, and budget-masking caught a third time (Agent 3)
+
+Tried to widen the accepted slice's native coverage from five sampled bytes toward
+the real boundaries (0/47/48/57/58/64/65/90/91/94/95/96/97/122/123/127/128/255)
+using straight-line code rather than a loop, to avoid the `let`-in-loop wall. It
+does not work, and the reason is instructive.
+
+The accumulator shape itself is unsupported, independent of size:
+
+| program | result |
+| --- | --- |
+| `var total = 7` then `return total` | **emits** |
+| `if 1 <= 2 { return helper(1) } else { return helper(0) }` | **emits** |
+| `var total = 0`, then `if c { total = total + 1 } else { total = total + 0 }`, then `return total` | **unsupported** — "functions require local bindings and supported loops followed by one return" |
+
+So mutating a local inside a conditional requires a surrounding supported loop. A
+plain `var` with a return is fine; a conditional-return without `var` is fine; the
+combination is not.
+
+**And when the classifier closure is present, that construct limitation is not what
+you see.** With the same program plus the three classifier functions, every size
+from 2 statements (240 bytes) upward reports `STEP_LIMIT[emitter]` instead — the
+budget error fires before the construct check. That is the third independent
+occurrence of this masking (checker earlier, loop bodies earlier, emitter now), and
+it is the strongest argument yet for reordering: a compiler author told "step
+budget exceeded" will go and optimise, when the actual answer is "this shape is not
+supported".
+
+**Correction to my own ladder.** A first version of this probe compared
+"with closure" against "without closure", but the without-closure variant
+references `ascii_continue` and so fails for an undefined function — that column was
+meaningless, not evidence. The valid comparison is the self-contained table above.
+
+Consequence for the slice claim: native coverage stays at the five sampled byte
+values. Widening it needs either the construct (`var` in a conditional) or a
+straight-line form the emitter accepts, and neither exists today.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
