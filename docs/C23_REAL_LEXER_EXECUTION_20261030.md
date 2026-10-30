@@ -2070,6 +2070,61 @@ narrower: the parameter limit affects three constructors, the local-comparison r
 family of tests, and the budget affects throughput. Without list-valued fields, Lucy's
 lexer state cannot be described in the emitted language at all, so no amount of the other
 four fixes produces a compilable lexer.
+
+## The language supports list record fields; only the emitter refuses them (Agent 3)
+
+Completed the census with the classification that matters most: is the `List` record-field
+refusal a *language* limitation or an *emitter* gap?
+
+| program | checker | emitter | interpreter |
+| --- | --- | --- | --- |
+| `type Box { xs: List[Int] }` | **valid** | unsupported | runs |
+| `type Inner { x: Int }` / `type Outer { items: List[Inner] }` | **valid** | unsupported | runs |
+| build a `Box { xs: [1, 2] }`, read `b.xs`, take `length` | **valid** | unsupported | **runs, returns 2** |
+
+So the language accepts list-valued record fields, the checker types them, and the interpreter
+executes them correctly. **Only the emitter refuses.** That converts the gating blocker from a
+design question into a bounded implementation task, and it means nobody needs to argue about
+whether Pep should have list fields — it does.
+
+(Separately, `LexProgress` — `tokens: List[LexToken]` — is rejected earlier, at the checker.
+That is a different condition and remains unexplained; the `List[Inner]` case above proves the
+general shape is fine, so something specific to that declaration is involved.)
+
+### Verification handoff — the state a successor should start from
+
+**Headline metric (re-run this first):** the type and function census. It is the cleanest
+single progress number toward a compilable lexer:
+
+- types emittable: **1 of 4** (`SourcePosition`; `LexToken`, `LexCursor`, `LexProgress` blocked)
+- functions emittable: **3 of 9** (the character classifiers; three constructors blocked by the
+  four-parameter limit, `lexer_step` by a checker envelope, others by their types)
+
+**Line health:** Agent 1 `bff9dad` — 276 tests across fifteen modules, three known failures
+(two stale `test_a14_c23` expectations, one arena CRLF). Agent 2 `26be4be` — suite reaches 16
+tests on short-circuit work; its emitter cannot emit the accepted slice for budget reasons.
+
+**Ranked blockers, each with a reproduction in this report:**
+
+| # | blocker | repro |
+| --- | --- | --- |
+| 1 | `List` record fields (emitter only) | `type Box { xs: List[Int] }` |
+| 2 | four-parameter limit | `fn f(a,b,c,d) -> Int { return 0 }` |
+| 3 | local compared in a return | five-line reproduction |
+| 4 | emitter step budget | boundary ladder |
+| 5 | checker typed-node envelope | `lexer_step` |
+
+**Things verified as working, which should not be re-litigated:** emitted C is deterministic
+and path-clean; emitted code is UBSan- and ASan-clean across records, lists, strings,
+recursion; the Lean 4 model builds with its negative control still rejecting; the classifier
+slice emits natively on an integrated branch; and two of three emitter refusals are provably
+independent of both emitter generations.
+
+**Five wrong turns I took, recorded so they are not repeated:** the collection failures were
+not semantic (budget/construct); there was no order dependence; the `var` reading was wrong
+(the factor is a local in a returned comparison, and mutability is irrelevant); my "one-line"
+validation-vector fix was insufficient; and my first binary-determinism result was a
+same-second artefact. Each cost a round; each is documented above with the correction.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
