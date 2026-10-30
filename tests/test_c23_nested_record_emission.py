@@ -1394,6 +1394,16 @@ fn main() -> Int { return choose(true) }
 }
 fn main() -> Int { return classify(0) }
 """
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            reference = pathlib.Path(temp_dir) / "ordered-conditionals.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "2\n")
+
         generated = emit(source_text.encode("utf-8"))
         self.assertEqual(generated.count("if (!!"), 2, generated)
         self.assertLess(generated.index("pep_arg_1 <= 0"),
