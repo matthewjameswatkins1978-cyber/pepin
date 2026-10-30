@@ -1279,26 +1279,61 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
               PepC23NodeLookup { found: false, node: empty_node() }, recursiveBinding)
           } else {
             let base = pep_c23_child(nodes, result.node.id, "value", 0)
+            let firstRecord = if payloadType.node.kind == "type_named" {
+              pep_c23_record_declaration(nodes, payloadType.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let firstParentRecord = if result.node.kind == "field_access" && base.found && firstRecord.found {
+              pep_c23_union_payload_record_path_type(nodes, firstRecord.node,
+                patternArgument.node.text, base.node)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let secondRecord = if secondPayloadType.node.kind == "type_named" {
+              pep_c23_record_declaration(nodes, secondPayloadType.node.text)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
+            let secondParentRecord = if result.node.kind == "field_access" && base.found && secondRecord.found {
+              pep_c23_union_payload_record_path_type(nodes, secondRecord.node,
+                secondPatternArgument.node.text, base.node)
+            } else { PepC23NodeLookup { found: false, node: empty_node() } }
             var projectionIndex = -1
-            var projectionType = payloadType.node
-            if result.node.kind == "field_access" && base.found &&
-               base.node.kind == "name" && base.node.text == patternArgument.node.text {
+            var projectionBindingName = ""
+            var projectionRecord = PepC23NodeLookup { found: false, node: empty_node() }
+            var parentRecord = PepC23NodeLookup { found: false, node: empty_node() }
+            if firstParentRecord.found {
               projectionIndex = 0
+              projectionBindingName = patternArgument.node.text
+              projectionRecord = firstRecord
+              parentRecord = firstParentRecord
             } else {}
-            if result.node.kind == "field_access" && base.found &&
-               base.node.kind == "name" && base.node.text == secondPatternArgument.node.text {
+            if secondParentRecord.found {
               projectionIndex = 1
-              projectionType = secondPayloadType.node
+              projectionBindingName = secondPatternArgument.node.text
+              projectionRecord = secondRecord
+              parentRecord = secondParentRecord
             } else {}
-            if projectionIndex != -1 && projectionType.kind == "type_named" {
-              let record = pep_c23_record_declaration(nodes, projectionType.text)
-              let field = if record.found {
-                pep_c23_record_field_declaration(nodes, record.node, result.node.text)
+            if projectionIndex != -1 {
+              let field = pep_c23_record_field_declaration(nodes, parentRecord.node, result.node.text)
+              let fieldType = if field.found {
+                pep_c23_child(nodes, field.node.id, "type", 0)
               } else { PepC23NodeLookup { found: false, node: empty_node() } }
-              if !record.found || !field.found {
+              if !field.found || !fieldType.found {
                 return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
               } else {}
-              resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant, 2, projectionIndex, field, false)
+              if base.node.kind == "name" {
+                resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
+                  variant, 2, projectionIndex, field, false)
+              } else {
+                if pep_c23_c_scalar_type(fieldType.node) == "" {
+                  return pep_c23_unsupported("Pep C23 nested record payload projection requires a scalar terminal field")
+                } else {}
+                resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
+                  variant, 2, projectionIndex,
+                  PepC23NodeLookup { found: false, node: empty_node() }, false)
+                for pathPart in pep_c23_union_payload_record_path_parts(nodes,
+                  projectionRecord.node, projectionBindingName, base.node) {
+                  resultParts = append(resultParts, pathPart)
+                }
+                resultParts = append(resultParts, ".pep_field_")
+                resultParts = append(resultParts, int_text(field.node.childIndex))
+              }
             } else {
               let loweredResult = pep_c23_expression(nodes, function, result.node)
               if loweredResult.status != "emitted" { return loweredResult } else {}
