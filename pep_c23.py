@@ -178,6 +178,30 @@ def checker_cursor_with_functions(cursor, functions):
     ])
 
 
+def checker_binding_result(bindings, diagnostics):
+    return typed_record_value("BindingCollection", [
+        ("bindings", typed_list("BindingFact", list(bindings))),
+        ("diagnostics", typed_list("CheckDiagnostic", list(diagnostics))),
+    ])
+
+
+def checker_cursor_with_binding_result(cursor, binding_result):
+    typed_fields(cursor, "CheckerCursor", "checker cursor")
+    return typed_record_value("CheckerCursor", [
+        (item["name"], binding_result if item["name"] == "bindingResult" else item["value"])
+        for item in cursor["fields"]
+    ])
+
+
+def checker_binding_facts_for_owners(bindings, owner_ids):
+    return typed_list("BindingFact", [
+        binding for binding in bindings
+        if int(typed_field_value(
+            typed_fields(binding, "BindingFact", "checker binding context"),
+            "ownerFunctionId", "Int", "checker binding context")) in owner_ids
+    ])
+
+
 def checker_functions_for_context(functions, nodes):
     function_ids = {
         int(typed_field_value(
@@ -1110,6 +1134,9 @@ def check_target(session, parsed, target, tool_revision, source_length,
     external_name_references = []
     external_name_diagnostics = []
     external_functions = []
+    external_pending_bindings = None
+    external_binding_diagnostics = []
+    binding_work_offset = 0
     external_type_facts = []
     external_type_diagnostics = []
     external_type_unreachable = None
@@ -1145,13 +1172,24 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 cursor, checker_functions_for_context(external_functions, step_nodes))
         elif phase == "binding_types":
             binding_result = typed_fields(cursor_fields.get("bindingResult"), "BindingCollection", "checker bindings")
-            pending_bindings = typed_field_value(binding_result, "bindings", "List[BindingFact]", "checker bindings")
-            binding_count = min(4, len(pending_bindings))
+            if external_pending_bindings is None:
+                external_pending_bindings = typed_field_value(
+                    binding_result, "bindings", "List[BindingFact]", "checker bindings")
+                external_binding_diagnostics = typed_field_value(
+                    binding_result, "diagnostics", "List[CheckDiagnostic]", "checker bindings")
+                binding_work_offset = 0
+            work_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 5]
+            binding_count = min(4, len(work_bindings))
             syntax_ids = [
                 int(typed_field_value(typed_fields(binding, "BindingFact", "checker binding"),
                                       "syntaxId", "Int", "checker binding"))
-                for binding in pending_bindings[:binding_count]
+                for binding in work_bindings[:binding_count]
             ]
+            owner_ids = {
+                int(typed_field_value(typed_fields(binding, "BindingFact", "checker binding"),
+                                      "ownerFunctionId", "Int", "checker binding"))
+                for binding in work_bindings[:binding_count]
+            }
             step_nodes = checker_binding_type_context_nodes(checker_context_index, syntax_ids)
             context_ids = {
                 int(typed_field_value(
@@ -1167,6 +1205,10 @@ def check_target(session, parsed, target, tool_revision, source_length,
             ]
             step_cursor = checker_cursor_with_name_result(
                 cursor, checker_name_result(context_references))
+            step_cursor = checker_cursor_with_binding_result(
+                step_cursor, checker_binding_result(work_bindings, external_binding_diagnostics))
+            step_bindings = checker_binding_facts_for_owners(
+                external_typed_bindings["value"], owner_ids)
         elif phase == "type_analysis":
             next_node = int(typed_field_value(cursor_fields, "typeOffset", "Int", "checker cursor"))
             end_node = min(next_node + 1, node_count)
@@ -1270,6 +1312,18 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 name_result = checker_name_result(external_name_references, external_name_diagnostics)
             cursor = checker_cursor_with_name_result(cursor, name_result)
             cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
+            if next_phase == "binding_types":
+                binding_fields = typed_fields(
+                    cursor_fields.get("bindingResult"), "BindingCollection", "checker binding work")
+                external_pending_bindings = typed_field_value(
+                    binding_fields, "bindings", "List[BindingFact]", "checker binding work")
+                external_binding_diagnostics = typed_field_value(
+                    binding_fields, "diagnostics", "List[CheckDiagnostic]", "checker binding work")
+                binding_work_offset = 0
+                cursor = checker_cursor_with_binding_result(
+                    cursor, checker_binding_result(external_pending_bindings[:5],
+                                                   external_binding_diagnostics))
+                cursor_fields = typed_fields(cursor, "CheckerCursor", "checker step cursor")
         if phase == "type_analysis":
             next_phase = typed_field_value(cursor_fields, "phase", "Str", "checker cursor")
             if next_phase == "type_analysis":
@@ -1305,8 +1359,16 @@ def check_target(session, parsed, target, tool_revision, source_length,
         if phase == "binding_types":
             delta = typed_field_value(cursor_fields, "typedBindings", "List[BindingFact]", "checker binding delta")
             external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
-            if typed_field_value(cursor_fields, "phase", "Str", "checker cursor") != "binding_types":
+            binding_work_offset += binding_count
+            if typed_field_value(cursor_fields, "phase", "Str", "checker cursor") == "binding_types":
+                next_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 5]
+                cursor = checker_cursor_with_binding_result(
+                    cursor, checker_binding_result(next_bindings, external_binding_diagnostics))
+                cursor_fields = typed_fields(cursor, "CheckerCursor", "checker binding cursor")
+            else:
                 external_typed_bindings["value"].reverse()
+                external_pending_bindings = None
+                external_binding_diagnostics = []
         cursor = checker_cursor_without_typed_bindings(cursor)
         if cursor == previous_cursor:
             raise RuntimeError("Pep checker continuation did not make progress")

@@ -116,5 +116,32 @@ class PepC23CheckerDriverTests(unittest.TestCase):
         self.assertGreater(measurements["parser_node_count"], 0)
 
 
+    def test_staged_checker_completes_three_hundred_function_binding_batches(self):
+        count = 297
+        declarations = [
+            f"fn f{index}(p{index}: Int) -> Int {{ let x{index} = p{index}; return x{index} }}"
+            for index in range(count)
+        ]
+        declarations.extend([
+            "fn enabled() -> Bool { return true }",
+            "fn values() -> List[Int] { return [1] }",
+            "fn main() -> Int { return 0 }",
+        ])
+        source = ("\n".join(declarations) + "\n").encode()
+        measurements = {}
+        try:
+            emitted_source = emit(source, measurements)
+        except RuntimeError as error:
+            self.assertIn("request exceeds the 1 MiB JSONL message limit", str(error))
+            self.assertEqual(measurements["checker_status"], "valid")
+            self.assertNotIn("emitter_status", measurements)
+        else:
+            self.assertTrue(emitted_source)
+            self.assertEqual(measurements["emitter_status"], "emitted")
+        self.assertEqual(measurements["checker_node_count"], 2390)
+        self.assertGreater(measurements["checker_step_count"], 0)
+        self.assertLess(measurements["checker_max_request_bytes"], 1_048_576)
+
+
 if __name__ == "__main__":
     unittest.main()
