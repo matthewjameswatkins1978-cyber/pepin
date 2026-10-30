@@ -1,8 +1,8 @@
 name = "pep-value-copy"
 version = "0.1.0"
-defaultTargets = ["pep-value-copy"]
+defaultTargets = ["Verification"]
 # No dependencies: Lean core only (no Mathlib). Deliberately no [[require]]
 # section — an empty one risks manifest-validation rejection.
 
-[[leanLib]]
+[[lean_lib]]
 name = "Verification"

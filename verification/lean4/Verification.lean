@@ -9,7 +9,8 @@
   `BrokenVariant.lean` (package root) is deliberately NOT imported here;
   it must fail standalone checking (`lake env lean BrokenVariant.lean`).
 
-  Status: DRAFT, same BLOCKED_SECURITY build label as the modules.
+  Status: `MODEL_PROVED` — kernel-checked 2026-10-30 (see
+  verification/receipts/lean4-kernel-check.md).
 -/
 import Verification.ValueCopy
 import Verification.AliasedCounterexample

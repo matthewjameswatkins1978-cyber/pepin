@@ -1,6 +1,8 @@
 # V1 model ↔ implementation correspondence (Agent 3, V3 scoping)
 
-Status: `DRAFT`. This note records exactly what the Lean model in
+Status: `DRAFT` (bridge-obligation register; the model itself is now
+`MODEL_PROVED` — see `../receipts/lean4-kernel-check.md`, 2026-10-30).
+This note records exactly what the Lean model in
 `Verification/` claims about real Pep, and where the correspondence
 is strong, loose, or missing. It is a bridge *obligation* register,
 not a bridge proof. Nothing here upgrades any `DRAFT`/`TESTED` label.

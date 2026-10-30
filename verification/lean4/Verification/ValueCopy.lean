@@ -1,5 +1,5 @@
 /-
-  Pep value-copy model — DEC-001 subset (DRAFT, not kernel-checked).
+  Pep value-copy model — DEC-001 subset.
 
   Accepted source: PEP-LANG-FINAL-DRAFT-2026-10-27 §4 — ordinary data
   and collections are independent logical values; editing one copy must
@@ -16,12 +16,18 @@
   `none`, never UB); no FFI/host effects; no concurrency; no raw
   pointers; source-level values, not C23/OCaml representations.
 
-  Status: DRAFT. `lake build` is BLOCKED_SECURITY on the held host;
-  this file must be kernel-checked on an approved host before any
-  MODEL_PROVED claim. No `sorry`, `admit`, `axiom`, or `native_decide`.
-  Approved-host check MUST confirm the `cases h : e` / `simp_all`
-  idioms below elaborate as intended; fix tactics there, never the
-  theorem statements, if the kernel disagrees.
+  Status: kernel-checked locally on the (formerly held) Windows host
+  with leanprover/lean4:v4.35.0 after the #22 native clearance — see
+  verification/receipts/lean4-kernel-check.md for the actual run.
+  No `sorry`, `admit`, `axiom`, or `native_decide`.
+
+  Kernel-check amendments (tactics/instances only, statements verbatim):
+  - Core Lean has no `DecidableEq` deriving handler for NESTED
+    inductives, so `PepVal` carries a hand-written mutual decision
+    procedure instead of `deriving DecidableEq`.
+  - Bare `set` / `get` in tactic position are ambiguous with
+    `MonadStateOf.set` / `MonadState.get`, so tactics fully qualify
+    `_root_.set` / `_root_.get`.
 -/
 
 /-- Small Pep values: scalars plus nested lists (DEC-005 subset). -/
@@ -29,7 +35,33 @@ inductive PepVal where
   | int : Int → PepVal
   | bool : Bool → PepVal
   | list : List PepVal → PepVal
-  deriving DecidableEq, Repr
+  deriving Repr
+
+/- Hand-written structural decision procedure: core Lean's
+   `deriving DecidableEq` has no handler for nested inductives. -/
+mutual
+  def pepDecEq : (a b : PepVal) → Decidable (a = b)
+    | .int x, .int y => if h : x = y then isTrue (by simp [h]) else isFalse (by simp [h])
+    | .bool x, .bool y => if h : x = y then isTrue (by simp [h]) else isFalse (by simp [h])
+    | .list xs, .list ys =>
+      match listDecEq xs ys with
+      | isTrue h => isTrue (by simp [h])
+      | isFalse h => isFalse (by simp [h])
+    | .int _, .bool _ | .int _, .list _ | .bool _, .int _
+    | .bool _, .list _ | .list _, .int _ | .list _, .bool _ =>
+      isFalse (by simp)
+  def listDecEq : (xs ys : List PepVal) → Decidable (xs = ys)
+    | [], [] => isTrue rfl
+    | x :: xs, y :: ys =>
+      match pepDecEq x y, listDecEq xs ys with
+      | isTrue hxy, isTrue hxs => isTrue (by simp [hxy, hxs])
+      | isFalse hxy, _ => isFalse (by simp [hxy])
+      | _, isFalse hxs => isFalse (by simp [hxs])
+    | [], _ :: _ => isFalse (by simp)
+    | _ :: _, [] => isFalse (by simp)
+end
+
+instance : DecidableEq PepVal := pepDecEq
 
 /-- Structural index into a list level (own recursion keeps helper
     lemmas provable by plain structural induction). -/
@@ -120,9 +152,12 @@ def editOrig (s : Snap) (p : List Nat) (v : Int) : Option Snap :=
 theorem editOrig_copy (s : Snap) (p : List Nat) (v : Int) (s' : Snap)
     (h : editOrig s p v = some s') : s'.copy = s.copy := by
   simp only [editOrig] at h
-  cases hset : set s.orig p v with
-  | none => simp_all
-  | some o' => simp_all
+  cases hset : _root_.set s.orig p v with
+  | none => simp [hset] at h
+  | some o' =>
+    simp [hset] at h
+    subst s'
+    rfl
 
 /-- THEOREM 1 (edit takes effect): a legal edit observably installs the
     new scalar at the edited path. -/
@@ -132,34 +167,34 @@ theorem edit_takes_effect (a : PepVal) (p : List Nat) (v : Int) (a' : PepVal)
   induction p generalizing a a' with
   | nil =>
     cases a with
-    | int _ => simp_all [set, get]
-    | bool _ => simp [set] at h
-    | list _ => simp [set] at h
+    | int _ => simp_all [_root_.set, _root_.get]
+    | bool _ => simp [_root_.set] at h
+    | list _ => simp [_root_.set] at h
   | cons i rest ih =>
     cases a with
-    | int _ => simp [set] at h
-    | bool _ => simp [set] at h
+    | int _ => simp [_root_.set] at h
+    | bool _ => simp [_root_.set] at h
     | list xs =>
       have h' := h
-      simp only [set] at h'
+      simp only [_root_.set] at h'
       cases hidx : idx xs i with
       | none => simp_all
       | some x =>
         simp only [hidx] at h'
-        cases hset : set x rest v with
+        cases hset : _root_.set x rest v with
         | none => simp_all
         | some x' =>
           simp only [hset] at h'
           have ha : a' = .list (upd xs i x') := by
-            cases h'
-            rfl
+            injection h' with h2
+            exact h2.symm
           rw [ha]
-          simp only [get]
+          simp only [_root_.get]
           have hstep : idx (upd xs i x') i = some x' :=
             idx_upd_same xs i x' (by simp [hidx])
           rw [hstep]
           show get x' rest = some (.int v)
-          exact ih x' hset
+          exact ih x x' hset
 
 /-- THEOREM 2 (copy independence, DEC-001): editing the original of a
     copy-then-edit snapshot leaves every observation of the earlier
@@ -185,7 +220,7 @@ def exPath : List Nat := [0]
 def exNew : Int := 99
 
 /-- The edit is legal and computes to the rewritten list.
-    `#eval` witnesses this on an approved host. -/
+    `#eval` witnesses this on this host. -/
 def exEdited : Option PepVal := set exOrig exPath exNew
 #eval exEdited
 -- Expected: `some (PepVal.list [PepVal.int 99, PepVal.int 2, PepVal.int 3])`

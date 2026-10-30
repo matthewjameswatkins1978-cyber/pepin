@@ -1,0 +1,2 @@
+# Lean build products (never committed; regenerate with `lake build`).
+.lake/

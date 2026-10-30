@@ -1,7 +1,9 @@
 # Pep value-copy model (Lean 4, core only)
 
-**Status:** `DRAFT` — sources written, Lean NOT executed on this host.
-Build label: `BLOCKED_SECURITY` (see `../receipts/lean4-build-BLOCKED_SECURITY.md`).
+**Status:** `MODEL_PROVED` — kernel-checked locally on 2026-10-30 with
+pinned `leanprover/lean4:v4.35.0` after the issue #22 native clearance.
+Receipt: `../receipts/lean4-kernel-check.md`. Build label
+`BLOCKED_SECURITY` retired with the hold.
 
 ## Provenance
 
@@ -14,10 +16,9 @@ Build label: `BLOCKED_SECURITY` (see `../receipts/lean4-build-BLOCKED_SECURITY.m
 - Out of scope (explicit assumptions): no FFI/host effects, no
   concurrency, no raw pointers, statically valid index paths only,
   source-level values (not C23/OCaml representations).
-- Lean toolchain (pinned, official, NOT installed here):
-  `leanprover/lean4:v4.35.0` (stable 2026-10-12; v4.36.0 was still RC
-  on 2026-10-27). Install per https://lean-lang.org/install/manual/
-  with `elan` + `lake`, on a separately approved safe host only.
+- Lean toolchain (pinned, official, installed via `elan` on this host
+  after the #22 clearance): `leanprover/lean4:v4.35.0` (stable
+  2026-10-12).
 
 ## Layout
 
