@@ -811,6 +811,43 @@ checker the skips disappear and everything passes.
 **Practical consequence for the integrator:** the "carry the test file across"
 recipe is finished. The next integration must take `tests/pep_c23_emitter.pep` and
 `tests/test_c23_str_contains.py` together from `46c5af6`, on top of Agent 1 line.
+
+## Str comparison lowering: supported, with one principled refusal (Agent 3)
+
+Re-probing Str behaviour against the newest emitter (blob `8493e9d3`, from Agent 2
+`784050c`) on Agent 1 `eb8f7c0`. My first pass read as "Str comparison
+unsupported" and that was misleading, so the shape was bisected properly:
+
+| comparison form | result |
+| --- | --- |
+| `left == right` (both variables) | **emits** |
+| `left == "a"` / `"a" == right` (one literal) | **emits** |
+| `left != right` (variables) | **emits** |
+| `"a" == "a"` (both literals) | unsupported — "rejects two fallible Str comparison operands because C operand evaluation order is unspecified" |
+| `"a" != "b"` (both literals) | unsupported, same reason |
+
+So Str comparison lowering works. The single refusal is **both operands literal**,
+and the reason is principled rather than arbitrary: with two potentially trapping
+operands in a context where C leaves evaluation order unspecified, the emitter
+declines rather than picking an order silently. That is the same rule that rejects
+`INT64_MIN / -1` and the "two fallible operands" cases in the arithmetic path.
+
+Worth noting for whoever documents this: the same underlying restriction surfaces
+with **two different messages** depending on context — a conditional-return
+function whose `if` condition is a Str comparison reports "functions require local
+bindings and supported loops followed by one return", while `let same: Bool = "a"
+== "a"` reports the fallible-operands message. A user hitting the first would not
+guess it was about Str comparison at all.
+
+**Merge target re-verified** with Agent 2 newest tests (`784050c`):
+
+| state | result |
+| --- | --- |
+| `eb8f7c0` + `8493e9d3` emitter + `784050c` tests | **12 tests, OK, zero skips** |
+| same tree, `test_c23_cli` | 6/6 OK — the `"a" == "a"` exemplar is still refused, so no third merge-breaker |
+| same tree, accepted classifier slice | 1 test, OK |
+| same tree, `test_a14_c23` | 11 tests, 2 known failures (unchanged) |
+| same tree, `test_a12` | 23/23 OK |
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
