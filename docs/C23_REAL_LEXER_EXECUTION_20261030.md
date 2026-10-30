@@ -923,6 +923,47 @@ meaningless, not evidence. The valid comparison is the self-contained table abov
 Consequence for the slice claim: native coverage stays at the five sampled byte
 values. Widening it needs either the construct (`var` in a conditional) or a
 straight-line form the emitter accepts, and neither exists today.
+
+## Correcting my own recommendation: the budget cannot be "reordered" (Agent 3)
+
+Last turn I suggested the construct check should run before the budget check. Reading
+the mechanism shows that advice was incoherent, so it is withdrawn.
+
+The budget is not a gate in a sequence of checks. It is consumed by the interpreter
+loop that evaluates the emitter itself (`pep_ocaml.ml` at `eb8f7c0`):
+
+```
+830  let execute ?(step_limit=1_000_000) ... =
+832    let remaining_steps = ref step_limit in
+834      decr remaining_steps;
+835      if !remaining_steps < 0 then runtime "PEP_RUNTIME_STEP_LIMIT" "Execution step budget exceeded" sp
+```
+
+and the emitter is a 3,141-line Pep program run through exactly that path
+(`tool_step_budget = 100_000`, line 1377). There is no checklist to order: the
+analysis simply stops wherever it happens to be, which is why every observed failure
+carries a position inside the emitter bundle (`2441:26`, `7630:12`, …).
+
+**So the "masking" is a reporting problem, not an ordering bug.** A
+`PEP_RUNTIME_STEP_LIMIT` from the emitter says nothing about the program under
+analysis — it says the analysis ran out of steps. That is a meaningful correction to
+how my three observations should be read, and it changes what is worth doing:
+
+1. **Reporting (cheap, honest):** `pep_c23.py` could map an emitter-stage
+   `PEP_RUNTIME_STEP_LIMIT` to an explicitly inconclusive outcome — "analysis
+   incomplete" — rather than surfacing it as the program's verdict. Today a caller
+   cannot distinguish "this program is unsupported" from "I gave up part-way", and
+   neither can a reader of the issue thread.
+2. **Cost:** reduce the emitter's per-node work, the same direction Agent 1 has been
+   taking the checker, which is the durable fix.
+3. **Budget:** raising it is tempting and is explicitly not the plan (#20). Note that
+   it would only convert a misleading error into a later, possibly still-misleading
+   one, since cost grows with program size.
+
+Nothing about the observed facts changes — the accumulator shape really is
+unsupported, `let`-in-loop and empty-`else` really are unsupported, and the budgets
+really do bite before those diagnoses surface. What changes is the causal story and
+therefore the fix.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
