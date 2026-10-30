@@ -142,6 +142,43 @@ Both halves of the diagnosis above are now independently confirmed:
 
 So "native-verified" is legitimate only for the combination. Evidence pins and
 the exact integration instruction are recorded on issue #20.
+## Next-component probe — `utf8_check` under the combined state (Agent 3)
+
+Extracted `type Utf8Check` plus `fn utf8_check` verbatim from
+`examples/pep_lexer.pep` (87 lines, 2,825 bytes) and drove it from a harness
+calling `utf8_check(source_bytes(), 0, byte_length(source_bytes()))` — exactly
+how the lexer consumes its own input. Run against `3ec4679` + the `cb6a710`
+emitter (the combination that passes the classifier slice). Two blockers, both
+concrete:
+
+1. **`source_bytes()` is gated to a v2 semanticTarget.** The reference path
+   `pep.ps1 run` refuses with `PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is
+   available only for a host-authorised v2 semanticTarget`. So the reference
+   oracle used by the classifier slice (run in the interpreter, compare stdout)
+   **cannot** be used for `utf8_check`; its reference must come from the
+   semantic-target machinery.
+2. **The staged checker still exhausts its budget at this size.** `emit` fails
+   with `PEP_RUNTIME_STEP_LIMIT` on the 2.8 KB block in the combined state, with
+   the 100,000-step budget unchanged.
+
+### Correction to the ceiling characterisation above
+
+The earlier section described the wall as "roughly 300-400 bytes of source".
+That was a byte-based extrapolation from a ladder of uniformly shaped trivial
+functions, where bytes and node count were confounded. Measured more carefully,
+byte size is a **poor** proxy:
+
+| sample | shape | bytes | combined state |
+| --- | --- | --- | --- |
+| real classifier slice | 4 functions | 470 | **passes** |
+| trivial ladder | 9 functions | 255 | passes |
+| trivial ladder | 17 functions | 491 | fails `PEP_RUNTIME_STEP_LIMIT` |
+| `utf8_check` block | 1 dense function | 2,825 | fails `PEP_RUNTIME_STEP_LIMIT` |
+
+The binding quantity is AST/expression complexity rather than source bytes, and
+the true ceiling sits between these samples. It should be measured in nodes per
+phase rather than inferred from bytes — which is Agent 1 territory, and is what
+`checker_start/step` continuation billing exists to make possible.
 
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
