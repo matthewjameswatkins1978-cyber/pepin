@@ -127,6 +127,8 @@ fn ast_value_span(value: AstValue) -> AstSpan {
     AstUnary(op, operand, span) => span
     AstName(name, span) => span
     AstFunction(name, typeParameters, parameters, result, body, span) => span
+    AstList(items, span) => span
+    AstTypeList(element, span) => span
     _ => ast_value_span_part_1(value)
   }
 }
@@ -160,7 +162,6 @@ fn ast_value_span_part_4(value: AstValue) -> AstSpan {
 }
 fn ast_value_span_part_5(value: AstValue) -> AstSpan {
   return match value {
-    AstList(items, span) => span
     AstIfExpression(condition, yes, no, span) => span
     _ => ast_value_span_part_6(value)
   }
@@ -202,7 +203,6 @@ fn ast_value_span_part_10(value: AstValue) -> AstSpan {
 }
 fn ast_value_span_part_11(value: AstValue) -> AstSpan {
   return match value {
-    AstTypeList(element, span) => span
     AstTypeParameter(name, span) => span
     _ => ast_value_span_part_12(value)
   }
@@ -417,6 +417,11 @@ fn flat_node_fast_1(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
     AstAbsent() => state
+    AstList(items, span) => flat_composite(value, parentId, childIndex, role, "list", "", items, "element", state)
+    AstTypeList(element, span) => flat_composite(value, parentId, childIndex, role, "type_list", "", [element], "element_type", state)
+    AstMatchExpression(subject, arms, span) => flat_match_expression(value, parentId, childIndex, role, subject, arms, state)
+    AstMatchArm(pattern, result, span) => flat_match_arm(value, parentId, childIndex, role, pattern, result, state)
+    AstConstructorPattern(name, args, span) => flat_composite(value, parentId, childIndex, role, "constructor_pattern", name, args, "argument", state)
     AstName(name, span) => flat_plain(value, parentId, childIndex, role, "name", name, 0, false, [], state)
     _ => flat_node_fast_2(value, parentId, childIndex, role, state)
   }
@@ -528,7 +533,6 @@ fn flat_node_part_5(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
     AstUnary(op, operand, span) => flat_composite(value, parentId, childIndex, role, "unary", op, [operand], "operand", state)
-    AstList(items, span) => flat_composite(value, parentId, childIndex, role, "list", "", items, "element", state)
     _ => flat_node_part_6(value, parentId, childIndex, role, state)
   }
 }
@@ -551,7 +555,6 @@ fn flat_node_part_7(value: AstValue, parentId: Int, childIndex: Int, role: Str,
 fn flat_node_part_8(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
-    AstMatchExpression(subject, arms, span) => flat_match_expression(value, parentId, childIndex, role, subject, arms, state)
     AstWildcardPattern(span) => flat_plain(value, parentId, childIndex, role, "wildcard_pattern", "", 0, false, [], state)
     _ => flat_node_part_9(value, parentId, childIndex, role, state)
   }
@@ -560,14 +563,12 @@ fn flat_node_part_9(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
     AstBindingPattern(name, span) => flat_plain(value, parentId, childIndex, role, "binding_pattern", name, 0, false, [], state)
-    AstConstructorPattern(name, args, span) => flat_composite(value, parentId, childIndex, role, "constructor_pattern", name, args, "argument", state)
     _ => flat_node_part_10(value, parentId, childIndex, role, state)
   }
 }
 fn flat_node_part_10(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
-    AstMatchArm(pattern, result, span) => flat_match_arm(value, parentId, childIndex, role, pattern, result, state)
     AstTypeScalar(name, span) => flat_plain(value, parentId, childIndex, role, "type_scalar", name, 0, false, [], state)
     _ => flat_node_part_11(value, parentId, childIndex, role, state)
   }
@@ -576,7 +577,6 @@ fn flat_node_part_11(value: AstValue, parentId: Int, childIndex: Int, role: Str,
   state: FlatState) -> FlatState {
   return match value {
     AstTypeNamed(name, span) => flat_plain(value, parentId, childIndex, role, "type_named", name, 0, false, [], state)
-    AstTypeList(element, span) => flat_composite(value, parentId, childIndex, role, "type_list", "", [element], "element_type", state)
     _ => flat_node_part_12(value, parentId, childIndex, role, state)
   }
 }
