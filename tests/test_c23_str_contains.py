@@ -1233,6 +1233,172 @@ fn main() -> Int { return 0 }
                     self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES",
                                   malformed.stderr)
 
+    def test_lucy_source_byte_length_matches_interpreter_and_native_c23(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        length_binding = next(
+            line.strip() for line in lexer.splitlines()
+            if line.strip().startswith("let length = byte_length("))
+        self.assertEqual(length_binding, "let length = byte_length(source)")
+        source_text = (
+            "fn measure(source: SourceBytes) -> Int {\n"
+            f"  {length_binding}\n"
+            "  return length\n"
+            "}\n"
+            "fn main() -> Int { return 0 }\n")
+        reference_text = source_text + (
+            "fn probe() -> Int { return byte_length(source_bytes()) }\n")
+        vectors = [
+            ("empty", b""),
+            ("nul", bytes([0])),
+            ("ascii", b"Lucy"),
+            ("utf8", "λ🐇".encode("utf-8")),
+            ("all-bytes", bytes(range(256))),
+        ]
+
+        def digest(raw):
+            return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+        def req(op, **fields):
+            return {"schemaVersion": 3, "toolProtocolVersion": 2, "op": op, **fields}
+
+        def encoded(value):
+            return {"type": "Int", "value": str(value)}
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-byte-length.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+            generated = emit(source.read_bytes())
+            declaration = re.search(
+                r"int64_t pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+)\);",
+                generated)
+            self.assertIsNotNone(declaration, generated)
+            function_id = declaration.group(1)
+            self.assertIn(
+                "typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;",
+                generated)
+            self.assertIn("pep_byte_length(pep_arg_", generated)
+            self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES", generated)
+            self.assertIn("PEP_RUNTIME_LENGTH_RANGE", generated)
+
+            reference_revision = digest(reference_text.encode("utf-8"))
+            requests = [req("open", source=reference_text, name="byte-length-program")]
+            targets = []
+            for index, (name, raw) in enumerate(vectors):
+                document = "doc-" + str(index + 2)
+                targets.append((name, raw, document))
+                requests.append(req("open_bytes", bytes=list(raw)))
+            requests.append(req("tool_register", tool="byte-length-probe",
+                                document="doc-1", revision=reference_revision,
+                                function="probe"))
+            validate_index = len(requests)
+            requests.append(req("tool_validate", tool="byte-length-probe",
+                                document="doc-1", revision=reference_revision,
+                                testVectors=[
+                                    {"arguments": [], "expect": encoded(len(raw)),
+                                     "semanticTarget": {"document": document,
+                                                        "revision": digest(raw),
+                                                        "entryFunctions": []}}
+                                    for _, raw, document in targets
+                                ]))
+            activate_index = len(requests)
+            requests.append(req("tool_activate", tool="byte-length-probe",
+                                document="doc-1", revision=reference_revision))
+            invoke_start = len(requests)
+            for _, raw, document in targets:
+                requests.append(req("tool_invoke", tool="byte-length-probe", arguments=[],
+                                    semanticTarget={"document": document,
+                                                    "revision": digest(raw),
+                                                    "entryFunctions": []}))
+
+            session = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(PEP), "session", "--jsonl"],
+                cwd=ROOT, text=True,
+                input="".join(json.dumps(item, ensure_ascii=True) + "\n" for item in requests),
+                capture_output=True, check=False)
+            self.assertEqual(session.returncode, 0, session.stderr)
+            responses = [json.loads(line) for line in session.stdout.splitlines()]
+            self.assertEqual(responses[validate_index]["status"], "Validated",
+                             responses[validate_index])
+            self.assertEqual(responses[activate_index]["status"], "Active",
+                             responses[activate_index])
+            interpreter_values = []
+            for index, (_, raw, _) in enumerate(targets):
+                response = responses[invoke_start + index]
+                self.assertNotIn("error", response, response)
+                result = response["result"]
+                self.assertEqual(result, encoded(len(raw)), response)
+                interpreter_values.append(result["value"])
+
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            byte_rows = []
+            calls = []
+            for index, (_, raw, _) in enumerate(targets):
+                if raw:
+                    byte_rows.append(
+                        f"  static const unsigned char input_{index}[] = "
+                        f"{{{', '.join(str(value) for value in raw)}}};\n")
+                    source_view = (
+                        f"(pep_source_bytes){{input_{index}, sizeof input_{index}}}")
+                else:
+                    source_view = "(pep_source_bytes){NULL, 0}"
+                calls.append(
+                    f"  (void)printf(\"%lld\\n\", (long long)pep_fn_{function_id}("
+                    f"{source_view}));\n")
+            harness = (
+                "#include <stddef.h>\n#include <stdint.h>\n#include <stdio.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(int argc, char **argv) {\n"
+                "  static const unsigned char byte = 0;\n"
+                "  if (argc > 1) {\n"
+                f"    if (argv[1][0] == 'm') (void)pep_fn_{function_id}((pep_source_bytes){{NULL, 1}});\n"
+                f"    if (argv[1][0] == 'r' && SIZE_MAX > (size_t)INT64_MAX) "
+                f"(void)pep_fn_{function_id}((pep_source_bytes){{&byte, (size_t)((uintmax_t)INT64_MAX + UINTMAX_C(1))}});\n"
+                "    return 0;\n  }\n" +
+                "".join(byte_rows) +
+                "".join(calls) +
+                "  return 0;\n}\n")
+            harness_path = folder / "lucy-byte-length-harness.c"
+            harness_path.write_text(harness, encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-byte-length-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout.splitlines(), interpreter_values)
+                    malformed = subprocess.run(
+                        [str(executable), "malformed"], cwd=folder,
+                        text=True, capture_output=True, check=False)
+                    self.assertNotEqual(malformed.returncode, 0)
+                    self.assertEqual(malformed.stdout, "")
+                    self.assertIn("PEP_RUNTIME_INVALID_SOURCE_BYTES",
+                                  malformed.stderr)
+                    overflow = subprocess.run(
+                        [str(executable), "range"], cwd=folder,
+                        text=True, capture_output=True, check=False)
+                    if "PEP_RUNTIME_LENGTH_RANGE" in generated:
+                        self.assertNotEqual(overflow.returncode, 0)
+                        self.assertEqual(overflow.stdout, "")
+                        self.assertIn("PEP_RUNTIME_LENGTH_RANGE", overflow.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1882,6 +1882,21 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let thirdArgument = PepC23NodeLookup { found: thirdArgumentFound, node: thirdArgumentNode }
     let extraArgument = PepC23NodeLookup { found: extraArgumentFound, node: extraArgumentNode }
     let target = PepC23NodeLookup { found: targetFound, node: targetNode }
+    if node.text == "byte_length" {
+      if !argument.found || secondArgument.found || thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 byte_length requires one SourceBytes parameter")
+      } else {}
+      if argument.node.kind != "name" ||
+         !pep_c23_source_bytes_parameter(nodes, function, argument.node.text).found {
+        return pep_c23_unsupported("Pep C23 byte_length currently requires a direct SourceBytes parameter")
+      } else {}
+      let source = pep_c23_expression(nodes, function, argument.node)
+      if source.status != "emitted" { return source } else {}
+      var parts: List[Str] = ["pep_byte_length("]
+      for part in source.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
     if node.text == "byte_at" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 byte_at requires a SourceBytes parameter and one Int offset")
@@ -2694,6 +2709,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   reversed = prepend(reversed, "#include <stdlib.h>\n")
   if requiresArena { reversed = prepend(reversed, "#include \"pep_arena.h\"\n") } else {}
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;\n[[maybe_unused]] static int64_t pep_byte_at(pep_source_bytes source, int64_t offset) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if (offset < 0 || (uintmax_t)offset >= (uintmax_t)source.length) { fputs(\"PEP_RUNTIME_BYTE_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.data[(size_t)offset];\n}\n")
+  reversed = prepend(reversed, "[[maybe_unused]] static int64_t pep_byte_length(pep_source_bytes source) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if ((uintmax_t)source.length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_LENGTH_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.length;\n}\n")
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_str;\n[[maybe_unused]] static _Bool pep_str_equal(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length != right.length) { return 0; }\n  for (size_t i = 0; i < left.length; ++i) { if (left.data[i] != right.data[i]) { return 0; } }\n  return 1;\n}\n[[maybe_unused]] static _Bool pep_str_contains(pep_str haystack, pep_str needle) {\n  if ((haystack.length != 0 && haystack.data == NULL) || (needle.length != 0 && needle.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (needle.length == 0) { return 1; }\n  if (needle.length > haystack.length) { return 0; }\n  size_t limit = haystack.length - needle.length;\n  for (size_t i = 0; i <= limit; ++i) {\n    size_t j = 0;\n    while (j < needle.length && haystack.data[i + j] == needle.data[j]) { ++j; }\n    if (j == needle.length) { return 1; }\n  }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
