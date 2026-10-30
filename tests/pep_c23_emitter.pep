@@ -501,6 +501,7 @@ fn pep_c23_c_scalar_type(node: FlatAstNode) -> Str {
 fn pep_c23_c_record_field_type(nodes: List[FlatAstNode], owner: FlatAstNode, node: FlatAstNode) -> Str {
   let scalar = pep_c23_c_scalar_type(node)
   if scalar != "" { return scalar } else {}
+  if node.kind == "type_scalar" && node.text == "Str" { return "pep_str" } else {}
   if node.kind != "type_named" { return "" } else {}
   let nested = pep_c23_record_declaration(nodes, node.text)
   if !nested.found || !(nested.node.id + 1 <= owner.id) { return "" } else {}
@@ -759,6 +760,24 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
       return PepC23NodeLookup { found: false, node: empty_node() }
     } else {}
   }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
+fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind == "name" {
+    return pep_c23_str_parameter(nodes, function, value.text)
+  } else {}
+  if value.kind == "field_access" {
+    let owner = pep_c23_child(nodes, value.id, "value", 0)
+    if !owner.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let record = pep_c23_record_value_type(nodes, function, owner.node)
+    if !record.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let field = pep_c23_record_field_declaration(nodes, record.node, value.text)
+    if !field.found { return PepC23NodeLookup { found: false, node: empty_node() } } else {}
+    let fieldType = pep_c23_child(nodes, field.node.id, "type", 0)
+    if fieldType.found && fieldType.node.kind == "type_scalar" && fieldType.node.text == "Str" {
+      return PepC23NodeLookup { found: true, node: value }
+    } else {}
+  } else {}
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
@@ -1778,19 +1797,26 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let extraArgument = PepC23NodeLookup { found: extraArgumentFound, node: extraArgumentNode }
     let target = PepC23NodeLookup { found: targetFound, node: targetNode }
     if node.text == "str_contains" {
-      if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found ||
-         argument.node.kind != "name" || secondArgument.node.kind != "name" {
-        return pep_c23_unsupported("Pep C23 str_contains requires two direct Str parameter names")
+      if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 str_contains requires exactly two supported Str values")
       } else {}
-      let haystack = pep_c23_str_parameter(nodes, function, argument.node.text)
-      let needle = pep_c23_str_parameter(nodes, function, secondArgument.node.text)
+      let haystack = pep_c23_str_expression(nodes, function, argument.node)
+      let needle = pep_c23_str_expression(nodes, function, secondArgument.node)
       if !haystack.found || !needle.found {
-        return pep_c23_unsupported("Pep C23 str_contains arguments must resolve to direct Str parameters")
+        return pep_c23_unsupported("Pep C23 str_contains arguments must resolve to Str parameters or declared record fields")
       } else {}
+      let loweredHaystack = pep_c23_expression(nodes, function, argument.node)
+      let loweredNeedle = pep_c23_expression(nodes, function, secondArgument.node)
+      if loweredHaystack.status != "emitted" { return loweredHaystack } else {}
+      if loweredNeedle.status != "emitted" { return loweredNeedle } else {}
+      var parts: List[Str] = ["pep_str_contains("]
+      for part in loweredHaystack.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in loweredNeedle.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
       return PepC23Emission {
         status: "emitted",
-        sourceParts: ["pep_str_contains(pep_arg_", int_text(haystack.node.id), ", pep_arg_",
-          int_text(needle.node.id), ")"],
+        sourceParts: parts,
         diagnostic: ""
       }
     } else {}
@@ -2060,13 +2086,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !left.found || !right.found {
       return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
     } else {}
-    let leftStringParameter = if left.node.kind == "name" {
-      pep_c23_str_parameter(nodes, function, left.node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
-    let rightStringParameter = if right.node.kind == "name" {
-      pep_c23_str_parameter(nodes, function, right.node.text)
-    } else { PepC23NodeLookup { found: false, node: empty_node() } }
-    if leftStringParameter.found || rightStringParameter.found {
+    let leftStringValue = pep_c23_str_expression(nodes, function, left.node)
+    let rightStringValue = pep_c23_str_expression(nodes, function, right.node)
+    if leftStringValue.found || rightStringValue.found {
       return pep_c23_unsupported("Pep C23 Str comparison and binary operations are not yet lowered")
     } else {}
     if node.text != "&&" && node.text != "||" && pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
