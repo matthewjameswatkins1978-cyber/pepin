@@ -807,6 +807,14 @@ class PepCliTests(unittest.TestCase):
             "say(int_text(length(nested)))\n"
             "say(int_text(length(empty)))\n"
         )
+        checked = invoke("check", self.source(source), "--json")
+        self.assertEqual(checked.returncode, 0, checked.stdout)
+        checked_functions = json.loads(checked.stdout)["typedTree"]["functions"]
+        generic_identity = next(function for function in checked_functions if function["name"] == "identity")
+        self.assertEqual(generic_identity["typeParameters"], ["T"])
+        generic_first = next(function for function in checked_functions if function["name"] == "first")
+        self.assertEqual(generic_first["typeParameters"], ["T", "U"])
+
         result = invoke("run", self.source(source))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "7\n11\n1\n2\n1\n1\n")
