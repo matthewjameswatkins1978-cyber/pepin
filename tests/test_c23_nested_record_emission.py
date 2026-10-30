@@ -1,4 +1,5 @@
 import pathlib
+import re
 import subprocess
 import tempfile
 import unittest
@@ -337,6 +338,68 @@ fn main() -> Int {
             "fn main() -> Int { return 0 }\n")
         with self.assertRaisesRegex(ValueError, "unsupported layout"):
             emit(source_text.encode("utf-8"))
+
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_native_match_rejects_an_invalid_union_tag(self):
+        source_text = """type MaybeInt = Missing() | Some(Int)
+fn choose(value: MaybeInt) -> Int {
+  return match value {
+    Missing() => 0
+    Some(number) => number
+  }
+}
+fn main() -> Int { return choose(Some(7)) }
+"""
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "invalid-union-tag.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "reference.pep"
+            reference.write_text(
+                source_text + "say(int_text(main()))\n",
+                encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, "7\n")
+
+            generated = emit(source.read_bytes())
+            signature = re.search(
+                r"int64_t (pep_fn_\d+)\(pep_union_(\d+) pep_arg_\d+\);",
+                generated)
+            self.assertIsNotNone(signature, generated)
+            function_name, union_id = signature.groups()
+            generated_c = folder / "invalid-union-tag-generated.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            harness = folder / "invalid-union-tag-harness.c"
+            harness.write_text(
+                "#define main pep_generated_main\n"
+                "#include \"invalid-union-tag-generated.c\"\n"
+                "#undef main\n"
+                "int main(void) {\n"
+                f"  pep_union_{union_id} malformed = {{ .tag = UINT32_MAX }};\n"
+                f"  (void){function_name}(malformed);\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / (compiler.stem + "-invalid-union-tag.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2",
+                         str(harness), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(result.stderr, "PEP_RUNTIME_INVALID_UNION\n")
 
     def test_recursive_tree_union_uses_arena_and_checked_helper_passing(self):
         source_text = """type Tree = Leaf(Int) | Branch(Tree)
