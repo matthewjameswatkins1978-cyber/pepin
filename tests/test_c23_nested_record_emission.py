@@ -1355,6 +1355,76 @@ fn main() -> Int {
                             self.assertEqual(native.stdout, interpreted.stdout)
 
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_lucy_ascii_letter_boolean_expression_runs_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
+        lexer_text = lexer.decode("utf-8")
+        start = lexer_text.index("fn ascii_letter(")
+        end = lexer_text.index("\n}", start) + 2
+        function = lexer_text[start:end]
+        self.assertIn(
+            "return (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122) || byte == 95",
+            function)
+
+        values = (64, 65, 90, 91, 96, 97, 122, 123, 48, 95)
+        expected = "".join(
+            f"{int(value in (65, 90, 97, 122, 95))}\n" for value in values)
+        source_text = function + "\nfn main() -> Int { return 0 }\n"
+        reference_text = source_text + "".join(
+            f"say(int_text(if ascii_letter({value}) {{ 1 }} else {{ 0 }}))\n"
+            for value in values)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-ascii-letter.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-ascii-letter-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            self.assertIn(" && ", generated)
+            self.assertIn(" || ", generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            letter_match = re.search(
+                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+            self.assertIsNotNone(letter_match, generated)
+            calls = ", ".join(
+                f"pep_fn_{letter_match.group(1)}({value}) ? 1 : 0"
+                for value in values)
+            harness_path = folder / "harness.c"
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n#include \"generated.c\"\n#undef main\n"
+                "int main(void) {\n"
+                f"  printf(\"{('%d' + chr(92) + 'n') * len(values)}\", {calls});\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-ascii-letter-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_while_byte_at_local_and_conditional_assignment_emit_c23(self):
         source_text = """fn scan(source: SourceBytes, limit: Int) -> Int {
   var result = 0
