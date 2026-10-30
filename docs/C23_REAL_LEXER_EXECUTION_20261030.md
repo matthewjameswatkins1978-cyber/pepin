@@ -1670,6 +1670,54 @@ or something narrower — the 2×2 above is the smallest reproduction I have (fo
 One of my probe programs was itself invalid (returning `Bool` from an `Int` function); the
 checker and interpreter both rejected it with `PEP_TYPE_MISMATCH`, which was reassuring —
 they agree, and the mistake was mine.
+
+## Corrected: the unsupported rule is a local binding in a returned comparison, not `var` (Agent 3)
+
+Last round I attributed the 31 unsupported collection failures to "a mutable local in the
+callee". That is **wrong**, and the correction is cleaner than the original guess.
+
+Four more probes, all with a one-argument call site (avoiding the zero-argument confound):
+
+| callee body | result |
+| --- | --- |
+| `let b = 0` then `return b <= n` | **unsupported** |
+| `let b = 0`, `let c = 5`, then `return b <= c` | **unsupported** |
+| `var b = 0` then `return b <= n` | **unsupported** |
+| `var b = 0` then `return !(b <= n)` | **unsupported** |
+| `var b = true` then `return b` | **emits** |
+| `let b = 7` then `return b` (Int result) | **emits** |
+| `return 0 <= n` (no binding at all) | **emits** |
+
+So the factor is **a local binding participating in the comparison that is returned** — not
+mutability (`let` and `var` behave identically), and not comparison alone (a literal-only
+comparison emits). The earlier `var`-only reading came from probes whose call sites used
+zero-argument calls, which fail for a separate, already-documented reason; that confound is
+what made `var` look special.
+
+**The diagnostic remains the bigger problem.** Every case above reports:
+
+```
+Pep C23 unsupported: Pep C23 one-parameter calls require one argument and a call-free
+target expression
+```
+
+The failing calls have exactly one argument and a plainly named local target. So the text
+describes a condition that is satisfied. Someone reading it would look at call arity or
+call targets — I did, twice — and never at local bindings in returned comparisons.
+
+**Minimal reproduction for the builder:** five lines.
+
+```pep
+fn f(n: Int) -> Bool {
+  let b = 0
+  return b <= n
+}
+fn main() -> Int { return if f(1) { 42 } else { 0 } }
+```
+
+`emit` declines this with the arity message; the interpreter returns `42`. If the emitter
+genuinely cannot lower it, the diagnostic should say so in terms of the binding; if it can,
+this is a one-condition bug behind 31 test failures.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
