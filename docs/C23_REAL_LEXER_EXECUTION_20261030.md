@@ -1624,6 +1624,52 @@ Re-ran anyway at the current tree:
 - `lake env lean BrokenVariant.lean` → **exit 1**, the negative control still rejects
 
 So the proofs still compile and the build still actually checks them.
+
+## The 31 unsupported collection cases: partially isolated, and misreported (Agent 3)
+
+Second-priority work: characterising the 31 `Pep C23 unsupported` failures in the
+collections suite. Reproduced the real case exactly — the stdlib helper
+`list_bool_has_true_majority` plus a `main` calling it:
+
+```
+Pep C23 unsupported: Pep C23 one-parameter calls require one argument and a call-free
+target expression
+```
+
+while the interpreter returns `1` for the same program. So the program is valid and the
+emitter declines it.
+
+**A clean 2×2 isolates one factor:**
+
+| callee | called as | result |
+| --- | --- | --- |
+| `fn f(n: Int) -> Bool { var balance = 0; return !(balance <= 0) }` | `if f(1)` | **unsupported** |
+| `fn f(n: Int) -> Bool { return !(n <= 0) }` | `if f(1)` | **emits** |
+| `fn f(values: List[Bool]) -> Bool { var balance = 0; return !(balance <= 0) }` | `if f([true])` | **unsupported** |
+| `fn f(values: List[Bool]) -> Bool { return !(0 <= 0) }` | `if f([true])` | **emits** |
+
+So **a mutable local in the callee flips an accepted call to unsupported**, regardless of
+whether the parameter is `Int` or `List[Bool]`. And the diagnostic says nothing about
+`var`: it blames one-parameter call arity and a "call-free target expression" that are
+both demonstrably satisfied in the failing cases.
+
+**Where the isolation stops, stated plainly.** I could not reduce further. Four
+hypotheses were tested and disproved along the way — if-expression assignment in a `for`
+loop, list-literal arguments, unary-not around a comparison, and `var` plus a plain
+return (that one emits, as measured earlier). The later probes also hit a confound: calling
+a *zero-argument* function produces a different message ("zero-argument calls require a
+call-free scalar result …") and fails for that reason alone, so zero-argument probes cannot
+discriminate the `var` effect.
+
+**Recommendation:** this needs builder instrumentation rather than more black-box probing
+from this lane. Two concrete asks: (1) make the diagnostic name the real cause instead of
+the call-arity text, and (2) confirm whether the rule is "callee declares a mutable local"
+or something narrower — the 2×2 above is the smallest reproduction I have (four programs,
+~30 lines total).
+
+One of my probe programs was itself invalid (returning `Bool` from an `Int` function); the
+checker and interpreter both rejected it with `PEP_TYPE_MISMATCH`, which was reassuring —
+they agree, and the mistake was mine.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
