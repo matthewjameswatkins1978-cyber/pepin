@@ -168,6 +168,20 @@ fn pep_c23_union_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode,
   }
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
+fn pep_c23_str_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  for parameter in nodes {
+    if parameter.parentId == function.id && parameter.role == "parameter" &&
+       parameter.kind == "parameter" && parameter.text == name {
+      let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+      if parameterType.found && parameterType.node.kind == "type_scalar" &&
+         parameterType.node.text == "Str" {
+        return PepC23NodeLookup { found: true, node: parameter }
+      } else {}
+      return PepC23NodeLookup { found: false, node: empty_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: empty_node() }
+}
 fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "name" {
     let parameter = pep_c23_bool_list_parameter(nodes, function, node.text)
@@ -808,7 +822,10 @@ fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, val
   return PepC23NodeLookup { found: false, node: empty_node() }
 }
 fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str {
-  if node.kind == "type_scalar" { return pep_c23_c_scalar_type(node) } else {}
+  if node.kind == "type_scalar" {
+    if node.text == "Str" { return "pep_str" } else {}
+    return pep_c23_c_scalar_type(node)
+  } else {}
   if node.kind == "type_named" {
     let declaration = pep_c23_record_declaration(nodes, node.text)
     if declaration.found { return "pep_record" } else {}
@@ -1760,6 +1777,23 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let thirdArgument = PepC23NodeLookup { found: thirdArgumentFound, node: thirdArgumentNode }
     let extraArgument = PepC23NodeLookup { found: extraArgumentFound, node: extraArgumentNode }
     let target = PepC23NodeLookup { found: targetFound, node: targetNode }
+    if node.text == "str_contains" {
+      if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found ||
+         argument.node.kind != "name" || secondArgument.node.kind != "name" {
+        return pep_c23_unsupported("Pep C23 str_contains requires two direct Str parameter names")
+      } else {}
+      let haystack = pep_c23_str_parameter(nodes, function, argument.node.text)
+      let needle = pep_c23_str_parameter(nodes, function, secondArgument.node.text)
+      if !haystack.found || !needle.found {
+        return pep_c23_unsupported("Pep C23 str_contains arguments must resolve to direct Str parameters")
+      } else {}
+      return PepC23Emission {
+        status: "emitted",
+        sourceParts: ["pep_str_contains(pep_arg_", int_text(haystack.node.id), ", pep_arg_",
+          int_text(needle.node.id), ")"],
+        diagnostic: ""
+      }
+    } else {}
     if node.text == "contains" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 contains lowering requires a list and an Int value")
@@ -1907,10 +1941,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let directCallTarget = targetStatement.found && targetStatement.node.kind == "return" &&
       targetValue.found && targetValue.node.kind == "call" &&
       nestedReturnTarget.found && nestedReturnTarget.node.id != target.node.id
+    let directStrContainsTarget = targetStatement.found && targetStatement.node.kind == "return" &&
+      targetValue.found && targetValue.node.kind == "call" && targetValue.node.text == "str_contains"
     let conditionalTarget = (targetStatement.found && targetStatement.node.kind == "if_statement") ||
       (targetStatement.found && targetStatement.node.kind == "return" && targetValue.found && targetValue.node.kind == "if_expression") ||
       directLocalTarget ||
-      directCallTarget
+      directCallTarget ||
+      directStrContainsTarget
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
@@ -2022,6 +2059,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let right = pep_c23_child(nodes, node.id, "right", 1)
     if !left.found || !right.found {
       return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
+    } else {}
+    let leftStringParameter = if left.node.kind == "name" {
+      pep_c23_str_parameter(nodes, function, left.node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    let rightStringParameter = if right.node.kind == "name" {
+      pep_c23_str_parameter(nodes, function, right.node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+    if leftStringParameter.found || rightStringParameter.found {
+      return pep_c23_unsupported("Pep C23 Str comparison and binary operations are not yet lowered")
     } else {}
     if node.text != "&&" && node.text != "||" && pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
       return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
@@ -2292,7 +2338,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   let secondParameterCType = if secondParameterType.found { pep_c23_c_parameter_type(nodes, secondParameterType.node) } else { "" }
   let thirdParameterCType = if thirdParameterType.found { pep_c23_c_parameter_type(nodes, thirdParameterType.node) } else { "" }
   let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
-  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && parameterCType == "") || (secondParameter.found && secondParameterCType == "") || (thirdParameter.found && thirdParameterCType == "") || resultCType == "" || (function.text == "main" && result.node.text != "Int") {
+  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && parameterCType == "") || (secondParameter.found && secondParameterCType == "") || (thirdParameter.found && thirdParameterCType == "") || resultCType == "" || resultCType == "pep_str" || (function.text == "main" && result.node.text != "Int") {
     return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
@@ -2306,6 +2352,12 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
       if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
+        let stringParameterValue = if initialValue.node.kind == "name" {
+          pep_c23_str_parameter(nodes, function, initialValue.node.text)
+        } else { PepC23NodeLookup { found: false, node: empty_node() } }
+        if initialValue.node.kind == "string" || stringParameterValue.found {
+          return pep_c23_unsupported("Pep C23 string literals and Str local bindings are not yet lowered")
+        } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           let recursiveUnionList = if statement.kind == "let" {
             pep_c23_union_list_local_declaration(nodes, function, statement.text)
@@ -2492,6 +2544,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   reversed = prepend(reversed, "#include <stdint.h>\n")
   reversed = prepend(reversed, "#include <stdlib.h>\n")
   if requiresArena { reversed = prepend(reversed, "#include \"pep_arena.h\"\n") } else {}
+  reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_str;\n[[maybe_unused]] static _Bool pep_str_contains(pep_str haystack, pep_str needle) {\n  if ((haystack.length != 0 && haystack.data == NULL) || (needle.length != 0 && needle.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (needle.length == 0) { return 1; }\n  if (needle.length > haystack.length) { return 0; }\n  size_t limit = haystack.length - needle.length;\n  for (size_t i = 0; i <= limit; ++i) {\n    size_t j = 0;\n    while (j < needle.length && haystack.data[i + j] == needle.data[j]) { ++j; }\n    if (j == needle.length) { return 1; }\n  }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n[[maybe_unused]] static int64_t pep_checked_length(size_t length) { if ((uintmax_t)length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } return (int64_t)length; }\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
