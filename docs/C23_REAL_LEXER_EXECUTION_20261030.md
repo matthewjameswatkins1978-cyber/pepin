@@ -1335,6 +1335,41 @@ pre-push loop, or in a shared pre-push hook alongside `test_a12`.
 
 **Totals at `3d6774e`:** 109 checker-side tests green, 16 emit-path tests failing plus 5
 slice errors, all from one unpropagated type rename.
+
+## `39a487f` fixed the construct barrier and broke the verified slice (Agent 3)
+
+A trade-off this report did not expect, found by bisecting Agent 2's emitter series
+against a fixed Agent 1 base (`e0d1f89`, the last head whose bundle validates).
+
+Exactly one emitter-changing commit lies between the working and failing states:
+
+```
+39a487f  Lower byte locals and conditionals inside C23 loops
+         emitter 23ef2b19 -> e806ee66
+```
+
+The accepted classifier slice, run twice per state:
+
+| emitter | slice |
+| --- | --- |
+| `23ef2b19` (before `39a487f`) | **OK** — 2 of 2 runs |
+| `e806ee66` (after `39a487f`) | **FAILED — 5 errors, `stage=emitter`, `INCONCLUSIVE`** — 2 of 2 runs |
+
+So the commit that cleared the `utf8_check` construct barrier (the previous section's
+good news) simultaneously cost enough emitter budget that **the project's one verified
+native component stopped emitting**. It is not flaky: five consecutive runs across two
+emitters, both directions reproducible.
+
+This is not a defect in either change; it is the cost/coverage trade-off the budget
+creates. But it does mean the mission currently has **no state in which both hold**:
+before `39a487f` the slice emits and `utf8_check` is unconstructible; after it,
+`utf8_check` is constructible and the slice is `INCONCLUSIVE`.
+
+**Consequence for how progress should be measured:** "the slice passes" and "the loop
+constructs lower" are now mutually exclusive facts in the tree, and each was reported as
+progress without the other. The emitter's per-node cost is the variable connecting them,
+and it deserves a standing regression gate — the slice test itself, at 9–12 seconds, is
+the natural one.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
