@@ -3,10 +3,51 @@ import subprocess
 import tempfile
 import unittest
 
+from pep_c23 import PepCompilerToolBudgetError, invoke_tool
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PEP = ROOT / "pep.ps1"
 CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
 GCC = pathlib.Path(r"C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe")
+
+
+class PepToolBudgetErrorTests(unittest.TestCase):
+    def test_budget_error_separates_target_identity_from_bundle_location(self):
+        class FailedSession:
+            def send(self, request):
+                return {
+                    "schemaVersion": 3,
+                    "outcome": "error",
+                    "tool": request["tool"],
+                    "revision": "sha256:compiler-bundle",
+                    "error": {
+                        "code": "PEP_RUNTIME_STEP_LIMIT",
+                        "message": "Execution step budget exceeded at 2441:26",
+                    },
+                }
+
+        target = {
+            "document": "doc-target",
+            "revision": "sha256:target-bytes",
+            "entryFunctions": [],
+        }
+        for stage, tool in (
+            ("parser", "pep-c23-parser-step"),
+            ("checker", "pep-c23-checker-step"),
+        ):
+            with self.subTest(stage=stage):
+                with self.assertRaises(PepCompilerToolBudgetError) as captured:
+                    invoke_tool(FailedSession(), tool, [], target, "sha256:compiler-bundle",
+                                "profile failure", stage=stage)
+                error = captured.exception
+                self.assertEqual(error.stage, stage)
+                self.assertEqual(error.target_document, "doc-target")
+                self.assertEqual(error.target_revision, "sha256:target-bytes")
+                self.assertIsNone(error.target_span)
+                self.assertEqual(error.tool_source_location, "compiler-bundle:2441:26")
+                self.assertIn("target_source_span=unavailable", str(error))
+                self.assertIn("compiler_bundle_location=compiler-bundle:2441:26", str(error))
+                self.assertNotIn("target_location=2441:26", str(error))
 
 
 @unittest.skipUnless(CLANG.is_file(), f"Clang not installed at {CLANG}")

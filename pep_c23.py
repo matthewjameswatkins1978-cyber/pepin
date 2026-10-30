@@ -169,10 +169,45 @@ def typed_field_value(fields, name, type_name, label):
     return value.get("value")
 
 
-def invoke_tool(session, tool, arguments, semantic_target, tool_revision, label):
+class PepCompilerToolBudgetError(RuntimeError):
+    def __init__(self, stage, tool, target_document, target_revision, tool_revision,
+                 tool_source_location):
+        self.stage = stage
+        self.tool = tool
+        self.target_document = target_document
+        self.target_revision = target_revision
+        self.target_span = None
+        self.tool_revision = tool_revision
+        self.tool_source_location = tool_source_location
+        location = tool_source_location or "unavailable"
+        super().__init__(
+            f"stage={stage} code=PEP_RUNTIME_STEP_LIMIT; "
+            f"target_document={target_document}; target_revision={target_revision}; "
+            f"target_source_span=unavailable; compiler_tool={tool}; "
+            f"compiler_bundle_revision={tool_revision}; "
+            f"compiler_bundle_location={location}"
+        )
+
+
+def invoke_tool(session, tool, arguments, semantic_target, tool_revision, label, stage=None):
     response = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                              "op": "tool_invoke", "tool": tool,
                              "arguments": arguments, "semanticTarget": semantic_target})
+    if response.get("outcome") != "ok":
+        error = response.get("error", {})
+        if stage and error.get("code") == "PEP_RUNTIME_STEP_LIMIT":
+            message = error.get("message", "")
+            marker = " at "
+            location = None
+            if marker in message:
+                candidate = message.rsplit(marker, 1)[-1]
+                line, separator, column = candidate.partition(":")
+                if separator and line.isdigit() and column.isdigit():
+                    location = f"compiler-bundle:{line}:{column}"
+            raise PepCompilerToolBudgetError(
+                stage, tool, semantic_target.get("document", "unavailable"),
+                semantic_target.get("revision", "unavailable"), tool_revision, location
+            )
     require(response, "outcome", "ok", label)
     require(response, "tool", tool, label)
     require(response, "revision", tool_revision, label)
@@ -240,7 +275,7 @@ def parse_target(session, source_bytes, target, tool_revision):
                        "entryFunctions": []}
     start_started = time.perf_counter_ns()
     cursor = invoke_tool(session, "pep-c23-parser-start", [], semantic_target,
-                         tool_revision, "start parser")
+                         tool_revision, "start parser", stage="parser")
     parser_start_ms = (time.perf_counter_ns() - start_started) / 1_000_000
     parser_start_request_bytes = session.last_request_bytes
     parser_start_response_bytes = session.last_response_bytes
@@ -261,7 +296,7 @@ def parse_target(session, source_bytes, target, tool_revision):
         previous_cursor = cursor
         step_started = time.perf_counter_ns()
         chunk = invoke_tool(session, "pep-c23-parser-step", [cursor], semantic_target,
-                            tool_revision, "advance parser")
+                            tool_revision, "advance parser", stage="parser")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
@@ -418,7 +453,7 @@ def check_target(session, parsed, target, tool_revision):
     request_bytes_before = session.request_bytes_total
     response_bytes_before = session.response_bytes_total
     cursor = invoke_tool(session, "pep-c23-checker-start", [parsed], target,
-                         tool_revision, "start checker")
+                         tool_revision, "start checker", stage="checker")
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
     max_request_bytes = session.last_request_bytes
     max_response_bytes = session.last_response_bytes
@@ -436,7 +471,7 @@ def check_target(session, parsed, target, tool_revision):
         previous_cursor = cursor
         step_started = time.perf_counter_ns()
         cursor = invoke_tool(session, "pep-c23-checker-step", [cursor], target,
-                             tool_revision, "advance checker")
+                             tool_revision, "advance checker", stage="checker")
         step_elapsed_ms.append((time.perf_counter_ns() - step_started) / 1_000_000)
         max_request_bytes = max(max_request_bytes, session.last_request_bytes)
         max_response_bytes = max(max_response_bytes, session.last_response_bytes)
