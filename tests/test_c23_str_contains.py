@@ -567,6 +567,89 @@ fn ascii_continue(byte: Int) -> Bool {
                                      native.stdout + native.stderr)
                     self.assertEqual(native.stdout, interpreted.stdout)
 
+    def test_lucy_guarded_ascii_digit_condition_matches_lexer_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        self.assertIn(
+            "if !(length <= offset) && ascii_digit(byte_at(source, offset)) {",
+            lexer)
+        source_text = """fn ascii_digit(byte: Int) -> Bool {
+  return 48 <= byte && byte <= 57
+}
+
+fn available_digit_byte(length: Int, offset: Int, byte: Int) -> Int {
+  return if !(length <= offset) && ascii_digit(byte) { 1 } else { 0 }
+}
+
+fn main() -> Int { return 0 }
+"""
+        cases = ((0, 0, 48), (1, 0, 48), (1, 0, 57), (1, 0, 47),
+                 (2, 1, 56), (2, 2, 57), (3, 1, 65), (3, 1, 128))
+        def is_ascii_digit(value):
+            return 48 <= value <= 57
+        expected = "".join(
+            f"{int(length > offset and is_ascii_digit(byte))}\n"
+            for length, offset, byte in cases)
+        reference_text = source_text + "".join(
+            f"say(int_text(available_digit_byte({length}, {offset}, {byte})))\n"
+            for length, offset, byte in cases)
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-guarded-identifier.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-guarded-identifier-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            function = re.search(
+                r"int64_t pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                generated)
+            self.assertIsNotNone(function, generated)
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            calls = ", ".join(
+                f"(long long)pep_fn_{function.group(1)}({length}, {offset}, {byte})"
+                for length, offset, byte in cases)
+            format_string = "\\n".join("%lld" for _ in cases) + "\\n"
+            harness_path = folder / "lucy-guarded-identifier-harness.c"
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n"
+                '#include "generated.c"\n'
+                "#undef main\n"
+                "int main(void) {\n"
+                f'  printf("{format_string}", {calls});\n'
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-guarded-identifier-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_lucy_utf8_check_boolean_ranges_lower_natively(self):
         lexer_bytes = (ROOT / "examples" / "pep_lexer.pep").read_bytes().replace(b"\r\n", b"\n")
         blob = hashlib.sha1(f"blob {len(lexer_bytes)}\0".encode("ascii") + lexer_bytes).hexdigest()
