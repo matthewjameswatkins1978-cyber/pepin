@@ -233,6 +233,39 @@ a valid Pep checker report", which looked like an emitter defect. It is not:
 argument with `PEP_LIST_EXPECTED: Builtin 'contains' expects a List, found Str`.
 The emitter message was accurate. The Str builtin is `str_contains`. My probe was
 wrong, not the compiler.
+### Regression sweep at `e9abcd7`, and the size of the two remaining gaps
+
+Full sweep on the newest Agent 1 head, clean tree, no builder files touched:
+
+| suite | result | time |
+| --- | --- | --- |
+| `tests.test_a13` (pinned differential) | **76/76 OK** | 257.8s |
+| `tests.test_a12` | 23/23 OK | 26.7s |
+| `tests.test_a13_nested_records` | 13/13 OK | 36.2s |
+| `tests.test_a14_c23` (native, clang + gcc) | 11/11 OK | 56.4s |
+| `tests.test_c23_cli` | 6/6 OK | 15.6s |
+
+129 tests, all green. No regression from `e9abcd7`.
+
+**Gap 1 — `SourceBytes` lowering does not exist for target programs.** The
+emitter contains `source_bytes()` and `byte_length(source)` at lines 808-809,
+but those are the *emitter's own* Pep source running inside the tool, not
+lowering support for a target program. Anyone grepping the emitter for these
+names will find hits and conclude support exists; it does not. A
+`byte_length(source_bytes())` target therefore falls into the generic gate at
+line 2016 (`if !target.found || extraArgument.found`) and reports "calls require
+a known target and at most three arguments". Adding support means wiring
+`source_bytes`/`byte_length`/`byte_at` into the call-lowering path plus a
+`SourceBytes` runtime representation.
+
+**Gap 2 — `List` record fields are one mapper away.**
+`pep_c23_c_record_field_type` (line 501) maps scalar Int/Bool, `Str` →
+`pep_str`, and named records → "record"; anything else returns `""`, which the
+construction path turns into "record fields require Int, Bool, or a preceding
+record declaration". A `List[Int]` field is a list-kind type, so it falls
+through. Extending that mapper plus the record struct emission is a bounded
+change, but it is the gate standing between Lucy AST records and native
+emission.
 
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
