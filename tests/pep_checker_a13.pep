@@ -117,6 +117,13 @@ fn child_at(nodes: List[CheckerNode], parent: Int, role: Str, index: Int) -> Nod
   }
   return NodeLookup { found: false, node: empty_node() }
 }
+fn first_child_at(nodes: List[CheckerNode], parent: Int, role: Str) -> NodeLookup {
+  let child = lookup_node(nodes, parent + 1)
+  if child.found && child.node.parentId == parent && child.node.role == role && child.node.childIndex == 0 {
+    return child
+  } else {}
+  return NodeLookup { found: false, node: empty_node() }
+}
 fn type_name_at(nodes: List[CheckerNode], id: Int) -> Str {
   return legacy_type_name(type_shape_at(nodes, id))
 }
@@ -440,7 +447,8 @@ fn declared_binding_shape(nodes: List[CheckerNode], node: CheckerNode) -> PepTyp
 fn declared_binding_info(nodes: List[CheckerNode], node: CheckerNode) -> DeclaredBindingInfo {
   if node.kind == "binding_pattern" { return DeclaredBindingInfo { typeName: "", typeShape: empty_type_shape() } } else {}
   let role = if node.kind == "parameter" { "type" } else { "annotation" }
-  let declared = child_at(nodes, node.id, role, 0)
+  // Validated preorder IDs make a binding's first direct child the following node; this avoids scanning later AST nodes when no annotation exists.
+  let declared = first_child_at(nodes, node.id, role)
   if !declared.found { return DeclaredBindingInfo { typeName: "", typeShape: empty_type_shape() } } else {}
   let shape = type_shape_at(nodes, declared.node.id)
   let name = legacy_type_name(shape)
