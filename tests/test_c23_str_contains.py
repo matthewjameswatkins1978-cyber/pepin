@@ -344,6 +344,103 @@ say(int_text(bool_int(is_terminal("validate"))))
                                      native.stdout + native.stderr)
                     self.assertEqual(native.stdout, interpreted.stdout)
 
+    def test_lucy_cursor_record_string_conditions_lower_natively(self):
+        lexer = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+        self.assertIn('if cursor.stage == "validate" && cursor.mode != "" {', lexer)
+        self.assertIn('if cursor.stage == "done" || cursor.stage == "error" {', lexer)
+        source_text = """type LexState { stage: Str, mode: Str }
+fn should_validate(cursor: LexState) -> Bool {
+  return cursor.stage == "validate" && cursor.mode != ""
+}
+fn is_terminal(cursor: LexState) -> Bool {
+  return cursor.stage == "done" || cursor.stage == "error"
+}
+fn main() -> Int { return 0 }
+"""
+        reference_text = source_text + """fn bool_int(value: Bool) -> Int {
+  if value { return 1 } else { return 0 }
+}
+say(int_text(bool_int(should_validate(LexState { stage: "validate", mode: "scan" }))))
+say(int_text(bool_int(should_validate(LexState { stage: "validate", mode: "" }))))
+say(int_text(bool_int(should_validate(LexState { stage: "scan", mode: "scan" }))))
+say(int_text(bool_int(is_terminal(LexState { stage: "done", mode: "" }))))
+say(int_text(bool_int(is_terminal(LexState { stage: "error", mode: "" }))))
+say(int_text(bool_int(is_terminal(LexState { stage: "validate", mode: "scan" }))))
+"""
+        expected = "1\n0\n0\n1\n1\n0\n"
+
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            source = folder / "lucy-cursor-string-conditions.pep"
+            source.write_text(source_text, encoding="utf-8", newline="\n")
+            reference = folder / "lucy-cursor-string-reference.pep"
+            reference.write_text(reference_text, encoding="utf-8", newline="\n")
+
+            checked = self.invoke("check", source, "--json")
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, expected)
+
+            generated = emit(source.read_bytes())
+            record = re.search(
+                r"typedef struct \{(.*?)\} pep_record_(\d+);", generated, re.DOTALL)
+            self.assertIsNotNone(record, generated)
+            self.assertIn("pep_str pep_field_0;", record.group(1))
+            self.assertIn("pep_str pep_field_1;", record.group(1))
+            declarations = re.findall(
+                r"_Bool pep_fn_(\d+)\(pep_record_(\d+) pep_arg_\d+\);", generated)
+            self.assertEqual(len(declarations), 2, generated)
+            validate_id, record_id = declarations[0]
+            terminal_id, terminal_record_id = declarations[1]
+            self.assertEqual(record_id, terminal_record_id)
+
+            generated_path = folder / "generated.c"
+            generated_path.write_text(generated, encoding="utf-8", newline="\n")
+            harness_path = folder / "lucy-cursor-string-harness.c"
+            harness_path.write_text(
+                "#include <stdio.h>\n#include <stdint.h>\n"
+                "#define main pep_generated_main\n"
+                '#include "generated.c"\n'
+                "#undef main\n"
+                "int main(void) {\n"
+                "  static const unsigned char validate[] = {118, 97, 108, 105, 100, 97, 116, 101};\n"
+                "  static const unsigned char scan[] = {115, 99, 97, 110};\n"
+                "  static const unsigned char done[] = {100, 111, 110, 101};\n"
+                "  static const unsigned char error[] = {101, 114, 114, 111, 114};\n"
+                f"  pep_record_{record_id} active = {{ .pep_field_0 = {{ validate, sizeof validate }}, .pep_field_1 = {{ scan, sizeof scan }} }};\n"
+                f"  pep_record_{record_id} no_mode = {{ .pep_field_0 = {{ validate, sizeof validate }}, .pep_field_1 = {{ NULL, 0 }} }};\n"
+                f"  pep_record_{record_id} scanning = {{ .pep_field_0 = {{ scan, sizeof scan }}, .pep_field_1 = {{ scan, sizeof scan }} }};\n"
+                f"  pep_record_{record_id} completed = {{ .pep_field_0 = {{ done, sizeof done }}, .pep_field_1 = {{ NULL, 0 }} }};\n"
+                f"  pep_record_{record_id} failed = {{ .pep_field_0 = {{ error, sizeof error }}, .pep_field_1 = {{ NULL, 0 }} }};\n"
+                "  printf(\"%d\\n%d\\n%d\\n%d\\n%d\\n%d\\n\", "
+                f"pep_fn_{validate_id}(active), pep_fn_{validate_id}(no_mode), pep_fn_{validate_id}(scanning), "
+                f"pep_fn_{terminal_id}(completed), pep_fn_{terminal_id}(failed), pep_fn_{terminal_id}(active));\n"
+                "  return 0;\n"
+                "}\n",
+                encoding="utf-8", newline="\n")
+
+            if not (CLANG.is_file() and GCC.is_file()):
+                self.skipTest("Clang and GCC are required for native C23 verification")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = folder / f"lucy-cursor-string-{compiler.stem}.exe"
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2", str(harness_path),
+                         "-o", str(executable)],
+                        cwd=folder, text=True, capture_output=True, check=False)
+                    self.assertEqual(compiled.returncode, 0,
+                                     compiled.stdout + compiled.stderr)
+                    native = subprocess.run(
+                        [str(executable)], cwd=folder, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(native.returncode, 0,
+                                     native.stdout + native.stderr)
+                    self.assertEqual(native.stdout, interpreted.stdout)
+
     def test_native_string_literals_and_immutable_locals_preserve_source_bytes(self):
         source_text = r'''fn empty_literals() -> Bool {
   return str_contains("", "")
