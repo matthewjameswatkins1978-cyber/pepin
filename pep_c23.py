@@ -1146,7 +1146,7 @@ def check_target(session, parsed, target, tool_revision, source_length,
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 3) // 4)
+                        9 + 2 * ((node_count + 31) // 32) + ((node_count + 15) // 16) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + ((node_count + 7) // 8) + (binding_count + 7) // 8)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     external_typed_bindings = typed_list("BindingFact")
@@ -1215,8 +1215,8 @@ def check_target(session, parsed, target, tool_revision, source_length,
                 external_binding_diagnostics = typed_field_value(
                     binding_result, "diagnostics", "List[CheckDiagnostic]", "checker bindings")
                 binding_work_offset = 0
-            work_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 5]
-            binding_count = min(4, len(work_bindings))
+            work_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 9]
+            binding_count = min(8, len(work_bindings))
             syntax_ids = [
                 int(typed_field_value(typed_fields(binding, "BindingFact", "checker binding"),
                                       "syntaxId", "Int", "checker binding"))
@@ -1414,7 +1414,7 @@ def check_target(session, parsed, target, tool_revision, source_length,
             external_typed_bindings = typed_list("BindingFact", delta + external_typed_bindings["value"])
             binding_work_offset += binding_count
             if typed_field_value(cursor_fields, "phase", "Str", "checker cursor") == "binding_types":
-                next_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 5]
+                next_bindings = external_pending_bindings[binding_work_offset:binding_work_offset + 9]
                 cursor = checker_cursor_with_binding_result(
                     cursor, checker_binding_result(next_bindings, external_binding_diagnostics))
                 cursor_fields = typed_fields(cursor, "CheckerCursor", "checker binding cursor")
