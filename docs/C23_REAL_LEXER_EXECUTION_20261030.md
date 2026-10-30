@@ -994,6 +994,52 @@ one-test-larger suite).
 reported by a bare `require(emitted, "outcome", "ok", "emit checked source")` at
 `pep_c23.py:629`. So the inconclusive-outcome remedy proposed above has not landed
 yet, and emitter budget errors still read as program verdicts.
+
+## SourceBytes lowering has started landing (Agent 3)
+
+Agent 2's `7bfb819` ("Lower checked SourceBytes length to C23") moves the emitter to
+blob `23ef2b19` and adds `byte_length` lowering via a `pep_byte_length` runtime
+helper that checks a null data pointer with non-zero length and a length beyond
+`INT64_MAX`. Its suite runs **14 tests, OK, zero skips** on the combined target
+(`eb8f7c0` plus that emitter and tests).
+
+Measured support now, with `SourceBytes` as a function parameter:
+
+| form | result |
+| --- | --- |
+| `byte_length(source)` | **emits** |
+| `byte_at(source, 0)` | **emits** |
+| `byte_slice(source, 0, 1)` | unsupported — "calls require a known target and at most three arguments" |
+| `utf8_slice(source, 0, 1)` returning `Str` | unsupported — "functions require supported parameters and scalar or record results" |
+| `byte_length(source_bytes())` (the original blocker) | unsupported — **now with a specific message**: "byte_length currently requires a direct SourceBytes parameter" |
+
+That last row is real progress in its own right: the generic "calls require a known
+target" message became a precise statement of what the lowering needs.
+
+### What still stands between here and `utf8_check`
+
+The remaining obstruction is a function-shape rule, not `SourceBytes`:
+
+| function body | result |
+| --- | --- |
+| `let x = byte_at(source, o)` then `return x` | **emits** |
+| `if f(66) { return 1 } else { return 0 }` where `f` is a Pep function | **emits** |
+| `let x = byte_at(source, o)` then `if x <= 127 { return 1 } else { return 0 }` | unsupported |
+| `if byte_at(source, o) <= 127 { return 1 } else { return 0 }` | unsupported |
+| `let v = byte_at(...)`, `let small = v <= 127`, then `if small { ... }` | unsupported |
+
+So a conditional-return body tolerates a user-function call in the condition but not
+a builtin, and not a local binding alongside it — and hoisting the builtin into
+`let` does not help. The accepted slice passes because its condition is a
+user-function call with no bindings.
+
+**The actionable problem here is the diagnostic, not the restriction.** All four
+failing shapes return the identical "functions require local bindings and supported
+loops followed by one return". A compiler author cannot tell from that message
+whether the issue is the builtin, the binding, the conditional, or the
+combination — and I could not separate them by reading either. This is the second
+concrete instance of the reporting theme: distinct causes collapsing into one
+message, which then reads as a program verdict.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
