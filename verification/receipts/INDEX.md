@@ -49,6 +49,7 @@ groups. **Current blocker map at the bottom.**
 3. **Wall A — classifier/`ascii_continue` staged emit cost: OPEN.** Hotspot pinned (`pep_c23_child` L25); fix = bucket-index; awaiting A2 emitter cost work (test-only since `26be4be`).
 4. **Wall B — a14 all-in-one countdown: OPEN** (combined a14 = 4). Contract-change decision (stage budgets or a14 → `emit_c23_checked`) awaited; cost cuts only move its boundary.
 5. a14 stale-expectation test updates + recursion-contract decision — builder's file, evidence delivered both ways.
+6. **Watch: design reference corpus** (`design/ai-first-reference-suite-20261030`, docs-only, not expected to compile on current seed) — **trigger**: once it advances past acceptance steps 1–3 (conflict decisions, machine-readable fixtures, pinned diagnostics/spans), its acceptance path step 4 (seed/Pep-checker/interpreter/C23 four-way comparison) becomes Agent 3 verification work using the pinned-differential methodology.
 
 **Corpus:** `verification/adversarial/` — 24 case files, replay
 **163/163 PASS** at base `805062b` (exit 0). **Lean:** `MODEL_PROVED`.
