@@ -182,6 +182,58 @@ the true ceiling sits between these samples. It should be measured in nodes per
 phase rather than inferred from bytes — which is Agent 1 territory, and is what
 `checker_start/step` continuation billing exists to make possible.
 
+## Agent 1 `e9abcd7` — diagnostic labelling verified, and a merge-breaker found (Agent 3)
+
+Agent 1 head moved to `e9abcd7` ("Label compiler checker budget failures
+accurately"). Verified against it:
+
+- **The real-lexer slice still passes** in combination with the `cb6a710` emitter.
+- **The budget diagnostic is now honest.** The `utf8_check` block no longer
+  produces a bare step error; it raises `PepCompilerToolBudgetError` with
+  `stage=checker`, `compiler_tool=pep-c23-checker-start`,
+  `compiler_bundle_revision=sha256:8fb1d285…`,
+  `compiler_bundle_location=compiler-bundle:2709:40`, and an explicit
+  `target_source_span=unavailable`. That is the labelling this report asked for,
+  and it correctly declines to pretend the budget was exhausted in the target.
+- **`tests/test_c23_cli` passes 6/6 on clean `e9abcd7`** and fails **5/6** with
+  the Agent 2 emitter applied — an integration interaction, not a defect in
+  either branch on its own.
+
+### The merge-breaker, and its one-line fix
+
+`tests/test_c23_cli.py:106-110` asserts that `fn main() -> Int { return
+length([1, 2]) }` is **unsupported** (expects exit 2 and "Pep C23 unsupported:").
+With the `cb6a710` emitter that program is now **supported and correct**:
+`run-c23` compiles, runs and prints `2`, matching the interpreter. So the test
+fails with `0 != 2` after a merge purely because the exemplar is stale.
+
+Verified in the same combined tree, these are still unsupported, with their exact
+messages:
+
+| program | combined state |
+| --- | --- |
+| `return length(append([1], 2))` | unsupported — "length lowering requires a direct integer list literal or immediate…" |
+| `return byte_length(source_bytes())` | unsupported — "calls require a known target and at most three arguments" |
+| `type Box { xs: List[Int] }` | unsupported — "record fields require Int, Bool, or a preceding record declaration" |
+
+**Recommendation:** when merging Agent 2 onto Agent 1, change the exemplar at
+line 106 to `length(append([1], 2))`. Same feature area, same test intent,
+minimal churn, and it stays unsupported for a documented reason.
+
+The last two rows are not test trivia — they are the two constructs that block
+the next Lucy components. `byte_length(source_bytes())` blocks a natural
+`utf8_check` harness, and `List`-typed record fields block Lucy AST shapes such
+as token lists.
+
+### A false alarm I raised and then disproved
+
+I initially probed `contains("abc", "b")` and saw the emitter fail with "requires
+a valid Pep checker report", which looked like an emitter defect. It is not:
+`contains` is the **List** builtin, and the checker correctly rejects the Str
+argument with `PEP_LIST_EXPECTED: Builtin 'contains' expects a List, found Str`.
+The emitter message was accurate. The Str builtin is `str_contains`. My probe was
+wrong, not the compiler.
+
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
