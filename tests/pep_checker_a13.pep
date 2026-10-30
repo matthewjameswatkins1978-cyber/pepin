@@ -76,12 +76,12 @@ fn compact_checker_nodes(nodes: List[FlatAstNode]) -> List[CheckerNode] {
   for node in nodes { reversed = prepend(reversed, compact_checker_node(node)) }
   return reverse(reversed)
 }
-fn empty_node() -> CheckerNode {
+fn checker_empty_node() -> CheckerNode {
   return CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: 0, endByte: 0 }
 }
 fn lookup_node(nodes: List[CheckerNode], id: Int) -> NodeLookup {
   for node in nodes { if node.id == id { return NodeLookup { found: true, node: node } } else {} }
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn is_type_table_diagnostic(nodes: List[CheckerNode], candidate: CheckDiagnostic) -> Bool {
   if candidate.code == "PEP_DUPLICATE_TYPE" || candidate.code == "PEP_DUPLICATE_CONSTRUCTOR" || candidate.code == "PEP_RESERVED_CONSTRUCTOR" {
@@ -104,7 +104,7 @@ fn first_type_table_diagnostic(nodes: List[CheckerNode], diagnostics: List[Check
   }
   return DiagnosticLookup { found: found, diagnostic: first }
 }
-fn count_children(nodes: List[CheckerNode], parent: Int, role: Str) -> Int {
+fn checker_count_children(nodes: List[CheckerNode], parent: Int, role: Str) -> Int {
   var count = 0
   for node in nodes { if node.parentId == parent && node.role == role { count = count + 1 } else {} }
   return count
@@ -115,14 +115,14 @@ fn child_at(nodes: List[CheckerNode], parent: Int, role: Str, index: Int) -> Nod
       return NodeLookup { found: true, node: node }
     } else {}
   }
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn first_child_at(nodes: List[CheckerNode], parent: Int, role: Str) -> NodeLookup {
   let child = lookup_node(nodes, parent + 1)
   if child.found && child.node.parentId == parent && child.node.role == role && child.node.childIndex == 0 {
     return child
   } else {}
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn type_name_at(nodes: List[CheckerNode], id: Int) -> Str {
   return legacy_type_name(type_shape_at(nodes, id))
@@ -141,7 +141,7 @@ fn quick_sort_nodes(nodes: List[CheckerNode]) -> List[CheckerNode] {
   if length(nodes) <= 1 { return nodes } else {}
   let pivotIndex = length(nodes) / 2
   var position = 0
-  var pivot = empty_node()
+  var pivot = checker_empty_node()
   for node in nodes {
     if position == pivotIndex { pivot = node } else {}
     position = position + 1
@@ -184,7 +184,7 @@ fn is_constructor(nodes: List[CheckerNode], name: Str) -> Bool {
 }
 fn record_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "record_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn diagnostic_order_byte(nodes: List[CheckerNode], candidate: CheckDiagnostic) -> Int {
   if candidate.code != "PEP_MISSING_FIELD" { return candidate.startByte } else {}
@@ -212,11 +212,11 @@ fn diagnostic_order_byte(nodes: List[CheckerNode], candidate: CheckDiagnostic) -
 }
 fn union_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.parentId == -1 && node.kind == "union_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn variant_declaration(nodes: List[CheckerNode], name: Str) -> NodeLookup {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return NodeLookup { found: true, node: node } } else {} }
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn constructor_union_type(nodes: List[CheckerNode], name: Str) -> Str {
   let variant = variant_declaration(nodes, name)
@@ -320,7 +320,7 @@ fn increment_role_count(counts: List[ChildRoleCount], role: Str) -> List[ChildRo
 fn validation_parent(stack: List[ValidationFrame], parentId: Int) -> ValidationParent {
   var reversed: List[ValidationFrame] = []
   var found = false
-  var parent = ValidationFrame { nodeId: -1, node: empty_node(), roleCounts: [] }
+  var parent = ValidationFrame { nodeId: -1, node: checker_empty_node(), roleCounts: [] }
   for frame in stack {
     if !found {
       if frame.nodeId == parentId {
@@ -464,7 +464,7 @@ fn collect_functions(nodes: List[CheckerNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
   var active = false
-  var activeNode = empty_node()
+  var activeNode = checker_empty_node()
   var activeArity = 0
   var activeResultShape = empty_type_shape()
   var activeTypeListNode = -1
@@ -766,7 +766,7 @@ fn infer_expression_type(nodes: List[CheckerNode], id: Int, functions: List[Chec
     let nestedListContext = list_element_type(expectedElement) != "" ||
       (parent.found && parent.node.kind == "list" && node.role == "element") ||
       (parent.found && parent.node.kind == "call" && (parent.node.text == "append" || parent.node.text == "prepend") && node.role == "argument" && node.childIndex == 1)
-    if expectedElement != "" && (nestedListContext || count_children(nodes, node.id, "element") == 0) { return expected } else {}
+    if expectedElement != "" && (nestedListContext || checker_count_children(nodes, node.id, "element") == 0) { return expected } else {}
     for element in nodes {
       if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
         let actual = infer_expression_type(nodes, element.id, functions, bindings, references)
@@ -839,7 +839,7 @@ fn expression_type_shape(nodes: List[CheckerNode], id: Int, functions: List[Chec
   if found.node.kind == "match" {
     let parent = lookup_node(nodes, found.node.parentId)
     if !parent.found || parent.node.kind != "binary" || (parent.node.text != "==" && parent.node.text != "!=") || found.node.role != "left" { return empty_type_shape() } else {}
-    if count_children(nodes, found.node.id, "arm") == 1 {
+    if checker_count_children(nodes, found.node.id, "arm") == 1 {
       for arm in nodes {
         if arm.parentId == found.node.id && arm.kind == "match_arm" {
           let result = child_at(nodes, arm.id, "result", 1)
@@ -912,7 +912,7 @@ fn has_extra_list_depth(actual: PepTypeShape, expected: PepTypeShape) -> Bool {
 }
 fn list_mismatch_node(nodes: List[CheckerNode], expressionId: Int, expected: PepTypeShape, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> NodeLookup {
   let expression = lookup_node(nodes, expressionId)
-  if !expression.found { return NodeLookup { found: false, node: empty_node() } } else {}
+  if !expression.found { return NodeLookup { found: false, node: checker_empty_node() } } else {}
   if expression.node.kind == "list" && expected.listDepth != 0 {
     let expectedElement = without_one_list(expected)
     for element in nodes {
@@ -928,11 +928,11 @@ fn list_mismatch_node(nodes: List[CheckerNode], expressionId: Int, expected: Pep
         }
       } else {}
     }
-    return NodeLookup { found: false, node: empty_node() }
+    return NodeLookup { found: false, node: checker_empty_node() }
   } else {}
   let actual = expression_type_shape(nodes, expressionId, functions, bindings, references)
   if actual.kind != "" && !same_type_shape(expected, actual) { return expression } else {}
-  return NodeLookup { found: false, node: empty_node() }
+  return NodeLookup { found: false, node: checker_empty_node() }
 }
 fn list_type_name(elementType: Str) -> Str {
   if elementType == "Int" { return "List[Int]" } else {}
@@ -999,7 +999,7 @@ fn contextual_expected_type(nodes: List[CheckerNode], node: CheckerNode, functio
       let enclosingExpected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
       if list_element_type(enclosingExpected) != "" { return enclosingExpected } else {}
       let collection = child_at(nodes, parent.node.id, "argument", 0)
-      if collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0 {
+      if collection.found && collection.node.kind == "list" && checker_count_children(nodes, collection.node.id, "element") == 0 {
         let value = child_at(nodes, parent.node.id, "argument", 1)
         if value.found { return list_type_name(infer_expression_type(nodes, value.node.id, functions, bindings, references)) } else { return "" }
       } else { return "" }
@@ -1008,7 +1008,7 @@ fn contextual_expected_type(nodes: List[CheckerNode], node: CheckerNode, functio
       let enclosingExpected = contextual_expected_type(nodes, parent.node, functions, bindings, references)
       if list_element_type(enclosingExpected) != "" { return list_element_type(enclosingExpected) } else {}
       let collection = child_at(nodes, parent.node.id, "argument", 0)
-      if collection.found && !(collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0) {
+      if collection.found && !(collection.node.kind == "list" && checker_count_children(nodes, collection.node.id, "element") == 0) {
         return list_element_type(infer_expression_type(nodes, collection.node.id, functions, bindings, references))
       } else { return "" }
     } else {}
@@ -1072,7 +1072,7 @@ fn union_variant_count(nodes: List[CheckerNode], unionName: Str) -> Int {
 }
 fn validate_nested_pattern(nodes: List[CheckerNode], pattern: CheckerNode, expectedType: Str) -> PatternValidation {
   if pattern.kind == "binding_pattern" || pattern.kind == "wildcard_pattern" {
-    return PatternValidation { valid: true, covers: true, code: "", node: empty_node() }
+    return PatternValidation { valid: true, covers: true, code: "", node: checker_empty_node() }
   } else {}
   if pattern.kind != "constructor_pattern" {
     return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_UNSUPPORTED", node: pattern }
@@ -1085,8 +1085,8 @@ fn validate_nested_pattern(nodes: List[CheckerNode], pattern: CheckerNode, expec
     return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_TYPE_MISMATCH", node: pattern }
   } else {}
   let variant = variant_declaration(nodes, pattern.text)
-  let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
-  if expectedArity != count_children(nodes, pattern.id, "argument") {
+  let expectedArity = if variant.found { checker_count_children(nodes, variant.node.id, "field_type") } else { -1 }
+  if expectedArity != checker_count_children(nodes, pattern.id, "argument") {
     return PatternValidation { valid: false, covers: false, code: "PEP_PATTERN_ARITY", node: pattern }
   } else {}
   var covers = union_variant_count(nodes, expectedType) == 1
@@ -1098,7 +1098,7 @@ fn validate_nested_pattern(nodes: List[CheckerNode], pattern: CheckerNode, expec
       if !nested.covers { covers = false } else {}
     } else {}
   }
-  return PatternValidation { valid: true, covers: covers, code: "", node: empty_node() }
+  return PatternValidation { valid: true, covers: covers, code: "", node: checker_empty_node() }
 }
 fn pattern_covers_payload(nodes: List[CheckerNode], pattern: CheckerNode, expectedType: Str) -> Bool {
   let checked = validate_nested_pattern(nodes, pattern, expectedType)
@@ -1110,7 +1110,7 @@ fn pattern_key_nested_parts(nodes: List[CheckerNode], pattern: CheckerNode) -> L
     if payload.parentId == pattern.id && payload.role == "argument" {
       let kind = if payload.kind == "constructor_pattern" { "constructor" } else { if payload.kind == "binding_pattern" || payload.kind == "wildcard_pattern" { "irrefutable" } else { "unsupported" } }
       let constructor = if payload.kind == "constructor_pattern" { payload.text } else { "" }
-      let payloadArity = if payload.kind == "constructor_pattern" { count_children(nodes, payload.id, "argument") } else { 0 }
+      let payloadArity = if payload.kind == "constructor_pattern" { checker_count_children(nodes, payload.id, "argument") } else { 0 }
       reversed = prepend(reversed, PatternKeyNestedPart { position: payload.childIndex, kind: kind, constructor: constructor, payloadArity: payloadArity })
     } else {}
   }
@@ -1139,8 +1139,8 @@ fn same_pattern_structure(nodes: List[CheckerNode], leftId: Int, rightId: Int) -
   } else {}
   if left.node.kind != "constructor_pattern" || right.node.kind != "constructor_pattern" { return false } else {}
   if left.node.text != right.node.text { return false } else {}
-  let leftCount = count_children(nodes, leftId, "argument")
-  let rightCount = count_children(nodes, rightId, "argument")
+  let leftCount = checker_count_children(nodes, leftId, "argument")
+  let rightCount = checker_count_children(nodes, rightId, "argument")
   if leftCount != rightCount { return false } else {}
   var index = 0
   while index <= leftCount - 1 {
@@ -1418,7 +1418,7 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
 }
 fn builtin_call_has_primary_failure(nodes: List[CheckerNode], call: CheckerNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
   let requiredArity = fixed_builtin_arity(call.text)
-  if requiredArity != -1 && count_children(nodes, call.id, "argument") != requiredArity { return true } else {}
+  if requiredArity != -1 && checker_count_children(nodes, call.id, "argument") != requiredArity { return true } else {}
   var index = 0
   for argument in nodes {
     if argument.parentId == call.id && argument.role == "argument" {
@@ -1461,7 +1461,7 @@ fn statement_always_returns(nodes: List[CheckerNode], statement: CheckerNode) ->
   if statement.kind == "return" { return true } else {}
   if statement.kind == "block" { return branch_always_returns(nodes, statement.id, "statement") } else {}
   if statement.kind == "if_statement" {
-    if count_children(nodes, statement.id, "else") == 0 { return false } else {}
+    if checker_count_children(nodes, statement.id, "else") == 0 { return false } else {}
     return branch_always_returns(nodes, statement.id, "then") && branch_always_returns(nodes, statement.id, "else")
   } else {}
   return false
@@ -1504,7 +1504,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var firstActiveFound = false
-  var firstActiveNode = empty_node()
+  var firstActiveNode = checker_empty_node()
   for activeNode in activeNodes {
     if !firstActiveFound { firstActiveFound = true; firstActiveNode = activeNode } else {}
   }
@@ -1518,7 +1518,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
   var activeFunctionFound = initialFunctionFound
   var activeFunction = initialFunction
   var reversedDiagnostics: List[CheckDiagnostic] = []
-  var unreachable = UnreachableLookup { found: false, node: empty_node() }
+  var unreachable = UnreachableLookup { found: false, node: checker_empty_node() }
   for node in activeNodes {
     if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
       let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
@@ -1619,7 +1619,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Assignment target has no supported concrete type", node))
               } else {}
               if nameMismatch || shapeMismatch {
-                let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                let mismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                 let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Assigned value type does not match the target binding", mismatchNode))
               } else {}
@@ -1638,7 +1638,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
           if known_builtin(node.text) && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This built-in call has no type rule in the current checker slice", node)) } else {}
           if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
-          if node.kind == "list" && count_children(nodes, node.id, "element") == 0 {
+          if node.kind == "list" && checker_count_children(nodes, node.id, "element") == 0 {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node))
           } else {
             if node.kind != "name" && node.kind != "if_expression" && node.kind != "field_access" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
@@ -1652,12 +1652,12 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         let declaration = record_declaration(nodes, node.text)
         if declaration.found {
           var duplicateFound = false
-          var duplicateNode = empty_node()
+          var duplicateNode = checker_empty_node()
           var fieldDiagnosticFound = false
           var fieldDiagnosticCode = ""
-          var fieldDiagnosticNode = empty_node()
+          var fieldDiagnosticNode = checker_empty_node()
           var unknownFieldFound = false
-          var unknownFieldNode = empty_node()
+          var unknownFieldNode = checker_empty_node()
           for field in nodes {
             if field.parentId == node.id && field.kind == "record_field" {
               if !duplicateFound && is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
@@ -1689,7 +1689,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                     fieldDiagnosticCode = "PEP_TYPE_MISMATCH"
                     fieldDiagnosticNode = value.node
                   } else {
-                    let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                    let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                     if ((expected == "" || actual == "") && shapeMismatch) || (expected == actual && expectedShape.listDepth != 0 && expectedShape.listDepth != 1 && listMismatch.found) {
                       let mismatch = listMismatch
                       fieldDiagnosticFound = true
@@ -1702,7 +1702,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
             } else {}
           }
           var missingFound = false
-          var missingNode = empty_node()
+          var missingNode = checker_empty_node()
           for declared in nodes {
             if !missingFound && declared.parentId == declaration.node.id && declared.kind == "field_declaration" {
               var supplied = false
@@ -1778,7 +1778,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         }
       } else {}
       if node.kind == "match" {
-        let matchArmCount = count_children(nodes, node.id, "arm")
+        let matchArmCount = checker_count_children(nodes, node.id, "arm")
         if matchArmCount == 0 {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_MATCH", "A match expression must have at least one arm", node))
         } else {}
@@ -1818,7 +1818,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         if subject.found && subject.node.kind == "call" {
           let target = find_function(functions, subject.node.text)
           if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
-          if target.found && count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
+          if target.found && checker_count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
           if target.found {
             var argumentIndex = 0
             for argument in nodes {
@@ -1831,7 +1831,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
                 let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
                 let needsNestedListCheck = expectedShape.listDepth != 0 && (expectedArgument == "" || actualArgument == "" || expectedArgument != actualArgument || argument.kind == "list")
-                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                 if expectedArgument != "" && actualArgument != "" && expectedArgument != actualArgument || shapeMismatch || listMismatch.found { subjectHasPrimaryError = true } else {}
                 argumentIndex = argumentIndex + 1
               } else {}
@@ -1894,13 +1894,13 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 var patternArgumentCount = 0
                 var reversedArgumentPatterns: List[PatternKeyPart] = []
                 let variant = variant_declaration(nodes, pattern.node.text)
-                let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
+                let expectedArity = if variant.found { checker_count_children(nodes, variant.node.id, "field_type") } else { -1 }
                 for payload in nodes {
                   if payload.parentId == pattern.node.id && payload.role == "argument" {
                     patternArgumentCount = patternArgumentCount + 1
                     let partKind = if payload.kind == "constructor_pattern" { "constructor" } else { if payload.kind == "binding_pattern" || payload.kind == "wildcard_pattern" { "irrefutable" } else { "unsupported" } }
                     let partConstructor = if payload.kind == "constructor_pattern" { payload.text } else { "" }
-                    let partArity = if payload.kind == "constructor_pattern" { count_children(nodes, payload.id, "argument") } else { 0 }
+                    let partArity = if payload.kind == "constructor_pattern" { checker_count_children(nodes, payload.id, "argument") } else { 0 }
                     reversedArgumentPatterns = prepend(reversedArgumentPatterns, PatternKeyPart { position: payload.childIndex, kind: partKind, constructor: partConstructor, payloadArity: partArity, nestedParts: pattern_key_nested_parts(nodes, payload) })
                     if payload.kind == "constructor_pattern" {
                       let expectedType = variant_payload_type(nodes, pattern.node.text, payload.childIndex)
@@ -1961,7 +1961,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
               if expectedResultType != "" {
                 if result.node.kind == "list" {
                   let expectedResultShape = legacy_type_shape(nodes, expectedResultType)
-                  let listMismatch = if expectedResultShape.listDepth != 0 && !contextualMismatchReported { list_mismatch_node(nodes, result.node.id, expectedResultShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                  let listMismatch = if expectedResultShape.listDepth != 0 && !contextualMismatchReported { list_mismatch_node(nodes, result.node.id, expectedResultShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                   if (actualResult != "" && actualResult != expectedResultType || listMismatch.found) && !contextualMismatchReported {
                     let mismatchNode = if listMismatch.found { listMismatch.node } else { result.node }
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MATCH_ARM_TYPE_MISMATCH", "Match arm result type does not match the other arms", mismatchNode))
@@ -2029,7 +2029,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
                 let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
                 let needsNestedListCheck = expectedShape.listDepth != 0 && (expected == "" || actualArgument == "" || expected != actualArgument || argument.kind == "list")
-                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                 if expected != "" && actualArgument != "" && expected != actualArgument || shapeMismatch || listMismatch.found {
                   let mismatchNode = if listMismatch.found { listMismatch.node } else { argument }
                   reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Function argument type does not match its parameter", mismatchNode))
@@ -2042,7 +2042,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         } else {
           let requiredArity = fixed_builtin_arity(node.text)
           if requiredArity != -1 {
-            if count_children(nodes, node.id, "argument") != requiredArity {
+            if checker_count_children(nodes, node.id, "argument") != requiredArity {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Built-in call argument count does not match its signature", node))
             } else {}
             var index = 0
@@ -2058,14 +2058,14 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                 index = index + 1
               } else {}
             }
-          if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && count_children(nodes, node.id, "argument") == requiredArity {
+          if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && checker_count_children(nodes, node.id, "argument") == requiredArity {
               let collection = child_at(nodes, node.id, "argument", 0)
               let collectionShape = if collection.found { expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { empty_type_shape() }
               let elementShape = without_one_list(collectionShape)
               let collectionType = if collection.found && collectionShape.listDepth == 0 { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
               let elementType = if collectionShape.listDepth != 0 { legacy_type_name(elementShape) } else { "" }
               if elementType == "" && collectionShape.listDepth == 0 {
-                let emptyCollection = collection.found && collection.node.kind == "list" && count_children(nodes, collection.node.id, "element") == 0
+                let emptyCollection = collection.found && collection.node.kind == "list" && checker_count_children(nodes, collection.node.id, "element") == 0
                 if !emptyCollection {
                   let code = if collectionType == "" { "PEP_LIST_UNTYPED" } else { "PEP_LIST_EXPECTED" }
                   let atNode = if collection.found { collection.node } else { node }
@@ -2081,7 +2081,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
                   let contextualExtraList = node.text == "append" && value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualValueShape, expectedElementShape)
                   let structuralMismatch = expectedElementShape.kind != "" && actualValueShape.kind != "" && !same_type_shape(expectedElementShape, actualValueShape) && !contextualExtraList
                   if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch {
-                    let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                    let mismatch = if expectedElementShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedElementShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
                     let mismatchNode = if mismatch.found { mismatch.node } else { value.node }
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Expected list element type does not match", mismatchNode))
                   } else {}
@@ -2099,8 +2099,8 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
       } else {}
       if node.kind == "call" && is_constructor(nodes, node.text) {
         let variant = variant_declaration(nodes, node.text)
-        let expectedArity = if variant.found { count_children(nodes, variant.node.id, "field_type") } else { -1 }
-        if expectedArity != count_children(nodes, node.id, "argument") {
+        let expectedArity = if variant.found { checker_count_children(nodes, variant.node.id, "field_type") } else { -1 }
+        if expectedArity != checker_count_children(nodes, node.id, "argument") {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Constructor payload count does not match its declared variant", node))
         } else {}
         var payloadIndex = 0
@@ -2111,7 +2111,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
             let expectedShape = variant_payload_shape(nodes, node.text, payloadIndex)
             let actualShape = expression_type_shape(nodes, argument.id, functions, bindings, references)
             let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-            let nestedMismatch = if argument.kind == "list" && expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            let nestedMismatch = if argument.kind == "list" && expectedShape.listDepth != 0 { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
             if nestedMismatch.found {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Constructor payload type does not match its declaration", nestedMismatch.node))
             } else {
@@ -2144,7 +2144,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
           } else {}
           if expectedResult != "" {
             var mismatchReported = false
-            let thenMismatch = if expectedShape.listDepth != 0 && thenValue.node.kind == "list" { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            let thenMismatch = if expectedShape.listDepth != 0 && thenValue.node.kind == "list" { list_mismatch_node(nodes, thenValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
             if thenMismatch.found {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenMismatch.node))
               mismatchReported = true
@@ -2153,7 +2153,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", thenValue.node))
               mismatchReported = true
             } else {}
-            let elseMismatch = if !mismatchReported && expectedShape.listDepth != 0 && elseValue.node.kind == "list" { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+            let elseMismatch = if !mismatchReported && expectedShape.listDepth != 0 && elseValue.node.kind == "list" { list_mismatch_node(nodes, elseValue.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
             if !mismatchReported && elseMismatch.found {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "If branch does not match its contextual result type", elseMismatch.node))
               mismatchReported = true
@@ -2185,7 +2185,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         let actualShape = if actualReturn == "" { expression_type_shape(nodes, returned.node.id, functions, bindings, references) } else { empty_type_shape() }
         let expectedShape = if owner.function.returnShape.kind != "" { owner.function.returnShape } else { legacy_type_shape(nodes, owner.function.returnType) }
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
         let conditionalMismatchHandled = if returned.node.kind == "if_expression" { if_expression_branch_mismatch(nodes, returned.node.id, owner.function.returnType, expectedShape, functions, bindings, references) } else { false }
         if (owner.function.returnType != "" && actualReturn != "" && owner.function.returnType != actualReturn || shapeMismatch || listMismatch.found) && !conditionalMismatchHandled {
           let code = "PEP_TYPE_MISMATCH"
@@ -2203,7 +2203,7 @@ fn type_analysis_over_nodes_raw(nodes: List[CheckerNode], activeNodes: List[Chec
         let actualInitializer = infer_expression_type(nodes, value.node.id, functions, bindings, references)
         let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
-        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+        let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: checker_empty_node() } }
         if expected == "" || actualInitializer == "" || listMismatch.found {
           if shapeMismatch || listMismatch.found {
             let mismatchNode = if listMismatch.found { listMismatch.node } else { value.node }
@@ -2304,16 +2304,16 @@ fn analyze() -> CheckerReport {
   var errorEnd = 0
   var errorLine = 0
   var errorColumn = 0
-  var errorNode = empty_node()
+  var errorNode = checker_empty_node()
   var attempts = 0
   let sourceLength = byte_length(source_bytes())
   while !complete && attempts <= sourceLength + 1 {
     let chunk = parser_step(cursor)
     if chunk.document != authority.document || chunk.revision != authority.revision {
-      return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
+      return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", checker_empty_node())
     } else {}
     if !chunk.done && chunk.cursor.nextNodeId == cursor.nextNodeId && chunk.cursor.stream.lexCursor.offset == cursor.stream.lexCursor.offset && chunk.cursor.stream.lexCursor.stage == cursor.stream.lexCursor.stage && chunk.cursor.functionActive == cursor.functionActive && chunk.cursor.functionChildIndex == cursor.functionChildIndex && chunk.cursor.topLevelChildIndex == cursor.topLevelChildIndex && length(chunk.cursor.frames) == length(cursor.frames) && length(chunk.cursor.stream.bufferedTokens) == length(cursor.stream.bufferedTokens) && chunk.cursor.stream.lexCursor.line == cursor.stream.lexCursor.line && chunk.cursor.stream.lexCursor.column == cursor.stream.lexCursor.column {
-      return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_NO_PROGRESS", "Parser continuation did not advance", empty_node())
+      return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_NO_PROGRESS", "Parser continuation did not advance", checker_empty_node())
     } else {}
     for node in chunk.nodes { nodesReversed = prepend(nodesReversed, node) }
     cursor = chunk.cursor
@@ -2328,7 +2328,7 @@ fn analyze() -> CheckerReport {
     errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: chunk.errorStart, endByte: chunk.errorEnd }
     attempts = attempts + 1
   }
-  if !complete { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
+  if !complete { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", checker_empty_node()) } else {}
   if parseStatus != "complete" { return invalid_report(authority.document, authority.revision, 0, errorCode, errorMessage, errorNode) } else {}
   let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorStart, errorEnd: errorEnd, errorLine: errorLine, errorColumn: errorColumn }
   return analyze_parsed(parsed)
@@ -2359,7 +2359,7 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNo
         if node.kind == "call" && inside_function(node, function) {
           let target = find_function(functions, node.text)
           if target.found {
-            if count_children(nodes, node.id, "argument") == target.function.arity {
+            if checker_count_children(nodes, node.id, "argument") == target.function.arity {
               reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
             } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
           } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
@@ -2385,7 +2385,7 @@ fn checker_report_from_parts(document: Str, revision: Str, nodes: List[CheckerNo
       if node.kind == "call" && currentCallerId != -1 && node.id != currentCallerSyntaxId && currentCallerStartByte <= node.startByte && node.endByte <= currentCallerEndByte {
         let target = find_function(functions, node.text)
         if target.found {
-          if count_children(nodes, node.id, "argument") == target.function.arity {
+          if checker_count_children(nodes, node.id, "argument") == target.function.arity {
             reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
           } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
         } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
@@ -2471,19 +2471,19 @@ fn checker_start(parsed: ParserProgress, totalNodeCount: Int) -> CheckerCursor {
   let authority = semantic_snapshot()
   let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
   let emptyNames = NameResolution { references: [], diagnostics: [] }
-  let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
+  let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: checker_empty_node() } }
   let report = empty_checker_report(authority.document, authority.revision)
   if parsed.document != authority.document || parsed.revision != authority.revision {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node()))
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", checker_empty_node()))
   } else {}
-  if !parsed.done { return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node())) } else {}
+  if !parsed.done { return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", checker_empty_node())) } else {}
   if parsed.status != "complete" || parsed.errorCode != "" {
     let code = if parsed.errorCode != "" { parsed.errorCode } else { "A13_PARSER_STATUS" }
     let errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: parsed.errorStart, endByte: parsed.errorEnd }
     return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, code, parsed.message, errorNode))
   } else {}
   if totalNodeCount + 1 <= 0 {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_CHECKER_CURSOR", "Checker node count must not be negative", empty_node()))
+    return make_checker_cursor(authority.document, authority.revision, "done", true, parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], invalid_report(authority.document, authority.revision, 0, "A13_CHECKER_CURSOR", "Checker node count must not be negative", checker_empty_node()))
   } else {}
   let retainedParser = ParserProgress { document: parsed.document, revision: parsed.revision, status: parsed.status, nodes: [], done: parsed.done, errorCode: parsed.errorCode, message: parsed.message, errorStart: parsed.errorStart, errorEnd: parsed.errorEnd, errorLine: parsed.errorLine, errorColumn: parsed.errorColumn }
   let validation = TreeValidation { sourceLength: byte_length(source_bytes()), nextNode: 0, nextRoot: 0, valid: true, stack: [], totalCount: totalNodeCount }
@@ -2501,13 +2501,13 @@ fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: Lis
 fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> CheckerCursor {
   let authority = semantic_snapshot()
   if cursor.document != authority.document || cursor.revision != authority.revision {
-    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", empty_node()))
+    return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_PARSER_REVISION", "Checker continuation changed the authorised target identity", checker_empty_node()))
   } else {}
   if cursor.done { return cursor } else {}
   if cursor.phase == "validation" {
     let validation = tree_validation_chunk(inputNodes, cursor.validation)
     if !validation.valid {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], invalid_report(authority.document, authority.revision, validation.totalCount, "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], invalid_report(authority.document, authority.revision, validation.totalCount, "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", checker_empty_node()))
     } else {}
     if validation.nextNode == validation.totalCount {
       return make_checker_cursor(authority.document, authority.revision, "functions", false, cursor.parsed, [], [], cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, [], cursor.report)
@@ -2525,7 +2525,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
       return checker_replace(cursor, "names", false, cursor.functions, empty, cursor.nameResult, cursor.typedBindings, cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
     if !(0 <= cursor.typeOffset) || length(inputNodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding cursor offset is invalid", checker_empty_node()))
     } else {}
     let proposed = cursor.typeOffset + 16
     let chunkEnd = if proposed <= length(inputNodes) { proposed } else { length(inputNodes) }
@@ -2553,7 +2553,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
       return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
     } else {}
     if !(0 <= cursor.typeOffset) {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", checker_empty_node()))
     } else {}
     let chunkEnd = if length(cursor.bindingResult.bindings) <= 8 { length(cursor.bindingResult.bindings) } else { 8 }
     let chunk = infer_binding_types_chunk(inputNodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
@@ -2567,7 +2567,7 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
   } else {}
   if cursor.phase == "type_analysis" {
     if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(inputNodes)) || length(inputNodes) != 0 && length(inputNodes) <= cursor.typeOffset {
-      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", empty_node()))
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker type-analysis cursor offset is invalid", checker_empty_node()))
     } else {}
     let chunkEnd = checker_type_chunk_end(inputNodes, cursor.typeOffset)
     let result = type_analysis_chunk(inputNodes, cursor.functions, cursor.typedBindings, cursor.nameResult.references, cursor.typeOffset, chunkEnd)
@@ -2592,17 +2592,17 @@ fn checker_step(cursor: CheckerCursor, inputNodes: List[CheckerNode]) -> Checker
     let report = checker_report_from_parts(cursor.document, cursor.revision, inputNodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
     let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
     let emptyNames = NameResolution { references: [], diagnostics: [] }
-    let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
+    let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: checker_empty_node() } }
     return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   } else {}
-  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
+  return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(inputNodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", checker_empty_node()))
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
-    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
+    return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", checker_empty_node())
   } else {}
-  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", empty_node()) } else {}
+  if !parsed.done { return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_BUDGET", "Parser continuation did not finish within the source-bounded call envelope", checker_empty_node()) } else {}
   if parsed.status != "complete" {
     let errorNode = CheckerNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", startByte: parsed.errorStart, endByte: parsed.errorEnd }
     return invalid_report(authority.document, authority.revision, 0, parsed.errorCode, parsed.message, errorNode)
@@ -2610,7 +2610,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let sourceLength = byte_length(source_bytes())
   let originalNodes = parsed.nodes
   let nodes = sort_nodes(compact_checker_nodes(originalNodes))
-  if !flat_source_positions_valid(originalNodes) || !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
+  if !flat_source_positions_valid(originalNodes) || !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", checker_empty_node()) } else {}
   let functions = collect_functions(nodes)
   let bindingResult = collect_bindings(nodes, functions)
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)

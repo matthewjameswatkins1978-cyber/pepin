@@ -1453,6 +1453,19 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(len(report["bindings"]["value"]), count, report)
         self.assertEqual(len(report["references"]["value"]), count, report)
 
+    def test_full_compiler_bundle_typechecks_with_compact_checker_nodes(self):
+        sources = (
+            ROOT / "examples" / "pep_lexer.pep",
+            ROOT / "examples" / "pep_parser.pep",
+            ROOT / "tests" / "pep_checker_a13.pep",
+            ROOT / "tests" / "pep_c23_emitter.pep",
+        )
+        bundle = NL.join(path.read_text(encoding="utf-8") for path in sources)
+        opened = self.client.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                   "name": "a13-c23-compiler-bundle", "metadataOnly": True})
+        self.assertEqual(opened.get("outcome"), "ok", opened)
+        self.assertEqual(opened.get("status"), "valid", opened)
+
     def test_staged_checker_composes_ninety_six_function_roots(self):
         count = 96
         declarations = [

@@ -16,6 +16,14 @@ type FlatAstNode {
   line: Int,
   column: Int
 }
+fn empty_node() -> FlatAstNode {
+  return FlatAstNode { id: -1, parentId: -1, childIndex: -1, role: "", kind: "", text: "", integerValue: 0, booleanValue: false, stringParts: [], startByte: 0, endByte: 0, line: 0, column: 0 }
+}
+fn count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
+  var count = 0
+  for node in nodes { if node.parentId == parent && node.role == role { count = count + 1 } else {} }
+  return count
+}
 type FlatState { nextId: Int, nodesReversed: List[FlatAstNode] }
 
 type ParserStream {
