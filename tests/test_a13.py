@@ -282,7 +282,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(cursor.get("outcome"), "ok", cursor)
         value = cursor["result"]
         node_count = len(fields(parsed)["nodes"]["value"])
-        maximum_steps = min(4096, 8 + 2 * ((node_count + 31) // 32) + (node_count + 11) // 12)
+        binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
+        binding_count = sum(
+            scalar(fields(node)["kind"]) in binding_kinds
+            for node in fields(parsed)["nodes"]["value"]
+        )
+        maximum_steps = min(4096, 8 + 2 * ((node_count + 31) // 32) +
+                            (node_count + 11) // 12 + (binding_count + 7) // 8)
         for _ in range(maximum_steps):
             current = fields(value)
             if scalar(current["done"]):
@@ -1343,6 +1349,26 @@ class A13FunctionResolutionTests(unittest.TestCase):
         source = NL.join(lines)
 
         reference = self._reference_check("staged-32-sequential-bindings", source)
+        parser_result = self._parse_staged(source)
+        _, report = self._analyze_staged(source, parser_result=parser_result)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(len(report["bindings"]["value"]), count, report)
+        names = [scalar(fields(item)["name"]) for item in report["bindings"]["value"]]
+        self.assertEqual(names, [f"x{index}" for index in range(count)])
+
+    def test_staged_checker_composes_sixty_four_sequential_local_bindings(self):
+        count = 64
+        lines = ["fn main() -> Int {"]
+        lines.extend(
+            f"  let x{index} = {index if index == 0 else f'x{index - 1} + 1'}"
+            for index in range(count)
+        )
+        lines.extend([f"  return x{count - 1}", "}"])
+        source = NL.join(lines)
+
+        reference = self._reference_check("staged-64-sequential-bindings", source)
         parser_result = self._parse_staged(source)
         _, report = self._analyze_staged(source, parser_result=parser_result)
 

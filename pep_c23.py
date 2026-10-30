@@ -457,10 +457,17 @@ def check_target(session, parsed, target, tool_revision):
     start_ms = (time.perf_counter_ns() - started) / 1_000_000
     max_request_bytes = session.last_request_bytes
     max_response_bytes = session.last_response_bytes
-    node_count = len(typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
-                                       "nodes", "List[FlatAstNode]", "parser result"))
+    parser_nodes = typed_field_value(typed_fields(parsed, "ParserProgress", "parser result"),
+                                     "nodes", "List[FlatAstNode]", "parser result")
+    node_count = len(parser_nodes)
+    binding_kinds = {"parameter", "let", "var", "for_in", "binding_pattern"}
+    binding_count = sum(
+        typed_field_value(typed_fields(node, "FlatAstNode", "parser node"), "kind", "Str", "parser node")
+        in binding_kinds
+        for node in parser_nodes
+    )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        8 + 2 * ((node_count + 31) // 32) + (node_count + 11) // 12)
+                        8 + 2 * ((node_count + 31) // 32) + (node_count + 11) // 12 + (binding_count + 7) // 8)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):

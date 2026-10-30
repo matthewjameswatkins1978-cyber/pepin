@@ -1046,9 +1046,11 @@ fn same_constructor_pattern_key(nodes: List[FlatAstNode], left: ConstructorPatte
   } else {}
   return same_pattern_key_parts(left.argumentPatterns, right.argumentPatterns)
 }
-fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
-  var typed: List[BindingFact] = []
+fn infer_binding_types_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], startBinding: Int, endBinding: Int, previous: List[BindingFact]) -> List[BindingFact] {
+  var typed = previous
+  var bindingOffset = 0
   for binding in bindings {
+    if startBinding <= bindingOffset && bindingOffset + 1 <= endBinding {
     var typeName = binding.typeName
     let declaration = lookup_node(nodes, binding.syntaxId)
     var typeShape = binding.typeShape
@@ -1084,8 +1086,23 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
       if value.found { typeShape = expression_type_shape(nodes, value.node.id, functions, typed, references) } else {}
     } else {}
     typed = prepend(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape })
+    } else {}
+    bindingOffset = bindingOffset + 1
   }
-  return reverse(typed)
+  return typed
+}
+fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> List[BindingFact] {
+  let partial = infer_binding_types_chunk(nodes, functions, bindings, references, 0, length(bindings), [])
+  return reverse(partial)
+}
+fn drop_binding_prefix(bindings: List[BindingFact], count: Int) -> List[BindingFact] {
+  var reversedRemaining: List[BindingFact] = []
+  var offset = 0
+  for binding in bindings {
+    if count <= offset { reversedRemaining = prepend(reversedRemaining, binding) } else {}
+    offset = offset + 1
+  }
+  return reverse(reversedRemaining)
 }
 fn is_first_type_declaration(nodes: List[FlatAstNode], name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
@@ -2371,8 +2388,21 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
     }
   } else {}
   if cursor.phase == "binding_types" {
-    let bindings = infer_binding_types(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references)
-    return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, bindings, cursor.typeResult, 0, cursor.holes, cursor.report)
+    if length(cursor.bindingResult.bindings) == 0 {
+      return checker_replace(cursor, "type_analysis", false, cursor.functions, cursor.bindingResult, cursor.nameResult, [], cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {}
+    if !(0 <= cursor.typeOffset) {
+      return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker binding-type cursor offset is invalid", empty_node()))
+    } else {}
+    let chunkEnd = if length(cursor.bindingResult.bindings) <= 8 { length(cursor.bindingResult.bindings) } else { 8 }
+    let chunk = infer_binding_types_chunk(cursor.nodes, cursor.functions, cursor.bindingResult.bindings, cursor.nameResult.references, 0, chunkEnd, cursor.typedBindings)
+    let remainingBindings = drop_binding_prefix(cursor.bindingResult.bindings, chunkEnd)
+    let nextBindingResult = BindingCollection { bindings: remainingBindings, diagnostics: cursor.bindingResult.diagnostics }
+    if length(remainingBindings) == 0 {
+      return checker_replace(cursor, "type_analysis", false, cursor.functions, nextBindingResult, cursor.nameResult, reverse(chunk), cursor.typeResult, 0, cursor.holes, cursor.report)
+    } else {
+      return checker_replace(cursor, "binding_types", false, cursor.functions, nextBindingResult, cursor.nameResult, chunk, cursor.typeResult, cursor.typeOffset + chunkEnd, cursor.holes, cursor.report)
+    }
   } else {}
   if cursor.phase == "type_analysis" {
     if !(0 <= cursor.typeOffset) || !(cursor.typeOffset <= length(cursor.nodes)) || length(cursor.nodes) != 0 && length(cursor.nodes) <= cursor.typeOffset {
