@@ -1425,6 +1425,59 @@ fn main() -> Int {
                                      native.stdout + native.stderr)
                     self.assertEqual(native.stdout, interpreted.stdout)
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
+    def test_staged_pipeline_preserves_recursive_call_depth_boundary(self):
+        template = (
+            "fn main() -> Int { return countdown({DEPTH}) }\n"
+            "fn countdown(value: Int) -> Int {\n"
+            "  if value <= 0 { return 42 } else { return countdown(value - 1) }\n"
+            "}\n")
+        (ROOT / "_build").mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            folder = pathlib.Path(temp_dir)
+            for depth in (510, 511):
+                source_text = template.replace("{DEPTH}", str(depth))
+                source = folder / f"countdown-{depth}.pep"
+                source.write_text(source_text, encoding="utf-8", newline="\n")
+                reference = folder / f"countdown-{depth}-reference.pep"
+                reference.write_text(
+                    source_text + "\nsay(int_text(main()))\n",
+                    encoding="utf-8", newline="\n")
+                interpreted = self.invoke("run", reference)
+                if depth == 510:
+                    self.assertEqual(interpreted.returncode, 0,
+                                     interpreted.stdout + interpreted.stderr)
+                    self.assertEqual(interpreted.stdout, "42\n")
+                else:
+                    self.assertNotEqual(interpreted.returncode, 0)
+                    self.assertEqual(interpreted.stdout, "")
+                    self.assertIn("PEP_RUNTIME_CALL_DEPTH", interpreted.stderr)
+
+                generated = emit(source.read_bytes())
+                generated_path = folder / f"countdown-{depth}.c"
+                generated_path.write_text(
+                    generated, encoding="utf-8", newline="\n")
+                for compiler in (CLANG, GCC):
+                    with self.subTest(depth=depth, compiler=compiler.name):
+                        executable = folder / f"countdown-{depth}-{compiler.stem}.exe"
+                        compiled = subprocess.run(
+                            [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                             "-Wpedantic", "-Werror", "-O2", str(generated_path),
+                             "-o", str(executable)],
+                            cwd=folder, text=True, capture_output=True, check=False)
+                        self.assertEqual(compiled.returncode, 0,
+                                         compiled.stdout + compiled.stderr)
+                        native = subprocess.run(
+                            [str(executable)], cwd=folder,
+                            text=True, capture_output=True, check=False)
+                        self.assertEqual(native.returncode, interpreted.returncode)
+                        self.assertEqual(native.stdout, interpreted.stdout)
+                        if depth == 511:
+                            self.assertIn("PEP_RUNTIME_CALL_DEPTH", native.stderr)
+                        else:
+                            self.assertEqual(native.stderr, interpreted.stderr)
+
     def test_while_byte_at_local_and_conditional_assignment_emit_c23(self):
         source_text = """fn scan(source: SourceBytes, limit: Int) -> Int {
   var result = 0
