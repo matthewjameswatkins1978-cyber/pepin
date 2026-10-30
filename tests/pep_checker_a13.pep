@@ -4,6 +4,7 @@ type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int,
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
 type DiagnosticLookup { found: Bool, diagnostic: CheckDiagnostic }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape }
+type DeclaredBindingInfo { typeName: Str, typeShape: PepTypeShape }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape, startByte: Int, endByte: Int }
 type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
@@ -261,6 +262,10 @@ fn inside_function(node: FlatAstNode, function: CheckedFunction) -> Bool {
   return node.id != function.syntaxId && function.startByte <= node.startByte && node.endByte <= function.endByte
 }
 fn fixed_child_index(parentKind: Str, role: Str) -> Int {
+  if parentKind == "block" { return -1 } else {}
+  if parentKind == "function" { if role == "return_type" { return 0 } else { return -1 } } else {}
+  if parentKind == "let" || parentKind == "var" { if role == "annotation" || role == "value" { return 0 } else { return -1 } } else {}
+  if parentKind == "return" { if role == "value" { return 0 } else { return -1 } } else {}
   if parentKind == "binary" { if role == "left" { return 0 } else { if role == "right" { return 1 } else { return -1 } } } else {}
   if parentKind == "unary" && role == "operand" { return 0 } else {}
   if parentKind == "if_expression" { if role == "condition" { return 0 } else { if role == "then" { return 1 } else { if role == "else" { return 2 } else { return -1 } } } } else {}
@@ -375,6 +380,16 @@ fn declared_binding_shape(nodes: List[FlatAstNode], node: FlatAstNode) -> PepTyp
   let declared = child_at(nodes, node.id, role, 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
+fn declared_binding_info(nodes: List[FlatAstNode], node: FlatAstNode) -> DeclaredBindingInfo {
+  if node.kind == "binding_pattern" { return DeclaredBindingInfo { typeName: "", typeShape: empty_type_shape() } } else {}
+  let role = if node.kind == "parameter" { "type" } else { "annotation" }
+  let declared = child_at(nodes, node.id, role, 0)
+  if !declared.found { return DeclaredBindingInfo { typeName: "", typeShape: empty_type_shape() } } else {}
+  let shape = type_shape_at(nodes, declared.node.id)
+  let name = legacy_type_name(shape)
+  let storedShape = if name != "" { empty_type_shape() } else { shape }
+  return DeclaredBindingInfo { typeName: name, typeShape: storedShape }
+}
 fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
@@ -420,6 +435,15 @@ fn first_scope(scopes: List[Int], fallback: Int) -> Int {
   for scope in scopes { if !found { answer = scope; found = true } else {} }
   return answer
 }
+fn binding_scope_id(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxId: Int, functionSemanticId: Int) -> Int {
+  if node.kind == "parameter" { return functionSemanticId } else {}
+  if node.kind == "for_in" { return scope_key(node, "body") } else {}
+  if (node.kind == "let" || node.kind == "var") && node.role == "statement" {
+    let parent = lookup_node(nodes, node.parentId)
+    if parent.found && parent.node.kind == "block" { return scope_key(parent.node, node.role) } else {}
+  } else {}
+  return first_scope(scope_chain(nodes, node, functionSyntaxId, functionSemanticId), functionSemanticId)
+}
 fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) -> Int {
   let arm = lookup_node(nodes, pattern.parentId)
   if arm.found {
@@ -458,12 +482,12 @@ fn collect_bindings_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunct
       let parameter = node.kind == "parameter" && node.parentId == activeFunctionSyntaxId
       let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && activeFunctionStart <= node.startByte && node.endByte <= activeFunctionEnd
       if startNode <= nodeOffset && nodeOffset + 1 <= endNode && activeFunctionId != -1 && (parameter || local) {
-        let scopes = scope_chain(nodes, node, activeFunctionSyntaxId, activeFunctionId)
-        let scope = if parameter { activeFunctionId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, activeFunctionId) } }
+        let scope = binding_scope_id(nodes, node, activeFunctionSyntaxId, activeFunctionId)
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        let declaredInfo = declared_binding_info(nodes, node)
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
@@ -478,12 +502,12 @@ fn collect_bindings_chunk(nodes: List[FlatAstNode], functions: List[CheckedFunct
       let parameter = node.kind == "parameter" && node.parentId == function.syntaxId
       let local = (node.kind == "let" || node.kind == "var" || node.kind == "for_in" || node.kind == "binding_pattern") && inside_function(node, function)
       if startNode <= nodeOffset && nodeOffset + 1 <= endNode && (parameter || local) {
-        let scopes = scope_chain(nodes, node, function.syntaxId, function.semanticId)
-        let scope = if parameter { function.semanticId } else { if node.kind == "for_in" { scope_key(node, "body") } else { first_scope(scopes, function.semanticId) } }
+        let scope = binding_scope_id(nodes, node, function.syntaxId, function.semanticId)
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == function.semanticId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        let declaredInfo = declared_binding_info(nodes, node)
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: declaredInfo.typeName, typeShape: declaredInfo.typeShape }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
@@ -2341,7 +2365,7 @@ fn checker_start(parsed: ParserProgress) -> CheckerCursor {
   return make_checker_cursor(authority.document, authority.revision, "functions", false, retainedParser, nodes, [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
 }
 fn checker_type_chunk_end(nodes: List[FlatAstNode], startNode: Int) -> Int {
-  let proposed = startNode + 12
+  let proposed = startNode + 4
   return if proposed <= length(nodes) { proposed } else { length(nodes) }
 }
 fn checker_replace(cursor: CheckerCursor, phase: Str, done: Bool, functions: List[CheckedFunction], bindingResult: BindingCollection, nameResult: NameResolution, typedBindings: List[BindingFact], typeResult: TypeAnalysis, typeOffset: Int, holes: List[HoleFact], report: CheckerReport) -> CheckerCursor {
@@ -2429,7 +2453,10 @@ fn checker_step(cursor: CheckerCursor) -> CheckerCursor {
   } else {}
   if cursor.phase == "report" {
     let report = checker_report_from_parts(cursor.document, cursor.revision, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.holes)
-    return checker_replace(cursor, "done", true, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, report)
+    let emptyBindings = BindingCollection { bindings: [], diagnostics: [] }
+    let emptyNames = NameResolution { references: [], diagnostics: [] }
+    let emptyTypes = TypeAnalysis { expressionTypes: [], diagnostics: [], unreachable: UnreachableLookup { found: false, node: empty_node() } }
+    return make_checker_cursor(cursor.document, cursor.revision, "done", true, cursor.parsed, [], [], emptyBindings, emptyNames, [], emptyTypes, 0, [], report)
   } else {}
   return make_checker_cursor(authority.document, authority.revision, "done", true, cursor.parsed, cursor.nodes, cursor.functions, cursor.bindingResult, cursor.nameResult, cursor.typedBindings, cursor.typeResult, cursor.typeOffset, cursor.holes, invalid_report(authority.document, authority.revision, length(cursor.nodes), "A13_CHECKER_CURSOR", "Checker continuation phase is invalid", empty_node()))
 }

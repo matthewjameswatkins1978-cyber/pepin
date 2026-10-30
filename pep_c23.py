@@ -467,7 +467,7 @@ def check_target(session, parsed, target, tool_revision):
         for node in parser_nodes
     )
     maximum_steps = min(MAX_CHECKER_STEPS,
-                        8 + 2 * ((node_count + 31) // 32) + (node_count + 11) // 12 + (binding_count + 7) // 8)
+                        8 + 2 * ((node_count + 31) // 32) + (node_count + 3) // 4 + (binding_count + 7) // 8)
     step_elapsed_ms = []
     cursor_fields = typed_fields(cursor, "CheckerCursor", "checker start cursor")
     for _ in range(maximum_steps):
