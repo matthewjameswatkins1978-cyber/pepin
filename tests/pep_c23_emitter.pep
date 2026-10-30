@@ -1277,15 +1277,43 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
                   if !record.found || !field.found {
                     return pep_c23_unsupported("Pep C23 record payload projection does not resolve a declared field")
                   } else {}
-                  for part in loweredSubject.sourceParts { resultParts = append(resultParts, part) }
-                  resultParts = append(resultParts, ".payload.payload_")
-                  resultParts = append(resultParts, int_text(variant.childIndex))
-                  resultParts = append(resultParts, ".field_0.pep_field_")
-                  resultParts = append(resultParts, int_text(field.node.childIndex))
+                  resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts, variant,
+                    1, 0, field, false)
                 } else {
-                  let loweredResult = pep_c23_expression(nodes, function, result.node)
-                  if loweredResult.status != "emitted" { return loweredResult } else {}
-                  resultParts = loweredResult.sourceParts
+                  if base.found && base.node.kind == "field_access" {
+                    let root = pep_c23_child(nodes, base.node.id, "value", 0)
+                    let record = pep_c23_record_declaration(nodes, payloadType.node.text)
+                    let field = if record.found {
+                      pep_c23_record_field_declaration(nodes, record.node, base.node.text)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    let fieldType = if field.found {
+                      pep_c23_child(nodes, field.node.id, "type", 0)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    let nestedRecord = if fieldType.found && fieldType.node.kind == "type_named" {
+                      pep_c23_record_declaration(nodes, fieldType.node.text)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    let nestedField = if nestedRecord.found {
+                      pep_c23_record_field_declaration(nodes, nestedRecord.node, result.node.text)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    let nestedFieldType = if nestedField.found {
+                      pep_c23_child(nodes, nestedField.node.id, "type", 0)
+                    } else { PepC23NodeLookup { found: false, node: empty_node() } }
+                    if !root.found || root.node.kind != "name" ||
+                       root.node.text != patternArgument.node.text || !record.found ||
+                       !field.found || !fieldType.found || !nestedRecord.found ||
+                       !nestedField.found || !nestedFieldType.found ||
+                       pep_c23_c_scalar_type(nestedFieldType.node) == "" {
+                      return pep_c23_unsupported("Pep C23 nested record payload projection requires a scalar terminal field")
+                    } else {}
+                    resultParts = pep_c23_union_payload_parts(loweredSubject.sourceParts,
+                      variant, 1, 0, field, false)
+                    resultParts = append(resultParts, ".pep_field_")
+                    resultParts = append(resultParts, int_text(nestedField.node.childIndex))
+                  } else {
+                    let loweredResult = pep_c23_expression(nodes, function, result.node)
+                    if loweredResult.status != "emitted" { return loweredResult } else {}
+                    resultParts = loweredResult.sourceParts
+                  }
                 }
               } else {
                 let loweredResult = pep_c23_expression(nodes, function, result.node)
