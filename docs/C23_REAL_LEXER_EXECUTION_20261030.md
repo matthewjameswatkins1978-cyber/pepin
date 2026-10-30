@@ -692,6 +692,34 @@ Scope: UBSan only (AddressSanitizer was not exercised), and seven programs is a
 sample rather than a proof. But it is a different axis from everything else
 reported here, and it is the first evidence that the checker's arithmetic contract
 survives into the generated C.
+
+## Sanitizers extended to the wider backend, and AddressSanitizer results (Agent 3)
+
+Following the arithmetic-only UBSan check above, the same treatment across the
+wider generated C — records, lists, strings, recursion, and the classifier slice:
+
+| program | UBSan | AddressSanitizer | output |
+| --- | --- | --- | --- |
+| record field access | clean | clean | `42` |
+| `length([1, 2])` | clean | clean | `2` |
+| `str_contains` hit / miss | clean | clean | `1` / `0` |
+| bounded recursion (`countdown(10)`) | clean | clean | `42` |
+| classifier slice | clean | clean | `42` |
+
+**Twelve distinct emitted programs, no sanitizer report of any kind.** Records,
+lists, string search and recursion all produce C that is both memory-safe and
+free of undefined behaviour on the paths exercised.
+
+**Practical note for anyone repeating this.** An AddressSanitizer binary built
+here fails at start with exit `3221225781` (`0xC0000135`, DLL not found) unless
+`clang_rt.asan_dynamic-x86_64.dll` is beside the executable or on `PATH` — it lives
+in `…/llvm/current/lib/clang/23/lib/windows/`. That is a toolchain packaging
+detail, not a defect in the emitted C, and it is easy to misread as an ASan
+failure if you only look at the exit code.
+
+**Merge recipe re-checked.** With Agent 2 newest tests (`77aa6b9`), `fd5c5d5` plus
+`tests/test_c23_str_contains.py` from that head now runs **9 tests, OK, zero
+skips**. The recipe keeps holding as the test file grows.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
