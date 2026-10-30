@@ -1511,6 +1511,43 @@ further feature or coverage work.
 **Not measured:** the remaining 65 tests of the suite, which would take roughly another
 15–25 minutes at these timings. The 47% figure above is for the sampled range, not the
 whole suite.
+
+## Agent 1's line is healthy again at `46bf1c0` — and emitter cost is now the only blocker (Agent 3)
+
+Both A1 blockers are fixed, and the fix confirms the withdrawn one-line claim was right to
+withdraw: it needed an adapter-contract change as well, not just an extra argument.
+
+| check | at `46bf1c0` |
+| --- | --- |
+| classifier slice | **OK** (16 s) |
+| `test_c23_cli` | **8/8 OK** |
+| `test_a12` | 23/23 OK |
+| `test_a13` | **87/87 OK** (344 s) — grew from 86 |
+| `test_a14_c23` | 11 tests, the 2 known failures |
+
+The validation vector now reads
+`[empty_parsed, typed("Int", 0)]` — the second of the three variants I tried and which
+failed at `7628d6d`. It works now because the checker/composition contract changed too.
+So the staged path is restored and the earlier `PEP_TOOL_ARGUMENT_COUNT` /
+`PEP_TOOL_ARGUMENT_TYPE` failures are gone.
+
+### Emitter cost is now isolated as the single remaining blocker
+
+A1's line still ships the **original** emitter (`9573c227`, pre-`39a487f`), which is why
+the slice emits there at all. Swapping in Agent 2's newest emitter (`44d4e0f1`) on this
+same, now-healthy line:
+
+```
+slice: FAILED — analysis_status=INCONCLUSIVE, stage=emitter
+```
+
+So the failure is not a property of A1's broken state or of my tree setup — it follows the
+emitter. Every emitter after `23ef2b19` cannot emit the accepted slice, on either A1 head,
+and that is now measured against a line where everything else passes.
+
+**Net status:** A1 unblocked (slice, CLI, a12, a13 all green); A2's newer emitters blocked
+by budget; collections suite ~half budget-blocked on its own branch. One root cause
+remains for all three: emitter per-node cost.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
