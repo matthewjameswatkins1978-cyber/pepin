@@ -41,6 +41,7 @@ groups. **Current blocker map at the bottom.**
 
 | receipt | one-line |
 |---|---|
+| `WALLB-headroom-collapse-ladder.md` | **All-in-one countdown headroom → zero**: pre-series emits countdown(0/6/100), current fails 0..99 (same death point = emitter L499, host budget unchanged); staged path green — migration now the only green route. |
 | `RECOVERY-eda6a0f-depth-axis-cleared.md` | **Depth axis FIXED**: A1's arm-hoisting (direction #1) recovers heavy **26 → 4**, deep suite 22 → **0**; remaining 4 = a14 step-axis set (Wall B track). |
 | `REMEASURE-e37218a-persists-26.md` | A1's response `e37218a` (checker overhead): heavy still **26** — parser chains untouched, regression persists; their new driver tests **12/12 OK**; no new defect in heavy set. |
 | `MECHANISM-ae91bdc-match-chains.md` | **`ae91bdc` mechanism**: 3 parser dispatchers split into 19/29/19-way fallthrough chains; each hop = 1 host frame; death = `ast_value_span_part_1/part_3` braces (parser L138/152); one mechanism, two budgets (depth 128 + step 100k). |
