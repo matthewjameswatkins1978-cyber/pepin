@@ -170,13 +170,14 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             self.assertRegex(generated, r"\.payload")
             self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
 
+    @unittest.skipUnless(CLANG.is_file() and GCC.is_file(),
+                         "Clang and GCC are required for native C23 verification")
     def test_record_payload_union_variants_relay_and_match_fields(self):
         source_text = """type AstSpan { startByte: Int }
 type AstValue = Number(Int) | Spanned(AstSpan)
 fn relay(value: AstValue) -> AstValue { return value }
 fn main() -> Int {
   let located = relay(Spanned(AstSpan { startByte: 31 }))
-  let counted = Number(11)
   return match located {
     Number(number) => number
     Spanned(span) => span.startByte
@@ -204,13 +205,31 @@ fn main() -> Int {
             self.assertRegex(
                 generated,
                 r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
-            self.assertRegex(generated, r"\.tag = 0, \.payload\.payload_0 = \{ \.field_0 = 11 \}")
             self.assertRegex(
                 generated,
                 r"\.tag = 1, \.payload\.payload_1 = \{ \.field_0 = \(pep_record_\d+\)")
             self.assertRegex(generated, r"\.tag == 1")
             self.assertIn(".payload.payload_1.field_0.pep_field_0", generated)
             self.assertIn("PEP_RUNTIME_INVALID_UNION", generated)
+
+            generated_c = pathlib.Path(temp_dir) / "ast-value.c"
+            generated_c.write_text(generated, encoding="utf-8", newline="\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = pathlib.Path(temp_dir) / (compiler.stem + "-ast-value.exe")
+                    compile_result = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra",
+                         "-Wpedantic", "-Werror", "-O2",
+                         str(generated_c), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(compile_result.returncode, 0,
+                                     compile_result.stdout + compile_result.stderr)
+                    result = subprocess.run(
+                        [str(executable)], cwd=ROOT, text=True,
+                        capture_output=True, check=False)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+                    self.assertEqual(result.stdout, "31\n")
 
     def test_tagged_union_rejects_non_int_payload_layout(self):
         source_text = (
