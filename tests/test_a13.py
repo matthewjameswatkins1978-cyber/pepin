@@ -1428,6 +1428,35 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(len(report["bindings"]["value"]), count, report)
         self.assertEqual(len(report["references"]["value"]), count, report)
 
+    def test_staged_checker_composes_thirty_two_function_signatures(self):
+        declarations = []
+        expected = []
+        for index in range(32):
+            if index % 3 == 0:
+                declarations.append(f"fn f{index}() -> Int {{ return {index} }}")
+                expected.append((f"f{index}", 0, "Int"))
+            elif index % 3 == 1:
+                declarations.append(f"fn f{index}(p{index}: Bool) -> Bool {{ return p{index} }}")
+                expected.append((f"f{index}", 1, "Bool"))
+            else:
+                declarations.append(f"fn f{index}(p{index}: Int, q{index}: Bool) -> List[Bool] {{ return [] }}")
+                expected.append((f"f{index}", 2, "List[Bool]"))
+        declarations.append("fn main() -> Int { return 0 }")
+        expected.append(("main", 0, "Int"))
+        source = NL.join(declarations)
+
+        reference = self._reference_check("staged-32-function-signatures", source)
+        parser_result = self._parse_staged(source)
+        _, report = self._analyze_staged(source, parser_result=parser_result)
+
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        actual = [
+            (scalar(fields(item)["name"]), scalar(fields(item)["arity"]), scalar(fields(item)["returnType"]))
+            for item in report["functions"]["value"]
+        ]
+        self.assertEqual(actual, expected)
+
     def test_staged_checker_rejects_noncontiguous_node_ids(self):
         source = "fn main() -> Int { return 0 }"
         opened, parsed = self._parse_staged(source)

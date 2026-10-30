@@ -432,19 +432,60 @@ fn declared_binding_info(nodes: List[FlatAstNode], node: FlatAstNode) -> Declare
   let storedShape = if name != "" { empty_type_shape() } else { shape }
   return DeclaredBindingInfo { typeName: name, typeShape: storedShape }
 }
+fn checked_function(node: FlatAstNode, ordinal: Int, arity: Int, resultShape: PepTypeShape) -> CheckedFunction {
+  let resultType = if resultShape.kind != "" { legacy_type_name(resultShape) } else { "" }
+  let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
+  return CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: arity, returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte }
+}
 fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
+  var active = false
+  var activeNode = empty_node()
+  var activeArity = 0
+  var activeResultShape = empty_type_shape()
+  var activeTypeListNode = -1
+  var activeTypeListDepth = 0
   for node in nodes {
     if node.parentId == -1 && node.kind == "function" {
-      let declaredResult = child_at(nodes, node.id, "return_type", 0)
-      let resultShape = if declaredResult.found { type_shape_at(nodes, declaredResult.node.id) } else { empty_type_shape() }
-      let resultType = if declaredResult.found { legacy_type_name(resultShape) } else { "" }
-      let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
-      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte })
-      ordinal = ordinal + 1
+      if active {
+        reversed = prepend(reversed, checked_function(activeNode, ordinal, activeArity, activeResultShape))
+        ordinal = ordinal + 1
+      } else {}
+      active = true
+      activeNode = node
+      activeArity = 0
+      activeResultShape = empty_type_shape()
+      activeTypeListNode = -1
+      activeTypeListDepth = 0
     } else {}
+    if active && node.parentId == activeNode.id && node.kind == "parameter" {
+      activeArity = activeArity + 1
+    } else {}
+    if active && node.parentId == activeNode.id && node.role == "return_type" {
+      if node.kind == "type_scalar" {
+        activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }
+      } else { if node.kind == "type_named" {
+        activeResultShape = known_type_shape(nodes, node.text)
+      } else { if node.kind == "type_list" {
+        activeTypeListNode = node.id
+        activeTypeListDepth = 1
+      } else {} } }
+    } else { if activeTypeListNode == node.parentId {
+      if node.kind == "type_list" {
+        activeTypeListNode = node.id
+        activeTypeListDepth = activeTypeListDepth + 1
+      } else { if node.kind == "type_scalar" {
+        activeResultShape = PepTypeShape { kind: "builtin", name: node.text, listDepth: activeTypeListDepth }
+        activeTypeListNode = -1
+      } else { if node.kind == "type_named" {
+        let baseShape = known_type_shape(nodes, node.text)
+        activeResultShape = if baseShape.kind == "" { empty_type_shape() } else { PepTypeShape { kind: baseShape.kind, name: baseShape.name, listDepth: activeTypeListDepth } }
+        activeTypeListNode = -1
+      } else {} } }
+    } else {} }
   }
+  if active { reversed = prepend(reversed, checked_function(activeNode, ordinal, activeArity, activeResultShape)) } else {}
   return reverse(reversed)
 }
 fn scope_key(node: FlatAstNode, role: Str) -> Int {
@@ -481,8 +522,8 @@ fn binding_scope_id(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxI
   if node.kind == "parameter" { return functionSemanticId } else {}
   if node.kind == "for_in" { return scope_key(node, "body") } else {}
   if (node.kind == "let" || node.kind == "var") && node.role == "statement" {
-    let parent = lookup_node(nodes, node.parentId)
-    if parent.found && parent.node.kind == "block" { return scope_key(parent.node, node.role) } else {}
+    // Function-body bindings use the function scope; nested-block bindings use their block parent ID directly.
+    return if node.parentId == functionSyntaxId { functionSemanticId } else { 3000000 + node.parentId * 2 }
   } else {}
   return first_scope(scope_chain(nodes, node, functionSyntaxId, functionSemanticId), functionSemanticId)
 }
