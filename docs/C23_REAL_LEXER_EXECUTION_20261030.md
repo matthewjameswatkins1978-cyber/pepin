@@ -2025,6 +2025,51 @@ Two consequences worth stating:
   non-zero code. That is fine for tests and probably fine for the language, but it means the
   emitted binary is not a drop-in for a shell script that relies on exit codes — worth knowing
   before anyone builds a tooling contract on it.
+
+## Distance to a compilable lexer, measured per construct (Agent 3)
+
+Ran a census of Lucy's own lexer — its four types and nine functions — to answer "how far from
+standalone Lucy" with numbers instead of anecdote. The answer is more structural than any of
+the rules reported above.
+
+### Three of Lucy's four types cannot be emitted at all
+
+| type | has `List` field | result |
+| --- | --- | --- |
+| `SourcePosition` | no | **emits** |
+| `LexToken` | yes (`stringParts: List[Str]`) | **unsupported** — "record fields require Int, Bool, or a preceding record declaration" |
+| `LexCursor` | yes (`stringPartsReversed: List[Str]`) | **unsupported** — same |
+| `LexProgress` | yes (`tokens: List[LexToken]`) | rejected earlier, at the checker |
+
+This is the **`List` record-field limitation** first noted in this report's early rounds
+(`type Box { xs: List[Int] }` is refused) — and it is not a corner case. It blocks the three
+types that carry Lucy's actual lexer state.
+
+### And the constructors are blocked by the parameter limit
+
+`make_cursor` takes **16** parameters, `make_progress` **11**, `make_token` **8**. All are
+refused by the four-parameter limit isolated earlier. `lexer_step` additionally trips a
+checker envelope: "checker input exceeds the direct typed-node envelope; packed …".
+
+Only the three character classifiers — the ones the accepted slice exercises — are in
+emittable territory, plus `advance_position`'s three-parameter shape once its result type is
+representable.
+
+### The ranked blocker list, each with a reproduction
+
+| blocker | what it stops | reproduction |
+| --- | --- | --- |
+| **`List` record fields** | 3 of 4 lexer types, and any AST with child lists | `type Box { xs: List[Int] }` |
+| **four-parameter limit** | all three lexer constructors (8, 11, 16 params) | `fn f(a,b,c,d) -> Int { return 0 }` |
+| local-compared-in-return rule | 16 collection cases | local compared in a return |
+| emitter step budget | whole-file analysis; ~half the collections suite | boundary ladder |
+| checker typed-node envelope | `lexer_step` | census output above |
+
+**The single highest-value fix is `List` record fields.** Everything else on that list is
+narrower: the parameter limit affects three constructors, the local-comparison rule one
+family of tests, and the budget affects throughput. Without list-valued fields, Lucy's
+lexer state cannot be described in the emitted language at all, so no amount of the other
+four fixes produces a compilable lexer.
 No changes were made to the accepted release. No compiler source was modified
 for the delivered result: the budget and construct experiments were run on
 temporary local edits and reverted (`git status` clean, patched `pep.exe`
