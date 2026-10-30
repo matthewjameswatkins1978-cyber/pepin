@@ -1800,7 +1800,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     var parameterOne = empty_node()
     var parameterTwoFound = false
     var parameterTwo = empty_node()
+    var whileLocalCandidate = false
     for candidate in nodes {
+      if candidate.kind == "let" && candidate.role == "body" &&
+         candidate.text == node.text && !(node.id <= candidate.id) {
+        whileLocalCandidate = true
+      } else {}
       if candidate.parentId == function.id {
         if candidate.role == "statement" && (candidate.kind == "let" || candidate.kind == "var") && candidate.text == node.text {
           localFound = true
@@ -1826,7 +1831,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
       } else {}
     }
-    let whileLocal = pep_c23_enclosing_while_binding(nodes, function, node, node.text)
+    let whileLocal = if whileLocalCandidate {
+      pep_c23_enclosing_while_binding(nodes, function, node, node.text)
+    } else { PepC23NodeLookup { found: false, node: empty_node() } }
     if whileLocal.found {
       return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(whileLocal.node.id)], diagnostic: "" }
     } else {}
