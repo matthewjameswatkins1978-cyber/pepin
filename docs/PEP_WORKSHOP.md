@@ -19,6 +19,19 @@ are legacy stores and are adopted on first open with contents preserved.
 - `python pep_workshop.py dir --root DIR [--name NAME]` (for scripts)
 - `python pep_workshop.py repl --root DIR [--project NAME]` (defaults active)
 
+## Checkpoints (W2)
+
+- `checkpoint save --root DIR --project NAME [--label L}` snapshots the
+  current `definitions.pep` bytes immutably as `checkpoints/cp-NNN.pep`
+  with a JSON sidecar (`digest`, byte count, UTC time, label).
+- Identity is `sha256:` over exact source bytes (`revision_kind:
+  workshop-file-sha256`), distinct from the compiler's session revisions.
+- `checkpoint list` / `checkpoint show --id cp-NNN` inspect revisions;
+  a corrupt `index.json` is rebuilt from the snapshot files on disk.
+- Empty projects snapshot honestly (0 bytes); bad ids and unknown
+  projects fail with clean errors. Restore/diff arrive in the next slice
+  with preview-before-write protection and no automatic execution.
+
 `active.json` in the root remembers the last opened project across
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
 metadata and unknown projects fail with clean JSON errors, never

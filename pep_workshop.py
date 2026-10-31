@@ -204,6 +204,123 @@ def project_source_digest(proj: pathlib.Path) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+CHECKPOINTS_DIRNAME = "checkpoints"
+CHECKPOINT_ID_RE = re.compile(r"^cp-(\d{3})$")
+
+
+def checkpoints_dir(proj: pathlib.Path) -> pathlib.Path:
+    return proj / CHECKPOINTS_DIRNAME
+
+
+def _checkpoint_index_file(proj: pathlib.Path) -> pathlib.Path:
+    return checkpoints_dir(proj) / "index.json"
+
+
+def _scan_checkpoint_ids(proj: pathlib.Path) -> list[str]:
+    cdir = checkpoints_dir(proj)
+    if not cdir.is_dir():
+        return []
+    ids = []
+    for child in cdir.iterdir():
+        if child.is_file() and child.suffix == ".pep" and CHECKPOINT_ID_RE.match(child.stem):
+            ids.append(child.stem)
+    return sorted(ids)
+
+
+def _read_checkpoint_index(proj: pathlib.Path) -> list[dict]:
+    index_file = _checkpoint_index_file(proj)
+    if not index_file.exists():
+        return []
+    try:
+        payload = json.loads(index_file.read_text(encoding="utf-8"))
+        entries = payload.get("checkpoints")
+        if isinstance(payload, dict) and isinstance(entries, list):
+            return entries
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+        pass
+    # Corrupt index: rebuild from the immutable snapshot files on disk.
+    rebuilt = []
+    for cid in _scan_checkpoint_ids(proj):
+        try:
+            meta = read_checkpoint_meta(proj, cid)
+            rebuilt.append({k: meta[k] for k in
+                            ("id", "label", "created_utc", "digest", "bytes")})
+        except (ValueError, FileNotFoundError, OSError):
+            continue
+    return rebuilt
+
+
+def _write_checkpoint_index(proj: pathlib.Path, entries: list[dict]) -> None:
+    _atomic_write_text(_checkpoint_index_file(proj),
+                       json.dumps({"schema": WORKSHOP_SCHEMA, "checkpoints": entries},
+                                  indent=2, sort_keys=True) + "\n")
+
+
+def read_checkpoint_meta(proj: pathlib.Path, cid: str) -> dict:
+    if not CHECKPOINT_ID_RE.match(cid or ""):
+        raise ValueError(f"bad checkpoint id {cid!r}: expected cp-NNN")
+    meta_file = checkpoints_dir(proj) / f"{cid}.json"
+    src_file = checkpoints_dir(proj) / f"{cid}.pep"
+    try:
+        payload = json.loads(meta_file.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"no such checkpoint: {cid!r}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"checkpoint metadata is corrupt: {meta_file} ({exc})") from exc
+    if not isinstance(payload, dict) or payload.get("id") != cid:
+        raise ValueError(f"checkpoint metadata is corrupt: {meta_file}")
+    if not src_file.exists():
+        raise ValueError(f"checkpoint source is missing: {src_file}")
+    return payload
+
+
+def save_checkpoint(root: pathlib.Path, name: str, label: str | None = None) -> dict:
+    """Snapshot the project's current definitions source immutably."""
+    proj = resolve_project_dir(root, name)
+    store = proj / STORE_FILENAME
+    try:
+        data = store.read_bytes() if store.exists() else b""
+    except OSError as exc:
+        raise ValueError(f"cannot read project source: {exc}") from exc
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"project source is not valid UTF-8: {store}") from exc
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    existing = _read_checkpoint_index(proj)
+    taken = {e.get("id") for e in existing if isinstance(e, dict)}
+    n = 1
+    while f"cp-{n:03d}" in taken:
+        n += 1
+    cid = f"cp-{n:03d}"
+    cdir = checkpoints_dir(proj)
+    cdir.mkdir(parents=True, exist_ok=True)
+    meta = {"schema": WORKSHOP_SCHEMA, "id": cid, "project": proj.name,
+            "label": label or "", "created_utc": _utcnow(),
+            "digest": digest, "bytes": len(data), "tool": "pep_workshop/1",
+            "revision_kind": "workshop-file-sha256"}
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".pep", delete=False, dir=str(cdir)) as tmp:
+        tmp.write(data)
+        tmp_path = pathlib.Path(tmp.name)
+    os.replace(tmp_path, cdir / f"{cid}.pep")
+    _atomic_write_text(cdir / f"{cid}.json",
+                       json.dumps(meta, indent=2, sort_keys=True) + "\n")
+    _write_checkpoint_index(proj, existing + [
+        {k: meta[k] for k in ("id", "label", "created_utc", "digest", "bytes")}])
+    return meta
+
+
+def list_checkpoints(root: pathlib.Path, name: str) -> dict:
+    proj = resolve_project_dir(root, name)
+    return {"project": proj.name, "checkpoints": _read_checkpoint_index(proj)}
+
+
+def show_checkpoint(root: pathlib.Path, name: str, cid: str) -> dict:
+    proj = resolve_project_dir(root, name)
+    return read_checkpoint_meta(proj, cid)
+
+
 def run_project_repl(root: pathlib.Path, name: str | None) -> int:
     """Open the interactive prompt on a project's store directory."""
     try:
@@ -239,6 +356,20 @@ def main(argv: list[str] | None = None) -> int:
     p_repl.add_argument("--root", required=True)
     p_repl.add_argument("--project", default=None)
 
+    p_ckpt = sub.add_parser("checkpoint", help="source revisions")
+    ckpt = p_ckpt.add_subparsers(dest="ckpt", required=True)
+    c_save = ckpt.add_parser("save", help="snapshot current source")
+    c_save.add_argument("--root", required=True)
+    c_save.add_argument("--project", required=True)
+    c_save.add_argument("--label", default=None)
+    c_list = ckpt.add_parser("list", help="list checkpoints")
+    c_list.add_argument("--root", required=True)
+    c_list.add_argument("--project", required=True)
+    c_show = ckpt.add_parser("show", help="show checkpoint metadata")
+    c_show.add_argument("--root", required=True)
+    c_show.add_argument("--project", required=True)
+    c_show.add_argument("--id", required=True)
+
     args = parser.parse_args(argv)
     try:
         root = pathlib.Path(args.root)
@@ -254,6 +385,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"dir": str(resolve_project_dir(root, args.name))}, indent=2))
         elif args.command == "repl":
             return run_project_repl(root, args.project)
+        elif args.command == "checkpoint":
+            if args.ckpt == "save":
+                print(json.dumps(
+                    save_checkpoint(root, args.project, args.label), indent=2))
+            elif args.ckpt == "list":
+                print(json.dumps(
+                    list_checkpoints(root, args.project), indent=2))
+            elif args.ckpt == "show":
+                print(json.dumps(
+                    show_checkpoint(root, args.project, args.id), indent=2))
         return 0
     except (RuntimeError, ValueError, FileNotFoundError, OSError,
             UnicodeDecodeError) as exc:

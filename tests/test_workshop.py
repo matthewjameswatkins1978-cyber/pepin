@@ -122,6 +122,72 @@ class WorkshopProjectTests(unittest.TestCase):
             self.assertIn("alpha", switched.stdout)
             self.assertNotIn("beta", switched.stdout)
 
+    def test_checkpoint_save_list_show_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            with open(pathlib.Path(root) / "p" / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 1 }\n")
+            saved = workshop("checkpoint", "save", "--root", root,
+                             "--project", "p", "--label", "first")
+            self.assertEqual(saved.returncode, 0, saved.stderr)
+            meta = json.loads(saved.stdout)
+            self.assertEqual(meta["id"], "cp-001")
+            self.assertEqual(meta["label"], "first")
+            self.assertEqual(meta["revision_kind"], "workshop-file-sha256")
+            snap = (pathlib.Path(root) / "p" / "checkpoints" / "cp-001.pep").read_bytes()
+            self.assertEqual(snap, b"fn v() -> Int { return 1 }\n")
+            import hashlib as _hl
+            self.assertEqual(meta["digest"], "sha256:" + _hl.sha256(snap).hexdigest())
+            second = workshop("checkpoint", "save", "--root", root, "--project", "p")
+            self.assertEqual(json.loads(second.stdout)["id"], "cp-002")
+            listed = workshop("checkpoint", "list", "--root", root, "--project", "p")
+            ids = [c["id"] for c in json.loads(listed.stdout)["checkpoints"]]
+            self.assertEqual(ids, ["cp-001", "cp-002"])
+            shown = workshop("checkpoint", "show", "--root", root,
+                             "--project", "p", "--id", "cp-001")
+            self.assertEqual(json.loads(shown.stdout)["label"], "first")
+
+    def test_checkpoint_empty_project_and_bad_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "e").returncode, 0)
+            saved = workshop("checkpoint", "save", "--root", root, "--project", "e")
+            meta = json.loads(saved.stdout)
+            self.assertEqual(meta["bytes"], 0)
+            self.assertTrue(meta["digest"].startswith("sha256:"))
+            bad = workshop("checkpoint", "show", "--root", root,
+                           "--project", "e", "--id", "cp-999")
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("error", bad.stderr)
+            evil = workshop("checkpoint", "show", "--root", root,
+                            "--project", "e", "--id", "../active")
+            self.assertNotEqual(evil.returncode, 0)
+            unknown = workshop("checkpoint", "save", "--root", root,
+                               "--project", "ghost")
+            self.assertNotEqual(unknown.returncode, 0)
+            self.assertIn("error", unknown.stderr)
+
+    def test_checkpoint_index_rebuilt_when_corrupt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            (pathlib.Path(root) / "p" / "definitions.pep").write_text(
+                "fn v() -> Int { return 1 }\n", encoding="utf-8")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "p", "--label", "a").returncode, 0)
+            (pathlib.Path(root) / "p" / "checkpoints" / "index.json").write_bytes(b"{x")
+            listed = workshop("checkpoint", "list", "--root", root, "--project", "p")
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            entries = json.loads(listed.stdout)["checkpoints"]
+            self.assertEqual([e["id"] for e in entries], ["cp-001"])
+            self.assertEqual(entries[0]["label"], "a")
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")
