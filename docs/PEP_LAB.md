@@ -33,6 +33,21 @@ remains ephemeral; persistence here means ordinary source bytes in files.
 - Rejected (invalid/duplicate) definitions leave the existing store
   byte-identical; diagnostics carry the compiler's exact error code.
 
+## Interactive REPL (Milestone 2)
+
+`python pep_lab.py repl --store DIR` opens a text prompt over the same
+compiler. Type Pep code (several lines if needed); a blank line checks
+``stored definitions + buffer`` and reports `valid`,
+`incomplete: holes [...]`, or `invalid: CODE message @ line:col`.
+
+- `:run` evaluates the buffer once against the store and prints output.
+- `:def` validates and persists the buffer, then clears it. Rejection
+  keeps the buffer so it can be corrected (`:clear`/`:pop` discard).
+- `:check`, `:holes`, `:show`, `:export FILE`, `:describe`, `:help`, `:quit`.
+- Buffers are ad-hoc: quitting never writes, and nothing re-executes.
+- Note: `query --holes` names holes `identity` where `check` uses `name`;
+  the REPL accepts both.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.

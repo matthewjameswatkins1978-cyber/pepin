@@ -140,6 +140,90 @@ class PepLabTests(unittest.TestCase):
             self.assertNotEqual(exported.returncode, 0)
             self.assertIn("error", exported.stderr)
 
+    def _script(self, store, lines):
+        sys.path.insert(0, str(ROOT))
+        try:
+            import pep_lab
+        finally:
+            sys.path.remove(str(ROOT))
+        session = pep_lab.ReplSession(pathlib.Path(store))
+        outputs = []
+        for line in lines:
+            out, quit = session.handle(line)
+            outputs.append(out)
+            if quit:
+                break
+        return session, outputs
+
+    def test_repl_define_use_and_export_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn double(n: Int) -> Int { return n + n }",
+                "",                      # blank line checks the buffer
+                ":def",                  # persist it
+                ":show",                 # list it
+                'say(int_text(double(21)))',
+                ":run",                  # evaluate buffer against the store
+                f":export {tmp}/final.pep",
+                ":quit",
+            ])
+            self.assertIn("valid", outputs[1])
+            self.assertIn("double", outputs[2])
+            self.assertIn("double", outputs[3])
+            self.assertEqual(outputs[5], "42")
+            self.assertIn("final.pep", outputs[6])
+            exported = pathlib.Path(tmp, "final.pep").read_text(encoding="utf-8")
+            self.assertIn("fn double", exported)
+            self.assertIn("store_sha256:", exported)
+            # Quitting never writes: the ad-hoc say line is not persisted.
+            self.assertNotIn("say(", (pathlib.Path(store) / "definitions.pep").read_text(encoding="utf-8"))
+
+    def test_repl_error_correct_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                'fn broken(n: Int) -> Int { return "nope" }',
+                "",          # check -> invalid with the compiler's code
+                ":def",      # rejected, buffer kept for correction
+                ":clear",    # discard and retype
+                "fn broken(n: Int) -> Int { return n }",
+                "",
+                ":def",
+                ":quit",
+            ])
+            self.assertIn("PEP_TYPE_MISMATCH", outputs[1])
+            self.assertIn("not persisted", outputs[2])
+            self.assertIn("valid", outputs[5])
+            self.assertIn("broken", outputs[6])
+
+    def test_repl_holes_help_and_unknown_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn h(n: Int) -> Int { return ?calc }",
+                "",
+                ":holes",
+                ":help",
+                ":frobnicate",
+                ":quit",
+            ])
+            self.assertIn("incomplete", outputs[1])
+            self.assertIn("calc : Int in h", outputs[2])
+            self.assertIn(":def", outputs[3])
+            self.assertIn("unknown command", outputs[4])
+
+    def test_repl_run_reports_failure_without_persisting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                'say(1)',
+                ":run",
+                ":quit",
+            ])
+            self.assertIn("exit", outputs[1])
+            self.assertFalse((pathlib.Path(store) / "definitions.pep").exists())
+
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))
         try:

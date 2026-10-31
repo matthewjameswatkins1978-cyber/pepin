@@ -1,4 +1,4 @@
-"""Pep Lab: Living Prompt (step 1) over the existing OCaml seed.
+"""Pep Lab: Living Prompt over the existing OCaml seed.
 
 Thin file-backed wrapper. It does NOT change pep_ocaml.ml, the session
 protocol, or any accepted language semantics. All evaluation and
@@ -14,6 +14,11 @@ inspection delegate to the existing ``pep.ps1`` CLI:
 The in-process ``session --jsonl`` keeps revisions only for its own
 lifetime; this wrapper provides persistence by keeping ordinary source
 bytes in files, which remain the durable program (Founding Design v0.3).
+
+The ``repl`` command adds an interactive text prompt: type Pep code
+(several lines if needed), a blank line checks the buffer, ``:run``
+evaluates it once against the stored definitions, and ``:def`` persists it.
+The buffer is never re-executed implicitly and quitting never writes.
 """
 from __future__ import annotations
 
@@ -199,6 +204,207 @@ def eval_with_store(store_dir: pathlib.Path, main_source: str) -> subprocess.Com
         tmp_path.unlink(missing_ok=True)
 
 
+def _hole_name(hole: dict) -> object:
+    # `query --holes` calls it `identity`; `check` calls it `name`.
+    return hole.get("name", hole.get("identity"))
+
+
+def _format_status(payload: dict) -> str:
+    """One-line human summary of a check payload for the REPL."""
+    status = payload.get("status")
+    if status == "valid":
+        return "valid"
+    if status == "incomplete":
+        holes = payload.get("holes", [])
+        names = ", ".join(
+            f"{_hole_name(h)} ({h.get('expectedType')}) in {h.get('scope')}"
+            for h in holes
+        )
+        return f"incomplete: holes [{names}]" if names else "incomplete"
+    if status == "invalid":
+        parts = []
+        for diag in payload.get("diagnostics", []):
+            span = diag.get("span", {}) or {}
+            start = span.get("start", {}) or {}
+            at = f" @ {start.get('line')}:{start.get('column')}" \
+                if start.get("line") is not None else ""
+            parts.append(f"{diag.get('code')}: {diag.get('message')}{at}")
+        detail = "; ".join(parts) if parts else "no diagnostics"
+        return f"invalid: {detail}"
+    return f"unknown status: {status!r}"
+
+
+REPL_HELP = """Pep Lab REPL -- an interactive text prompt over the seed compiler.
+Type Pep code, several lines if needed; a blank line checks the buffer.
+Commands (prefix with a colon):
+  :help          show this help
+  :run            evaluate stored definitions + buffer (runs once)
+  :def            validate the buffer and persist it as definitions
+  :check          re-check stored definitions + buffer
+  :holes          list typed holes in stored definitions + buffer
+  :show           list persisted definition names
+  :export FILE    export definitions to a portable .pep file
+  :describe       show the compiler identity
+  :pop            drop the last buffered line
+  :clear          discard the buffer
+  :quit           leave the REPL (also Ctrl-D)"""
+
+
+class ReplSession:
+    """Interactive prompt state: a line buffer over a file-backed store.
+
+    The buffer is ad-hoc experiment text; only ``:def`` persists. Buffers
+    are checked and run as ``stored definitions + buffer`` so experiments
+    can use persisted functions. Each ``:run`` executes once -- nothing is
+    re-executed implicitly -- and quitting never writes the store.
+    """
+
+    def __init__(self, store_dir: pathlib.Path):
+        self.store_dir = store_dir
+        self.buf: list[str] = []
+
+    def buffer_text(self) -> str:
+        text = "\n".join(self.buf)
+        return text + "\n" if text else ""
+
+    def combined_text(self) -> str:
+        src = self.store_dir / STORE_FILENAME
+        defs = src.read_text(encoding="utf-8") if src.exists() else ""
+        if defs and not defs.endswith("\n"):
+            defs += "\n"
+        return defs + self.buffer_text()
+
+    def _check_combined(self) -> dict:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pep", delete=False, encoding="utf-8",
+            newline="\n",
+        ) as tmp:
+            tmp.write(self.combined_text())
+            tmp_path = pathlib.Path(tmp.name)
+        try:
+            return cmd_check(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def _holes_combined(self) -> dict:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".pep", delete=False, encoding="utf-8",
+            newline="\n",
+        ) as tmp:
+            tmp.write(self.combined_text())
+            tmp_path = pathlib.Path(tmp.name)
+        try:
+            return cmd_holes(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    def handle(self, line: str) -> tuple[str, bool]:
+        """Handle one input line; returns (output text, quit flag)."""
+        stripped = line.strip()
+        try:
+            if stripped in (":quit", ":exit", ":q"):
+                return ("bye", True)
+            if stripped == ":help":
+                return (REPL_HELP, False)
+            if stripped == ":clear":
+                self.buf = []
+                return ("buffer cleared", False)
+            if stripped == ":pop":
+                if not self.buf:
+                    return ("buffer is already empty", False)
+                self.buf.pop()
+                return (f"dropped; {len(self.buf)} line(s) buffered", False)
+            if stripped == ":show":
+                names = list_definitions(self.store_dir)
+                return ("definitions: " + (", ".join(names) if names else "(none)"), False)
+            if stripped == ":describe":
+                info = cmd_describe()
+                builtins = [b["name"] for b in info.get("builtins", [])]
+                return (f"Pep with {', '.join(info.get('types', []))}; "
+                        f"builtins: {', '.join(builtins)}", False)
+            if stripped == ":check":
+                if not self.buf:
+                    return ("buffer is empty -- type Pep code first", False)
+                return (_format_status(self._check_combined()), False)
+            if stripped == ":holes":
+                payload = self._holes_combined()
+                holes = payload.get("holes", [])
+                if not holes:
+                    return (f"{payload.get('status', 'unknown')}: no holes", False)
+                lines = [f"{_hole_name(h)} : {h.get('expectedType')} "
+                         f"in {h.get('scope')}" for h in holes]
+                return ("holes:\n" + "\n".join(lines), False)
+            if stripped == ":run":
+                if not self.buf:
+                    return ("buffer is empty -- type Pep code first", False)
+                proc = eval_with_store(self.store_dir, self.buffer_text())
+                out = proc.stdout
+                if proc.returncode != 0:
+                    out += f"[exit {proc.returncode}]\n{proc.stderr}"
+                return (out.rstrip("\n") or f"[exit {proc.returncode}]", False)
+            if stripped == ":def":
+                if not self.buf:
+                    return ("buffer is empty -- type Pep code first", False)
+                try:
+                    result = define_source(self.store_dir, self.buffer_text())
+                except ValueError as exc:
+                    # Keep the buffer so the user can correct and retry.
+                    return (f"not persisted: {exc}", False)
+                self.buf = []
+                names = ", ".join(result["functions"]) or "(no functions)"
+                return (f"persisted ({result['status']}): {names}", False)
+            if stripped.startswith(":export"):
+                target = stripped[len(":export"):].strip()
+                if not target:
+                    return ("usage: :export FILE", False)
+                result = export_store(self.store_dir, pathlib.Path(target))
+                names = ", ".join(result["definitions"]) or "(none)"
+                return (f"exported {result['output']} [{result['sha256'][:12]}]: {names}", False)
+            if stripped.startswith(":"):
+                return (f"unknown command {stripped!r} -- try :help", False)
+            if stripped == "":
+                if not self.buf:
+                    return ("", False)
+                return (_format_status(self._check_combined()), False)
+            self.buf.append(line.rstrip("\n"))
+            return (f"... ({len(self.buf)} buffered)", False)
+        except (RuntimeError, ValueError, FileNotFoundError, OSError,
+                UnicodeDecodeError) as exc:
+            return (f"error: {exc}", False)
+
+
+def run_repl(store_dir: pathlib.Path, stdin=None, stdout=None) -> int:
+    """Run the interactive loop; ``stdin``/``stdout`` allow scripted use."""
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    session = ReplSession(store_dir)
+    stdout.write("Pep Lab REPL -- :help for commands, blank line checks, :quit to leave.\n")
+    stdout.flush()
+    while True:
+        try:
+            stdout.write("pep> " if not session.buf else "...+ ")
+            stdout.flush()
+            line = stdin.readline()
+        except KeyboardInterrupt:
+            stdout.write("\nbuffer cleared\n")
+            session.buf = []
+            continue
+        if line == "":
+            stdout.write("bye\n")
+            return 0
+        try:
+            output, quit = session.handle(line.rstrip("\n"))
+        except KeyboardInterrupt:
+            stdout.write("\nbuffer cleared\n")
+            session.buf = []
+            continue
+        if output:
+            stdout.write(output + "\n")
+            stdout.flush()
+        if quit:
+            return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Pep Lab Living Prompt (step 1)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -235,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--store", required=True)
     p_run.add_argument("--file", required=True)
 
+    p_repl = sub.add_parser("repl", help="interactive text prompt over the seed compiler")
+    p_repl.add_argument("--store", required=True)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "eval":
@@ -264,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "export":
             print(json.dumps(export_store(pathlib.Path(args.store), pathlib.Path(args.output)), indent=2))
             return 0
+        if args.command == "repl":
+            return run_repl(pathlib.Path(args.store))
         if args.command == "eval-store":
             main_source = pathlib.Path(args.file).read_text(encoding="utf-8")
             proc = eval_with_store(pathlib.Path(args.store), main_source)
