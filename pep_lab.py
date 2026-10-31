@@ -6,8 +6,9 @@ inspection delegate to the existing ``pep.ps1`` CLI:
 
 - evaluation: ``pep.ps1 run FILE``
 - compiler inspection: ``describe`` / ``check`` / ``inspect`` / ``query --holes``
-- persistent definitions: an append-only ``definitions.pep`` store file
-  validated with ``check`` before each append
+- persistent definitions: a ``definitions.pep`` store file validated with
+  ``check`` before each atomic update (temp file + replace, so a crash or a
+  rejected snippet can never leave a truncated store)
 - source export: a plain ``.pep`` file with an explicit dependency header
 
 The in-process ``session --jsonl`` keeps revisions only for its own
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -31,43 +33,72 @@ STORE_FILENAME = "definitions.pep"
 
 FN_RE = re.compile(r"^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
 
+# Bounded execution: the seed compiler answers in seconds; never wait forever
+# on a hung subprocess. Missing pwsh/pep.ps1 surfaces as RuntimeError, not a
+# traceback, so scripts and the REPL can report it as infrastructure failure.
+PEP_TIMEOUT = 120
+
 
 def _run_pep(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["pwsh", "-NoProfile", "-File", str(PEP), *args],
-        cwd=ROOT, text=True, capture_output=True, check=False, input=input_text,
-    )
+    try:
+        return subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(PEP), *args],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+            input=input_text, timeout=PEP_TIMEOUT,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"cannot launch pep subprocess: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"pep subprocess timed out after {PEP_TIMEOUT}s: {' '.join(args)}"
+        ) from exc
+
+
+def _load_json(proc: subprocess.CompletedProcess[str], what: str) -> dict:
+    if proc.returncode != 0:
+        raise RuntimeError(f"{what} failed: {proc.stderr.strip()}")
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{what} returned malformed JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{what} returned a non-object JSON payload")
+    return payload
 
 
 def cmd_describe() -> dict:
-    proc = _run_pep("describe", "--json")
-    if proc.returncode != 0:
-        raise RuntimeError(f"describe failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    payload = _load_json(_run_pep("describe", "--json"), "describe")
+    if payload.get("schemaVersion") != 2 or payload.get("language") != "Pep":
+        raise RuntimeError(f"describe returned unexpected identity: {payload!r:.200}")
+    return payload
 
 
 def cmd_check(path: pathlib.Path) -> dict:
+    # The file CLI exits nonzero for incomplete/invalid programs but still
+    # emits the JSON payload on stdout; prefer that payload over the exit
+    # code so callers can distinguish valid/incomplete/invalid from a real
+    # transport failure (no usable JSON at all).
     proc = _run_pep("check", str(path), "--json")
-    if proc.returncode != 0:
-        raise RuntimeError(f"check failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"check failed (exit {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()[:200]}"
+        ) from exc
+    if not isinstance(payload, dict) or "status" not in payload:
+        raise RuntimeError("check returned JSON without a status field")
+    return payload
 
 
 def cmd_inspect(path: pathlib.Path) -> dict:
-    proc = _run_pep("inspect", str(path), "--json")
-    if proc.returncode != 0:
-        raise RuntimeError(f"inspect failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    return _load_json(_run_pep("inspect", str(path), "--json"), "inspect")
 
 
 def cmd_holes(path: pathlib.Path, offset: int | None = None) -> dict:
     args = ["query", str(path), "--holes", "--json"]
     if offset is not None:
         args += ["--offset", str(offset)]
-    proc = _run_pep(*args)
-    if proc.returncode != 0:
-        raise RuntimeError(f"query failed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout)
+    return _load_json(_run_pep(*args), "query")
 
 
 def cmd_eval(path: pathlib.Path) -> subprocess.CompletedProcess[str]:
@@ -95,11 +126,14 @@ def define_source(store_dir: pathlib.Path, snippet: str) -> dict:
     """
     path = store_path(store_dir)
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    combined = existing + ("" if not existing.endswith("\n") and existing else "") + snippet
-    if not combined.endswith("\n"):
-        combined += "\n"
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    if not snippet.endswith("\n"):
+        snippet += "\n"
+    combined = existing + snippet
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".pep", delete=False, encoding="utf-8"
+        mode="w", suffix=".pep", delete=False, encoding="utf-8",
+        newline="\n",  # never let Windows text mode rewrite stored bytes to CRLF
     ) as tmp:
         tmp.write(combined)
         tmp_path = pathlib.Path(tmp.name)
@@ -109,8 +143,16 @@ def define_source(store_dir: pathlib.Path, snippet: str) -> dict:
         tmp_path.unlink(missing_ok=True)
     if payload.get("status") == "invalid":
         raise ValueError(f"definition rejected: {payload.get('diagnostics')!r}")
-    with open(path, "a", encoding="utf-8") as handle:
-        handle.write(snippet if snippet.endswith("\n") else snippet + "\n")
+    # Atomic durable write: temp file in the same directory, then replace, so
+    # a crash or failed validation can never leave a truncated store behind.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".pep", delete=False, encoding="utf-8",
+        newline="\n",  # byte fidelity: stored source keeps LF newlines
+        dir=str(path.parent),
+    ) as tmp:
+        tmp.write(combined)
+        tmp_path = pathlib.Path(tmp.name)
+    os.replace(tmp_path, path)
     return {"status": payload.get("status"), "functions": FN_RE.findall(snippet)}
 
 
@@ -128,7 +170,15 @@ def export_store(store_dir: pathlib.Path, output: pathlib.Path) -> dict:
         f"# definitions: {', '.join(names) if names else '(none)'}\n"
         "# Common lab modules are NOT implicit; import by pasting this file.\n"
     )
-    output.write_text(header + body, encoding="utf-8")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".pep", delete=False, encoding="utf-8",
+        newline="\n",  # exported bytes are exactly header + stored body
+        dir=str(output.parent),
+    ) as tmp:
+        tmp.write(header + body)
+        tmp_path = pathlib.Path(tmp.name)
+    os.replace(tmp_path, output)
     return {"output": str(output), "sha256": digest, "definitions": names}
 
 
@@ -137,7 +187,8 @@ def eval_with_store(store_dir: pathlib.Path, main_source: str) -> subprocess.Com
     src = store_dir / STORE_FILENAME
     defs = src.read_text(encoding="utf-8") if src.exists() else ""
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".pep", delete=False, encoding="utf-8", dir=ROOT
+        mode="w", suffix=".pep", delete=False, encoding="utf-8",
+        newline="\n", dir=ROOT
     ) as tmp:
         # dir=ROOT keeps Resolve-Path simple on Windows; removed afterwards.
         tmp.write(defs + main_source)
@@ -219,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(proc.stdout)
             sys.stderr.write(proc.stderr)
             return proc.returncode
-    except (RuntimeError, ValueError, FileNotFoundError) as exc:
+    except (RuntimeError, ValueError, FileNotFoundError, OSError, UnicodeDecodeError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
     return 2

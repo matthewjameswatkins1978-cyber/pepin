@@ -20,6 +20,19 @@ no compiler semantics and claims no new packet acceptance.
 a main snippet in a temporary file. The in-process `session --jsonl`
 remains ephemeral; persistence here means ordinary source bytes in files.
 
+## Reliability (Milestone 1)
+
+- `check` exits nonzero for incomplete/invalid programs but still emits its
+  JSON payload; the wrapper reads the payload (not the exit code) to tell
+  valid/incomplete/invalid apart from a genuine transport failure.
+- Store updates and exports are atomic (same-directory temp file + replace).
+- All temp writes use `newline="\n"` so Windows text mode never rewrites
+  stored source bytes to CRLF.
+- Every compiler subprocess has a 120s timeout; missing executables, hangs
+  and malformed JSON surface as clean errors, never tracebacks.
+- Rejected (invalid/duplicate) definitions leave the existing store
+  byte-identical; diagnostics carry the compiler's exact error code.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.
