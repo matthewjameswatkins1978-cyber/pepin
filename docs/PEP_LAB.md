@@ -48,6 +48,16 @@ compiler. Type Pep code (several lines if needed); a blank line checks
 - Note: `query --holes` names holes `identity` where `check` uses `name`;
   the REPL accepts both.
 
+## Compiler-aware output (Milestone 3)
+
+- Invalid diagnostics render the offending source line with a caret under
+  the reported column, in addition to `CODE message @ line:col`.
+- `:holes` appends the compiler's fill candidates (`try: n`) when known.
+- `:info` lists stored definitions with their compiler-checked signatures
+  (`fn double(n: Int) -> Int`) plus the numbered buffer contents.
+- No new semantics are claimed: file-backed sources only, no incremental
+  compilation, no revision-aware session state beyond ordinary files.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.

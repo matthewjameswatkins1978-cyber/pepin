@@ -209,9 +209,37 @@ class PepLabTests(unittest.TestCase):
                 ":quit",
             ])
             self.assertIn("incomplete", outputs[1])
-            self.assertIn("calc : Int in h", outputs[2])
+            self.assertIn("calc : Int in h (try: n)", outputs[2])
             self.assertIn(":def", outputs[3])
             self.assertIn("unknown command", outputs[4])
+
+    def test_repl_invalid_shows_source_excerpt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                'say(1)',
+                "",
+                ":quit",
+            ])
+            self.assertIn("invalid", outputs[1])
+            self.assertIn("> say(1)", outputs[1])
+            self.assertIn("^", outputs[1])
+
+    def test_repl_info_shows_checked_signatures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn double(n: Int) -> Int { return n + n }",
+                ":def",
+                ":info",
+                "say(1)",
+                ":info",
+                ":quit",
+            ])
+            self.assertIn("store: fn double(n: Int) -> Int", outputs[2])
+            self.assertIn("buffer: (empty)", outputs[2])
+            self.assertIn("store: fn double(n: Int) -> Int", outputs[4])
+            self.assertIn("buffer: 1 line(s):", outputs[4])
 
     def test_repl_run_reports_failure_without_persisting(self):
         with tempfile.TemporaryDirectory() as tmp:

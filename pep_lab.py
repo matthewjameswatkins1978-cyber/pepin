@@ -209,7 +209,29 @@ def _hole_name(hole: dict) -> object:
     return hole.get("name", hole.get("identity"))
 
 
-def _format_status(payload: dict) -> str:
+def _hole_suggestions(hole: dict) -> str:
+    # Prefer the compiler's fill candidates; fall back to visible bindings.
+    candidates = []
+    for action in hole.get("actions", []) or []:
+        candidates.extend(c.get("name") for c in action.get("candidates", []) or [])
+    if not candidates:
+        candidates = [b.get("name") for b in hole.get("bindings", []) or []]
+    seen = [c for c in dict.fromkeys(candidates) if c]
+    return f" (try: {', '.join(seen)})" if seen else ""
+
+
+def _excerpt(source_text: str, line: int | None, column: int | None) -> str:
+    if not source_text or not line:
+        return ""
+    lines = source_text.split("\n")
+    if line < 1 or line > len(lines):
+        return ""
+    text = lines[line - 1]
+    caret = " " * max((column or 1) - 1, 0) + "^" if column else ""
+    return f"\n  > {text}" + (f"\n    {caret}" if caret else "")
+
+
+def _format_status(payload: dict, source_text: str | None = None) -> str:
     """One-line human summary of a check payload for the REPL."""
     status = payload.get("status")
     if status == "valid":
@@ -217,7 +239,7 @@ def _format_status(payload: dict) -> str:
     if status == "incomplete":
         holes = payload.get("holes", [])
         names = ", ".join(
-            f"{_hole_name(h)} ({h.get('expectedType')}) in {h.get('scope')}"
+            f"{_hole_name(h)} ({h.get('expectedType')}) in {h.get('scope')}{_hole_suggestions(h)}"
             for h in holes
         )
         return f"incomplete: holes [{names}]" if names else "incomplete"
@@ -228,7 +250,8 @@ def _format_status(payload: dict) -> str:
             start = span.get("start", {}) or {}
             at = f" @ {start.get('line')}:{start.get('column')}" \
                 if start.get("line") is not None else ""
-            parts.append(f"{diag.get('code')}: {diag.get('message')}{at}")
+            excerpt = _excerpt(source_text or "", start.get("line"), start.get("column"))
+            parts.append(f"{diag.get('code')}: {diag.get('message')}{at}{excerpt}")
         detail = "; ".join(parts) if parts else "no diagnostics"
         return f"invalid: {detail}"
     return f"unknown status: {status!r}"
@@ -243,6 +266,7 @@ Commands (prefix with a colon):
   :check          re-check stored definitions + buffer
   :holes          list typed holes in stored definitions + buffer
   :show           list persisted definition names
+  :info            show checked signatures of stored defs + buffer state
   :export FILE    export definitions to a portable .pep file
   :describe       show the compiler identity
   :pop            drop the last buffered line
@@ -298,6 +322,33 @@ class ReplSession:
         finally:
             tmp_path.unlink(missing_ok=True)
 
+    def _info(self) -> str:
+        """Checked signatures of stored definitions plus buffer state."""
+        lines = []
+        src = self.store_dir / STORE_FILENAME
+        if src.exists():
+            try:
+                payload = cmd_check(src)
+            except (RuntimeError, ValueError) as exc:
+                lines.append(f"store: cannot check ({exc})")
+            else:
+                fns = (payload.get("typedTree") or {}).get("functions", [])
+                if not fns:
+                    lines.append(f"store: {payload.get('status')} (no functions)")
+                for fn in fns:
+                    params = ", ".join(
+                        f"{p.get('name')}: {p.get('type')}"
+                        for p in fn.get("parameters", []))
+                    lines.append(f"store: fn {fn.get('name')}({params}) -> {fn.get('returnType')}")
+        else:
+            lines.append("store: (empty)")
+        if self.buf:
+            lines.append(f"buffer: {len(self.buf)} line(s):")
+            lines.extend(f"  {i + 1}: {text}" for i, text in enumerate(self.buf))
+        else:
+            lines.append("buffer: (empty)")
+        return "\n".join(lines)
+
     def handle(self, line: str) -> tuple[str, bool]:
         """Handle one input line; returns (output text, quit flag)."""
         stripped = line.strip()
@@ -317,6 +368,8 @@ class ReplSession:
             if stripped == ":show":
                 names = list_definitions(self.store_dir)
                 return ("definitions: " + (", ".join(names) if names else "(none)"), False)
+            if stripped == ":info":
+                return (self._info(), False)
             if stripped == ":describe":
                 info = cmd_describe()
                 builtins = [b["name"] for b in info.get("builtins", [])]
@@ -325,14 +378,15 @@ class ReplSession:
             if stripped == ":check":
                 if not self.buf:
                     return ("buffer is empty -- type Pep code first", False)
-                return (_format_status(self._check_combined()), False)
+                combined = self.combined_text()
+                return (_format_status(self._check_combined(), combined), False)
             if stripped == ":holes":
                 payload = self._holes_combined()
                 holes = payload.get("holes", [])
                 if not holes:
                     return (f"{payload.get('status', 'unknown')}: no holes", False)
                 lines = [f"{_hole_name(h)} : {h.get('expectedType')} "
-                         f"in {h.get('scope')}" for h in holes]
+                         f"in {h.get('scope')}{_hole_suggestions(h)}" for h in holes]
                 return ("holes:\n" + "\n".join(lines), False)
             if stripped == ":run":
                 if not self.buf:
@@ -365,7 +419,7 @@ class ReplSession:
             if stripped == "":
                 if not self.buf:
                     return ("", False)
-                return (_format_status(self._check_combined()), False)
+                return (_format_status(self._check_combined(), self.combined_text()), False)
             self.buf.append(line.rstrip("\n"))
             return (f"... ({len(self.buf)} buffered)", False)
         except (RuntimeError, ValueError, FileNotFoundError, OSError,
