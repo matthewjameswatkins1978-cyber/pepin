@@ -394,6 +394,137 @@ def restore_checkpoint(root: pathlib.Path, name: str, cid: str,
             "current_digest": current_digest, "target_digest": target_digest}
 
 
+EXPERIMENTS_DIRNAME = "experiments"
+EXPERIMENT_ID_RE = re.compile(r"^exp-(\d{3})$")
+EXPERIMENT_KINDS = ("check", "inspect", "holes")
+
+
+def experiments_dir(proj: pathlib.Path) -> pathlib.Path:
+    return proj / EXPERIMENTS_DIRNAME
+
+
+def _compiler_identity() -> dict:
+    from pep_lab import cmd_describe
+    info = cmd_describe()
+    canonical = json.dumps(info, sort_keys=True)
+    return {"language": info.get("language"),
+            "schemaVersion": info.get("schemaVersion"),
+            "digest": "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+
+
+def _next_experiment_id(proj: pathlib.Path) -> str:
+    taken = {p.stem for p in experiments_dir(proj).glob("exp-*.json")
+             if p.is_file() and EXPERIMENT_ID_RE.match(p.stem)}
+    n = 1
+    while f"exp-{n:03d}" in taken:
+        n += 1
+    return f"exp-{n:03d}"
+
+
+def _read_experiment(proj: pathlib.Path, eid: str) -> dict:
+    if not EXPERIMENT_ID_RE.match(eid or ""):
+        raise ValueError(f"bad experiment id {eid!r}: expected exp-NNN")
+    exp_file = experiments_dir(proj) / f"{eid}.json"
+    try:
+        payload = json.loads(exp_file.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"no such experiment: {eid!r}") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"experiment record is corrupt: {exp_file} ({exc})") from exc
+    if not isinstance(payload, dict) or payload.get("id") != eid:
+        raise ValueError(f"experiment record is corrupt: {exp_file}")
+    return payload
+
+
+def record_experiment(root: pathlib.Path, name: str, kind: str,
+                      label: str | None = None, run: bool = False) -> dict:
+    """Run one compiler flow against the current source and record it.
+
+    check/inspect/holes never execute code. ``run=True`` additionally
+    executes the current source once as an explicitly requested
+    observation (stdout/stderr/return code), tagged as observation -- not
+    as proof of anything beyond that run.
+    """
+    if kind not in EXPERIMENT_KINDS:
+        raise ValueError(f"bad experiment kind {kind!r}: {', '.join(EXPERIMENT_KINDS)}")
+    from pep_lab import cmd_check, cmd_holes, cmd_inspect, cmd_eval
+    proj = resolve_project_dir(root, name)
+    store = proj / STORE_FILENAME
+    source_digest = project_source_digest(proj)
+    source_bytes = store.read_bytes() if store.exists() else b""
+    runner = {"check": cmd_check, "inspect": cmd_inspect, "holes": cmd_holes}[kind]
+    result = runner(store)
+    record_result = {"status": result.get("status")}
+    if result.get("status") == "invalid":
+        record_result["diagnostics"] = result.get("diagnostics", [])
+    if result.get("status") == "incomplete":
+        record_result["holes"] = [
+            {"name": h.get("name", h.get("identity")),
+             "expectedType": h.get("expectedType"), "scope": h.get("scope")}
+            for h in result.get("holes", [])]
+    observation = None
+    if run:
+        proc = cmd_eval(store)
+        observation = {"stdout": proc.stdout, "stderr": proc.stderr,
+                       "returncode": proc.returncode}
+    eid = _next_experiment_id(proj)
+    record = {"schema": WORKSHOP_SCHEMA, "id": eid, "project": proj.name,
+              "label": label or "", "kind": kind, "created_utc": _utcnow(),
+              "tool": "pep_workshop/1", "source_digest": source_digest,
+              "source_bytes": len(source_bytes),
+              "compiler": _compiler_identity(),
+              "result": record_result, "observation": observation}
+    edir = experiments_dir(proj)
+    edir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_text(edir / f"{eid}.json",
+                       json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return record
+
+
+def list_experiments(root: pathlib.Path, name: str) -> dict:
+    proj = resolve_project_dir(root, name)
+    current_digest = project_source_digest(proj)
+    current_compiler = _compiler_identity()["digest"]
+    entries = []
+    for exp_file in sorted(experiments_dir(proj).glob("exp-*.json")):
+        try:
+            record = json.loads(exp_file.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+            entries.append({"id": exp_file.stem, "status": "corrupt"})
+            continue
+        entries.append({
+            "id": record.get("id"), "kind": record.get("kind"),
+            "label": record.get("label", ""),
+            "created_utc": record.get("created_utc"),
+            "result_status": (record.get("result") or {}).get("status"),
+            "observed_run": record.get("observation") is not None,
+            "stale": record.get("source_digest") != current_digest,
+            "compiler_changed": (record.get("compiler") or {}).get("digest") != current_compiler,
+        })
+    return {"project": proj.name, "current_digest": current_digest, "experiments": entries}
+
+
+def show_experiment(root: pathlib.Path, name: str, eid: str) -> dict:
+    return _read_experiment(resolve_project_dir(root, name), eid)
+
+
+def rerun_experiment(root: pathlib.Path, name: str, eid: str) -> dict:
+    """Re-run a recorded flow against the CURRENT source; record untouched."""
+    from pep_lab import cmd_check, cmd_holes, cmd_inspect
+    proj = resolve_project_dir(root, name)
+    record = _read_experiment(proj, eid)
+    runner = {"check": cmd_check, "inspect": cmd_inspect, "holes": cmd_holes}[record["kind"]]
+    current = runner(proj / STORE_FILENAME)
+    recorded_status = (record.get("result") or {}).get("status")
+    return {"project": proj.name, "id": eid, "kind": record["kind"],
+            "recorded_status": recorded_status,
+            "recorded_digest": record.get("source_digest"),
+            "current_digest": project_source_digest(proj),
+            "current_status": current.get("status"),
+            "same_status": current.get("status") == recorded_status,
+            "stale": record.get("source_digest") != project_source_digest(proj)}
+
+
 def run_project_repl(root: pathlib.Path, name: str | None) -> int:
     """Open the interactive prompt on a project's store directory."""
     try:
@@ -428,6 +559,28 @@ def main(argv: list[str] | None = None) -> int:
     p_repl = sub.add_parser("repl", help="interactive prompt on a project")
     p_repl.add_argument("--root", required=True)
     p_repl.add_argument("--project", default=None)
+
+    p_exp = sub.add_parser("experiment", help="repeatable experiment records")
+    exp = p_exp.add_subparsers(dest="exp", required=True)
+    e_record = exp.add_parser("record", help="run a flow and record it")
+    e_record.add_argument("--root", required=True)
+    e_record.add_argument("--project", required=True)
+    e_record.add_argument("--kind", required=True,
+                          help="check|inspect|holes")
+    e_record.add_argument("--label", default=None)
+    e_record.add_argument("--run", action="store_true",
+                          help="also execute the source once as an observation")
+    e_list = exp.add_parser("list", help="list experiments with staleness")
+    e_list.add_argument("--root", required=True)
+    e_list.add_argument("--project", required=True)
+    e_show = exp.add_parser("show", help="show an experiment record")
+    e_show.add_argument("--root", required=True)
+    e_show.add_argument("--project", required=True)
+    e_show.add_argument("--id", required=True)
+    e_rerun = exp.add_parser("rerun", help="re-run a flow against current source")
+    e_rerun.add_argument("--root", required=True)
+    e_rerun.add_argument("--project", required=True)
+    e_rerun.add_argument("--id", required=True)
 
     p_ckpt = sub.add_parser("checkpoint", help="source revisions")
     ckpt = p_ckpt.add_subparsers(dest="ckpt", required=True)
@@ -471,6 +624,20 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"dir": str(resolve_project_dir(root, args.name))}, indent=2))
         elif args.command == "repl":
             return run_project_repl(root, args.project)
+        elif args.command == "experiment":
+            if args.exp == "record":
+                print(json.dumps(
+                    record_experiment(root, args.project, args.kind,
+                                      label=args.label, run=args.run), indent=2))
+            elif args.exp == "list":
+                print(json.dumps(
+                    list_experiments(root, args.project), indent=2))
+            elif args.exp == "show":
+                print(json.dumps(
+                    show_experiment(root, args.project, args.id), indent=2))
+            elif args.exp == "rerun":
+                print(json.dumps(
+                    rerun_experiment(root, args.project, args.id), indent=2))
         elif args.command == "checkpoint":
             if args.ckpt == "save":
                 print(json.dumps(

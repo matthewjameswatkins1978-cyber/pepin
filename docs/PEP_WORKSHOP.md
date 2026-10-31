@@ -37,6 +37,22 @@ are legacy stores and are adopted on first open with contents preserved.
   `--apply` performs the restore atomically; `--expect DIGEST` refuses on
   conflict. Restoring is a file operation and never executes code.
 
+## Experiments (W3)
+
+- `experiment record --root DIR --project NAME --kind check|inspect|holes
+  [--label L] [--run]` runs one compiler flow against the current source
+  and records it as `experiments/exp-NNN.json` with the source digest,
+  byte count, compiler identity digest, check status (plus diagnostics or
+  typed holes), and -- only with explicit `--run` -- one execution
+  observation (stdout/stderr/return code). Recording never executes unless
+  `--run` is passed; check/inspect/holes kinds are side-effect free.
+- `experiment list` marks each record `stale` when the live source digest
+  differs, and `compiler_changed` when the compiler identity differs.
+- `experiment show` returns the full record; `experiment rerun --id`
+  re-runs the flow against current source, compares statuses, and leaves
+  the stored record untouched. Observations are historical evidence, not
+  current compiler facts.
+
 `active.json` in the root remembers the last opened project across
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
 metadata and unknown projects fail with clean JSON errors, never

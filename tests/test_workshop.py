@@ -239,6 +239,83 @@ class WorkshopProjectTests(unittest.TestCase):
                              "--project", "p", "--id", "cp-001", "--apply")
             self.assertIn("already at", json.loads(again.stdout)["reason"])
 
+    def test_experiment_record_list_rerun_with_staleness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            proj = pathlib.Path(root) / "p"
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 1 }\n")
+            recorded = workshop("experiment", "record", "--root", root,
+                                "--project", "p", "--kind", "check",
+                                "--label", "baseline")
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            rec = json.loads(recorded.stdout)
+            self.assertEqual(rec["id"], "exp-001")
+            self.assertEqual(rec["result"]["status"], "valid")
+            self.assertIsNone(rec["observation"])
+            self.assertTrue(rec["source_digest"].startswith("sha256:"))
+            listed = workshop("experiment", "list", "--root", root, "--project", "p")
+            entries = json.loads(listed.stdout)["experiments"]
+            self.assertEqual(len(entries), 1)
+            self.assertFalse(entries[0]["stale"])
+            self.assertFalse(entries[0]["compiler_changed"])
+            self.assertFalse(entries[0]["observed_run"])
+            # Change the source: the record goes stale but stays readable.
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 2 }\n")
+            stale = workshop("experiment", "list", "--root", root, "--project", "p")
+            self.assertTrue(json.loads(stale.stdout)["experiments"][0]["stale"])
+            rerun = workshop("experiment", "rerun", "--root", root,
+                             "--project", "p", "--id", "exp-001")
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            rr = json.loads(rerun.stdout)
+            self.assertTrue(rr["same_status"])
+            self.assertTrue(rr["stale"])
+            # The record itself is untouched by rerun: digest still pins v1.
+            shown = workshop("experiment", "show", "--root", root,
+                             "--project", "p", "--id", "exp-001")
+            rec2 = json.loads(shown.stdout)
+            self.assertEqual(rec2["result"]["status"], "valid")
+            import hashlib as _hl2
+            self.assertEqual(
+                rec2["source_digest"],
+                "sha256:" + _hl2.sha256(b"fn v() -> Int { return 1 }\n").hexdigest())
+
+    def test_experiment_run_observation_is_explicit_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            proj = pathlib.Path(root) / "p"
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write('say("hi")\n')
+            recorded = workshop("experiment", "record", "--root", root,
+                                "--project", "p", "--kind", "check", "--run")
+            rec = json.loads(recorded.stdout)
+            self.assertIsNotNone(rec["observation"])
+            self.assertEqual(rec["observation"]["returncode"], 0)
+            self.assertEqual(rec["observation"]["stdout"], "hi\n")
+            listed = workshop("experiment", "list", "--root", root, "--project", "p")
+            self.assertTrue(json.loads(listed.stdout)["experiments"][0]["observed_run"])
+
+    def test_experiment_bad_kind_and_unknown_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            bad = workshop("experiment", "record", "--root", root,
+                           "--project", "p", "--kind", "prove")
+            self.assertNotEqual(bad.returncode, 0)
+            self.assertIn("error", bad.stderr)
+            missing = workshop("experiment", "show", "--root", root,
+                               "--project", "p", "--id", "exp-009")
+            self.assertNotEqual(missing.returncode, 0)
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")
