@@ -333,6 +333,15 @@ class PepLabTests(unittest.TestCase):
             self.assertTrue(outputs[4].startswith("not loaded: bad buffer name"))
             self.assertEqual(outputs[5], "buffers: (none)")
 
+    def test_repl_limits_shows_budgets_from_compiler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [":limits", ":quit"])
+            self.assertIn("run: 1000000 steps, depth 512", outputs[0])
+            self.assertIn("tools: 100000 steps, depth 128", outputs[0])
+            self.assertIn("not a sandbox", outputs[0])
+            self.assertIn("65536 source bytes max", outputs[0])
+
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))
         try:

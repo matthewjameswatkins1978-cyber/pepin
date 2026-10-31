@@ -286,6 +286,7 @@ Commands (prefix with a colon):
   :info            show checked signatures of stored defs + buffer state
   :export FILE    export definitions to a portable .pep file
   :describe       show the compiler identity
+  :limits         show execution budgets and transport caps
   :pop            drop the last buffered line
   :save NAME      save the buffer as a named experiment
   :load NAME      replace the buffer with a saved experiment
@@ -432,6 +433,20 @@ class ReplSession:
                 builtins = [b["name"] for b in info.get("builtins", [])]
                 return (f"Pep with {', '.join(info.get('types', []))}; "
                         f"builtins: {', '.join(builtins)}", False)
+            if stripped == ":limits":
+                info = cmd_describe()
+                runtime = info.get("runtime", {})
+                session = info.get("session", {})
+                tool = session.get("toolRuntime", {})
+                transport = session.get("typedTransport", {})
+                tool_steps = tool.get('maxSteps')
+                tool_depth = tool.get('maxCallDepth')
+                return ("limits:\n" + "\n".join([
+                    f"run: {runtime.get('maxSteps')} steps, depth {runtime.get('maxCallDepth')}",
+                    f"tools: {tool_steps} steps, depth {tool_depth} (trusted local, not a sandbox)",
+                    f"open: {session.get('maxOpenByteInput')} source bytes max",
+                    f"transport: depth {transport.get('maxDepth')}, nodes {transport.get('maxNodes')}, bytes {transport.get('maxMessageBytes')}",
+                ]), False)
             if stripped == ":check":
                 if not self.buf:
                     return ("buffer is empty -- type Pep code first", False)
