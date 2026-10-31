@@ -342,6 +342,20 @@ class PepLabTests(unittest.TestCase):
             self.assertIn("not a sandbox", outputs[0])
             self.assertIn("65536 source bytes max", outputs[0])
 
+    def test_repl_history_lists_session_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn inc(n: Int) -> Int { return n + 1 }",
+                ":def",
+                ":history",
+                ":quit",
+            ])
+            self.assertIn("fn inc(n: Int) -> Int { return n + 1 }", outputs[2])
+            self.assertIn(":def", outputs[2])
+            self.assertNotIn(":history", outputs[2])
+            self.assertNotIn(":quit", outputs[2])
+
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))
         try:

@@ -278,6 +278,7 @@ REPL_HELP = """Pep Lab REPL -- an interactive text prompt over the seed compiler
 Type Pep code, several lines if needed; a blank line checks the buffer.
 Commands (prefix with a colon):
   :help          show this help
+  :history        show commands and code entered this session
   :run            evaluate stored definitions + buffer (runs once)
   :def            validate the buffer and persist it as definitions
   :check          re-check stored definitions + buffer
@@ -307,6 +308,7 @@ class ReplSession:
     def __init__(self, store_dir: pathlib.Path):
         self.store_dir = store_dir
         self.buf: list[str] = []
+        self.history: list[str] = []
 
     def buffer_text(self) -> str:
         text = "\n".join(self.buf)
@@ -373,11 +375,24 @@ class ReplSession:
     def handle(self, line: str) -> tuple[str, bool]:
         """Handle one input line; returns (output text, quit flag)."""
         stripped = line.strip()
+        if stripped and stripped not in (":history",):
+            # Record commands and code for `:history`; the listing itself
+            # and blank check-submits would only add noise.
+            self.history.append(stripped)
+            if len(self.history) > 200:
+                self.history = self.history[-200:]
         try:
             if stripped in (":quit", ":exit", ":q"):
                 return ("bye", True)
             if stripped == ":help":
                 return (REPL_HELP, False)
+            if stripped == ":history":
+                if not self.history:
+                    return ("history: (empty)", False)
+                width = len(str(len(self.history)))
+                lines = [f"{i + 1:>{width}}  {entry}"
+                         for i, entry in enumerate(self.history)]
+                return ("history:\n" + "\n".join(lines), False)
             if stripped == ":clear":
                 self.buf = []
                 return ("buffer cleared", False)

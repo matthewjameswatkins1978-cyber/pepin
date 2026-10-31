@@ -44,6 +44,8 @@ compiler. Type Pep code (several lines if needed); a blank line checks
 - `:def` validates and persists the buffer, then clears it. Rejection
   keeps the buffer so it can be corrected (`:clear`/`:pop` discard).
 - `:check`, `:holes`, `:show`, `:export FILE`, `:describe`, `:help`, `:quit`.
+- `:save NAME` / `:load NAME` / `:buffers` persist ad-hoc buffers as
+  ordinary `.pep` files (see Named experiment buffers).
 - Buffers are ad-hoc: quitting never writes, and nothing re-executes.
 - Note: `query --holes` names holes `identity` where `check` uses `name`;
   the REPL accepts both.
@@ -55,6 +57,10 @@ compiler. Type Pep code (several lines if needed); a blank line checks
 - `:holes` appends the compiler's fill candidates (`try: n`) when known.
 - `:info` lists stored definitions with their compiler-checked signatures
   (`fn double(n: Int) -> Int`) plus the numbered buffer contents.
+- `:limits` reports run/tool step budgets, the source-bytes open cap and
+  typed-transport caps from live `describe` output.
+- `:history` lists commands and code entered this session (in-memory
+  only, capped at 200 entries, never persisted).
 - No new semantics are claimed: file-backed sources only, no incremental
   compilation, no revision-aware session state beyond ordinary files.
 
