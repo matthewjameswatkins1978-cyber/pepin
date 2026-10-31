@@ -537,6 +537,14 @@ class WorkshopProjectTests(unittest.TestCase):
             self.assertNotEqual(rec.returncode, 0)
             self.assertIn("error", rec.stderr)
 
+    def test_packaging_forwarder_help(self):
+        proc = subprocess.run(
+            ['pwsh', '-NoProfile', '-File', str(ROOT / 'pep-workshop.ps1'),
+             'list', '--root', 'dummy'],
+            cwd=ROOT, text=True, capture_output=True, check=False)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('"projects": []', proc.stdout)
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")
