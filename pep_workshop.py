@@ -197,6 +197,11 @@ def resolve_project_dir(root: pathlib.Path, name: str | None) -> pathlib.Path:
     return resolve_project_dir(root, active)
 
 
+def _require_usable_root(root: pathlib.Path) -> None:
+    if root.exists() and not root.is_dir():
+        raise ValueError(f"not a directory: {root}")
+
+
 def project_source_digest(proj: pathlib.Path) -> str:
     """SHA-256 of the project's current definitions source (may be empty)."""
     store = proj / STORE_FILENAME
@@ -736,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         root = pathlib.Path(args.root)
+        _require_usable_root(root)
         if args.command == "create":
             print(json.dumps(create_project(root, args.name), indent=2))
         elif args.command == "list":

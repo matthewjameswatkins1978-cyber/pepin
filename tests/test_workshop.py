@@ -486,6 +486,57 @@ class WorkshopProjectTests(unittest.TestCase):
             self.assertNotIn("definitions: v, w", proc.stdout)
             self.assertIn("not restored:", proc.stdout)
 
+    def test_no_temp_litter_after_operations(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp) / "ws"
+            sroot = str(root)
+            self.assertEqual(
+                workshop("create", "--root", sroot, "--name", "p").returncode, 0)
+            with open(root / "p" / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 1 }\n")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", sroot,
+                         "--project", "p").returncode, 0)
+            self.assertEqual(
+                workshop("experiment", "record", "--root", sroot,
+                         "--project", "p", "--kind", "check").returncode, 0)
+            self.assertEqual(
+                workshop("checkpoint", "restore", "--root", sroot,
+                         "--project", "p", "--id", "cp-001",
+                         "--apply").returncode, 0)
+            self.assertEqual(
+                workshop("open", "--root", sroot, "--name", "ghost").returncode, 2)
+            litter = [p for p in root.rglob("*")
+                      if p.is_file() and (p.suffix == ".tmp" or p.name.startswith("tmp"))]
+            self.assertEqual(litter, [])
+
+    def test_root_is_a_file_fails_cleanly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rootfile = str(pathlib.Path(tmp) / "notadir")
+            pathlib.Path(rootfile).write_text("x", encoding="utf-8")
+            for argv in (["create", "--name", "p"], ["list"],
+                          ["open", "--name", "p"], ["active"],
+                          ["dir"],
+                          ["checkpoint", "save", "--project", "p"],
+                          ["checkpoint", "list", "--project", "p"],
+                          ["experiment", "record", "--project", "p", "--kind", "check"],
+                          ["experiment", "list", "--project", "p"],
+                          ["inspect", "--project", "p"]):
+                proc = workshop(*argv, "--root", rootfile)
+                self.assertNotEqual(proc.returncode, 0, argv)
+                self.assertIn("error", proc.stderr, argv)
+
+    def test_experiment_record_on_empty_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "e").returncode, 0)
+            rec = workshop("experiment", "record", "--root", root,
+                           "--project", "e", "--kind", "check")
+            self.assertNotEqual(rec.returncode, 0)
+            self.assertIn("error", rec.stderr)
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")

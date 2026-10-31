@@ -86,3 +86,31 @@ are legacy stores and are adopted on first open with contents preserved.
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
 metadata and unknown projects fail with clean JSON errors, never
 tracebacks. Tests: `python -m unittest tests.test_workshop -v`.
+## User guide: a complete multi-session demonstration
+
+Session 1 -- start a project and bank a working revision:
+
+    python pep_workshop.py create --root C:\pep-ws --name shapes
+    # write definitions into C:\pep-ws\shapes\definitions.pep
+    python pep_workshop.py checkpoint save --root C:\pep-ws --project shapes --label v1
+    python pep_workshop.py inspect --root C:\pep-ws --project shapes
+    python pep_workshop.py experiment record --root C:\pep-ws --project shapes --kind check
+
+Session 2 -- resume, experiment, break, recover:
+
+    python pep_workshop.py open --root C:\pep-ws --project shapes
+    python pep_workshop.py repl --root C:\pep-ws
+    # ... :def new ideas, :checkpoint save v2, :restore cp-001 preview/apply ...
+    python pep_workshop.py checkpoint diff --root C:\pep-ws --project shapes --a cp-001 --b current
+    python pep_workshop.py experiment list --root C:\pep-ws --project shapes  # stale flags
+
+Session 3 -- export the portable program:
+
+    python pep_lab.py export --store C:\pep-ws\shapes --output shapes_final.pep
+    python pep_lab.py run shapes_final.pep
+
+Every step above is exercised by tests/test_workshop.py (including the
+legacy-store adoption path for pre-workshop --store directories) with
+exact-output assertions. Human-readable REPL text and deterministic JSON
+are kept separate: the REPL prints prose, every other command prints one
+JSON object (or one JSON error with a nonzero exit).
