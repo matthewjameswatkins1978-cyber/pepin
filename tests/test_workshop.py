@@ -316,6 +316,70 @@ class WorkshopProjectTests(unittest.TestCase):
                                "--project", "p", "--id", "exp-009")
             self.assertNotEqual(missing.returncode, 0)
 
+    def test_inspect_reports_revision_pinned_facts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            proj = pathlib.Path(root) / "p"
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 1 }\n")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "p", "--label", "v1").returncode, 0)
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write('fn v() -> Int { return "bad" }\n')
+            current = workshop("inspect", "--root", root, "--project", "p")
+            self.assertEqual(current.returncode, 0, current.stderr)
+            cur = json.loads(current.stdout)
+            self.assertEqual(cur["status"], "invalid")
+            self.assertEqual(cur["revision"]["kind"], "current")
+            self.assertTrue(any(d["code"] == "PEP_TYPE_MISMATCH"
+                                for d in cur["diagnostics"]))
+            self.assertEqual(cur["functions"], [])
+            # The checkpoint revision still reports the OLD facts.
+            old = workshop("inspect", "--root", root, "--project", "p",
+                           "--revision", "cp-001")
+            self.assertEqual(old.returncode, 0, old.stderr)
+            pinned = json.loads(old.stdout)
+            self.assertEqual(pinned["status"], "valid")
+            self.assertEqual(pinned["revision"]["kind"], "checkpoint")
+            self.assertEqual(
+                pinned["functions"],
+                [{"name": "v", "parameters": [], "returns": "Int"}])
+            self.assertNotEqual(pinned["revision"]["digest"],
+                                cur["revision"]["digest"])
+
+    def test_inspect_holes_and_tamper_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            proj = pathlib.Path(root) / "p"
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn h(n: Int) -> Int { return ?calc }\n")
+            holed = workshop("inspect", "--root", root, "--project", "p")
+            holes = json.loads(holed.stdout)["holes"]
+            self.assertEqual(len(holes), 1)
+            self.assertEqual(holes[0]["name"], "calc")
+            self.assertEqual(holes[0]["expectedType"], "Int")
+            self.assertIn("n", holes[0]["suggestions"])
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "p").returncode, 0)
+            with open(proj / "checkpoints" / "cp-001.pep", "wb") as fh:
+                fh.write(b"tampered")
+            tampered = workshop("inspect", "--root", root, "--project", "p",
+                                "--revision", "cp-001")
+            self.assertNotEqual(tampered.returncode, 0)
+            self.assertIn("integrity", tampered.stderr)
+            badrev = workshop("inspect", "--root", root, "--project", "p",
+                              "--revision", "nope")
+            self.assertNotEqual(badrev.returncode, 0)
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")

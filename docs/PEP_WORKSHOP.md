@@ -53,6 +53,17 @@ are legacy stores and are adopted on first open with contents preserved.
   the stored record untouched. Observations are historical evidence, not
   current compiler facts.
 
+## Inspection (W4)
+
+- `inspect --root DIR --project NAME [--revision current|cp-NNN]` runs
+  the compiler on the exact bytes of the live source or a checkpoint
+  snapshot and returns a compact view: status, diagnostic codes/messages/
+  spans, typed holes with fill suggestions, and checked function
+  signatures. No AST dumps, no caching: every call re-runs the compiler,
+  and the reported digest pins each fact to its revision.
+- Checkpoint snapshots are integrity-checked against their recorded digest
+  before inspection; tampering fails loudly instead of yielding facts.
+
 `active.json` in the root remembers the last opened project across
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
 metadata and unknown projects fail with clean JSON errors, never

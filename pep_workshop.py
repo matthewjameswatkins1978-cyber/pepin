@@ -525,6 +525,69 @@ def rerun_experiment(root: pathlib.Path, name: str, eid: str) -> dict:
             "stale": record.get("source_digest") != project_source_digest(proj)}
 
 
+def inspect_project(root: pathlib.Path, name: str,
+                    revision: str = "current") -> dict:
+    """Compact compiler facts for the project source at one revision.
+
+    ``revision`` is ``current`` (live definitions.pep) or a checkpoint id.
+    The check runs on the exact revision bytes; the reported digest lets
+    callers match facts to experiments and checkpoints. No fact is cached:
+    every call re-runs the compiler, so nothing can go stale in storage --
+    staleness is determined by comparing digests. Never executes code.
+    """
+    from pep_lab import cmd_check
+    proj = resolve_project_dir(root, name)
+    if revision == "current":
+        store = proj / STORE_FILENAME
+        data = store.read_bytes() if store.exists() else b""
+        rev = {"kind": "current",
+               "digest": "sha256:" + hashlib.sha256(data).hexdigest()}
+    else:
+        if not CHECKPOINT_ID_RE.match(revision or ""):
+            raise ValueError(f"bad revision {revision!r}: 'current' or cp-NNN")
+        meta = read_checkpoint_meta(proj, revision)
+        data = (checkpoints_dir(proj) / f"{revision}.pep").read_bytes()
+        actual = "sha256:" + hashlib.sha256(data).hexdigest()
+        if actual != meta["digest"]:
+            raise ValueError(
+                f"checkpoint {revision!r} source failed integrity check: "
+                f"{actual} != recorded {meta['digest']}")
+        rev = {"kind": "checkpoint", "id": revision, "digest": meta["digest"]}
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".pep", delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = pathlib.Path(tmp.name)
+    try:
+        payload = cmd_check(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    holes = []
+    for hole in payload.get("holes", []) or []:
+        suggestions = []
+        for action in hole.get("actions", []) or []:
+            suggestions.extend(c.get("name") for c in action.get("candidates", []) or [])
+        if not suggestions:
+            suggestions = [b.get("name") for b in hole.get("bindings", []) or []]
+        holes.append({
+            "name": hole.get("name", hole.get("identity")),
+            "expectedType": hole.get("expectedType"),
+            "scope": hole.get("scope"),
+            "suggestions": [s for s in dict.fromkeys(suggestions) if s]})
+    functions = []
+    for fn in (payload.get("typedTree") or {}).get("functions", []) or []:
+        functions.append({
+            "name": fn.get("name"),
+            "parameters": [f"{p.get('name')}: {p.get('type')}"
+                           for p in fn.get("parameters", []) or []],
+            "returns": fn.get("returnType")})
+    return {"project": proj.name, "revision": rev,
+            "status": payload.get("status"),
+            "diagnostics": [
+                {"code": d.get("code"), "message": d.get("message"),
+                 "span": d.get("span")} for d in payload.get("diagnostics", []) or []],
+            "holes": holes, "functions": functions}
+
+
 def run_project_repl(root: pathlib.Path, name: str | None) -> int:
     """Open the interactive prompt on a project's store directory."""
     try:
@@ -555,6 +618,12 @@ def main(argv: list[str] | None = None) -> int:
     p_dir = sub.add_parser("dir", help="print a project directory (default: active)")
     p_dir.add_argument("--root", required=True)
     p_dir.add_argument("--name", default=None)
+
+    p_inspect = sub.add_parser("inspect", help="compiler facts for a project revision")
+    p_inspect.add_argument("--root", required=True)
+    p_inspect.add_argument("--project", required=True)
+    p_inspect.add_argument("--revision", default="current",
+                           help="'current' or a checkpoint id (default: current)")
 
     p_repl = sub.add_parser("repl", help="interactive prompt on a project")
     p_repl.add_argument("--root", required=True)
@@ -622,6 +691,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"root": str(root), "active": read_active(root)}, indent=2))
         elif args.command == "dir":
             print(json.dumps({"dir": str(resolve_project_dir(root, args.name))}, indent=2))
+        elif args.command == "inspect":
+            print(json.dumps(
+                inspect_project(root, args.project, args.revision), indent=2))
         elif args.command == "repl":
             return run_project_repl(root, args.project)
         elif args.command == "experiment":
