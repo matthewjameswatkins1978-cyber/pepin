@@ -189,6 +189,38 @@ class PepC23ListRecordFieldTests(unittest.TestCase):
                       generated)
         self.assertRegex(generated, r"pep_list_str pep_field_15;")
 
+    def test_real_lexer_type_declaration_census(self):
+        """Pin the measured census for Lucy's real lexer declarations.
+
+        Baseline, parent commit 26be4be: SourcePosition and Utf8Check emitted,
+        LexToken and LexCursor were refused by the emitter for their List-valued
+        fields. LexProgress is unchanged either way: its complete closure stops at
+        the Pep-written checker's fixed 100k-step budget before the emitter runs.
+        """
+        dependencies = {"LexProgress": ["LexToken", "LexCursor"]}
+        census = {}
+        for name in ("SourcePosition", "Utf8Check", "LexToken", "LexCursor", "LexProgress"):
+            declarations = dependencies.get(name, []) + [name]
+            source_text = "\n".join(lexer_declaration(item) for item in declarations)
+            source_text += "fn main() -> Int { return 0 }\n"
+            try:
+                emit(source_text.encode("utf-8"))
+            except RuntimeError as error:
+                if "PEP_RUNTIME_STEP_LIMIT" not in str(error):
+                    raise
+                census[name] = "checker-budget"
+            except ValueError:
+                census[name] = "unsupported"
+            else:
+                census[name] = "emitted"
+        self.assertEqual(census, {
+            "SourcePosition": "emitted",
+            "Utf8Check": "emitted",
+            "LexToken": "emitted",
+            "LexCursor": "emitted",
+            "LexProgress": "checker-budget",
+        })
+
     def test_real_lexer_complete_type_closure_is_bounded_by_the_checker(self):
         """The whole real lexer type block either emits, or stops at the checker budget.
 
