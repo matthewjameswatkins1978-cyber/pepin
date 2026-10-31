@@ -110,6 +110,16 @@ def cmd_eval(path: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return _run_pep("run", str(path))
 
 
+BUFFER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _buffer_file(store_dir: pathlib.Path, name: str) -> pathlib.Path:
+    if not BUFFER_NAME_RE.match(name or ""):
+        raise ValueError(
+            f"bad buffer name {name!r}: use 1-64 letters/digits/_/-, starting alphanumeric")
+    return store_dir / "buffers" / f"{name}.pep"
+
+
 def _read_store(path: pathlib.Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -277,6 +287,9 @@ Commands (prefix with a colon):
   :export FILE    export definitions to a portable .pep file
   :describe       show the compiler identity
   :pop            drop the last buffered line
+  :save NAME      save the buffer as a named experiment
+  :load NAME      replace the buffer with a saved experiment
+  :buffers        list saved experiments
   :clear          discard the buffer
   :quit           leave the REPL (also Ctrl-D)"""
 
@@ -367,6 +380,43 @@ class ReplSession:
             if stripped == ":clear":
                 self.buf = []
                 return ("buffer cleared", False)
+            if stripped == ":buffers":
+                bufdir = self.store_dir / "buffers"
+                names = sorted(p.stem for p in bufdir.glob("*.pep")) if bufdir.is_dir() else []
+                return ("buffers: " + (", ".join(names) if names else "(none)"), False)
+            if stripped.startswith(":save"):
+                name = stripped[len(":save"):].strip()
+                if not self.buf:
+                    return ("buffer is empty -- type Pep code first", False)
+                try:
+                    target = _buffer_file(self.store_dir, name)
+                except ValueError as exc:
+                    return (f"not saved: {exc}", False)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".pep", delete=False, encoding="utf-8",
+                    newline="\n", dir=str(target.parent),
+                ) as tmp:
+                    tmp.write(self.buffer_text())
+                    tmp_path = pathlib.Path(tmp.name)
+                os.replace(tmp_path, target)
+                return (f"saved buffer {name} ({len(self.buf)} line(s))", False)
+            if stripped.startswith(":load"):
+                name = stripped[len(":load"):].strip()
+                try:
+                    target = _buffer_file(self.store_dir, name)
+                except ValueError as exc:
+                    return (f"not loaded: {exc}", False)
+                if not target.exists():
+                    return (f"no saved buffer {name!r}", False)
+                try:
+                    text = target.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    return (f"not loaded: saved buffer is not valid UTF-8: {target}", False)
+                self.buf = text.split("\n")
+                if self.buf and self.buf[-1] == "":
+                    self.buf.pop()
+                return (f"loaded buffer {name} ({len(self.buf)} line(s))", False)
             if stripped == ":pop":
                 if not self.buf:
                     return ("buffer is already empty", False)

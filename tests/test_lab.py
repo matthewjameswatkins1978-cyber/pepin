@@ -296,6 +296,43 @@ class PepLabTests(unittest.TestCase):
             self.assertTrue(outputs[0].startswith("error: store file is not valid UTF-8"))
             self.assertEqual(outputs[1], "buffer cleared")
 
+    def test_repl_named_buffers_save_load_and_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn inc(n: Int) -> Int { return n + 1 }",
+                ":save inc-v1",
+                ":buffers",
+                ":clear",
+                ":load inc-v1",
+                "",
+                ":quit",
+            ])
+            self.assertIn("saved buffer inc-v1 (1 line(s))", outputs[1])
+            self.assertIn("inc-v1", outputs[2])
+            self.assertIn("loaded buffer inc-v1 (1 line(s))", outputs[4])
+            self.assertIn("valid", outputs[5])
+            saved = pathlib.Path(store, "buffers", "inc-v1.pep").read_bytes()
+            self.assertEqual(saved, b"fn inc(n: Int) -> Int { return n + 1 }\n")
+
+    def test_repl_named_buffers_reject_bad_names_and_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(pathlib.Path(tmp) / "lab")
+            session, outputs = self._script(store, [
+                "fn x() -> Int { return 1 }",
+                ":save ../evil",
+                ":save ''",
+                ":load nosuch",
+                ":load ../evil",
+                ":buffers",
+                ":quit",
+            ])
+            self.assertTrue(outputs[1].startswith("not saved: bad buffer name"))
+            self.assertTrue(outputs[2].startswith("not saved: bad buffer name"))
+            self.assertEqual(outputs[3], "no saved buffer 'nosuch'")
+            self.assertTrue(outputs[4].startswith("not loaded: bad buffer name"))
+            self.assertEqual(outputs[5], "buffers: (none)")
+
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))
         try:

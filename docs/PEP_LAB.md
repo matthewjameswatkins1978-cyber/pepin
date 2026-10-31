@@ -98,6 +98,14 @@ nearest supported value is named experiment buffers (`:save`/`:load` as
 ordinary `.pep` files beside the store), reusing only existing file and
 check/run machinery.
 
+## Named experiment buffers
+
+`:save NAME` persists the current buffer as `buffers/NAME.pep` inside the
+store directory; `:load NAME` restores it; `:buffers` lists them. Names
+are restricted to letters/digits/`_`/`-` so no path can escape the store.
+Buffers are ordinary `.pep` files -- the same durable representation as
+everything else in Pep Lab.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.
