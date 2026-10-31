@@ -45,12 +45,14 @@ module. No host driver, checker, parser or runtime file changed.
    convention rather than introducing an owned buffer.
 4. Record declaration emission emits the list C type parts instead of refusing.
 5. `length(x.field)` where the field is list-typed lowers to `pep_checked_length(<projection>.length)`.
-6. `pep_c23_expression_may_fail` now classifies `string` as infallible and a `list` literal by its
-   elements only. This is a correctness fix, not a relaxation: a string literal emits static bytes
+6. `pep_c23_field_value_may_fail` — a **record-construction-only** predicate — treats a `string`
+   literal as infallible and a `list` literal as failing only through its elements. This is a
+   correctness refinement, not a relaxation: a string literal emits static bytes
    (`(pep_str){ .data = (const unsigned char[]){ 120, 121 }, .length = 2 }`) with no runtime failure
    path, and a list literal can only fail through its elements. Without it, a record mixing one
    `Str` field with one `List` field was rejected by the conservative C-evaluation-order guard.
-   Two genuinely fallible fields (`calculate()`, `calculate()`) still fail closed.
+   Two genuinely fallible fields (`calculate()`, `calculate()`) still fail closed. It is deliberately
+   *not* folded into the shared `pep_c23_expression_may_fail`; see "Emitter step cost" below.
 
 ### Representation and lifetime
 
@@ -132,6 +134,34 @@ run on both trees and fails identically: **14/14 subtests, all at the `check par
 at the same step offsets** (3975/3981/2605/2441/3610). The emitter is never reached, so my change
 cannot be the cause. The same class of failure is what the earlier handoff recorded as "its emitter
 cannot emit the accepted slice for budget reasons".
+
+## Emitter step cost is a real constraint, and this change had to pay for itself
+
+Recording this because it is the kind of regression a test-count comparison hides.
+
+My first form of item 6 widened the **shared** `pep_c23_expression_may_fail` predicate, which runs
+on every call argument and every record field. That added one comparison on a hot path for
+*record-free* programs. A full-suite comparison against the parent commit then showed **six extra
+failing subtests** — three int-collection tests (`..._sum_outside...`, `..._int_product_outside...`,
+`..._int_last_index_of_outside...`) that pass at `26be4be` and, on that intermediate revision, aborted
+with `emit checked source: PEP_RUNTIME_STEP_LIMIT` at the unchanged 100k step budget. Folding the
+comparison into an existing early return did not recover them.
+
+The fix was to confine the refinement to where it is needed: the new
+`pep_c23_field_value_may_fail` is called only from record construction, so a program with no record
+construction executes exactly the baseline predicate and pays nothing. Re-measured, those three
+tests now fail on **exactly the same subtests as the parent commit, with no difference at all** in
+the compared failure lines.
+
+Whole-suite collection counts for the record: parent `26be4be` 213 failing subtest records out of
+129 tests; my intermediate (predicate-widening) revision 219; after the confinement the three
+previously-tipped tests match the parent exactly. The full suite was not re-run end-to-end after the
+confinement, and no claim is made about its total, because that suite is not green at the parent
+commit either and its remaining failures are checker-stage budget aborts.
+
+Practical lesson for the next agent on this emitter line: **the emitter is a Pep program with a fixed
+execution budget, and adding code to a hot predicate can break unrelated programs upstream of any
+semantic error.** Measure by whole-suite failure-line diff against the parent commit, not by totals.
 
 ## What remains blocked, and the next dependency
 

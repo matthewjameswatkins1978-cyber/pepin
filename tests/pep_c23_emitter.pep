@@ -1082,19 +1082,24 @@ fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   }
   return lastStatement
 }
-fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
-  if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" { return false } else {}
-  // A string literal lowers to static bytes with no runtime failure path, and a list literal can
-  // only fail through its elements, so neither needs the conservative evaluation-order guard.
+// Record construction only. A string literal lowers to static bytes with no runtime failure path,
+// and a list literal can only fail through its elements, so neither constrains C field evaluation
+// order. Kept separate from pep_c23_expression_may_fail so programs without record construction
+// pay no extra execution steps from this refinement.
+fn pep_c23_field_value_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "string" { return false } else {}
   if node.kind == "list" {
     for element in nodes {
       if element.parentId == node.id && element.role == "element" {
-        if pep_c23_expression_may_fail(nodes, element) { return true } else {}
+        if pep_c23_field_value_may_fail(nodes, element) { return true } else {}
       } else {}
     }
     return false
   } else {}
+  return pep_c23_expression_may_fail(nodes, node)
+}
+fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
+  if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" { return false } else {}
   if node.kind == "field_access" {
     let value = pep_c23_child(nodes, node.id, "value", 0)
     return !value.found || pep_c23_expression_may_fail(nodes, value.node)
@@ -2017,7 +2022,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 record field has no value") } else {}
-        if pep_c23_expression_may_fail(nodes, value.node) {
+        if pep_c23_field_value_may_fail(nodes, value.node) {
           if fallibleFieldCount != 0 {
             return pep_c23_unsupported("Pep C23 record construction rejects multiple fallible field expressions because C field evaluation order is unspecified")
           } else {}
