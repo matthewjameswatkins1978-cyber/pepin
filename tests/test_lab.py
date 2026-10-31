@@ -280,6 +280,22 @@ class PepLabTests(unittest.TestCase):
             self.assertIn("definitions: double", proc.stdout)
             self.assertIn("bye", proc.stdout)
 
+    def test_corrupt_store_reports_clean_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = pathlib.Path(tmp) / "lab"
+            store.mkdir(parents=True, exist_ok=True)
+            (store / "definitions.pep").write_bytes(b"fn \xff\xfe\n")
+            shown = lab("show", "--store", str(store))
+            self.assertNotEqual(shown.returncode, 0)
+            self.assertIn("not valid UTF-8", shown.stderr)
+            defined = lab("define", "--store", str(store), "--source",
+                          "fn ok() -> Int { return 1 }\n")
+            self.assertNotEqual(defined.returncode, 0)
+            self.assertIn("not valid UTF-8", defined.stderr)
+            session, outputs = self._script(store, [":show", ":clear", ":quit"])
+            self.assertTrue(outputs[0].startswith("error: store file is not valid UTF-8"))
+            self.assertEqual(outputs[1], "buffer cleared")
+
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))
         try:

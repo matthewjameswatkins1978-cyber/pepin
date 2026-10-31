@@ -71,6 +71,33 @@ compiler. Type Pep code (several lines if needed); a blank line checks
   concatenation operator, so multi-value lines are separate `say` calls.
   No compiler change proposed; recorded here as observed behavior.
 
+## Hardening and packaging (Milestone 5)
+
+- `pep-lab.ps1` forwards to `pep_lab.py` with repo-style `--help`, matching
+  `pep.ps1` conventions. Non-interactive commands emit JSON for machines;
+  the REPL is deliberately human-readable text.
+- Corrupt stores (non-UTF-8 bytes) report `store file is not valid UTF-8`
+  with exit 2 instead of a codec traceback; the store is never modified.
+- Platform boundary (verified, not assumed): PowerShell wrapper scripts
+  using `ValueFromRemainingArguments` cannot take piped stdin -- `pep.ps1`
+  `session --jsonl` behaves the same way. Interactive use runs the `repl`
+  command directly; scripted sessions drive `python pep_lab.py` with stdin
+  (as `tests/test_lab.py` does) or the in-process `ReplSession` API.
+- Sartorial reuse investigated and declined: no Sartorial code exists in
+  this repo, and Matthew's 28 Oct priorities explicitly defer a
+  Sartorial/Rust-tool migration. No new presentation dependency added.
+- `readline`-style history investigated and declined: unavailable in
+  Windows stock Python; no third-party dependency for appearance's sake.
+
+## Recommended next layer
+
+Defer graphics/audio: the seed exposes no canvas, image, or sound
+builtins, so a Living Canvas/ Pulse would need new compiler-approved host
+capabilities first -- a product-scope decision, not a REPL tweak. The
+nearest supported value is named experiment buffers (`:save`/`:load` as
+ordinary `.pep` files beside the store), reusing only existing file and
+check/run machinery.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.

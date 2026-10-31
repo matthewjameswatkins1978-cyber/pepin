@@ -110,6 +110,13 @@ def cmd_eval(path: pathlib.Path) -> subprocess.CompletedProcess[str]:
     return _run_pep("run", str(path))
 
 
+def _read_store(path: pathlib.Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"store file is not valid UTF-8: {path}") from exc
+
+
 def store_path(store_dir: pathlib.Path) -> pathlib.Path:
     store_dir.mkdir(parents=True, exist_ok=True)
     return store_dir / STORE_FILENAME
@@ -119,7 +126,7 @@ def list_definitions(store_dir: pathlib.Path) -> list[str]:
     path = store_dir / STORE_FILENAME
     if not path.exists():
         return []
-    return FN_RE.findall(path.read_text(encoding="utf-8"))
+    return FN_RE.findall(_read_store(path))
 
 
 def define_source(store_dir: pathlib.Path, snippet: str) -> dict:
@@ -130,7 +137,7 @@ def define_source(store_dir: pathlib.Path, snippet: str) -> dict:
     Returns the combined check payload plus the stored function names.
     """
     path = store_path(store_dir)
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    existing = _read_store(path) if path.exists() else ""
     if existing and not existing.endswith("\n"):
         existing += "\n"
     if not snippet.endswith("\n"):
@@ -166,7 +173,7 @@ def export_store(store_dir: pathlib.Path, output: pathlib.Path) -> dict:
     src = store_dir / STORE_FILENAME
     if not src.exists():
         raise FileNotFoundError(f"no lab store at {src}")
-    body = src.read_text(encoding="utf-8")
+    body = _read_store(src)
     digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
     names = FN_RE.findall(body)
     header = (
@@ -190,7 +197,7 @@ def export_store(store_dir: pathlib.Path, output: pathlib.Path) -> dict:
 def eval_with_store(store_dir: pathlib.Path, main_source: str) -> subprocess.CompletedProcess[str]:
     """Evaluate ``stored defs + main_source`` via a temp file with ``run``."""
     src = store_dir / STORE_FILENAME
-    defs = src.read_text(encoding="utf-8") if src.exists() else ""
+    defs = _read_store(src) if src.exists() else ""
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".pep", delete=False, encoding="utf-8",
         newline="\n", dir=ROOT
@@ -293,7 +300,7 @@ class ReplSession:
 
     def combined_text(self) -> str:
         src = self.store_dir / STORE_FILENAME
-        defs = src.read_text(encoding="utf-8") if src.exists() else ""
+        defs = _read_store(src) if src.exists() else ""
         if defs and not defs.endswith("\n"):
             defs += "\n"
         return defs + self.buffer_text()
