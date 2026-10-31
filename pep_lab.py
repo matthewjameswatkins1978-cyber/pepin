@@ -514,12 +514,20 @@ class ReplSession:
             return (f"error: {exc}", False)
 
 
-def run_repl(store_dir: pathlib.Path, stdin=None, stdout=None) -> int:
-    """Run the interactive loop; ``stdin``/``stdout`` allow scripted use."""
+def run_repl(store_dir: pathlib.Path, stdin=None, stdout=None,
+           session=None, banner=None) -> int:
+    """Run the interactive loop; ``stdin``/``stdout`` allow scripted use.
+
+    ``session`` may supply a ready-made session (e.g. a project-aware
+    subclass); ``banner`` overrides the greeting line. Defaults preserve
+    the plain store-backed prompt.
+    """
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
-    session = ReplSession(store_dir)
-    stdout.write("Pep Lab REPL -- :help for commands, blank line checks, :quit to leave.\n")
+    if session is None:
+        session = ReplSession(store_dir)
+    stdout.write(banner if banner is not None else
+                 "Pep Lab REPL -- :help for commands, blank line checks, :quit to leave.\n")
     stdout.flush()
     while True:
         try:

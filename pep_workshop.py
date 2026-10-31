@@ -591,10 +591,65 @@ def inspect_project(root: pathlib.Path, name: str,
 def run_project_repl(root: pathlib.Path, name: str | None) -> int:
     """Open the interactive prompt on a project's store directory."""
     try:
-        from pep_lab import run_repl
+        from pep_lab import run_repl, ReplSession, REPL_HELP
     except ImportError as exc:
         raise RuntimeError(f"pep_lab.py is required next to pep_workshop.py: {exc}") from exc
-    return run_repl(resolve_project_dir(root, name))
+    proj = resolve_project_dir(root, name)
+
+    workshop_help = (REPL_HELP + "\n"
+        "Workshop commands (this project only):\n"
+        "  :project                 show project name, directory and digest\n"
+        "  :checkpoint save [label] snapshot the persisted definitions\n"
+        "  :checkpoint list         list checkpoints\n"
+        "  :restore ID [apply]      preview (or apply) a restore; never runs code")
+
+    class WorkshopReplSession(ReplSession):
+        def handle(self, line: str) -> tuple[str, bool]:
+            stripped = line.strip()
+            if stripped == ":help":
+                return (workshop_help, False)
+            if stripped == ":project":
+                return (f"project {proj.name}\ndir {proj}\n"
+                        f"source {project_source_digest(proj)}", False)
+            if stripped in (":checkpoint list", ":checkpoints"):
+                entries = _read_checkpoint_index(proj)
+                if not entries:
+                    return ("checkpoints: (none)", False)
+                return ("checkpoints:\n" + "\n".join(
+                    f"{e['id']}  {e.get('label', '')}  {e.get('digest', '')[:19]}"
+                    for e in entries), False)
+            if stripped.startswith(":checkpoint save"):
+                label = stripped[len(":checkpoint save"):].strip() or None
+                try:
+                    meta = save_checkpoint(root, proj.name, label)
+                except (ValueError, FileNotFoundError, OSError) as exc:
+                    return (f"not saved: {exc}", False)
+                return (f"checkpoint {meta['id']} ({meta['digest'][:19]}): "
+                        f"{meta['label'] or '(no label)'}", False)
+            if stripped.startswith(":restore"):
+                parts = stripped.split()
+                if len(parts) < 2 or (len(parts) == 3 and parts[2] != "apply") \
+                        or len(parts) > 3:
+                    return ("usage: :restore ID [apply]", False)
+                cid, apply = parts[1], len(parts) == 3
+                try:
+                    result = restore_checkpoint(root, proj.name, cid, apply=apply)
+                except (ValueError, FileNotFoundError, OSError) as exc:
+                    return (f"not restored: {exc}", False)
+                if result["restored"]:
+                    return (f"restored {cid}; live source is now "
+                            f"{result['target_digest'][:19]}", False)
+                preview = result.get("preview") or "(no differences)"
+                reason = result.get("reason")
+                head = reason if reason else f"preview {cid} (not applied):"
+                return (head + "\n" + preview, False)
+            return super().handle(line)
+
+    return run_repl(
+        proj,
+        session=WorkshopReplSession(proj),
+        banner=(f"Pep Lab REPL (workshop project {proj.name}) -- :help for "
+                "commands, blank line checks, :quit to leave.\n"))
 
 
 def main(argv: list[str] | None = None) -> int:

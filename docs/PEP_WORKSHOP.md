@@ -63,6 +63,9 @@ are legacy stores and are adopted on first open with contents preserved.
   and the reported digest pins each fact to its revision.
 - Checkpoint snapshots are integrity-checked against their recorded digest
   before inspection; tampering fails loudly instead of yielding facts.
+- `repl --root DIR [--project NAME]` opens the prompt with workshop
+  commands: `:project`, `:checkpoint save [label]`, `:checkpoint list`,
+  `:restore ID [apply]` (preview by default, never executes code).
 
 ## Real projects (W5)
 

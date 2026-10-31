@@ -449,6 +449,43 @@ class WorkshopProjectTests(unittest.TestCase):
             self.assertEqual(obs["returncode"], 0)
             self.assertEqual(obs["stdout"], "total:\n62\nlargest:\n40\nover 10:\n2\n")
 
+    def test_workshop_repl_project_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            script = ("fn v() -> Int { return 1 }\n"
+                      ":def\n"
+                      ":project\n"
+                      ":checkpoint save v1\n"
+                      ":checkpoint list\n"
+                      "fn w() -> Int { return 2 }\n"
+                      ":def\n"
+                      ":checkpoint save v2\n"
+                      ":restore cp-001\n"
+                      ":restore cp-001 apply\n"
+                      ":show\n"
+                      ":restore nope\n"
+                      ":quit\n")
+            proc = subprocess.run(
+                [sys.executable, str(ROOT / "pep_workshop.py"),
+                 "repl", "--root", root, "--project", "p"],
+                cwd=ROOT, text=True, capture_output=True, check=False,
+                input=script,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("workshop project p", proc.stdout)
+            self.assertIn("project p", proc.stdout)
+            self.assertIn("checkpoint cp-001", proc.stdout)
+            self.assertIn("cp-001", proc.stdout)
+            self.assertIn("cp-002", proc.stdout)
+            self.assertIn("preview cp-001 (not applied):", proc.stdout)
+            self.assertIn("-fn w() -> Int { return 2 }", proc.stdout)
+            self.assertIn("restored cp-001", proc.stdout)
+            self.assertIn("definitions: v", proc.stdout)
+            self.assertNotIn("definitions: v, w", proc.stdout)
+            self.assertIn("not restored:", proc.stdout)
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")
