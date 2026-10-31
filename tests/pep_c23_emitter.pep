@@ -531,7 +531,27 @@ fn pep_c23_source_bytes_parameter(nodes: List[FlatAstNode], function: FlatAstNod
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 
+fn pep_c23_c_list_field_type_parts(nodes: List[FlatAstNode], owner: FlatAstNode, node: FlatAstNode) -> List[Str] {
+  let elementType = pep_c23_child(nodes, node.id, "element_type", 0)
+  if !elementType.found { return [] } else {}
+  if elementType.node.kind == "type_scalar" {
+    if elementType.node.text == "Int" { return ["pep_list_int"] } else {}
+    if elementType.node.text == "Bool" { return ["pep_list_bool"] } else {}
+    if elementType.node.text == "Str" { return ["pep_list_str"] } else {}
+    return []
+  } else {}
+  if elementType.node.kind == "type_named" {
+    let nested = pep_c23_record_declaration(nodes, elementType.node.text)
+    if !nested.found || !(nested.node.id + 1 <= owner.id) { return [] } else {}
+    return ["pep_list_record_", int_text(nested.node.id)]
+  } else {}
+  return []
+}
 fn pep_c23_c_record_field_type(nodes: List[FlatAstNode], owner: FlatAstNode, node: FlatAstNode) -> Str {
+  if node.kind == "type_list" {
+    if length(pep_c23_c_list_field_type_parts(nodes, owner, node)) == 0 { return "" } else {}
+    return "list"
+  } else {}
   let scalar = pep_c23_c_scalar_type(node)
   if scalar != "" { return scalar } else {}
   if node.kind == "type_scalar" && node.text == "Str" { return "pep_str" } else {}
@@ -1064,6 +1084,17 @@ fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
 }
 fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" { return false } else {}
+  // A string literal lowers to static bytes with no runtime failure path, and a list literal can
+  // only fail through its elements, so neither needs the conservative evaluation-order guard.
+  if node.kind == "string" { return false } else {}
+  if node.kind == "list" {
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" {
+        if pep_c23_expression_may_fail(nodes, element) { return true } else {}
+      } else {}
+    }
+    return false
+  } else {}
   if node.kind == "field_access" {
     let value = pep_c23_child(nodes, node.id, "value", 0)
     return !value.found || pep_c23_expression_may_fail(nodes, value.node)
@@ -1795,6 +1826,106 @@ fn pep_c23_union_match_expression(nodes: List[FlatAstNode], function: FlatAstNod
   parts = append(parts, ")")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
+fn pep_c23_list_field_element(nodes: List[FlatAstNode], function: FlatAstNode, elementKind: Str,
+  element: FlatAstNode) -> PepC23Emission {
+  if elementKind == "string" {
+    if element.kind != "string" {
+      return pep_c23_unsupported("Pep C23 List[Str] record field values currently require string literal elements")
+    } else {}
+    return pep_c23_string_literal(nodes, element)
+  } else {}
+  if elementKind == "record" {
+    if element.kind != "record" {
+      return pep_c23_unsupported("Pep C23 List[Record] record field values currently require record constructor elements")
+    } else {}
+    return pep_c23_expression(nodes, function, element)
+  } else {}
+  if elementKind == "integer" {
+    if element.kind == "integer" {
+      return PepC23Emission { status: "emitted", sourceParts: [int_text(element.integerValue)], diagnostic: "" }
+    } else {}
+    if pep_c23_is_negative_int_literal(nodes, element) {
+      return pep_c23_expression(nodes, function, element)
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Int] record field values currently require integer literal elements")
+  } else {}
+  if element.kind != "boolean" {
+    return pep_c23_unsupported("Pep C23 List[Bool] record field values currently require Bool literal elements")
+  } else {}
+  let lowered = if element.booleanValue { "1" } else { "0" }
+  return PepC23Emission { status: "emitted", sourceParts: [lowered], diagnostic: "" }
+}
+// List-valued record fields reuse the existing by-value list structs. Element storage is a
+// compound literal with the lifetime of the enclosing block, matching list parameter arguments.
+fn pep_c23_list_field_value(nodes: List[FlatAstNode], function: FlatAstNode, owner: FlatAstNode,
+  declaredType: FlatAstNode, value: FlatAstNode) -> PepC23Emission {
+  let listTypeParts = pep_c23_c_list_field_type_parts(nodes, owner, declaredType)
+  if length(listTypeParts) == 0 {
+    return pep_c23_unsupported("Pep C23 list record field type is unsupported")
+  } else {}
+  if value.kind != "list" {
+    return pep_c23_unsupported("Pep C23 list record field values currently require a list literal")
+  } else {}
+  let elementType = pep_c23_child(nodes, declaredType.id, "element_type", 0)
+  if !elementType.found { return pep_c23_unsupported("Pep C23 list record field has no element type") } else {}
+  var cElement: List[Str] = []
+  var elementKind = ""
+  if elementType.node.kind == "type_scalar" {
+    if elementType.node.text == "Str" { cElement = ["pep_str"]; elementKind = "string" } else {}
+    if elementType.node.text == "Int" { cElement = ["int64_t"]; elementKind = "integer" } else {}
+    if elementType.node.text == "Bool" { cElement = ["_Bool"]; elementKind = "boolean" } else {}
+  } else {}
+  if elementType.node.kind == "type_named" {
+    let nested = pep_c23_record_declaration(nodes, elementType.node.text)
+    if !nested.found {
+      return pep_c23_unsupported("Pep C23 list record field has no declared element record")
+    } else {}
+    cElement = ["pep_record_", int_text(nested.node.id)]
+    elementKind = "record"
+  } else {}
+  if elementKind == "" {
+    return pep_c23_unsupported("Pep C23 list record field element type is unsupported")
+  } else {}
+  let elementCount = pep_c23_count_children(nodes, value.id, "element")
+  var parts: List[Str] = ["("]
+  for listTypePart in listTypeParts { parts = append(parts, listTypePart) }
+  parts = append(parts, "){ .data = ")
+  if elementCount == 0 {
+    parts = append(parts, "NULL")
+  } else {
+    parts = append(parts, "(const ")
+    for cElementPart in cElement { parts = append(parts, cElementPart) }
+    parts = append(parts, "[]){")
+    var count = 0
+    for element in nodes {
+      if element.parentId == value.id && element.role == "element" {
+        if count != 0 { parts = append(parts, ", ") } else {}
+        let lowered = pep_c23_list_field_element(nodes, function, elementKind, element)
+        if lowered.status != "emitted" { return lowered } else {}
+        for part in lowered.sourceParts { parts = append(parts, part) }
+        count = count + 1
+      } else {}
+    }
+    parts = append(parts, "}")
+  }
+  parts = append(parts, ", .length = ")
+  parts = append(parts, int_text(elementCount))
+  parts = append(parts, " }")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+fn pep_c23_field_access_list_type(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23NodeLookup {
+  let owner = pep_c23_child(nodes, node.id, "value", 0)
+  if !owner.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
+  let record = pep_c23_record_value_type(nodes, function, owner.node)
+  if !record.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
+  let field = pep_c23_record_field_declaration(nodes, record.node, node.text)
+  if !field.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
+  let fieldType = pep_c23_child(nodes, field.node.id, "type", 0)
+  if !fieldType.found || fieldType.node.kind != "type_list" {
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  return fieldType
+}
 fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "match" { return pep_c23_union_match_expression(nodes, function, node) } else {}
   if node.kind == "string" { return pep_c23_string_literal(nodes, node) } else {}
@@ -1878,7 +2009,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         let declared = pep_c23_record_field_declaration(nodes, declaration.node, supplied.text)
         if !declared.found { return pep_c23_unsupported("Pep C23 record construction field does not resolve to a declaration") } else {}
         let fieldType = pep_c23_child(nodes, declared.node.id, "type", 0)
-        if !fieldType.found || pep_c23_c_record_field_type(nodes, declaration.node, fieldType.node) == "" {
+        let fieldKind = if fieldType.found {
+          pep_c23_c_record_field_type(nodes, declaration.node, fieldType.node)
+        } else { "" }
+        if fieldKind == "" {
           return pep_c23_unsupported("Pep C23 record fields require Int, Bool, or a preceding record declaration")
         } else {}
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
@@ -1889,7 +2023,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           } else {}
           fallibleFieldCount = fallibleFieldCount + 1
         } else {}
-        let lowered = pep_c23_expression(nodes, function, value.node)
+        let lowered = if fieldKind == "list" {
+          pep_c23_list_field_value(nodes, function, declaration.node, fieldType.node, value.node)
+        } else {
+          pep_c23_expression(nodes, function, value.node)
+        }
         if lowered.status != "emitted" { return lowered } else {}
         if fieldCount != 0 { parts = append(parts, ", ") } else {}
         parts = append(parts, ".pep_field_")
@@ -2136,6 +2274,18 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           } else {}
         } else {}
       }
+      if argument.node.kind == "field_access" {
+        let fieldType = pep_c23_field_access_list_type(nodes, function, argument.node)
+        if fieldType.found {
+          let projection = pep_c23_expression(nodes, function, argument.node)
+          if projection.status == "emitted" {
+            var lengthParts: List[Str] = ["pep_checked_length("]
+            for part in projection.sourceParts { lengthParts = append(lengthParts, part) }
+            lengthParts = append(lengthParts, ".length)")
+            return PepC23Emission { status: "emitted", sourceParts: lengthParts, diagnostic: "" }
+          } else {}
+        } else {}
+      } else {}
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
       return PepC23Emission { status: "emitted", sourceParts: [int_text(pep_c23_count_children(nodes, list.node.id, "element"))], diagnostic: "" }
@@ -2852,6 +3002,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_str;\n[[maybe_unused]] static _Bool pep_str_equal(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length != right.length) { return 0; }\n  for (size_t i = 0; i < left.length; ++i) { if (left.data[i] != right.data[i]) { return 0; } }\n  return 1;\n}\n[[maybe_unused]] static _Bool pep_str_contains(pep_str haystack, pep_str needle) {\n  if ((haystack.length != 0 && haystack.data == NULL) || (needle.length != 0 && needle.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (needle.length == 0) { return 1; }\n  if (needle.length > haystack.length) { return 0; }\n  size_t limit = haystack.length - needle.length;\n  for (size_t i = 0; i <= limit; ++i) {\n    size_t j = 0;\n    while (j < needle.length && haystack.data[i + j] == needle.data[j]) { ++j; }\n    if (j == needle.length) { return 1; }\n  }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
+  reversed = prepend(reversed, "typedef struct { const pep_str *data; size_t length; } pep_list_str;\n")
   reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n[[maybe_unused]] static int64_t pep_checked_length(size_t length) { if ((uintmax_t)length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } return (int64_t)length; }\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
   for record in parsed.nodes {
     if record.parentId == -1 && record.kind == "record_declaration" {
@@ -2868,7 +3019,13 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
             parts = append(parts, "pep_record_")
             parts = append(parts, int_text(nested.node.id))
           } else {
-            parts = append(parts, fieldKind)
+            if fieldKind == "list" {
+              for fieldPart in pep_c23_c_list_field_type_parts(parsed.nodes, record, fieldType.node) {
+                parts = append(parts, fieldPart)
+              }
+            } else {
+              parts = append(parts, fieldKind)
+            }
           }
           parts = append(parts, " pep_field_")
           parts = append(parts, int_text(field.childIndex))
