@@ -11,10 +11,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAB = ROOT / "pep_lab.py"
 
 
-def lab(*args):
+def lab(*args, input_text=None):
     return subprocess.run(
         [sys.executable, str(LAB), *map(str, args)],
         cwd=ROOT, text=True, capture_output=True, check=False,
+        input=input_text,
     )
 
 
@@ -251,6 +252,33 @@ class PepLabTests(unittest.TestCase):
             ])
             self.assertIn("exit", outputs[1])
             self.assertFalse((pathlib.Path(store) / "definitions.pep").exists())
+
+    def test_lab_shapes_demo_exact_output(self):
+        proc = lab("eval", "examples/lab_shapes.pep")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "12\n12\n27\n")
+
+    def test_lab_text_table_exact_output(self):
+        proc = lab("eval", "examples/lab_text_table.pep")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            proc.stdout,
+            "seven times one-two-three:\n42\nnine times one-two-three:\n54\n",
+        )
+
+    def test_lab_scripted_session_workflow(self):
+        script = (ROOT / "examples" / "lab_session.txt").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = lab("repl", "--store", str(pathlib.Path(tmp) / "lab"),
+                       input_text=script)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("persisted (valid): double", proc.stdout)
+            self.assertIn("store: fn double(n: Int) -> Int", proc.stdout)
+            self.assertIn("42", proc.stdout)
+            self.assertIn("PEP_TYPE_MISMATCH", proc.stdout)
+            self.assertIn("not persisted", proc.stdout)
+            self.assertIn("definitions: double", proc.stdout)
+            self.assertIn("bye", proc.stdout)
 
     def test_malformed_compiler_json_rejected(self):
         sys.path.insert(0, str(ROOT))

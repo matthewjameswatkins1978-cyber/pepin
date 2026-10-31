@@ -58,6 +58,19 @@ compiler. Type Pep code (several lines if needed); a blank line checks
 - No new semantics are claimed: file-backed sources only, no incremental
   compilation, no revision-aware session state beyond ordinary files.
 
+## Dogfooding demos (Milestone 4)
+
+- `examples/lab_shapes.pep`: records, tagged unions, `match`, lists and
+  `for` loops -- shape areas and a gallery total (outputs 12/12/27).
+- `examples/lab_text_table.pep`: text output via `say`/`int_text`
+  composition over lists and function calls (outputs 42/54 tables).
+- `examples/lab_session.txt`: scripted REPL workflow -- define, `:info`,
+  use, `:run`, typed-error rejection, correction, `:show`, `:quit`.
+  Pipe it into `repl --store` for a reproducible interactive demo.
+- Known language boundary met while dogfooding: `Str` has no
+  concatenation operator, so multi-value lines are separate `say` calls.
+  No compiler change proposed; recorded here as observed behavior.
+
 ## Limits
 
 - No `pep_ocaml.ml` change, no new builtin, no protocol version change.

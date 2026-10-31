@@ -1,0 +1,12 @@
+fn double(n: Int) -> Int { return n + n }
+
+:def
+:info
+say(int_text(double(21)))
+:run
+fn bad(n: Int) -> Int { return "nope" }
+
+:def
+:clear
+:show
+:quit
