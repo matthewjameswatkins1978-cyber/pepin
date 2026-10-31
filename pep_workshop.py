@@ -321,6 +321,79 @@ def show_checkpoint(root: pathlib.Path, name: str, cid: str) -> dict:
     return read_checkpoint_meta(proj, cid)
 
 
+def _snapshot_source(proj: pathlib.Path, cid: str) -> bytes:
+    read_checkpoint_meta(proj, cid)  # validates id + integrity
+    return (checkpoints_dir(proj) / f"{cid}.pep").read_bytes()
+
+
+def diff_checkpoints(root: pathlib.Path, name: str, a: str, b: str) -> dict:
+    """Unified line diff between two snapshots (or a snapshot and current)."""
+    import difflib
+    proj = resolve_project_dir(root, name)
+    if a == "current":
+        store = proj / STORE_FILENAME
+        a_bytes = store.read_bytes() if store.exists() else b""
+        a_label = "current"
+    else:
+        a_bytes = _snapshot_source(proj, a)
+        a_label = a
+    if b == "current":
+        store = proj / STORE_FILENAME
+        b_bytes = store.read_bytes() if store.exists() else b""
+        b_label = "current"
+    else:
+        b_bytes = _snapshot_source(proj, b)
+        b_label = b
+    a_text = a_bytes.decode("utf-8", errors="replace").splitlines()
+    b_text = b_bytes.decode("utf-8", errors="replace").splitlines()
+    diff = "\n".join(difflib.unified_diff(
+        a_text, b_text, fromfile=a_label, tofile=b_label, lineterm=""))
+    return {"project": proj.name, "a": a_label, "b": b_label,
+            "identical": not diff, "diff": diff}
+
+
+def restore_checkpoint(root: pathlib.Path, name: str, cid: str,
+                       apply: bool = False,
+                       expect: str | None = None) -> dict:
+    """Restore a snapshot to the project's live source (file op only).
+
+    Without ``apply`` this only previews the current-vs-target diff and
+    changes nothing. With ``apply`` the live ``definitions.pep`` is
+    replaced atomically. ``expect`` refuses when the current digest
+    differs (conflict protection). Nothing is ever executed.
+    """
+    proj = resolve_project_dir(root, name)
+    target_bytes = _snapshot_source(proj, cid)
+    target_digest = "sha256:" + hashlib.sha256(target_bytes).hexdigest()
+    store = proj / STORE_FILENAME
+    current_bytes = store.read_bytes() if store.exists() else b""
+    current_digest = "sha256:" + hashlib.sha256(current_bytes).hexdigest()
+    if current_digest == target_digest:
+        return {"project": proj.name, "id": cid, "restored": False,
+                "reason": f"already at {target_digest}",
+                "current_digest": current_digest, "target_digest": target_digest}
+    import difflib
+    preview = "\n".join(difflib.unified_diff(
+        current_bytes.decode("utf-8", errors="replace").splitlines(),
+        target_bytes.decode("utf-8", errors="replace").splitlines(),
+        fromfile="current", tofile=cid, lineterm=""))
+    if expect is not None and current_digest != expect:
+        raise ValueError(
+            f"refusing restore: current {current_digest} != expected {expect}")
+    if not apply:
+        return {"project": proj.name, "id": cid, "restored": False,
+                "preview": preview,
+                "current_digest": current_digest, "target_digest": target_digest}
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".pep", delete=False, dir=str(proj)) as tmp:
+        tmp.write(target_bytes)
+        tmp_path = pathlib.Path(tmp.name)
+    os.replace(tmp_path, store)
+    return {"project": proj.name, "id": cid, "restored": True,
+            "preview": preview,
+            "current_digest": current_digest, "target_digest": target_digest}
+
+
 def run_project_repl(root: pathlib.Path, name: str | None) -> int:
     """Open the interactive prompt on a project's store directory."""
     try:
@@ -369,6 +442,19 @@ def main(argv: list[str] | None = None) -> int:
     c_show.add_argument("--root", required=True)
     c_show.add_argument("--project", required=True)
     c_show.add_argument("--id", required=True)
+    c_diff = ckpt.add_parser("diff", help="diff two revisions (id or 'current')")
+    c_diff.add_argument("--root", required=True)
+    c_diff.add_argument("--project", required=True)
+    c_diff.add_argument("--a", required=True)
+    c_diff.add_argument("--b", required=True)
+    c_restore = ckpt.add_parser("restore", help="preview or apply a restore")
+    c_restore.add_argument("--root", required=True)
+    c_restore.add_argument("--project", required=True)
+    c_restore.add_argument("--id", required=True)
+    c_restore.add_argument("--apply", action="store_true",
+                           help="perform the restore; without it, preview only")
+    c_restore.add_argument("--expect", default=None,
+                           help="refuse unless current digest matches")
 
     args = parser.parse_args(argv)
     try:
@@ -395,6 +481,13 @@ def main(argv: list[str] | None = None) -> int:
             elif args.ckpt == "show":
                 print(json.dumps(
                     show_checkpoint(root, args.project, args.id), indent=2))
+            elif args.ckpt == "diff":
+                print(json.dumps(
+                    diff_checkpoints(root, args.project, args.a, args.b), indent=2))
+            elif args.ckpt == "restore":
+                print(json.dumps(
+                    restore_checkpoint(root, args.project, args.id,
+                                       apply=args.apply, expect=args.expect), indent=2))
         return 0
     except (RuntimeError, ValueError, FileNotFoundError, OSError,
             UnicodeDecodeError) as exc:

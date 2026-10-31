@@ -31,6 +31,11 @@ are legacy stores and are adopted on first open with contents preserved.
 - Empty projects snapshot honestly (0 bytes); bad ids and unknown
   projects fail with clean errors. Restore/diff arrive in the next slice
   with preview-before-write protection and no automatic execution.
+- `checkpoint diff --a cp-001 --b current` (either side may be a snapshot
+  id or `current`) shows a unified line diff; `identical: true` when equal.
+- `checkpoint restore --id cp-001` previews only and changes nothing;
+  `--apply` performs the restore atomically; `--expect DIGEST` refuses on
+  conflict. Restoring is a file operation and never executes code.
 
 `active.json` in the root remembers the last opened project across
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt

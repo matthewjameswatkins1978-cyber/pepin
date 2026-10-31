@@ -188,6 +188,57 @@ class WorkshopProjectTests(unittest.TestCase):
             self.assertEqual([e["id"] for e in entries], ["cp-001"])
             self.assertEqual(entries[0]["label"], "a")
 
+    def test_checkpoint_diff_restore_with_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "p").returncode, 0)
+            proj = pathlib.Path(root) / "p"
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 1 }\n")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "p", "--label", "v1").returncode, 0)
+            with open(proj / "definitions.pep", "w",
+                       encoding="utf-8", newline="\n") as fh:
+                fh.write("fn v() -> Int { return 2 }\n")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "p", "--label", "v2").returncode, 0)
+            diffed = workshop("checkpoint", "diff", "--root", root,
+                              "--project", "p", "--a", "cp-001", "--b", "cp-002")
+            self.assertEqual(diffed.returncode, 0, diffed.stderr)
+            payload = json.loads(diffed.stdout)
+            self.assertFalse(payload["identical"])
+            self.assertIn("-fn v() -> Int { return 1 }", payload["diff"])
+            self.assertIn("+fn v() -> Int { return 2 }", payload["diff"])
+            # Preview changes nothing.
+            preview = workshop("checkpoint", "restore", "--root", root,
+                               "--project", "p", "--id", "cp-001")
+            self.assertEqual(preview.returncode, 0, preview.stderr)
+            pre = json.loads(preview.stdout)
+            self.assertFalse(pre["restored"])
+            self.assertIn("+fn v() -> Int { return 1 }", pre["preview"])
+            self.assertIn("return 2", proj.joinpath("definitions.pep").read_text(encoding="utf-8"))
+            # Wrong expectation refuses even with --apply.
+            refused = workshop("checkpoint", "restore", "--root", root,
+                               "--project", "p", "--id", "cp-001",
+                               "--apply", "--expect", "sha256:dead")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("refusing restore", refused.stderr)
+            # Apply restores exact bytes; second restore is a no-op.
+            applied = workshop("checkpoint", "restore", "--root", root,
+                               "--project", "p", "--id", "cp-001", "--apply")
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+            self.assertTrue(json.loads(applied.stdout)["restored"])
+            self.assertEqual(
+                (proj / "definitions.pep").read_bytes(),
+                b"fn v() -> Int { return 1 }\n")
+            again = workshop("checkpoint", "restore", "--root", root,
+                             "--project", "p", "--id", "cp-001", "--apply")
+            self.assertIn("already at", json.loads(again.stdout)["reason"])
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")
