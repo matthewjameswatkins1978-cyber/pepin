@@ -380,6 +380,75 @@ class WorkshopProjectTests(unittest.TestCase):
                               "--revision", "nope")
             self.assertNotEqual(badrev.returncode, 0)
 
+    def _write_example_source(self, root, project, example):
+        src = ROOT / "examples" / example
+        data = src.read_bytes()
+        (pathlib.Path(root) / project / "definitions.pep").write_bytes(data)
+        return data
+
+    def test_workshop_project_full_workflow(self):
+        # W5 acceptance: create, develop, check, execute, checkpoint,
+        # modify, restore, export -- across processes.
+        lab = lambda *a: subprocess.run(
+            [sys.executable, str(ROOT / "pep_lab.py"), *map(str, a)],
+            cwd=ROOT, text=True, capture_output=True, check=False)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = str(pathlib.Path(tmp) / "ws")
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "shapes").returncode, 0)
+            original = self._write_example_source(root, "shapes", "workshop_shapes.pep")
+            saved = workshop("checkpoint", "save", "--root", root,
+                             "--project", "shapes", "--label", "v1")
+            self.assertEqual(saved.returncode, 0, saved.stderr)
+            inspected = workshop("inspect", "--root", root, "--project", "shapes")
+            facts = json.loads(inspected.stdout)
+            self.assertEqual(facts["status"], "valid")
+            self.assertEqual(
+                sorted(f["name"] for f in facts["functions"]),
+                ["area", "count_circles", "is_circle", "perimeter", "total_area"])
+            recorded = workshop("experiment", "record", "--root", root,
+                                "--project", "shapes", "--kind", "check")
+            self.assertEqual(json.loads(recorded.stdout)["result"]["status"], "valid")
+            # Modify: Circle(2) -> Circle(5); diff must show it.
+            broken = original.replace(b"Circle(2)", b"Circle(5)")
+            self.assertNotEqual(broken, original)
+            (pathlib.Path(root) / "shapes" / "definitions.pep").write_bytes(broken)
+            diffed = workshop("checkpoint", "diff", "--root", root,
+                              "--project", "shapes", "--a", "cp-001", "--b", "current")
+            self.assertIn("Circle(5)", json.loads(diffed.stdout)["diff"])
+            # Restore, re-check, export the portable program, run it.
+            restored = workshop("checkpoint", "restore", "--root", root,
+                                "--project", "shapes", "--id", "cp-001", "--apply")
+            self.assertTrue(json.loads(restored.stdout)["restored"])
+            self.assertEqual(
+                (pathlib.Path(root) / "shapes" / "definitions.pep").read_bytes(),
+                original)
+            exported_path = pathlib.Path(tmp) / "shapes_final.pep"
+            exported = lab("export", "--store", str(pathlib.Path(root) / "shapes"),
+                           "--output", str(exported_path))
+            self.assertEqual(exported.returncode, 0, exported.stderr)
+            ran = lab("eval", str(exported_path))
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(
+                ran.stdout,
+                "areas:\n12\n12\n9\nperimeters:\n12\n14\ncircles:\n2\n"
+                "gallery area:\n36\n")
+            # Second project: ledger, shorter pass with an observed run.
+            self.assertEqual(
+                workshop("create", "--root", root, "--name", "ledger").returncode, 0)
+            self._write_example_source(root, "ledger", "workshop_ledger.pep")
+            self.assertEqual(
+                workshop("checkpoint", "save", "--root", root,
+                         "--project", "ledger").returncode, 0)
+            led = workshop("inspect", "--root", root, "--project", "ledger")
+            self.assertEqual(json.loads(led.stdout)["status"], "valid")
+            rec = workshop("experiment", "record", "--root", root,
+                           "--project", "ledger", "--kind", "check", "--run",
+                           "--label", "ledger-run")
+            obs = json.loads(rec.stdout)["observation"]
+            self.assertEqual(obs["returncode"], 0)
+            self.assertEqual(obs["stdout"], "total:\n62\nlargest:\n40\nover 10:\n2\n")
+
     def test_bad_names_and_missing_projects_fail_cleanly(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = str(pathlib.Path(tmp) / "ws")

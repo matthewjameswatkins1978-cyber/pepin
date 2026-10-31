@@ -64,6 +64,21 @@ are legacy stores and are adopted on first open with contents preserved.
 - Checkpoint snapshots are integrity-checked against their recorded digest
   before inspection; tampering fails loudly instead of yielding facts.
 
+## Real projects (W5)
+
+- `examples/workshop_shapes.pep`: tagged unions, wildcard patterns,
+  lists, loops, function composition (areas 12/12/9, perimeters 12/14,
+  2 circles, gallery area 36).
+- `examples/workshop_ledger.pep`: nominal payloads, loops, conditionals
+  (total 62, largest 40, 2 over 10).
+- The W5 test drives the full workflow through the CLI: create, write,
+  checkpoint, inspect, experiment record, modify, diff, restore, export a
+  portable program, run it with exact-output assertions.
+- Boundaries met while dogfooding (all accepted seed behavior, no
+  compiler change proposed): union constructors require parens
+  (no bare `Point`); no `>` comparison (use `!(a <= b)`); statement-`if`
+  inside loop bodies requires `else`.
+
 `active.json` in the root remembers the last opened project across
 process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
 metadata and unknown projects fail with clean JSON errors, never
