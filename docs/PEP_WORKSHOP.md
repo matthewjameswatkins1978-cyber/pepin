@@ -1,0 +1,25 @@
+# Pep Lab Persistent Workshop
+
+Durable, source-first project environment over the existing Pep Lab store
+and seed compiler. Ordinary `.pep` files stay authoritative; the compiler
+stays the sole semantic authority. No database, no new language.
+
+## Projects (W1)
+
+A workshop *root* is a plain directory; each subdirectory with a
+`project.json` is a project. A project directory **is** a Pep Lab store
+directory (`definitions.pep`, `buffers/`), so all existing `--store DIR`
+workflows keep working. Directories with store files but no `project.json`
+are legacy stores and are adopted on first open with contents preserved.
+
+- `python pep_workshop.py create --root DIR --name NAME`
+- `python pep_workshop.py list --root DIR` (JSON: projects + active)
+- `python pep_workshop.py open --root DIR --name NAME` (marks active)
+- `python pep_workshop.py active --root DIR`
+- `python pep_workshop.py dir --root DIR [--name NAME]` (for scripts)
+- `python pep_workshop.py repl --root DIR [--project NAME]` (defaults active)
+
+`active.json` in the root remembers the last opened project across
+process restarts. Names allow letters/digits/`_`/`-` (max 64); corrupt
+metadata and unknown projects fail with clean JSON errors, never
+tracebacks. Tests: `python -m unittest tests.test_workshop -v`.
