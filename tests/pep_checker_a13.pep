@@ -1607,6 +1607,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if is_expression_kind(node.kind) {
+      if node.kind == "integer" || node.kind == "boolean" || node.kind == "string" {
+        let litType = if node.kind == "integer" { "Int" } else { if node.kind == "boolean" { "Bool" } else { "Str" } }
+        reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: litType, typeShape: legacy_type_shape(nodes, litType), startByte: node.startByte, endByte: node.endByte })
+      } else {
       let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
       if actual == "" {
         let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
@@ -1631,6 +1635,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         }
       } else {
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: legacy_type_shape(nodes, actual), startByte: node.startByte, endByte: node.endByte })
+      }
       }
       if node.kind == "record" {
         if !resolvedReady {
@@ -1902,7 +1907,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             if argument.parentId == node.id {
               if !argumentMismatchFound {
                 let expected = signature_parameter_type(resolvedSigs, target.function.syntaxId, index)
-                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                let actualArgument = if argument.kind == "integer" { "Int" } else { if argument.kind == "boolean" { "Bool" } else { if argument.kind == "string" { "Str" } else { infer_expression_type(nodes, argument.id, functions, bindings, references) } } }
                 let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
                 let expectedShape = if needsExpectedShape { signature_parameter_shape(resolvedSigs, target.function.syntaxId, index) } else { empty_type_shape() }
                 let needsStructuralCheck = expected == "" || actualArgument == ""

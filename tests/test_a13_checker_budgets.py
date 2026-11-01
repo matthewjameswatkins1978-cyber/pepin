@@ -185,18 +185,19 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
 
-    def test_sixteen_literal_args_hit_step_budget(self):
-        # Documented frontier: 16-argument calls exceed the unchanged
-        # 100k budget (per-arg signature + inference scans); 8 args fit.
-        # Flip to valid when call-arg checking is staged or memoized.
+    def test_sixteen_literal_args_check_valid(self):
+        # Structural win (literal fast-path): 16-argument calls with
+        # literal args now check valid under the unchanged budget
+        # (was PEP_RUNTIME_STEP_LIMIT). Per-literal infer/shape scans
+        # eliminated in the main expression path + arg checking.
         params = ", ".join(f"p{i}: Int" for i in range(16))
         args = ", ".join(str(i) for i in range(16))
         source = (f"fn f16({params}) -> Int {{\n  return 0\n}}\n"
                   f"fn main() -> Int {{\n  return f16({args})\n}}\n")
         self.assert_ocaml_valid(source)
         result = self.invoke_checker(source)
-        self.assertEqual(result.get("outcome"), "error", result)
-        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
 
     def test_thirty_two_records_check_valid(self):
         # Scale pin flipped by the global single-pass record resolution:
