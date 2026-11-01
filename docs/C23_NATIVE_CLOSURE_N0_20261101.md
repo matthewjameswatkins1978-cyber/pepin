@@ -65,11 +65,42 @@ This is pinned by a test in `tests/test_c23_list_updates.py` so the boundary is
 recorded, not hidden, and so that whoever reduces the cost is told to re-measure and
 re-pin deliberately. No cap was raised.
 
-Likely cause to investigate next, not yet proven: each statement's lowering performs
-several full traversals of the node list (`pep_c23_child`, `pep_c23_mutable_list_binding`,
-`pep_c23_count_children`, ...), so cost grows with statements times nodes with a
-large constant. That is the first thing a dedicated emitter-cost slice should measure
-before changing anything.
+### Measured scaling law
+
+The boundary tracks total expression size, not statement count. Holding the shape
+constant and varying only the right-hand side:
+
+| right-hand side per statement | AST nodes per RHS | statements before the budget tips |
+| --- | --- | --- |
+| `acc = 1` | 1 | 17 |
+| `acc = 1 + 2` | 3 | 9 |
+| `acc = 1 + 2 + 3` | 5 | 6 |
+| `acc = 1 + 2 + 3 + 4` | 7 | 4 |
+
+That is roughly 17-30 expression nodes in total regardless of how they are grouped,
+i.e. **about 4,000-5,000 interpreter steps per expression node**. `let` bindings
+outside any loop tip at the same order (21 statements), so the cost is generic to the
+function-statement loop and is not specific to loops, list updates or records.
+
+### Hypotheses tested and eliminated
+
+- *Argument materialisation dominates.* Tested with programs that contain no `main`,
+  so the emitter refuses immediately: 60 nodes refuse cleanly and only ~84 nodes tip
+  the budget. Early-exit programs are cheap, so receiving the typed AST is not the
+  dominant cost for normal programs.
+- *Full node-list scans per statement.* Gating two scans that provably cannot succeed
+  (`pep_c23_str_expression` on non-equality operators, `pep_c23_record_value_type` /
+  `pep_c23_union_value_type` on scalar initialisers) measured +1 statement of headroom
+  for the first and no measurable change for the second. The per-statement scans are
+  real but are not where the budget goes.
+
+### What this means for the next attempt
+
+Two principled micro-optimisations moved the boundary from 6/7 to 7/8 statements; the
+remaining cost is a large per-expression constant that micro-gating does not touch.
+The next attempt should not guess again: it needs an actual profile of the emitter
+(for example by bisecting which lowering branch is entered for a fixed program, or by
+measuring a program with one branch disabled) before changing more code.
 
 ## Backend-only blockers, ranked by use in the canonical sources
 

@@ -2683,8 +2683,17 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !left.found || !right.found {
       return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
     } else {}
-    let leftStringValue = pep_c23_str_expression(nodes, function, left.node)
-    let rightStringValue = pep_c23_str_expression(nodes, function, right.node)
+    // Str only participates in == and !=, and a string *literal* is always a Str. Probing for Str
+    // on every arithmetic operand costs a full node-list scan per operand, which is a large share of
+    // the emitter's per-statement step budget, so gate the probe on what can actually be a Str.
+    let checkLeftStr = node.text == "==" || node.text == "!=" || left.node.kind == "string"
+    let checkRightStr = node.text == "==" || node.text == "!=" || right.node.kind == "string"
+    let leftStringValue = if checkLeftStr {
+      pep_c23_str_expression(nodes, function, left.node)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    let rightStringValue = if checkRightStr {
+      pep_c23_str_expression(nodes, function, right.node)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
     if leftStringValue.found || rightStringValue.found {
       if !leftStringValue.found || !rightStringValue.found ||
          (node.text != "==" && node.text != "!=") {
@@ -3497,8 +3506,18 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
               bodyParts = append(bodyParts, ";\n")
             } else {
               let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
-              let localRecord = pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
-              let localUnion = pep_c23_union_value_type(parsed.nodes, node, initialValue.node)
+              // A record or union value type can only be carried by these initialiser shapes, so do
+              // not pay two full node-list scans for a scalar literal. This runs for every local
+              // binding, and the per-statement step cost is what bounds real compiler bodies.
+              let possibleAggregate = initialValue.node.kind == "record" ||
+                initialValue.node.kind == "call" || initialValue.node.kind == "field_access" ||
+                initialValue.node.kind == "name"
+              let localRecord = if possibleAggregate {
+                pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
+              } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+              let localUnion = if possibleAggregate {
+                pep_c23_union_value_type(parsed.nodes, node, initialValue.node)
+              } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
               let localString = if initialValue.node.kind == "string" {
                 PepC23NodeLookup { found: true, node: initialValue.node }
               } else {

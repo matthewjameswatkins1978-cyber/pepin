@@ -175,7 +175,9 @@ class PepC23ListUpdateTests(unittest.TestCase):
         Lucy's `lexer_step` has dozens of statements, so this per-statement cost -- not
         any missing feature -- is what currently bounds real compiler function bodies.
         When the emitter becomes cheaper this test fails, which is the intended
-        reminder to re-measure and re-pin deliberately.
+        reminder to re-measure and re-pin deliberately. It already moved once: gating the
+        Str-operand probe on operators that can take Str took this boundary from 6/7 to
+        7/8 statements.
         """
         def program(statements):
             body = "".join("    acc = acc + 1\n" for _ in range(statements))
@@ -189,9 +191,9 @@ class PepC23ListUpdateTests(unittest.TestCase):
                     "  return acc\n"
                     "}\n")
 
-        emit(program(6).encode("utf-8"))
+        emit(program(7).encode("utf-8"))
         with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
-            emit(program(7).encode("utf-8"))
+            emit(program(8).encode("utf-8"))
 
     def test_record_list_updates_are_not_claimed(self):
         """List[record] mutable bindings are not lowered yet, so this stays refused."""
