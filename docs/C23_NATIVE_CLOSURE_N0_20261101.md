@@ -94,6 +94,27 @@ function-statement loop and is not specific to loops, list updates or records.
   for the first and no measurable change for the second. The per-statement scans are
   real but are not where the budget goes.
 
+### After the literal fix the emitter is node-bound in every measured shape
+
+The verbatim string-literal path (see below) removed the one place where cost scaled
+with characters rather than nodes. Every shape measured since converges on the same
+capacity, which is independent corroboration of the node model:
+
+| shape | capacity |
+| --- | --- |
+| statements in a while body | 21 |
+| one expression chain | ~12-16 terms |
+| mutable `List[Int]` literal, growing element count | 48 elements emit, 64 tip |
+| string literal, after the verbatim path | 640 characters |
+| string literal, before the verbatim path | 160 characters |
+| unrelated padding nodes | 1 statement per ~6 nodes |
+
+A `List[Int]` element costs two nodes and the list tips at ~50-60 nodes, exactly like
+everything else. So there is no remaining per-element emission inefficiency to exploit:
+the only lever left is **fewer nodes per invocation**, which is the bounded emitter
+contract. Per-element optimisations from here would be the fourth category of change
+that measures as no-gain.
+
 ### Correction: cost is per AST *node*, not per scan
 
 Two turns of this report argued that cost was approximately (node-list scans) x (nodes)
