@@ -1487,7 +1487,13 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if is_constructor(nodes, node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Constructor payload and nominal identity checks are not implemented", node)) } else {}
         } else {
           if node.kind == "list" && count_children(nodes, node.id, "element") == 0 {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node))
+            let listParent = lookup_node(nodes, node.parentId)
+            var listHasAnnotation = false
+            if listParent.found && (listParent.node.kind == "let" || listParent.node.kind == "var") && node.role == "value" {
+              let listAnnotation = child_at(nodes, listParent.node.id, "annotation", 0)
+              if listAnnotation.found && type_shape_at(nodes, listAnnotation.node.id).listDepth != 0 { listHasAnnotation = true } else {}
+            } else {}
+            if !listHasAnnotation { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node)) } else {}
           } else {
             if node.kind != "name" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
           }

@@ -205,6 +205,24 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
                 self.assertEqual(result.get("outcome"), "error", result)
                 self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
 
+    def test_nominal_empty_list_with_annotation_checks_valid(self):
+        # A2 divergence (bc324100): OCaml-valid mutable List[record]
+        # binding was rejected with PEP_EMPTY_LIST_NEEDS_TYPE. The empty
+        # list inherits a concrete list type from a list-shaped annotation,
+        # including nominal element types. All three use shapes pass.
+        decl = "type P { x: Int }\n"
+        for label, body in (
+            ("length", "  var points: List[P] = []\n  return length(points)\n"),
+            ("reverse", "  var points: List[P] = []\n  return length(reverse(points))\n"),
+            ("prepend", "  var points: List[P] = []\n  points = prepend(points, P { x: 1 })\n  return length(points)\n"),
+        ):
+            with self.subTest(use=label):
+                source = decl + "fn main() -> Int {\n" + body + "}\n"
+                self.assert_ocaml_valid(source)
+                result = self.invoke_checker(source)
+                self.assertEqual(result.get("outcome"), "ok", result)
+                self.assertEqual(self.report_status(result), "valid")
+
 
 if __name__ == "__main__":
     unittest.main()
