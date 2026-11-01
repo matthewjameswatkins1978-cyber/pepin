@@ -3049,7 +3049,15 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
         if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support byte_at lets, assignments, returns, and conditionals") } else {}
         let value = pep_c23_child(nodes, statement.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
-        let assignmentTargetList = pep_c23_mutable_list_binding(nodes, function, statement.text)
+        // Only a list value, a name, or a prepend/reverse call can carry a list update, and this
+        // runs for every assignment in every loop body. Scanning the whole node list for the common
+        // scalar assignment was pure waste against a fixed step budget.
+        let listUpdateCandidate = value.node.kind == "list" || value.node.kind == "name" ||
+          (value.node.kind == "call" &&
+           (value.node.text == "prepend" || value.node.text == "reverse"))
+        let assignmentTargetList = if listUpdateCandidate {
+          pep_c23_mutable_list_binding(nodes, function, statement.text)
+        } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
         var listUpdateFound = false
         var listUpdate = PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: "" }
         if assignmentTargetList.found && value.node.kind == "call" &&

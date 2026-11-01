@@ -94,13 +94,44 @@ function-statement loop and is not specific to loops, list updates or records.
   for the first and no measurable change for the second. The per-statement scans are
   real but are not where the budget goes.
 
-### What this means for the next attempt
+### The cost model, measured
 
-Two principled micro-optimisations moved the boundary from 6/7 to 7/8 statements; the
-remaining cost is a large per-expression constant that micro-gating does not touch.
-The next attempt should not guess again: it needs an actual profile of the emitter
-(for example by bisecting which lowering branch is entered for a fixed program, or by
-measuring a program with one branch disabled) before changing more code.
+Cost tracks **full node-list traversals times node count**, not branch logic. Holding
+the statement shape fixed (`acc = 1`, the cheapest statement) and adding only unrelated
+AST nodes — extra unused functions that the emitter scans but never lowers — collapses
+the headroom almost one-to-one:
+
+| unrelated padding nodes | statements before the budget tips |
+| --- | --- |
+| 0 | 21 |
+| ~6 | 19 |
+| ~12 | 17 |
+| ~18 | 15 |
+| ~24 | 13 |
+
+So one statement costs roughly as much as four extra nodes, i.e. **each statement
+performs about four to five full scans of the node list**, and total cost is
+approximately (scans) x (nodes). That is the real shape of the blocker.
+
+This model predicted the fix that worked: removing a single unnecessary scan per
+assignment — the mutable-list-binding lookup, which only a list value, a name, or a
+prepend/reverse call can ever need — moved the cheapest statement ladder from **17
+statements to 21** (about +24%), which is the ratio the model implies for dropping one
+of four to five scans. The same scan is noise on a binary-valued statement, where
+expression lowering dominates instead.
+
+### What this means for the next step
+
+The leverage is now explicit: **fewer scans per statement multiplies headroom
+directly**, and a structural change — computing each function's child lists once and
+reusing them, instead of calling `pep_c23_child`/`pep_c23_count_children`/binding
+lookups per node — is worth several times the current boundary. That is a real
+refactor of a 3,600-line Pep program and should be one deliberate slice with the
+ladder as its before/after measure, not a side effect of another feature.
+
+Micro-gating is not useless, as an earlier version of this note claimed; it is simply
+bounded by how many scans a statement performs. One scan removed, +24% on the cheapest
+shape.
 
 ## Backend-only blockers, ranked by use in the canonical sources
 
