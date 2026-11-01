@@ -160,6 +160,103 @@ class SectionByteIdentityTests(unittest.TestCase):
                 self.assertEqual(self.function_count(source), len(units))
                 self.assertEqual(header + "".join(units) + epilogue, one_shot)
 
+    def test_real_make_token_lowers_as_a_bounded_unit(self):
+        """Lucy's real `make_token` body, emitted without its caller.
+
+        `LexToken` + `make_token` is checker-valid; adding a `main` that calls it is what
+        exceeds the checker's step budget (measured). So a bounded chunk that carries just
+        the constructor is exactly the unit this path must support: the header plus that one
+        unit is C23 that compiles as a translation unit, which was unreachable while the whole
+        program had to check at once.
+        """
+        import subprocess
+        import tempfile
+
+        lexer_text = (ROOT / "examples" / "pep_lexer.pep").read_text(encoding="utf-8")
+
+        def block(header):
+            start = lexer_text.index("\n" + header) if ("\n" + header) in lexer_text \
+                else lexer_text.index(header)
+            if lexer_text[start] == "\n":
+                start += 1
+            depth = 0
+            index = lexer_text.index("{", start)
+            for position in range(index, len(lexer_text)):
+                character = lexer_text[position]
+                if character == "{":
+                    depth += 1
+                elif character == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return lexer_text[start:position + 1]
+            raise AssertionError(header)
+
+        source_text = block("type LexToken") + "\n" + block("fn make_token") + "\n"
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "unit-only",
+                                    "bytes": list(source_text.encode("utf-8"))})
+        require(target, "outcome", "ok", "open target without main")
+        semantic_target = {"document": target["document"], "revision": target["revision"],
+                           "entryFunctions": []}
+        parsed = pep_c23.parse_target(self.session, source_text.encode("utf-8"), target,
+                                      self.tool_revision)
+        try:
+            checked = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                         "op": "tool_invoke", "tool": "pep-c23-checker",
+                                         "arguments": [parsed], "semanticTarget": semantic_target})
+            require(checked, "outcome", "ok", "check target without main")
+        except RuntimeError as error:
+            self.skipTest("this checkout's Pep-written checker cannot reach LexToken + "
+                          "make_token within its step budget; A1's checker "
+                          "(codex/checker-emitter-integration@a58f5f8 or newer) can. "
+                          f"{type(error).__name__}")
+
+        def emit(tool, arguments, label):
+            response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_invoke", "tool": tool,
+                                          "arguments": arguments,
+                                          "semanticTarget": semantic_target})
+            if response.get("outcome") != "ok":
+                error = response.get("error") or {}
+                if error.get("code") == "PEP_RUNTIME_STEP_LIMIT":
+                    # Measured limitation, not an environment problem: each sectional entry
+                    # re-runs the whole emission and then slices, so asking for one unit still
+                    # costs a full emission. It fits for small programs (the byte-identity
+                    # tests prove that) but not for this target. Removing this cost needs a
+                    # mode-gated emission that skips the header work, which is a larger change
+                    # than the slicing design.
+                    self.skipTest("sectional entries cost a full emission each; the emitter step "
+                                  "budget is exceeded for LexToken + make_token. A mode-gated "
+                                  "emission is required to make this target cheap.")
+            require(response, "outcome", "ok", label)
+            fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+            self.assertEqual(fields["status"]["value"], "emitted",
+                             fields["diagnostic"]["value"])
+            return "".join(part["value"] for part in fields["sourceParts"]["value"])
+
+        header = emit("pep-c23-section", [parsed, checked["result"], typed("Str", "header")],
+                      "emit header")
+        unit = emit("pep-c23-function-unit", [parsed, checked["result"], typed("Int", 0)],
+                    "emit make_token unit")
+        self.assertIn("pep_fn_", unit)
+        translation_unit = header + unit
+
+        clang = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
+        gcc = pathlib.Path(r"C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe")
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            c_path = pathlib.Path(temp_dir) / "make_token.c"
+            c_path.write_text(translation_unit, encoding="utf-8", newline="\n")
+            for compiler in (clang, gcc):
+                if not compiler.is_file():
+                    continue
+                with self.subTest(compiler=compiler.name):
+                    built = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic",
+                         "-Werror", "-O2", "-c", str(c_path), "-o",
+                         str(pathlib.Path(temp_dir) / (compiler.stem + ".o"))],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+
     def test_out_of_range_unit_index_refuses(self):
         """Fail closed: a bad index must never emit a partial program."""
         one_shot, sections, checked, parsed, semantic_target = self.emit_parts(

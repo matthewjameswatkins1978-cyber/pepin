@@ -3422,12 +3422,18 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
       if node.text == "main" { mainFound = true; mainId = node.id } else {}
     } else {}
   }
-  if functionCount == 0 || !mainFound {
+  // A bounded chunk may legitimately contain one function and no `main`: the caller lives in a
+  // different chunk. Only the whole-program and epilogue paths need main, so they are the only
+  // ones that require it. The requirement is unchanged for part == "all".
+  let sectionNeedsMain = part == "all" || part == "main"
+  if functionCount == 0 || (sectionNeedsMain && !mainFound) {
     return pep_c23_unsupported("Pep C23 emission requires a top-level function named main")
   } else {}
-  let mainType = pep_c23_child(parsed.nodes, mainId, "return_type", 0)
-  if !mainType.found || mainType.node.kind != "type_scalar" || mainType.node.text != "Int" {
-    return pep_c23_unsupported("Pep C23 main function must return Int")
+  if mainFound {
+    let mainType = pep_c23_child(parsed.nodes, mainId, "return_type", 0)
+    if !mainType.found || mainType.node.kind != "type_scalar" || mainType.node.text != "Int" {
+      return pep_c23_unsupported("Pep C23 main function must return Int")
+    } else {}
   } else {}
   let requiresArena = pep_c23_requires_arena(parsed.nodes)
   var reversed: List[Str] = []
