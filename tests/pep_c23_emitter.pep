@@ -2531,10 +2531,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
-    // Three or more parameters use the general ordered path, whose gate is a superset of the
-    // two- and three-parameter gates, so no program that emitted before stops emitting.
-    if !(pep_c23_count_children(nodes, target.node.id, "parameter") <= 2) ||
-       !(pep_c23_count_children(nodes, node.id, "argument") <= 2) {
+    // Four or more parameters or arguments always use the general ordered path. A three-parameter
+    // call only falls through to it when the fixed-slot path below would refuse it, so every
+    // program that already emitted keeps the cheaper path and its exact behaviour.
+    if extraParameter.found || extraArgument.found {
+      return pep_c23_many_argument_call(nodes, function, node, target.node,
+        conditionalTarget, directLocalTarget)
+    } else {}
+    if parameter.found && secondParameter.found && thirdParameter.found && thirdArgument.found &&
+       !conditionalTarget && !directLocalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) {
       return pep_c23_many_argument_call(nodes, function, node, target.node,
         conditionalTarget, directLocalTarget)
     } else {}
