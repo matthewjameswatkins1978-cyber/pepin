@@ -8,12 +8,45 @@ agree before either side writes transport code.
 ## Why this exists, in measured numbers
 
 The Pep-written emitter is itself a Pep program with a fixed 100,000-step
-per-invocation budget. Its cost is **per AST node, not per scan**: adding a deliberately
-useless full node-list scan per statement changed nothing, while a single statement with
-a large expression chain tips the budget at the same place as many small statements. The
-capacity is roughly **30-60 AST nodes per invocation** at about 1.5k-3k steps per node,
-which is consistent with the cost being dominated by materialising the typed
-`ParserProgress` / `CheckerReport` arguments before any lowering runs.
+per-invocation budget. Its cost is **per materialised Pep value, not per scan and not per
+statement**: adding a deliberately useless full node-list scan per statement changed
+nothing, while a single statement with a large expression chain tips the budget at the
+same place as many small statements.
+
+Two measurements locate the budget precisely:
+
+| probe | result |
+| --- | --- |
+| one `let` with a string literal, width 80 | emits |
+| one `let` with a string literal, width 160 | tips |
+| 8 `let`s with width-1 literals | emits |
+| 8 `let`s with width-5 literals (40 chars total) | emits |
+| 8 `let`s with width-40 literals (320 chars total) | tips |
+| 8 / 12 / 16 `let`s with integer literals | all emit |
+
+So the capacity is roughly **40 nodes**, or roughly **120 characters of string-literal
+payload**, whichever comes first — about 1.5k-3k steps per node and about 800 steps per
+character. That is the signature of argument materialisation rather than lowering: the
+parser stores a string literal as a `List[Str]` of *single characters*, so every character
+of every literal becomes its own Pep value before the emitter's first statement runs.
+Programs with no `main`, which refuse almost immediately, still tip at ~84 nodes for the
+same reason.
+
+### What the chunk must therefore carry
+
+This is the single highest-value requirement in the contract, and it is worth more than
+any emitter-side tuning:
+
+1. **Only the fields the emitter reads.** Every field of every node is materialised; the
+   emitter does not need `startByte`, `endByte`, `line`, `column` on nodes it only emits,
+   and does not need `stringParts` on any node that is not a string literal.
+2. **Literal text as one value per node**, not a list of single characters — either a
+   single `Str` or a (offset, length) pair into the document the host already has. This
+   removes the per-character term entirely.
+3. **Nodes the chunk does not contain are refused, never skipped** (unchanged from below).
+
+A compact chunk type is therefore not an optimisation of the transport size; it changes
+the dominant per-invocation cost. The 1 MiB ceiling stays where it is either way.
 
 | probe | measured boundary |
 | --- | --- |
