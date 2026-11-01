@@ -3359,7 +3359,37 @@ fn emit_c23() -> PepC23Emission {
   let checked = analyze_parsed(parsed)
   return emit_c23_checked(parsed, checked)
 }
+// Section slicing helpers for the additive sectional entry point. Pep lists are values, so the
+// accumulator can be snapshotted at a boundary for free and the sections recovered by length.
+fn pep_c23_take_prefix(parts: List[Str], count: Int) -> List[Str] {
+  var taken: List[Str] = []
+  var index = 0
+  for part in parts {
+    if !(count <= index) { taken = append(taken, part) } else {}
+    index = index + 1
+  }
+  return taken
+}
+fn pep_c23_drop_prefix(parts: List[Str], count: Int) -> List[Str] {
+  var rest: List[Str] = []
+  var index = 0
+  for part in parts {
+    if count <= index { rest = append(rest, part) } else {}
+    index = index + 1
+  }
+  return rest
+}
 fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emission {
+  return emit_c23_checked_part(parsed, checked, "all")
+}
+// Additive sectional emission (LUCY-20261101-006 item 2). The one-shot output is ordered by
+// construction: header, one definition per top-level function in source order, then the epilogue.
+// Recording the accumulator length at the two boundaries lets each section be returned without
+// duplicating the emission code, and concatenating the three is the one-shot output byte for byte.
+fn emit_c23_section(parsed: ParserProgress, checked: CheckerReport, part: Str) -> PepC23Emission {
+  return emit_c23_checked_part(parsed, checked, part)
+}
+fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: Str) -> PepC23Emission {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision ||
      checked.document != authority.document || checked.revision != authority.revision ||
@@ -3554,6 +3584,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       }
     } else {}
   }
+  let sectionHeaderCount = length(reversed)
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
@@ -3874,6 +3905,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       reversed = prepend(reversed, "}\n")
     } else {}
   }
+  let sectionBodyCount = length(reversed)
   if requiresArena {
     reversed = prepend(reversed, "int main(void) {\n")
     reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
@@ -3894,5 +3926,16 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
     reversed = prepend(reversed, "  return 0;\n")
     reversed = prepend(reversed, "}\n")
   }
-  return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
+  let allParts = reverse(reversed)
+  var selected: List[Str] = allParts
+  if part == "header" {
+    selected = pep_c23_take_prefix(allParts, sectionHeaderCount)
+  } else {}
+  if part == "function" {
+    selected = pep_c23_drop_prefix(pep_c23_take_prefix(allParts, sectionBodyCount), sectionHeaderCount)
+  } else {}
+  if part == "main" {
+    selected = pep_c23_drop_prefix(allParts, sectionBodyCount)
+  } else {}
+  return PepC23Emission { status: "emitted", sourceParts: selected, diagnostic: "" }
 }

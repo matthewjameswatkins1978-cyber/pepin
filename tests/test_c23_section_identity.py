@@ -1,0 +1,139 @@
+"""Byte-identity gate for the additive sectional emitter.
+
+`emit_c23_section(parsed, checked, part)` returns one of `header`, `function` or `main`.
+Concatenating the three in that order must equal the one-shot `emit_c23_checked` output
+byte for byte, for every program the one-shot path supports. That equality is what lets the
+bounded-emitter work proceed without a second emission implementation that could drift.
+
+This module drives the staged pipeline directly (parser tool, checker tool, then both emitter
+tools) rather than through `pep_c23.emit`, because `emit_c23_section` is an additional entry
+point the host does not register yet.
+"""
+
+import pathlib
+import unittest
+
+import pep_c23
+from pep_c23 import Session, require, typed, typed_record
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+PROGRAMS = {
+    "scalars": "fn main() -> Int { return 40 + 2 }\n",
+    "two-functions": ("fn total(a: Int, b: Int) -> Int { return a + b }\n"
+                      "fn main() -> Int { return total(20, 22) }\n"),
+    "record": ("type Point { x: Int y: Int }\n"
+               "fn sum(point: Point) -> Int { return point.x + point.y }\n"
+               "fn main() -> Int {\n"
+               "  let point = Point { x: 19, y: 23 }\n"
+               "  return sum(point)\n"
+               "}\n"),
+    "string": 'fn main() -> Int { return if "ab" == "ab" { 1 } else { 0 } }\n',
+}
+
+
+class SectionByteIdentityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.session = Session()
+        bundle = "\n".join(path.read_text(encoding="utf-8") for path in pep_c23.SOURCES)
+        opened = cls.session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                   "name": "a2-sections", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        require(opened, "status", "valid", "check compiler bundle")
+        cls.tool_document = opened["document"]
+        cls.tool_revision = opened["revision"]
+
+        empty = cls.session.send({"schemaVersion": 3, "op": "open_bytes", "name": "t", "bytes": []})
+        require(empty, "outcome", "ok", "open empty target")
+        target_spec = {"document": empty["document"], "revision": empty["revision"],
+                       "entryFunctions": []}
+        empty_parsed = pep_c23.parser_progress(empty["document"], empty["revision"])
+        empty_checked = pep_c23.checker_report(empty["document"], empty["revision"])
+        start_cursor = pep_c23.parser_cursor_value(empty["document"], empty["revision"])
+        finished_cursor = pep_c23.parser_cursor_value(empty["document"], empty["revision"],
+                                                      done=True, lex_done=True, lex_stage="done")
+        unsupported = typed_record("unsupported", (),
+                                   "Pep C23 emission requires a top-level function named main")
+        registrations = [
+            ("pep-c23-parser-start", "parser_start", [], start_cursor),
+            ("pep-c23-parser-step", "parser_step", [finished_cursor],
+             pep_c23.parser_chunk_value(empty["document"], empty["revision"], finished_cursor)),
+            ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
+            ("pep-c23-emitter", "emit_c23_checked", [empty_parsed, empty_checked], unsupported),
+            ("pep-c23-section", "emit_c23_section",
+             [empty_parsed, empty_checked, typed("Str", "header")], unsupported),
+        ]
+        for tool, function, arguments, expected in registrations:
+            registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                           "op": "tool_register", "tool": tool,
+                                           "document": cls.tool_document,
+                                           "revision": cls.tool_revision, "function": function})
+            require(registered, "status", "Registered", f"register {tool}")
+            validated = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_validate", "tool": tool,
+                                          "document": cls.tool_document,
+                                          "revision": cls.tool_revision,
+                                          "testVectors": [{"arguments": arguments,
+                                                           "expect": expected,
+                                                           "semanticTarget": target_spec}]})
+            require(validated, "status", "Validated", f"validate {tool}")
+            activated = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_activate", "tool": tool,
+                                          "document": cls.tool_document,
+                                          "revision": cls.tool_revision})
+            require(activated, "status", "Active", f"activate {tool}")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.session.process.stdin.close()
+        cls.session.process.terminate()
+
+    def emit_parts(self, source_text):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "target", "bytes": list(source_text.encode("utf-8"))})
+        require(target, "outcome", "ok", "open target")
+        semantic_target = {"document": target["document"], "revision": target["revision"],
+                           "entryFunctions": []}
+        parsed = pep_c23.parse_target(self.session, source_text.encode("utf-8"), target,
+                                      self.tool_revision)
+        checked = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                     "op": "tool_invoke", "tool": "pep-c23-checker",
+                                     "arguments": [parsed], "semanticTarget": semantic_target})
+        require(checked, "outcome", "ok", "check target")
+
+        def emit_with(tool, arguments):
+            response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_invoke", "tool": tool,
+                                          "arguments": arguments,
+                                          "semanticTarget": semantic_target})
+            require(response, "outcome", "ok", f"invoke {tool}")
+            fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+            self.assertEqual(fields["status"]["value"], "emitted", fields["diagnostic"]["value"])
+            return "".join(part["value"] for part in fields["sourceParts"]["value"])
+
+        one_shot = emit_with("pep-c23-emitter", [parsed, checked["result"]])
+        sections = [emit_with("pep-c23-section", [parsed, checked["result"], typed("Str", part)])
+                    for part in ("header", "function", "main")]
+        return one_shot, sections
+
+    def test_sections_concatenate_to_the_one_shot_output(self):
+        for name, source in PROGRAMS.items():
+            with self.subTest(program=name):
+                one_shot, sections = self.emit_parts(source)
+                self.assertEqual("".join(sections), one_shot)
+
+    def test_each_section_carries_only_its_own_part(self):
+        header, body, main = self.emit_parts(PROGRAMS["two-functions"])[1]
+        self.assertIn("#include <stdio.h>", header)
+        self.assertNotIn("int main(", header)
+        self.assertNotIn("int main(", body)
+        # one definition line per source function, and no prototypes in this section
+        self.assertEqual(body.count("int64_t pep_fn_"), 2)
+        self.assertNotIn(";\nint64_t pep_fn_", body)
+        self.assertTrue(main.startswith("int main("))
+        self.assertNotIn("#include", main)
+
+
+if __name__ == "__main__":
+    unittest.main()
