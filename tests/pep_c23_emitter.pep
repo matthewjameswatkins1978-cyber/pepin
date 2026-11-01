@@ -2545,13 +2545,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
-    // A direct self-call that passes its own parameter through unchanged cannot terminate, and the
-    // C compilers reject the resulting function under -Winfinite-recursion with -Werror, so emitting
-    // it would break the emit-or-refuse contract. Name the shape instead.
+    // Clang rejects a direct self-call that passes its own parameter through unchanged
+    // (-Winfinite-recursion under -Werror), so emitting it would break the emit-or-refuse
+    // contract. This is a compilability check on the call shape only. It makes no claim about
+    // termination: a call that passes a changed argument is still just as capable of looping.
     if target.node.id == function.id && parameter.found && !secondParameter.found &&
        !thirdParameter.found && argument.found && !secondArgument.found &&
        argument.node.kind == "name" && argument.node.text == parameter.node.text {
-      return pep_c23_unsupported("Pep C23 recursive calls must pass a changed argument")
+      return pep_c23_unsupported("Pep C23 cannot lower a direct self-call that passes its own parameter unchanged")
     } else {}
     // Only four or more parameters or arguments use the general ordered path, detected through the
     // already-computed lookups so no extra traversal runs. Calls with one to three arguments keep
