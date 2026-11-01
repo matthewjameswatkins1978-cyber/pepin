@@ -321,21 +321,14 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         fn_nodes = [n for n in nodes if nval(n, "kind") == "function"
                     and str(nval(n, "parentId")) == "-1"]
         self.assertGreater(len(fn_nodes), 1, "chunk test needs multiple functions")
+        from tests.chunk_helper import decl_closure
         statuses, diags = [], []
         for fn in fn_nodes:
             fname = nval(fn, "text")
             sub = slice_subtree(nodes, nval(fn, "id"))
-            refs = {nval(x, "text") for x in sub
-                    if nval(x, "kind") in ("type_named", "record") and nval(x, "text")}
-            for x in sub:
-                if nval(x, "kind") in ("record", "call", "constructor_pattern") \
-                        and nval(x, "text") in v2u:
-                    refs.add("__union:" + v2u[nval(x, "text")])
-            for dname, did in decl_name_to_id.items():
-                if dname in refs or ("__union:" + did) in refs:
-                    for sn in slice_subtree(nodes, did):
-                        if all(str(nval(x, "id")) != str(nval(sn, "id")) for x in sub):
-                            sub.append(sn)
+            sigs_by_name = {s["name"]: s for s in sigs}
+            for sn in decl_closure(nodes, sub, sigs_by_name, decl_name_to_id, v2u):
+                sub.append(sn)
             chunk = remap_chunk(sub)
             self.assertLessEqual(len(chunk), 60, f"chunk for {fname} exceeds budget-sized bound")
             sliced = {"type": "ParserProgress", "fields": [

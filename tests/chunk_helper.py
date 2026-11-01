@@ -62,6 +62,76 @@ def type_shape(nodes, tid):
                 return (sk, sn, sd + 1)
     return ("", "", 0)
 
+def decl_closure(nodes, fn_sub, sigs_by_name, decl_name_to_id, v2u):
+    refs = set()
+    # 1. all nominal names inside type annotations in the function
+    def collect_type_names(tid):
+        tns = [n for n in nodes if str(nval(n, "id")) == str(tid)]
+        if not tns:
+            return
+        tn = tns[0]
+        k = nval(tn, "kind")
+        if k == "type_named":
+            refs.add(nval(tn, "text"))
+        for c in children_of(nodes, tid):
+            collect_type_names(nval(c, "id"))
+    fn_ids = {str(nval(x, "id")) for x in fn_sub}
+    for x in fn_sub:
+        if nval(x, "kind") in ("type_scalar", "type_named", "type_list"):
+            collect_type_names(nval(x, "id"))
+        if nval(x, "kind") == "record" and nval(x, "text"):
+            refs.add(nval(x, "text"))
+        if nval(x, "kind") in ("record", "call", "constructor_pattern") and nval(x, "text") in v2u:
+            refs.add("__union:" + v2u[nval(x, "text")])
+    # 2. call return types via signatures (local + external)
+    for x in fn_sub:
+        if nval(x, "kind") == "call" and nval(x, "text") in sigs_by_name:
+            rt = sigs_by_name[nval(x, "text")]["rtype"]
+            if rt and rt not in ("Int", "Bool", "Str", "Unit", "SourceBytes") and not rt.startswith("List["):
+                refs.add(rt)
+            elif rt.startswith("List[") and rt.endswith("]"):
+                inner = rt[5:-1]
+                if inner and inner not in ("Int", "Bool", "Str", "Unit", "SourceBytes"):
+                    refs.add(inner)
+    # 3. field-access base types via local binding map (params + annotated lets)
+    bmap = {}
+    for x in fn_sub:
+        if nval(x, "kind") == "parameter":
+            tch = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "type"]
+            if tch:
+                tn = type_string(nodes, nval(tch[0], "id"))
+                if tn:
+                    bmap[nval(x, "text")] = tn
+        if nval(x, "kind") in ("let", "var"):
+            nm = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "name"]
+            an = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "annotation"]
+            if nm and an:
+                tn = type_string(nodes, nval(an[0], "id"))
+                if tn:
+                    bmap[nval(nm[0], "text")] = tn
+    for x in fn_sub:
+        if nval(x, "kind") == "field_access":
+            v = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "value"]
+            if v and nval(v[0], "kind") == "name" and nval(v[0], "text") in bmap:
+                bt = bmap[nval(v[0], "text")]
+                if bt and not bt.startswith("List["):
+                    refs.add(bt)
+                elif bt.startswith("List[") and bt.endswith("]"):
+                    refs.add(bt[5:-1])
+            if v and nval(v[0], "kind") == "call" and nval(v[0], "text") in sigs_by_name:
+                rt = sigs_by_name[nval(v[0], "text")]["rtype"]
+                if rt and not rt.startswith("List[") and rt not in ("Int", "Bool", "Str", "Unit", "SourceBytes"):
+                    refs.add(rt)
+    # 4. materialise referenced decl subtrees
+    out = []
+    for dname, did in decl_name_to_id.items():
+        if dname in refs or ("__union:" + did) in refs:
+            for sn in slice_subtree(nodes, did):
+                if str(nval(sn, "id")) not in fn_ids and \
+                        all(str(nval(y, "id")) != str(nval(sn, "id")) for y in out):
+                    out.append(sn)
+    return out
+
 def variant_to_union(nodes):
     m = {}
     for n in nodes:
