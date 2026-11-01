@@ -85,9 +85,26 @@ type EmitterChunk {
 
 **Chunks must be bounded by node count, not by function.** One function of a few hundred
 nodes still exceeds the budget, so the unit is "as many whole statements of one function
-as fit under a node ceiling" (start at 24 and measure), with the function's signature and
-declaration emitted in the first chunk of that function and its body split across the
-rest. `part` values must reflect that split.
+as fit under a node ceiling", with the function's signature emitted in the first chunk of
+that function and its body split across the rest. `part` values must reflect that split.
+
+### The chunk ceiling is set by the checker as well as the emitter
+
+Measured on the same shapes, both stages bind at the same order of magnitude, so a chunk
+size must satisfy both:
+
+| stage | shape | capacity |
+| --- | --- | --- |
+| Pep-written checker | small declarations | 6 functions (~34 nodes) pass, 8 (~44) stop |
+| Pep-written checker | statements in one function | 20 pass, 25 stop |
+| emitter | statements in a while body | 21 |
+| emitter | mutable `List[Int]` literal | 48 elements, 64 stop |
+| emitter | string literal | 640 characters |
+
+So a chunk of about **24 nodes** is a safe working unit for both stages, and the exact
+value should be re-measured per stage rather than assumed. This is also why chunking has
+to be a joint design: choosing a ceiling that only suits the emitter would simply move the
+wall into the checker.
 
 ```
 ```
