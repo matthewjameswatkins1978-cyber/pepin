@@ -1309,6 +1309,11 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
       (subject.node.text == parameterName || subject.node.text == secondParameterName)
   } else {}
   if node.kind == "integer" { return true } else {}
+  // A literal constant references nothing and cannot fail, so it keeps a callee's result
+  // parameter-dependent in the only sense this gate cares about. Without this, a constructor
+  // whose record has a literal field could not be called with a parameter at all.
+  if node.kind == "string" { return true } else {}
+  if node.kind == "boolean" { return true } else {}
   if node.kind == "name" { return node.text == parameterName || node.text == secondParameterName } else {}
   if node.kind == "field_access" {
     let value = pep_c23_child(nodes, node.id, "value", 0)

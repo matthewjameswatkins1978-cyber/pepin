@@ -257,6 +257,38 @@ class PepC23RealLexerStageTests(unittest.TestCase):
         self.assertTrue("authorised source revision" in message
                         or "requires a valid Pep checker report" in message, message)
 
+    def test_constructor_with_list_str_parameter_runs_natively(self):
+        """The `make_token` stringParts shape with a real parameter.
+
+        A `List[Str]` parameter forwarded into a record field, called with a list literal.
+        This is the constructor body the lexer needs; `make_token` itself is blocked only
+        by its eight-parameter signature and node count.
+        """
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "fn token_of(parts: List[Str]) -> Tokenish {\n"
+            "  return Tokenish { kind: \"a\", parts: parts }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_of([\"x\", \"y\"])\n"
+            "  return length(token.parts)\n"
+            "}\n")
+        self.run_native(source, 2)
+
+    def test_constructor_with_list_record_parameter_runs_natively(self):
+        """The `tokens` shape with a real `List[record]` parameter."""
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List[Tokenish] }\n"
+            "fn made(tokens: List[Tokenish]) -> Progressish {\n"
+            "  return Progressish { status: \"ok\", tokens: tokens }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let progress = made([Tokenish { kind: \"a\", parts: [\"x\"] }])\n"
+            "  return length(progress.tokens) + 5\n"
+            "}\n")
+        self.run_native(source, 6)
+
     # --- ledger: what the checker still blocks ------------------------------
 
     def test_real_constructors_are_blocked_by_the_checker_not_the_emitter(self):
