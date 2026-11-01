@@ -1000,9 +1000,30 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
     return pep_c23_unsupported("Pep C23 string literal span does not include matching quotes")
   } else {}
   let contentEnd = node.endByte - 1
+  // Fast path: a literal that contains no backslash and no quote can be emitted verbatim as one C
+  // string literal, which costs a constant number of list operations instead of two per byte.
+  // The slow path below stays for literals that need escape decoding.
+  let contentStart = node.startByte + 1
+  var verbatim = true
+  var scan = contentStart
+  while !(contentEnd <= scan) {
+    let scanned = byte_at(source, scan)
+    if scanned == 92 || scanned == 34 { verbatim = false } else {}
+    scan = scan + 1
+  }
+  if verbatim {
+    let content = utf8_slice(source, contentStart, contentEnd)
+    return PepC23Emission { status: "emitted",
+      sourceParts: ["(pep_str){ .data = (const unsigned char[]){ \"", content,
+                    "\" }, .length = ", int_text(contentEnd - contentStart), " }"],
+      diagnostic: "" }
+  } else {}
   var offset = node.startByte + 1
   var byteCount = 0
-  var parts: List[Str] = ["(pep_str){ .data = (const unsigned char[]){ "]
+  // Build the byte list with prepend only. A singly linked list makes prepend cheap and append
+  // O(n), so emitting one append per byte was quadratic in literal length, and a long literal
+  // exhausted the emitter's step budget. One reverse at the end restores the order.
+  var reversedValues: List[Str] = []
   while !(contentEnd <= offset) {
     var value = byte_at(source, offset)
     if value == 92 {
@@ -1025,16 +1046,24 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
         }
       }
     } else {}
-    if byteCount != 0 { parts = append(parts, ", ") } else {}
-    parts = append(parts, int_text(value))
+    if byteCount != 0 { reversedValues = prepend(reversedValues, ", ") } else {}
+    reversedValues = prepend(reversedValues, int_text(value))
     byteCount = byteCount + 1
     offset = offset + 1
   }
-  if byteCount == 0 { parts = append(parts, "0") } else {}
-  parts = append(parts, " }, .length = ")
-  parts = append(parts, int_text(byteCount))
-  parts = append(parts, " }")
-  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  var reversed: List[Str] = [" }"]
+  reversed = prepend(reversed, int_text(byteCount))
+  reversed = prepend(reversed, " }, .length = ")
+  if byteCount == 0 {
+    reversed = prepend(reversed, "0")
+  } else {
+    for part in reversedValues { reversed = prepend(reversed, part) }
+  }
+  reversed = prepend(reversed, "(pep_str){ .data = (const unsigned char[]){ ")
+  // The list is already in forward order: prepend builds it back to front from the tail, and each
+  // prepend of a stored value restores that value's position. Reversing here would emit the bytes
+  // backwards, which compiles but produces wrong string contents.
+  return PepC23Emission { status: "emitted", sourceParts: reversed, diagnostic: "" }
 }
 fn pep_c23_union_value_type(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "call" {
@@ -2699,8 +2728,10 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
          (node.text != "==" && node.text != "!=") {
         return pep_c23_unsupported("Pep C23 Str operands currently support only equality and inequality against another Str")
       } else {}
-      if pep_c23_expression_may_fail(nodes, left.node) &&
-         pep_c23_expression_may_fail(nodes, right.node) {
+      // String literals have no runtime failure path, so comparing two literals is safe; this uses
+      // the same precise predicate as record construction and many-argument calls.
+      if pep_c23_infallible_value(nodes, left.node) &&
+         pep_c23_infallible_value(nodes, right.node) {
         return pep_c23_unsupported("Pep C23 rejects two fallible Str comparison operands because C operand evaluation order is unspecified")
       } else {}
       let loweredLeftString = pep_c23_expression(nodes, function, left.node)

@@ -268,11 +268,12 @@ class PepC23ListUpdateTests(unittest.TestCase):
     def test_list_update_count_is_bounded_by_the_emitter_step_budget(self):
         """Measured boundary, recorded rather than hidden.
 
-        Five arena-backed list updates in one function body emit; six exceed the
+        Six arena-backed list updates in one function body emit; seven exceed the
         emitter's fixed 100k-step per-invocation budget. Lucy's real `lexer_step`
-        performs about seventeen prepend/reverse calls, so this is a genuine
+        performs about seventeen prepend/reverse calls, so this is still a genuine
         emitter-headroom blocker for the native lexer, not a test artefact. No cap
-        was raised to make it pass.
+        was raised to make it pass. The boundary has moved twice already as the
+        emitter got cheaper: 5/6, then 6/7 after the verbatim string-literal path.
         """
         def program(count):
             body = "".join(f'    parts = prepend(parts, "x{index}")\n' for index in range(count))
@@ -286,9 +287,9 @@ class PepC23ListUpdateTests(unittest.TestCase):
                     "  return length(parts)\n"
                     "}\n")
 
-        emit(program(5).encode("utf-8"))
+        emit(program(6).encode("utf-8"))
         with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
-            emit(program(6).encode("utf-8"))
+            emit(program(7).encode("utf-8"))
 
     def test_str_list_reassignment_between_matching_bindings(self):
         self.run_native(
