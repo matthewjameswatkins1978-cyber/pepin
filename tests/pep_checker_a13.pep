@@ -1511,7 +1511,19 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             if listParent.found && (listParent.node.kind == "let" || listParent.node.kind == "var") && node.role == "value" {
               let listAnnotation = child_at(nodes, listParent.node.id, "annotation", 0)
               if listAnnotation.found && type_shape_at(nodes, listAnnotation.node.id).listDepth != 0 { listHasAnnotation = true } else {}
-            } else {}
+            } else {
+              if listParent.found && listParent.node.kind == "record_field" && node.role == "value" {
+                if !resolvedReady { resolvedRecords = resolve_all_records(nodes); resolvedReady = true } else {}
+                let listRecord = lookup_node(nodes, listParent.node.parentId)
+                if listRecord.found {
+                  let listDecl = record_declaration(nodes, listRecord.node.text)
+                  if listDecl.found {
+                    let listFacts = resolved_field_facts(resolvedRecords, listDecl.node.id, listParent.node.text)
+                    if listFacts.typeFound && listFacts.shape.listDepth != 0 { listHasAnnotation = true } else {}
+                  } else {}
+                } else {}
+              } else {}
+            }
             if !listHasAnnotation { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node)) } else {}
           } else {
             if node.kind != "name" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
