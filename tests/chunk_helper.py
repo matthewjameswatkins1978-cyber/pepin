@@ -75,6 +75,14 @@ def extract_sigs(nodes):
         fid = nval(n, "id")
         kids = children_of(nodes, fid)
         params = [c for c in kids if nval(c, "kind") == "parameter"]
+        ptypes = []
+        for pi, p in enumerate(params):
+            tch = [c for c in children_of(nodes, nval(p, "id")) if nval(c, "role") == "type"]
+            if tch:
+                ptypes.append((type_string(nodes, nval(tch[0], "id")) or "",
+                               type_shape(nodes, nval(tch[0], "id")), pi))
+            else:
+                ptypes.append(("", ("", "", 0), pi))
         ret = [c for c in kids if nval(c, "role") == "return_type"]
         rtype, rshape = "Unit", ("builtin", "Unit", 0)
         if ret:
@@ -84,10 +92,25 @@ def extract_sigs(nodes):
                 rshape = ("builtin", "Unit", 0)
         sigs.append({"name": nval(n, "text"), "arity": len(params),
                      "rtype": rtype, "rshape": rshape, "semid": 9000 + i,
-                     "synid": 1000000000 + i,
+                     "synid": 1000000000 + i, "ptypes": ptypes,
                      "start": nval(n, "startByte"), "end": nval(n, "endByte"),
                      "id": fid})
     return sigs
+
+def resolved_sig_value(sig):
+    pfacts = []
+    for tname, (sk, sn, sd), pi in sig.get("ptypes", []):
+        pfacts.append({"type": "ParamTypeFact", "fields": [
+            {"name": "index", "value": T("Int", pi)},
+            {"name": "typeName", "value": T("Str", tname)},
+            {"name": "shape", "value": {"type": "PepTypeShape", "fields": [
+                {"name": "kind", "value": T("Str", sk)},
+                {"name": "name", "value": T("Str", sn)},
+                {"name": "listDepth", "value": T("Int", sd)}]}}]})
+    return {"type": "ResolvedSignature", "fields": [
+        {"name": "functionId", "value": T("Int", sig["synid"])},
+        {"name": "functionName", "value": T("Str", sig["name"])},
+        {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": pfacts}}]}
 
 def checked_fn_value(sig):
     sk, sn, sd = sig["rshape"]

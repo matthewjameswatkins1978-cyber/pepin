@@ -1452,7 +1452,7 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   return false
 }
 
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> TypeAnalysis {
+fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], externalSignatures: List[ResolvedSignature]) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var activeFunctionFound = false
@@ -1893,7 +1893,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let target = find_function(functions, node.text)
         if target.found {
           if !resolvedSigsReady {
-            resolvedSigs = resolve_all_signatures(nodes)
+            resolvedSigs = append_signatures(resolve_all_signatures(nodes), externalSignatures)
             resolvedSigsReady = true
           } else {}
           var index = 0
@@ -2177,6 +2177,11 @@ fn analyze() -> CheckerReport {
   let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorNode.startByte, errorEnd: errorNode.endByte, errorLine: errorNode.line, errorColumn: errorNode.column }
   return analyze_parsed(parsed)
 }
+fn append_signatures(local: List[ResolvedSignature], external: List[ResolvedSignature]) -> List[ResolvedSignature] {
+  var merged = external
+  for item in reverse(local) { merged = prepend(merged, item) }
+  return merged
+}
 fn append_checked_functions(local: List[CheckedFunction], external: List[CheckedFunction]) -> List[CheckedFunction] {
   var merged = external
   for item in reverse(local) { merged = prepend(merged, item) }
@@ -2197,9 +2202,9 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
   return earlierMatches == 1
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
-  return analyze_chunk(parsed, [])
+  return analyze_chunk(parsed, [], [])
 }
-fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction]) -> CheckerReport {
+fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
     return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
@@ -2216,7 +2221,7 @@ fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction
   let bindingResult = collect_bindings(nodes, functions)
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
-  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references)
+  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures)
   let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []

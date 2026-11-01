@@ -277,13 +277,14 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         empty_pp = pep_c23.parser_progress(sample["document"], sample["revision"])
         empty_rep = pep_c23.checker_report(sample["document"], sample["revision"])
         empty_ext = {"type": "List[CheckedFunction]", "value": []}
+        empty_sig = {"type": "List[ResolvedSignature]", "value": []}
         for tool, function, arguments, expected in [
                 ("pep-c23-parser-start", "parser_start", [], start_cursor),
                 ("pep-c23-parser-step", "parser_step", [finished_cursor],
                  pep_c23.parser_chunk_value(sample["document"], sample["revision"],
                                             finished_cursor)),
                 ("pep-c23-checker", "analyze_parsed", [empty_pp], empty_rep),
-                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext], empty_rep)]:
+                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext, empty_sig], empty_rep)]:
             cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
                               "tool": tool, "document": tool_document,
                               "revision": cls.tool_revision, "function": function})
@@ -303,7 +304,8 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
 
     def check_chunked(self, source):
         from tests.chunk_helper import (fields_map, nval, extract_sigs, checked_fn_value,
-                                         slice_subtree, remap_chunk, variant_to_union)
+                                         resolved_sig_value, slice_subtree, remap_chunk,
+                                         variant_to_union)
         src = source.encode("utf-8")
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": "chunk-target", "bytes": list(src)})
@@ -343,11 +345,13 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
             ext = [s for s in sigs if s["name"] != fname]
             extv = {"type": "List[CheckedFunction]",
                     "value": [checked_fn_value(s) for s in ext]}
+            exts = {"type": "List[ResolvedSignature]",
+                    "value": [resolved_sig_value(s) for s in ext]}
             sem = {"document": target["document"], "revision": target["revision"],
                    "entryFunctions": []}
             r = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                                     "tool": "pep-c23-checker-chunk",
-                                    "arguments": [sliced, extv], "semanticTarget": sem})
+                                    "arguments": [sliced, extv, exts], "semanticTarget": sem})
             self.assertEqual(r.get("outcome"), "ok", r)
             statuses.append(fields_map(r["result"])["status"]["value"])
             for d in fields_map(r["result"]).get("diagnostics", {}).get("value", []):
@@ -380,6 +384,25 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         statuses, diags = self.check_chunked(source)
         self.assertTrue(all(s == "valid" for s in statuses), statuses)
         self.assertEqual(diags, [], diags)
+
+    def test_chunked_cross_call_match_valid(self):
+        # Cross-chunk calls resolve via external signatures: correct
+        # argument types check valid.
+        source = ("fn callee(x: Int) -> Int {\n  return x\n}\n"
+                  "fn caller(y: Int) -> Int {\n  return callee(y)\n}\n")
+        statuses, diags = self.check_chunked(source)
+        self.assertTrue(all(s == "valid" for s in statuses), statuses)
+        self.assertEqual(diags, [], diags)
+
+    def test_chunked_cross_call_mismatch_invalid(self):
+        # Cross-chunk calls are fully checked (not weakened): wrong
+        # argument types draw PEP_TYPE_MISMATCH via external param sigs.
+        source = ("fn callee(x: Int) -> Int {\n  return x\n}\n"
+                  "fn caller(y: Str) -> Int {\n  return callee(y)\n}\n")
+        statuses, diags = self.check_chunked(source)
+        self.assertIn("invalid", statuses, statuses)
+        codes = [c for c, _, _ in diags]
+        self.assertIn("PEP_TYPE_MISMATCH", codes, codes)
 
 
 if __name__ == "__main__":
