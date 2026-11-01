@@ -145,6 +145,29 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
 
+    def test_real_function_body_hits_step_budget(self):
+        # Next frontier (A1-5): real function bodies with conditional logic
+        # (stdlib collections shape) still exceed the unchanged budget.
+        # Bisection: params/lets/plain-for pass; the if-expression with a
+        # compound boolean condition is the cliff. Flip to valid when the
+        # expression-inference path is staged or memoized.
+        source = ("fn list_int_min_between(values: List[Int], lower: Int, upper: Int, fallback: Int) -> Int {\n"
+                  "  var found = false\n"
+                  "  var minimum = fallback\n"
+                  "  for item in values {\n"
+                  "    minimum = if lower <= item && item <= upper && (!found || item <= minimum) { item } else { minimum }\n"
+                  "    found = found || (lower <= item && item <= upper)\n"
+                  "  }\n"
+                  "  return minimum\n"
+                  "}\n"
+                  "fn main() -> Int {\n"
+                  "  return list_int_min_between([1, 2, 3], 1, 3, 9)\n"
+                  "}\n")
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "error", result)
+        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+
     def test_thirty_two_records_check_valid(self):
         # Scale pin flipped by the global single-pass record resolution:
         # 32 trivial records now check valid under the unchanged budget.
