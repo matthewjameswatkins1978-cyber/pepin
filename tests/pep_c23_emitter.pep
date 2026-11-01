@@ -25,6 +25,21 @@ fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex
   }
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
+// Parameter and argument lists are collected in declared order, so arity is not baked into a fixed
+// number of slots. Ordering uses childIndex, never node arrival order.
+fn pep_c23_ordered_children(nodes: List[FlatAstNode], parentId: Int, role: Str) -> List[FlatAstNode] {
+  var children: List[FlatAstNode] = []
+  var wanted = 0
+  while !(pep_c23_count_children(nodes, parentId, role) <= wanted) {
+    let child = pep_c23_child(nodes, parentId, role, wanted)
+    if child.found { children = append(children, child.node) } else {}
+    wanted = wanted + 1
+  }
+  return children
+}
+fn pep_c23_parameters(nodes: List[FlatAstNode], function: FlatAstNode) -> List[FlatAstNode] {
+  return pep_c23_ordered_children(nodes, function.id, "parameter")
+}
 fn pep_c23_is_negative_int_literal(nodes: List[FlatAstNode], value: FlatAstNode) -> Bool {
   if value.kind != "binary" || value.text != "neg" { return false } else {}
   let zero = pep_c23_child(nodes, value.id, "left", 0)
@@ -1931,6 +1946,112 @@ fn pep_c23_field_access_list_type(nodes: List[FlatAstNode], function: FlatAstNod
   } else {}
   return fieldType
 }
+// Structural gate for the result expression of a callee with more than three parameters. It keeps
+// that path to shapes the expression lowering already handles; anything unexpected refuses.
+fn pep_c23_parameterised_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> Bool {
+  if node.kind == "integer" || node.kind == "boolean" || node.kind == "name" || node.kind == "string" {
+    return true
+  } else {}
+  if node.kind == "unary" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    return operand.found && pep_c23_parameterised_expression(nodes, function, operand.node)
+  } else {}
+  if node.kind == "binary" {
+    let left = pep_c23_child(nodes, node.id, "left", 0)
+    let right = pep_c23_child(nodes, node.id, "right", 1)
+    return left.found && right.found &&
+      pep_c23_parameterised_expression(nodes, function, left.node) &&
+      pep_c23_parameterised_expression(nodes, function, right.node)
+  } else {}
+  if node.kind == "field_access" {
+    let value = pep_c23_child(nodes, node.id, "value", 0)
+    if !value.found { return false } else {}
+    let record = pep_c23_record_value_type(nodes, function, value.node)
+    if !record.found { return false } else {}
+    return pep_c23_record_field_declaration(nodes, record.node, node.text).found
+  } else {}
+  if node.kind == "record" {
+    if !pep_c23_record_declaration(nodes, node.text).found { return false } else {}
+    for supplied in nodes {
+      if supplied.parentId == node.id && supplied.role == "field" && supplied.kind == "record_field" {
+        let value = pep_c23_child(nodes, supplied.id, "value", 0)
+        if !value.found || !pep_c23_parameterised_expression(nodes, function, value.node) {
+          return false
+        } else {}
+      } else {}
+    }
+    return true
+  } else {}
+  if node.kind == "if_expression" {
+    let condition = pep_c23_child(nodes, node.id, "condition", 0)
+    let thenValue = pep_c23_child(nodes, node.id, "then", 1)
+    let elseValue = pep_c23_child(nodes, node.id, "else", 2)
+    return condition.found && thenValue.found && elseValue.found &&
+      pep_c23_parameterised_expression(nodes, function, condition.node) &&
+      pep_c23_parameterised_expression(nodes, function, thenValue.node) &&
+      pep_c23_parameterised_expression(nodes, function, elseValue.node)
+  } else {}
+  return false
+}
+// Four or more parameters: general ordered lowering. The safety rules match the one- to
+// three-parameter paths: the callee must be a direct return of a parameter-only result, or an
+// if-statement body, and at most one argument may fail at runtime because C leaves argument
+// evaluation order unspecified.
+fn pep_c23_many_argument_call(nodes: List[FlatAstNode], function: FlatAstNode, call: FlatAstNode,
+  target: FlatAstNode, conditionalTarget: Bool, directLocalTarget: Bool) -> PepC23Emission {
+  let parameters = pep_c23_parameters(nodes, target)
+  let argumentCount = pep_c23_count_children(nodes, call.id, "argument")
+  if length(parameters) != argumentCount {
+    return pep_c23_unsupported("Pep C23 calls require exactly one argument per declared parameter")
+  } else {}
+  let result = pep_c23_child(nodes, target.id, "return_type", 0)
+  if !result.found || length(pep_c23_c_parameter_type_parts(nodes, result.node)) == 0 {
+    return pep_c23_unsupported("Pep C23 calls require a target with a supported result type")
+  } else {}
+  let targetStatement = pep_c23_last_statement(nodes, target)
+  if !targetStatement.found {
+    return pep_c23_unsupported("Pep C23 calls require a target with a body")
+  } else {}
+  let targetValue = pep_c23_child(nodes, targetStatement.node.id, "value", 0)
+  let directParameterReturn = targetStatement.node.kind == "return" && targetValue.found &&
+    pep_c23_parameterised_expression(nodes, target, targetValue.node)
+  if !conditionalTarget && !directLocalTarget && !directParameterReturn {
+    return pep_c23_unsupported("Pep C23 calls require a direct parameter-only return or a conditional-return target")
+  } else {}
+  var fallibleArguments = 0
+  var arguments: List[FlatAstNode] = []
+  var wanted = 0
+  while !(argumentCount <= wanted) {
+    let argument = pep_c23_child(nodes, call.id, "argument", wanted)
+    if !argument.found {
+      return pep_c23_unsupported("Pep C23 call argument list has a gap")
+    } else {}
+    if pep_c23_expression_may_fail(nodes, argument.node) {
+      fallibleArguments = fallibleArguments + 1
+    } else {}
+    arguments = append(arguments, argument.node)
+    wanted = wanted + 1
+  }
+  if !(fallibleArguments <= 1) {
+    return pep_c23_unsupported("Pep C23 rejects multiple fallible call arguments because C argument evaluation order is unspecified")
+  } else {}
+  var parts: List[Str] = ["pep_fn_", int_text(target.id), "("]
+  var emitted = 0
+  for parameter in parameters {
+    let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+    let argument = pep_c23_child(nodes, call.id, "argument", emitted)
+    if !parameterType.found || !argument.found {
+      return pep_c23_unsupported("Pep C23 call arguments must match the declared parameter types")
+    } else {}
+    let lowered = pep_c23_call_argument(nodes, function, argument.node, parameterType)
+    if lowered.status != "emitted" { return lowered } else {}
+    if emitted != 0 { parts = append(parts, ", ") } else {}
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    emitted = emitted + 1
+  }
+  parts = pep_c23_close_generated_call(nodes, parts, emitted)
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
   if node.kind == "match" { return pep_c23_union_match_expression(nodes, function, node) } else {}
   if node.kind == "string" { return pep_c23_string_literal(nodes, node) } else {}
@@ -1946,12 +2067,8 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     var localId = -1
     var loopFound = false
     var loopId = -1
-    var parameterZeroFound = false
-    var parameterZero = pep_c23_empty_ast_node()
-    var parameterOneFound = false
-    var parameterOne = pep_c23_empty_ast_node()
-    var parameterTwoFound = false
-    var parameterTwo = pep_c23_empty_ast_node()
+    var parameterFound = false
+    var parameterNode = pep_c23_empty_ast_node()
     var whileLocalCandidate = false
     for candidate in nodes {
       if candidate.kind == "let" && candidate.role == "body" &&
@@ -1968,17 +2085,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           loopId = candidate.id
         } else {}
         if candidate.role == "parameter" && candidate.kind == "parameter" && candidate.text == node.text {
-          if candidate.childIndex == 0 && !parameterZeroFound {
-            parameterZeroFound = true
-            parameterZero = candidate
-          } else {}
-          if candidate.childIndex == 1 && !parameterOneFound {
-            parameterOneFound = true
-            parameterOne = candidate
-          } else {}
-          if candidate.childIndex == 2 && !parameterTwoFound {
-            parameterTwoFound = true
-            parameterTwo = candidate
+          if !parameterFound || !(parameterNode.childIndex <= candidate.childIndex) {
+            parameterFound = true
+            parameterNode = candidate
           } else {}
         } else {}
       } else {}
@@ -1991,14 +2100,8 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     } else {}
     if localFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(localId)], diagnostic: "" } } else {}
     if loopFound { return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(loopId)], diagnostic: "" } } else {}
-    if parameterZeroFound {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterZero.id)], diagnostic: "" }
-    } else {}
-    if parameterOneFound {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterOne.id)], diagnostic: "" }
-    } else {}
-    if parameterTwoFound {
-      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterTwo.id)], diagnostic: "" }
+    if parameterFound {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameterNode.id)], diagnostic: "" }
     } else {}
     return pep_c23_unsupported("Pep C23 name lowering requires a direct immutable local let or scalar parameter")
   } else {}
@@ -2295,8 +2398,8 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
       return PepC23Emission { status: "emitted", sourceParts: [int_text(pep_c23_count_children(nodes, list.node.id, "element"))], diagnostic: "" }
     } else {}
-    if !target.found || extraArgument.found {
-      return pep_c23_unsupported("Pep C23 calls require a known target and at most three arguments")
+    if !target.found {
+      return pep_c23_unsupported("Pep C23 calls require a known target")
     } else {}
     let parameter = pep_c23_child(nodes, target.node.id, "parameter", 0)
     let secondParameter = pep_c23_child(nodes, target.node.id, "parameter", 1)
@@ -2305,7 +2408,9 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
     let recordResult = result.found && result.node.kind == "type_named" && pep_c23_record_declaration(nodes, result.node.text).found
     let unionResult = result.found && result.node.kind == "type_named" && pep_c23_union_declaration(nodes, result.node.text).found
-    if extraParameter.found || !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult) {
+    // Arity itself is not checked here: three or more parameters are routed to the general
+    // ordered path below, which enforces one argument per declared parameter.
+    if !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult) {
       return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar, record, or tagged-union result")
     } else {}
     let targetStatement = pep_c23_last_statement(nodes, target.node)
@@ -2333,6 +2438,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       booleanCallTarget
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
+    } else {}
+    // Three or more parameters use the general ordered path, whose gate is a superset of the
+    // two- and three-parameter gates, so no program that emitted before stops emitting.
+    if !(pep_c23_count_children(nodes, target.node.id, "parameter") <= 2) ||
+       !(pep_c23_count_children(nodes, node.id, "argument") <= 2) {
+      return pep_c23_many_argument_call(nodes, function, node, target.node,
+        conditionalTarget, directLocalTarget)
     } else {}
     if parameter.found {
       let parameterType = pep_c23_child(nodes, parameter.node.id, "type", 0)
@@ -2789,19 +2901,20 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
-  let parameter = pep_c23_child(nodes, function.id, "parameter", 0)
-  let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
-  let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
-  let extraParameter = pep_c23_child(nodes, function.id, "parameter", 3)
-  let parameterType = if parameter.found { pep_c23_child(nodes, parameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
-  let secondParameterType = if secondParameter.found { pep_c23_child(nodes, secondParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
-  let thirdParameterType = if thirdParameter.found { pep_c23_child(nodes, thirdParameter.node.id, "type", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let parameters = pep_c23_parameters(nodes, function)
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
-  let parameterCType = if parameterType.found { pep_c23_c_parameter_type(nodes, parameterType.node) } else { "" }
-  let secondParameterCType = if secondParameterType.found { pep_c23_c_parameter_type(nodes, secondParameterType.node) } else { "" }
-  let thirdParameterCType = if thirdParameterType.found { pep_c23_c_parameter_type(nodes, thirdParameterType.node) } else { "" }
   let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
-  if extraParameter.found || (secondParameter.found && !parameter.found) || (thirdParameter.found && !secondParameter.found) || (function.text == "main" && (parameter.found || secondParameter.found || thirdParameter.found)) || (parameter.found && parameterCType == "") || (secondParameter.found && secondParameterCType == "") || (thirdParameter.found && thirdParameterCType == "") || resultCType == "" || resultCType == "pep_str" || (function.text == "main" && result.node.text != "Int") {
+  var parameterProblem = false
+  for parameter in parameters {
+    let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+    if !parameterType.found || pep_c23_c_parameter_type(nodes, parameterType.node) == "" {
+      parameterProblem = true
+    } else {}
+  }
+  if parameterProblem || length(parameters) != pep_c23_count_children(nodes, function.id, "parameter") ||
+     (function.text == "main" && length(parameters) != 0) ||
+     resultCType == "" || resultCType == "pep_str" ||
+     (function.text == "main" && result.node.text != "Int") {
     return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
@@ -2870,10 +2983,11 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
               return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function locals or other loop bindings")
             } else {}
           }
-          let firstParameter = pep_c23_child(nodes, function.id, "parameter", 0)
-          let secondParameter = pep_c23_child(nodes, function.id, "parameter", 1)
-          let thirdParameter = pep_c23_child(nodes, function.id, "parameter", 2)
-          if (firstParameter.found && firstParameter.node.text == statement.text) || (secondParameter.found && secondParameter.node.text == statement.text) || (thirdParameter.found && thirdParameter.node.text == statement.text) {
+          var parameterShadow = false
+          for parameterNode in pep_c23_parameters(nodes, function) {
+            if parameterNode.text == statement.text { parameterShadow = true } else {}
+          }
+          if parameterShadow {
             return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function parameters")
           } else {}
           let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
@@ -3121,42 +3235,31 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   } else {}
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
-      let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
-      let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
-      let thirdParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 2)
+      let functionParameters = pep_c23_parameters(parsed.nodes, node)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
-      if parameter.found {
-        let parameterType = pep_c23_child(parsed.nodes, parameter.node.id, "type", 0)
+      if length(functionParameters) == 0 {
+        if requiresArena { reversed = prepend(reversed, "(pep_arena_t *pep_arena);\n") } else {
+          reversed = prepend(reversed, "(void);\n")
+        }
+      } else {
         reversed = prepend(reversed, "(")
-        for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
-        reversed = prepend(reversed, " pep_arg_")
-        reversed = prepend(reversed, int_text(parameter.node.id))
-        if secondParameter.found {
-          let secondParameterType = pep_c23_child(parsed.nodes, secondParameter.node.id, "type", 0)
-          reversed = prepend(reversed, ", ")
-          for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, secondParameterType.node) { reversed = prepend(reversed, typePart) }
+        var prototypeIndex = 0
+        for parameterNode in functionParameters {
+          let parameterType = pep_c23_child(parsed.nodes, parameterNode.id, "type", 0)
+          if prototypeIndex != 0 { reversed = prepend(reversed, ", ") } else {}
+          for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
           reversed = prepend(reversed, " pep_arg_")
-          reversed = prepend(reversed, int_text(secondParameter.node.id))
-          if thirdParameter.found {
-            let thirdParameterType = pep_c23_child(parsed.nodes, thirdParameter.node.id, "type", 0)
-            reversed = prepend(reversed, ", ")
-            for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, thirdParameterType.node) { reversed = prepend(reversed, typePart) }
-            reversed = prepend(reversed, " pep_arg_")
-            reversed = prepend(reversed, int_text(thirdParameter.node.id))
-          } else {}
-        } else {}
+          reversed = prepend(reversed, int_text(parameterNode.id))
+          prototypeIndex = prototypeIndex + 1
+        }
         if requiresArena {
           reversed = prepend(reversed, ", ")
           reversed = prepend(reversed, "pep_arena_t *pep_arena")
           reversed = prepend(reversed, ");\n")
         } else { reversed = prepend(reversed, ");\n") }
-      } else {
-        if requiresArena { reversed = prepend(reversed, "(pep_arena_t *pep_arena);\n") } else {
-          reversed = prepend(reversed, "(void);\n")
-        }
       }
     } else {}
   }
@@ -3166,27 +3269,15 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       let hasConditionalBody = conditionalBody.status == "emitted"
       let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node) }
       if lowered.status != "emitted" { return lowered } else {}
-      let parameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
-      let secondParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 1)
-      let thirdParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 2)
+      let functionParameters = pep_c23_parameters(parsed.nodes, node)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       var bodyParts: List[Str] = ["  pep_enter();\n"]
       if requiresArena { bodyParts = append(bodyParts, "  (void)pep_arena;\n") } else {}
-      if parameter.found {
+      for parameterNode in functionParameters {
         bodyParts = append(bodyParts, "  (void)pep_arg_")
-        bodyParts = append(bodyParts, int_text(parameter.node.id))
+        bodyParts = append(bodyParts, int_text(parameterNode.id))
         bodyParts = append(bodyParts, ";\n")
-      } else {}
-      if secondParameter.found {
-        bodyParts = append(bodyParts, "  (void)pep_arg_")
-        bodyParts = append(bodyParts, int_text(secondParameter.node.id))
-        bodyParts = append(bodyParts, ";\n")
-      } else {}
-      if thirdParameter.found {
-        bodyParts = append(bodyParts, "  (void)pep_arg_")
-        bodyParts = append(bodyParts, int_text(thirdParameter.node.id))
-        bodyParts = append(bodyParts, ";\n")
-      } else {}
+      }
       var localBindings: List[FlatAstNode] = []
       var localBindingsCollected = false
       for statement in parsed.nodes {
@@ -3438,35 +3529,26 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, int_text(node.id))
-      if parameter.found {
-        let parameterType = pep_c23_child(parsed.nodes, parameter.node.id, "type", 0)
+      if length(functionParameters) == 0 {
+        if requiresArena { reversed = prepend(reversed, " (pep_arena_t *pep_arena) {\n") } else {
+          reversed = prepend(reversed, " (void) {\n")
+        }
+      } else {
         reversed = prepend(reversed, "(")
-        for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
-        reversed = prepend(reversed, " pep_arg_")
-        reversed = prepend(reversed, int_text(parameter.node.id))
-        if secondParameter.found {
-          let secondParameterType = pep_c23_child(parsed.nodes, secondParameter.node.id, "type", 0)
-          reversed = prepend(reversed, ", ")
-          for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, secondParameterType.node) { reversed = prepend(reversed, typePart) }
+        var signatureIndex = 0
+        for parameterNode in functionParameters {
+          let parameterType = pep_c23_child(parsed.nodes, parameterNode.id, "type", 0)
+          if signatureIndex != 0 { reversed = prepend(reversed, ", ") } else {}
+          for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
           reversed = prepend(reversed, " pep_arg_")
-          reversed = prepend(reversed, int_text(secondParameter.node.id))
-          if thirdParameter.found {
-            let thirdParameterType = pep_c23_child(parsed.nodes, thirdParameter.node.id, "type", 0)
-            reversed = prepend(reversed, ", ")
-            for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, thirdParameterType.node) { reversed = prepend(reversed, typePart) }
-            reversed = prepend(reversed, " pep_arg_")
-            reversed = prepend(reversed, int_text(thirdParameter.node.id))
-          } else {}
-        } else {}
+          reversed = prepend(reversed, int_text(parameterNode.id))
+          signatureIndex = signatureIndex + 1
+        }
         if requiresArena {
           reversed = prepend(reversed, ", ")
           reversed = prepend(reversed, "pep_arena_t *pep_arena")
           reversed = prepend(reversed, ") {\n")
         } else { reversed = prepend(reversed, ") {\n") }
-      } else {
-        if requiresArena { reversed = prepend(reversed, " (pep_arena_t *pep_arena) {\n") } else {
-          reversed = prepend(reversed, " (void) {\n")
-        }
       }
       for part in bodyParts { reversed = prepend(reversed, part) }
       reversed = prepend(reversed, "}\n")
