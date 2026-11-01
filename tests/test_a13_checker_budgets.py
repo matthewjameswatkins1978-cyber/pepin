@@ -254,6 +254,21 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
                 self.assertEqual(result.get("outcome"), "ok", result)
                 self.assertEqual(self.report_status(result), "valid")
 
+    def test_nominal_empty_list_in_record_field_checks_valid(self):
+        # A2 divergence (15734c8): OCaml-valid empty List[record] as a
+        # record field value was rejected with PEP_EMPTY_LIST_NEEDS_TYPE.
+        # Same family as mutable-List[record] bindings: the field inherits
+        # a concrete list type from the resolved record declaration.
+        decl = ("type Tokenish { kind: Str, parts: List[Str] }\n"
+                "type Progressish { status: Str, tokens: List[Tokenish] }\n")
+        body = ("fn made() -> Progressish {\n  return Progressish { status: \"ok\", tokens: [] }\n}\n"
+                "fn main() -> Int {\n  let p = made()\n  return length(p.tokens) + 5\n}\n")
+        source = decl + body
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
+
 
 class CheckerChunkedEquivalenceTests(unittest.TestCase):
     # Per-function chunking (analyze_chunk + external signatures): a program
