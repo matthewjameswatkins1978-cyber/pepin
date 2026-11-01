@@ -96,7 +96,7 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
                               "revision": cls.tool_revision})
         prefixes = cumulative_type_prefixes(lexer_type_block())
         cls.fixtures = dict(prefixes)
-        for n in (8, 16, 32):
+        for n in (8, 16, 32, 48, 96):
             cls.fixtures[f"R{n}"] = (
                 NL.join(f"type R{i} {{ f: Int }}" for i in range(n)) + NL)
 
@@ -153,6 +153,18 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         result = self.invoke_checker(source)
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
+
+    def test_large_scales_hit_step_budget(self):
+        # Documented frontier: 48+ trivial records still exceed the
+        # unchanged 100k budget. Flip each to a valid-assertion when the
+        # next composition repair lands it.
+        for label in ("R48", "R96"):
+            with self.subTest(fixture=label):
+                source = self.fixtures[label]
+                self.assert_ocaml_valid(source)
+                result = self.invoke_checker(source)
+                self.assertEqual(result.get("outcome"), "error", result)
+                self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
 
 
 if __name__ == "__main__":
