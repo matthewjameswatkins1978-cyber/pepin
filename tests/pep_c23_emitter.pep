@@ -247,6 +247,58 @@ fn pep_c23_bool_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, n
   parts = append(parts, " }")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
+fn pep_c23_str_list_parameter(nodes: List[FlatAstNode], function: FlatAstNode, name: Str) -> PepC23NodeLookup {
+  for parameter in nodes {
+    if parameter.parentId == function.id && parameter.role == "parameter" &&
+       parameter.kind == "parameter" && parameter.text == name {
+      let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+      if parameterType.found && parameterType.node.kind == "type_list" {
+        let elementType = pep_c23_child(nodes, parameterType.node.id, "element_type", 0)
+        if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Str" {
+          return PepC23NodeLookup { found: true, node: parameter }
+        } else {}
+      } else {}
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+fn pep_c23_str_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode) -> PepC23Emission {
+  if node.kind == "name" {
+    let parameter = pep_c23_str_list_parameter(nodes, function, node.text)
+    if parameter.found {
+      return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
+    } else {}
+    return pep_c23_unsupported("Pep C23 List[Str] arguments currently require a list literal or a direct List[Str] parameter")
+  } else {}
+  if node.kind != "list" {
+    return pep_c23_unsupported("Pep C23 List[Str] arguments currently require a list literal or a direct List[Str] parameter")
+  } else {}
+  var parts: List[Str] = ["(pep_list_str){ .data = "]
+  let elementCount = pep_c23_count_children(nodes, node.id, "element")
+  if elementCount == 0 {
+    parts = append(parts, "NULL")
+  } else {
+    parts = append(parts, "(const pep_str[]){")
+    var count = 0
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" {
+        if element.kind != "string" {
+          return pep_c23_unsupported("Pep C23 List[Str] arguments currently require string literal elements")
+        } else {}
+        if count != 0 { parts = append(parts, ", ") } else {}
+        let lowered = pep_c23_string_literal(nodes, element)
+        if lowered.status != "emitted" { return lowered } else {}
+        for part in lowered.sourceParts { parts = append(parts, part) }
+        count = count + 1
+      } else {}
+    }
+    parts = append(parts, "}")
+  }
+  parts = append(parts, ", .length = ")
+  parts = append(parts, int_text(elementCount))
+  parts = append(parts, " }")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_record_list_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode, parameterType: PepC23NodeLookup) -> PepC23Emission {
   let declaration = pep_c23_record_list_declaration(nodes, parameterType.node)
   if !declaration.found { return pep_c23_unsupported("Pep C23 List[Record] argument has no supported record element type") } else {}
@@ -505,6 +557,7 @@ fn pep_c23_call_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: 
   if cType == "pep_list_record" { return pep_c23_record_list_argument(nodes, function, node, parameterType) } else {}
   if cType == "pep_list_int" { return pep_c23_int_list_argument(nodes, function, node) } else {}
   if cType == "pep_list_bool" { return pep_c23_bool_list_argument(nodes, function, node) } else {}
+  if cType == "pep_list_str" { return pep_c23_str_list_argument(nodes, function, node) } else {}
   if cType == "pep_list_union" {
     let elementType = pep_c23_child(nodes, parameterType.node.id, "element_type", 0)
     if elementType.found {
@@ -1047,6 +1100,9 @@ fn pep_c23_c_parameter_type(nodes: List[FlatAstNode], node: FlatAstNode) -> Str 
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" {
       return "pep_list_bool"
     } else {}
+    if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Str" {
+      return "pep_list_str"
+    } else {}
     if elementType.found && elementType.node.kind == "type_named" {
       let unionType = pep_c23_union_declaration(nodes, elementType.node.text)
       if unionType.found && pep_c23_union_is_recursive(nodes, unionType.node) {
@@ -1097,16 +1153,39 @@ fn pep_c23_last_statement(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   }
   return lastStatement
 }
-// Record construction only. A string literal lowers to static bytes with no runtime failure path,
-// and a list literal can only fail through its elements, so neither constrains C field evaluation
-// order. Kept separate from pep_c23_expression_may_fail so programs without record construction
-// pay no extra execution steps from this refinement.
-fn pep_c23_field_value_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
+// A list record field accepts a list literal, or a same-typed list parameter forwarded by value.
+// Forwarding copies the descriptor only, so the caller keeps ownership of the element storage.
+fn pep_c23_list_parameter_of_type(nodes: List[FlatAstNode], function: FlatAstNode, name: Str,
+  declaredType: FlatAstNode) -> PepC23NodeLookup {
+  let wantedElement = pep_c23_child(nodes, declaredType.id, "element_type", 0)
+  if !wantedElement.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
+  for parameter in nodes {
+    if parameter.parentId == function.id && parameter.role == "parameter" &&
+       parameter.kind == "parameter" && parameter.text == name {
+      let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+      if !parameterType.found || parameterType.node.kind != "type_list" {
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+      } else {}
+      let actualElement = pep_c23_child(nodes, parameterType.node.id, "element_type", 0)
+      if !actualElement.found { return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } } else {}
+      if actualElement.node.kind == wantedElement.node.kind && actualElement.node.text == wantedElement.node.text {
+        return PepC23NodeLookup { found: true, node: parameter }
+      } else {}
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+// True when a value cannot fail at runtime. A string literal lowers to static bytes, and a list
+// literal can only fail through its elements, so neither constrains C's unspecified evaluation
+// order for record fields or call arguments. Used only by record construction and the
+// three-or-more-argument call path, so programs that use neither pay no extra execution steps.
+fn pep_c23_infallible_value(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "string" { return false } else {}
   if node.kind == "list" {
     for element in nodes {
       if element.parentId == node.id && element.role == "element" {
-        if pep_c23_field_value_may_fail(nodes, element) { return true } else {}
+        if pep_c23_infallible_value(nodes, element) { return true } else {}
       } else {}
     }
     return false
@@ -1883,8 +1962,15 @@ fn pep_c23_list_field_value(nodes: List[FlatAstNode], function: FlatAstNode, own
   if length(listTypeParts) == 0 {
     return pep_c23_unsupported("Pep C23 list record field type is unsupported")
   } else {}
+  if value.kind == "name" {
+    let parameter = pep_c23_list_parameter_of_type(nodes, function, value.text, declaredType)
+    if !parameter.found {
+      return pep_c23_unsupported("Pep C23 list record field values currently require a list literal or a matching list parameter")
+    } else {}
+    return PepC23Emission { status: "emitted", sourceParts: ["pep_arg_", int_text(parameter.node.id)], diagnostic: "" }
+  } else {}
   if value.kind != "list" {
-    return pep_c23_unsupported("Pep C23 list record field values currently require a list literal")
+    return pep_c23_unsupported("Pep C23 list record field values currently require a list literal or a matching list parameter")
   } else {}
   let elementType = pep_c23_child(nodes, declaredType.id, "element_type", 0)
   if !elementType.found { return pep_c23_unsupported("Pep C23 list record field has no element type") } else {}
@@ -2026,7 +2112,7 @@ fn pep_c23_many_argument_call(nodes: List[FlatAstNode], function: FlatAstNode, c
     if !argument.found {
       return pep_c23_unsupported("Pep C23 call argument list has a gap")
     } else {}
-    if pep_c23_expression_may_fail(nodes, argument.node) {
+    if pep_c23_infallible_value(nodes, argument.node) {
       fallibleArguments = fallibleArguments + 1
     } else {}
     arguments = append(arguments, argument.node)
@@ -2125,7 +2211,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
         let value = pep_c23_child(nodes, supplied.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 record field has no value") } else {}
-        if pep_c23_field_value_may_fail(nodes, value.node) {
+        if pep_c23_infallible_value(nodes, value.node) {
           if fallibleFieldCount != 0 {
             return pep_c23_unsupported("Pep C23 record construction rejects multiple fallible field expressions because C field evaluation order is unspecified")
           } else {}
@@ -2361,6 +2447,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
       if boolListParameter.found {
         return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(boolListParameter.node.id), ".length)"], diagnostic: "" }
+      } else {}
+      let strListParameter = if argument.node.kind == "name" {
+        pep_c23_str_list_parameter(nodes, function, argument.node.text)
+      } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+      if strListParameter.found {
+        return PepC23Emission { status: "emitted", sourceParts: ["pep_checked_length(pep_arg_", int_text(strListParameter.node.id), ".length)"], diagnostic: "" }
       } else {}
       let recordListParameter = if argument.node.kind == "name" {
         pep_c23_record_list_parameter(nodes, function, argument.node.text)
