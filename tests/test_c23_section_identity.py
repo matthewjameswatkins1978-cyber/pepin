@@ -63,6 +63,8 @@ class SectionByteIdentityTests(unittest.TestCase):
             ("pep-c23-emitter", "emit_c23_checked", [empty_parsed, empty_checked], unsupported),
             ("pep-c23-section", "emit_c23_section",
              [empty_parsed, empty_checked, typed("Str", "header")], unsupported),
+            ("pep-c23-function-unit", "emit_c23_function_unit",
+             [empty_parsed, empty_checked, typed("Int", 0)], unsupported),
         ]
         for tool, function, arguments, expected in registrations:
             registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -102,26 +104,86 @@ class SectionByteIdentityTests(unittest.TestCase):
                                      "arguments": [parsed], "semanticTarget": semantic_target})
         require(checked, "outcome", "ok", "check target")
 
-        def emit_with(tool, arguments):
+        def emit_fields(tool, arguments):
             response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                           "op": "tool_invoke", "tool": tool,
                                           "arguments": arguments,
                                           "semanticTarget": semantic_target})
             require(response, "outcome", "ok", f"invoke {tool}")
             fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
-            self.assertEqual(fields["status"]["value"], "emitted", fields["diagnostic"]["value"])
-            return "".join(part["value"] for part in fields["sourceParts"]["value"])
+            return (fields["status"]["value"], fields["diagnostic"]["value"],
+                    "".join(part["value"] for part in fields["sourceParts"]["value"]))
+
+        def emit_with(tool, arguments):
+            status, diagnostic, text = emit_fields(tool, arguments)
+            self.assertEqual(status, "emitted", diagnostic)
+            return text
 
         one_shot = emit_with("pep-c23-emitter", [parsed, checked["result"]])
         sections = [emit_with("pep-c23-section", [parsed, checked["result"], typed("Str", part)])
                     for part in ("header", "function", "main")]
-        return one_shot, sections
+        return one_shot, sections, checked["result"], parsed, semantic_target
+
+    def function_count(self, source_text):
+        return sum(1 for line in source_text.split("\n") if line.startswith("fn "))
+
+    def emit_units(self, source_text):
+        # Reuse the exact target opened by emit_parts: the emitter validates its arguments
+        # against the live semantic snapshot, so re-opening the same source under a new name
+        # makes the revision guard fire instead of exercising the unit path.
+        one_shot, sections, checked, parsed, semantic_target = self.emit_parts(source_text)
+        units = []
+        for index in range(self.function_count(source_text)):
+            response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                          "op": "tool_invoke", "tool": "pep-c23-function-unit",
+                                          "arguments": [parsed, checked, typed("Int", index)],
+                                          "semanticTarget": semantic_target})
+            require(response, "outcome", "ok", "invoke function unit")
+            fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+            self.assertEqual(fields["status"]["value"], "emitted",
+                             fields["diagnostic"]["value"])
+            units.append("".join(part["value"] for part in fields["sourceParts"]["value"]))
+        return one_shot, sections, units
 
     def test_sections_concatenate_to_the_one_shot_output(self):
         for name, source in PROGRAMS.items():
             with self.subTest(program=name):
-                one_shot, sections = self.emit_parts(source)
+                one_shot, sections, _, _, _ = self.emit_parts(source)
                 self.assertEqual("".join(sections), one_shot)
+
+    def test_function_units_concatenate_to_the_one_shot_output(self):
+        """The per-function granularity the bounded chunking design actually needs."""
+        for name, source in PROGRAMS.items():
+            with self.subTest(program=name):
+                one_shot, sections, units = self.emit_units(source)
+                header, _, epilogue = sections
+                self.assertEqual(self.function_count(source), len(units))
+                self.assertEqual(header + "".join(units) + epilogue, one_shot)
+
+    def test_out_of_range_unit_index_refuses(self):
+        """Fail closed: a bad index must never emit a partial program."""
+        one_shot, sections, checked, parsed, semantic_target = self.emit_parts(
+            PROGRAMS["two-functions"])
+        for index in (2, 9, -1):
+            with self.subTest(index=index):
+                response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                              "op": "tool_invoke", "tool": "pep-c23-function-unit",
+                                              "arguments": [parsed, checked, typed("Int", index)],
+                                              "semanticTarget": semantic_target})
+                require(response, "outcome", "ok", "invoke function unit")
+                fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+                self.assertEqual(fields["status"]["value"], "unsupported")
+                self.assertEqual(fields["sourceParts"]["value"], [])
+                self.assertIn("out of range", fields["diagnostic"]["value"])
+
+    def test_one_unit_carries_exactly_one_definition(self):
+        _, _, units = self.emit_units(PROGRAMS["two-functions"])
+        for index, unit in enumerate(units):
+            with self.subTest(unit=index):
+                self.assertEqual(unit.count("int64_t pep_fn_"), 1)
+                self.assertTrue(unit.rstrip().endswith("}"))
+                self.assertNotIn("#include", unit)
+                self.assertNotIn("int main(", unit)
 
     def test_each_section_carries_only_its_own_part(self):
         header, body, main = self.emit_parts(PROGRAMS["two-functions"])[1]

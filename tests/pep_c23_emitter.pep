@@ -3379,17 +3379,29 @@ fn pep_c23_drop_prefix(parts: List[Str], count: Int) -> List[Str] {
   }
   return rest
 }
+fn pep_c23_list_int_at(values: List[Int], wanted: Int) -> Int {
+  var index = 0
+  for value in values {
+    if index == wanted { return value } else {}
+    index = index + 1
+  }
+  return -1
+}
 fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emission {
-  return emit_c23_checked_part(parsed, checked, "all")
+  return emit_c23_checked_part(parsed, checked, "all", -1)
 }
 // Additive sectional emission (LUCY-20261101-006 item 2). The one-shot output is ordered by
 // construction: header, one definition per top-level function in source order, then the epilogue.
 // Recording the accumulator length at the two boundaries lets each section be returned without
 // duplicating the emission code, and concatenating the three is the one-shot output byte for byte.
 fn emit_c23_section(parsed: ParserProgress, checked: CheckerReport, part: Str) -> PepC23Emission {
-  return emit_c23_checked_part(parsed, checked, part)
+  return emit_c23_checked_part(parsed, checked, part, -1)
 }
-fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: Str) -> PepC23Emission {
+// One top-level function definition, in source order, for the bounded-emitter path.
+fn emit_c23_function_unit(parsed: ParserProgress, checked: CheckerReport, index: Int) -> PepC23Emission {
+  return emit_c23_checked_part(parsed, checked, "function-unit", index)
+}
+fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: Str, index: Int) -> PepC23Emission {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision ||
      checked.document != authority.document || checked.revision != authority.revision ||
@@ -3585,6 +3597,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     } else {}
   }
   let sectionHeaderCount = length(reversed)
+  var sectionFunctionEnds: List[Int] = []
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
@@ -3903,6 +3916,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
       }
       for part in bodyParts { reversed = prepend(reversed, part) }
       reversed = prepend(reversed, "}\n")
+      sectionFunctionEnds = append(sectionFunctionEnds, length(reversed))
     } else {}
   }
   let sectionBodyCount = length(reversed)
@@ -3936,6 +3950,16 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   } else {}
   if part == "main" {
     selected = pep_c23_drop_prefix(allParts, sectionBodyCount)
+  } else {}
+  if part == "function-unit" {
+    let unitEnd = pep_c23_list_int_at(sectionFunctionEnds, index)
+    let unitStart = if index == 0 {
+      sectionHeaderCount
+    } else { pep_c23_list_int_at(sectionFunctionEnds, index - 1) }
+    if unitEnd == -1 || unitStart == -1 {
+      return pep_c23_unsupported("Pep C23 function unit index is out of range")
+    } else {}
+    selected = pep_c23_drop_prefix(pep_c23_take_prefix(allParts, unitEnd), unitStart)
   } else {}
   return PepC23Emission { status: "emitted", sourceParts: selected, diagnostic: "" }
 }
