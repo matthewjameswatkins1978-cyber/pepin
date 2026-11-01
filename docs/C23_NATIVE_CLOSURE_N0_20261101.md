@@ -51,6 +51,37 @@ ran the emitter on the construct and recorded the outcome.
 Not yet measured (do not treat as facts): `at(...)` indexing, `match` over record
 payloads in parser bodies, and anything that requires the checker to reach it first.
 
+## Measured checker divergence: `List[record]` mutable bindings
+
+Attempting blocker 1's record half produced a finding that belongs to the checker
+lane, not the backend. This program is **valid** to the OCaml oracle and is
+**rejected by the Pep-written checker**, so the emitter never runs:
+
+```
+type P { x: Int }
+fn main() -> Int {
+  var points: List[P] = []
+  return length(points)
+}
+```
+
+- `pep.ps1 check` (OCaml): `status: valid`.
+- the staged Pep-written checker used by `pep_c23.emit` returns non-valid, so
+  emission stops with `Pep C23 emission requires a valid Pep checker report`.
+
+The same happens with `points = reverse(points)` and with
+`points = prepend(points, P { x: 1 })`, and it happens for the length-only program,
+so it is the *binding* that diverges, not the update.
+
+Consequence for this lane: `List[record]` mutable bindings — the lexer's `tokens`
+accumulator — cannot be reached natively until that divergence is fixed. I built and
+then **reverted** the matching emitter support rather than ship unreachable,
+unexercised lowering code; it goes back in when the checker reaches such a program.
+
+This is worth fixing early: `tokens: List[LexToken]` is the lexer's main output
+accumulator, and the divergence is visible on an eleven-line program with no
+templates, no loops and no emitter involvement.
+
 ## First native unit
 
 The smallest real unit that could run natively once blockers 1 and 2 are closed is
