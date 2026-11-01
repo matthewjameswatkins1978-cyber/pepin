@@ -416,6 +416,34 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         codes = [c for c, _, _ in diags]
         self.assertIn("PEP_TYPE_MISMATCH", codes, codes)
 
+    def test_compact_lexer_step_fits_transport(self):
+        # Transport gate (A2 field audit): the compact projection drops
+        # exactly stringParts/line/column, keeps the other 10 fields,
+        # and the 1,503-node lexer_step fits the 1 MiB JSONL message.
+        import json
+        from tests.chunk_helper import (fields_map, nval, slice_subtree,
+                                         remap_chunk, compact_node)
+        from pathlib import Path
+        lex = (Path(__file__).resolve().parent.parent
+               / "examples" / "pep_lexer.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "lex-transport", "bytes": list(lex)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, lex, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        step = [n for n in nodes if nval(n, "kind") == "function"
+                and nval(n, "text") == "lexer_step"]
+        self.assertEqual(len(step), 1, "lexer_step must exist")
+        sub = slice_subtree(nodes, nval(step[0], "id"))
+        chunk = remap_chunk(sub)
+        compact = [compact_node(n) for n in chunk]
+        kept = {"id", "parentId", "childIndex", "role", "kind", "text",
+                "integerValue", "booleanValue", "startByte", "endByte"}
+        for n in compact:
+            self.assertEqual({f["name"] for f in n["fields"]}, kept, n)
+        blob = json.dumps([{"fields": n["fields"]} for n in compact]).encode()
+        self.assertLess(len(blob), 1048576, len(blob))
+
 
 if __name__ == "__main__":
     unittest.main()

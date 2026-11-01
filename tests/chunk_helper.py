@@ -223,6 +223,14 @@ def slice_subtree(nodes, root_id):
                 keep.add(str(nval(n, "id"))); changed = True
     return [copy.deepcopy(n) for n in nodes if str(nval(n, "id")) in keep]
 
+def compact_node(node):
+    # Compact projection for emitter-bound chunks (per A2 field audit):
+    # drop exactly stringParts, line, column; keep the other 10 fields.
+    # Literal text is recovered from source_bytes() + byte spans.
+    return {"type": node.get("type", "FlatAstNode"),
+            "fields": [f for f in node.get("fields", [])
+                       if f.get("name") not in ("stringParts", "line", "column")]}
+
 def remap_chunk(sub):
     sub.sort(key=lambda n: int(nval(n, "id")))
     remap = {str(nval(n, "id")): str(i) for i, n in enumerate(sub)}
