@@ -13,6 +13,7 @@ type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount:
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
 type FieldTypeFacts { field: FlatAstNode, duplicate: Bool, typeFound: Bool, shape: PepTypeShape, name: Str, supported: Bool, code: Str }
+type ResolvedRecord { duplicateType: Bool, firstType: Bool, fields: List[FieldTypeFacts] }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
@@ -1074,7 +1075,7 @@ fn support_code_for_shape(nodes: List[FlatAstNode], shape: PepTypeShape) -> Str 
   } else {}
   return "PEP_A13_TYPE_UNSUPPORTED"
 }
-fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int) -> List[FieldTypeFacts] {
+fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int, recordName: Str) -> ResolvedRecord {
   var finished: List[FieldTypeFacts] = []
   var pending = false
   var pendingField = empty_node()
@@ -1084,7 +1085,11 @@ fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int) -> List[FieldT
   var walkDuplicate = false
   var walkNext = -1
   var walkDepth = 0
+  var earlierTypes = 0
   for node in nodes {
+    if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == recordName && node.id + 1 <= recordId {
+      earlierTypes = earlierTypes + 1
+    } else {}
     if pending {
       pending = false
       if node.role == "type" && node.childIndex == 0 && node.parentId == pendingField.id {
@@ -1160,7 +1165,7 @@ fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int) -> List[FieldT
   } else {}
   var ordered: List[FieldTypeFacts] = []
   for facts in finished { ordered = prepend(ordered, facts) }
-  return ordered
+  return ResolvedRecord { duplicateType: earlierTypes == 1, firstType: earlierTypes == 0, fields: ordered }
 }
 fn supported_type_at(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Bool {
   if supported_type(nodes, knownName) { return true } else {}
@@ -1376,9 +1381,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "record_declaration" {
-      if is_first_duplicate_type_declaration(nodes, node.text, node.id) && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
-      if supported_primitive_type(node.text) && is_first_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
-      for facts in resolve_record_fields(nodes, node.id) {
+      let resolvedRecord = resolve_record_fields(nodes, node.id, node.text)
+      if resolvedRecord.duplicateType && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+      if supported_primitive_type(node.text) && resolvedRecord.firstType { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
+      for facts in resolvedRecord.fields {
         if facts.duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", facts.field)) } else {}
         if facts.typeFound && !facts.supported {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(facts.code, "Record field type is outside the implemented checker subset", facts.field))
