@@ -220,6 +220,17 @@ fn record_field_shape(nodes: List[FlatAstNode], recordName: Str, fieldName: Str)
   }
   return empty_type_shape()
 }
+fn resolved_field_facts(records: List[ResolvedRecord], recordId: Int, fieldName: Str) -> FieldTypeFacts {
+  for record in records {
+    if record.recordId == recordId {
+      for facts in record.fields {
+        if facts.field.text == fieldName { return facts } else {}
+      }
+      return FieldTypeFacts { field: empty_node(), duplicate: false, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" }
+    } else {}
+  }
+  return FieldTypeFacts { field: empty_node(), duplicate: false, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" }
+}
 fn find_function_by_syntax(functions: List[CheckedFunction], syntaxId: Int) -> FunctionLookup {
   for function in functions { if function.syntaxId == syntaxId { return FunctionLookup { found: true, function: function } } else {} }
   return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
@@ -1133,10 +1144,10 @@ fn resolve_all_records(nodes: List[FlatAstNode]) -> List[ResolvedRecord] {
           walkDepth = 1
         } else {
           if node.kind == "type_scalar" {
-            currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }, name: "", supported: false, code: "" })
+            currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }, name: node.text, supported: false, code: "" })
           } else {
             if node.kind == "type_named" {
-              currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 }, name: "", supported: false, code: "" })
+              currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 }, name: node.text, supported: false, code: "" })
             } else {
               currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "" })
             }
@@ -1362,6 +1373,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
   var resolvedRecords: List[ResolvedRecord] = []
   var resolvedReady = false
+  var reversedTaRecordFields: List[FlatAstNode] = []
+  var reversedTaFieldDecls: List[FlatAstNode] = []
+  for taScan in nodes {
+    if taScan.kind == "record_field" { reversedTaRecordFields = prepend(reversedTaRecordFields, taScan) } else {}
+    if taScan.kind == "field_declaration" { reversedTaFieldDecls = prepend(reversedTaFieldDecls, taScan) } else {}
+  }
+  let taRecordFields = reverse(reversedTaRecordFields)
+  let taFieldDecls = reverse(reversedTaFieldDecls)
   for node in nodes {
     if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
       let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
@@ -1503,6 +1522,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: actual, typeShape: legacy_type_shape(nodes, actual), startByte: node.startByte, endByte: node.endByte })
       }
       if node.kind == "record" {
+        if !resolvedReady {
+          resolvedRecords = resolve_all_records(nodes)
+          resolvedReady = true
+        } else {}
         let declaration = record_declaration(nodes, node.text)
         if declaration.found {
           var duplicateFound = false
@@ -1510,15 +1533,16 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           var fieldDiagnosticFound = false
           var fieldDiagnosticCode = ""
           var fieldDiagnosticNode = empty_node()
-          for field in nodes {
-            if field.parentId == node.id && field.kind == "record_field" {
+          for field in taRecordFields {
+            if field.parentId == node.id {
               if !duplicateFound && is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
                 duplicateFound = true
                 duplicateNode = field
               } else {}
               if !fieldDiagnosticFound {
-                let expected = record_field_type(nodes, node.text, field.text)
-                let expectedShape = record_field_shape(nodes, node.text, field.text)
+                let resolvedFacts = resolved_field_facts(resolvedRecords, declaration.node.id, field.text)
+                let expected = resolvedFacts.name
+                let expectedShape = resolvedFacts.shape
                 let value = child_at(nodes, field.id, "value", 0)
                 let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
                 let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
@@ -1547,11 +1571,11 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           }
           var missingFound = false
           var missingNode = empty_node()
-          for declared in nodes {
-            if !missingFound && declared.parentId == declaration.node.id && declared.kind == "field_declaration" {
+          for declared in taFieldDecls {
+            if !missingFound && declared.parentId == declaration.node.id {
               var supplied = false
-              for field in nodes {
-                if field.parentId == node.id && field.kind == "record_field" && field.text == declared.text { supplied = true } else {}
+              for field in taRecordFields {
+                if field.parentId == node.id && field.text == declared.text { supplied = true } else {}
               }
               if !supplied {
                 missingFound = true
