@@ -136,6 +136,33 @@ class PepC23RealLexerStageTests(unittest.TestCase):
             "}\n")
         self.run_native(source, 201)
 
+    def test_real_advance_position_tracks_newlines_and_columns(self):
+        """The real position helper, exercised on both of its branches.
+
+        `advance_position` is the lexer's only position-tracking function that the
+        checker reaches today, so both outcomes are compiled and compared rather than
+        only the happy branch.
+        """
+        prefix = block("type SourcePosition") + "\n" + FUNCTION_BLOCKS["advance_position"] + "\n"
+        for label, byte, expected in (("newline", 10, 201), ("ordinary", 65, 308)):
+            with self.subTest(branch=label):
+                source = prefix + (
+                    "fn main() -> Int {\n"
+                    f"  let moved = advance_position({1 if label == 'newline' else 3}, "
+                    f"{5 if label == 'newline' else 7}, {byte})\n"
+                    "  return moved.line * 100 + moved.column\n"
+                    "}\n")
+                self.run_native(source, expected)
+
+    def test_real_utf8check_record_constructs_natively(self):
+        """A real lexer result type, constructed and projected without its function body."""
+        source = block("type Utf8Check") + (
+            "\nfn main() -> Int {\n"
+            "  let checked = Utf8Check { width: 2, invalidOffset: -1 }\n"
+            "  return checked.width * 10 + checked.invalidOffset + 1\n"
+            "}\n")
+        self.run_native(source, 20)
+
     # --- ledger: what the checker still blocks ------------------------------
 
     def test_real_constructors_are_blocked_by_the_checker_not_the_emitter(self):
