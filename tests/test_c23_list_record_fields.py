@@ -245,17 +245,17 @@ class PepC23ListRecordFieldTests(unittest.TestCase):
         This is the shape Lucy's real ``make_token`` uses for ``stringParts``.
         """
         generated = self.run_native(
-            "type Tok { kind: Str, parts: List[Str], count: Int }\n"
-            "fn make_tok(kind: Str, parts: List[Str], count: Int) -> Tok {\n"
-            "  return Tok { kind: kind, parts: parts, count: count }\n"
+            "type Tok { parts: List[Str], count: Int }\n"
+            "fn make_tok(kind: Str, text: Str, parts: List[Str], count: Int) -> Tok {\n"
+            "  return Tok { parts: parts, count: count }\n"
             "}\n"
             "fn main() -> Int {\n"
-            "  let tok = make_tok(\"string\", [\"ab\", \"cd\"], 7)\n"
+            "  let tok = make_tok(\"string\", \"\", [\"ab\", \"cd\"], 7)\n"
             "  return length(tok.parts) + tok.count\n"
             "}\n",
             9)
         self.assertIn("pep_list_str", generated)
-        self.assertIn(".pep_field_1 = pep_arg_", generated)
+        self.assertIn(".pep_field_0 = pep_arg_", generated)
 
     def test_list_str_argument_literal_and_parameter_forwarding(self):
         """A List[Str] literal argument and a forwarded List[Str] parameter both lower.

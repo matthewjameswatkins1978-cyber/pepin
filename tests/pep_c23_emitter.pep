@@ -28,14 +28,28 @@ fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex
 // Parameter and argument lists are collected in declared order, so arity is not baked into a fixed
 // number of slots. Ordering uses childIndex, never node arrival order.
 fn pep_c23_ordered_children(nodes: List[FlatAstNode], parentId: Int, role: Str) -> List[FlatAstNode] {
-  var children: List[FlatAstNode] = []
+  // Single pass in the common case: nodes arrive in ascending childIndex order. This runs for
+  // every function twice (prototype and definition), so a count-plus-indexed-lookup loop here
+  // measurably inflates emitter step cost on large programs.
+  var collected: List[FlatAstNode] = []
+  var inorder = true
+  var previous = -1
+  for node in nodes {
+    if node.parentId == parentId && node.role == role {
+      if !(previous <= node.childIndex) { inorder = false } else {}
+      previous = node.childIndex
+      collected = append(collected, node)
+    } else {}
+  }
+  if inorder { return collected } else {}
+  var ordered: List[FlatAstNode] = []
   var wanted = 0
-  while !(pep_c23_count_children(nodes, parentId, role) <= wanted) {
+  while !(length(collected) <= wanted) {
     let child = pep_c23_child(nodes, parentId, role, wanted)
-    if child.found { children = append(children, child.node) } else {}
+    if child.found { ordered = append(ordered, child.node) } else {}
     wanted = wanted + 1
   }
-  return children
+  return ordered
 }
 fn pep_c23_parameters(nodes: List[FlatAstNode], function: FlatAstNode) -> List[FlatAstNode] {
   return pep_c23_ordered_children(nodes, function.id, "parameter")
@@ -2531,15 +2545,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
-    // Four or more parameters or arguments always use the general ordered path. A three-parameter
-    // call only falls through to it when the fixed-slot path below would refuse it, so every
-    // program that already emitted keeps the cheaper path and its exact behaviour.
+    // Only four or more parameters or arguments use the general ordered path, detected through the
+    // already-computed lookups so no extra traversal runs. Calls with one to three arguments keep
+    // the fixed-slot paths and their exact previous behaviour and step cost: routing them here was
+    // measured to push unrelated collection programs over the emitter's 100k step budget.
     if extraParameter.found || extraArgument.found {
-      return pep_c23_many_argument_call(nodes, function, node, target.node,
-        conditionalTarget, directLocalTarget)
-    } else {}
-    if parameter.found && secondParameter.found && thirdParameter.found && thirdArgument.found &&
-       !conditionalTarget && !directLocalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) {
       return pep_c23_many_argument_call(nodes, function, node, target.node,
         conditionalTarget, directLocalTarget)
     } else {}

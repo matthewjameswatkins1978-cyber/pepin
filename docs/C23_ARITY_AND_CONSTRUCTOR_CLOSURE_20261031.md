@@ -42,14 +42,16 @@ All in `tests/pep_c23_emitter.pep`, the Pep-written emitter.
    correct signature would have produced invalid C.
 3. Prototype and definition parameter lists and the `(void)pep_arg_N` unused
    casts are emitted by loop over the ordered parameter list.
-4. `pep_c23_many_argument_call` is one ordered path for three or more parameters:
-   exactly one argument per declared parameter, each lowered against its declared
-   parameter type (so lists, records and unions keep their existing argument
-   rules), and **at most one runtime-fallible argument** because C leaves argument
-   evaluation order unspecified. Its body gate
-   (`conditionalTarget || directLocalTarget || parameter-only return`) is a strict
-   superset of the earlier three-parameter gate, so no program that emitted before
-   stops emitting.
+4. `pep_c23_many_argument_call` is one ordered path for more than three
+   parameters: exactly one argument per declared parameter, each lowered against
+   its declared parameter type (so lists, records and unions keep their existing
+   argument rules), and **at most one runtime-fallible argument** because C leaves
+   argument evaluation order unspecified. Routing is deliberately minimal: four or
+   more parameters or arguments always use it (detected through the already
+   computed `extraParameter`/`extraArgument` lookups, so no extra traversal), and a
+   three-parameter call uses it **only when the fixed-slot path would refuse it**.
+   Programs that already emitted therefore keep the cheaper path and their exact
+   behaviour — see the step-cost section below for why that mattered.
 5. `pep_c23_function_expression` validates every declared parameter type and the
    result type by loop, and the for-in parameter-shadowing guard covers all
    parameters rather than the first three.
@@ -63,6 +65,48 @@ All in `tests/pep_c23_emitter.pep`, the Pep-written emitter.
    now shared by record construction and the many-argument path — the first place
    where string and list literals are routinely arguments. Its scope is unchanged:
    one- and two-argument programs execute exactly the previous predicate.
+
+## Step cost: a regression I caught and closed
+
+Recording this because a focused suite did not catch it, and because the first two
+fixes I tried both made it worse.
+
+My first routing sent **every** three-or-more-parameter call through the general
+ordered path. That path re-walks the parameter and argument lists per call site, and
+it pushed four int-collection programs over the emitter's unchanged 100k step budget.
+They pass at the parent and failed reproducibly in an isolated sequential run:
+
+| test | parent `26be4be` | first routing | minimal routing |
+| --- | --- | --- | --- |
+| `..._count_outside`, `..._int_all_between`, `..._int_any_between`, `..._int_product_between` | 0 failures | **8 failures** | **0 failures** |
+| `..._int_last_outside`, `..._sum_between` | 14 failures | 4 failures | **2 failures** |
+
+Two further rounds of measurement were needed, each isolating one variable:
+
+| revision | routing | ordered-parameter collection | failures on the four-test group |
+| --- | --- | --- | --- |
+| parent `26be4be` | fixed slots only | n/a | 6 |
+| `a602659` | three or more | count + indexed lookup per parameter | **24** |
+| `3ff56de` | four or more, plus a three-parameter fallback | count + indexed lookup | 14 |
+| current | four or more only | single pass | **4** |
+
+Two conclusions, both from measurement rather than reasoning:
+
+- Routing three-parameter calls through the general path made things **worse**, not
+  better, for these programs. It was removed; one- to three-argument calls keep the
+  fixed-slot paths exactly.
+- The real cost was `pep_c23_ordered_children`, which collected parameters with a
+  count query plus one indexed lookup per element — several full AST scans per
+  function, twice per function (prototype and definition). It now collects in a
+  single pass and falls back to indexed lookups only if arrival order is not
+  ascending by `childIndex`. That alone moved the group from 14 failures to **4**,
+  better than the parent's 6.
+
+Note on method: my first two whole-suite collection runs (parent 213 failures,
+branch 229) were taken while other heavy suites ran concurrently on the same
+machine, and they disagree with isolated sequential measurement in both directions.
+I therefore treat only the isolated, sequential comparisons above as evidence, and
+I make no claim about the collections module's total failure count.
 
 ## A2-3 — native evidence
 
@@ -136,10 +180,14 @@ though no constructor is natively executable yet.
    if-expression branch are refused, and `test_recursive_native_calls_enforce_pep_depth`
    is one of the three remaining `test_a14_c23` failures inherited from the
    parent. Not an arity problem.
-3. **Two literal arguments on a 1-2 argument call** are still refused by the
-   conservative evaluation-order guard. Left untouched deliberately: that guard
-   runs for almost every program, and narrowing it is exactly the change that
-   caused the A2N-004 step-cost regression.
+3. **One- to three-argument calls and two literal arguments.** Calls with one to
+   three arguments keep the fixed-slot path and its pre-existing restrictions: two
+   literal arguments are still refused by the conservative evaluation-order guard,
+   and a three-parameter call whose result is not call-free, parameter-based or
+   conditional is still refused (`three-parameter calls require three arguments and a
+   call-free result`). Both are pinned by tests. Left untouched deliberately: those
+   paths run for almost every program, and every attempt to move them measured worse
+   on unrelated collection programs.
 4. **List[Str] local bindings** are unsupported (`immutable collection bindings
    require ...`), so a `List[Str]` value cannot yet be built and mutated locally.
 5. **Bounded emitter input (A2-4)** — not started; the >1 MiB one-shot checked-AST
