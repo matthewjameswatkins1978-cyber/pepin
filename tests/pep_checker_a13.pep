@@ -2062,6 +2062,11 @@ fn analyze() -> CheckerReport {
   let parsed = ParserProgress { document: authority.document, revision: authority.revision, status: parseStatus, nodes: reverse(nodesReversed), done: complete, errorCode: errorCode, message: errorMessage, errorStart: errorNode.startByte, errorEnd: errorNode.endByte, errorLine: errorNode.line, errorColumn: errorNode.column }
   return analyze_parsed(parsed)
 }
+fn append_checked_functions(local: List[CheckedFunction], external: List[CheckedFunction]) -> List[CheckedFunction] {
+  var merged = external
+  for item in reverse(local) { merged = prepend(merged, item) }
+  return merged
+}
 fn is_first_function_declaration(functions: List[CheckedFunction], name: Str, syntaxId: Int) -> Bool {
   var earlierMatches = 0
   for prior in functions {
@@ -2077,6 +2082,9 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
   return earlierMatches == 1
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
+  return analyze_chunk(parsed, [])
+}
+fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction]) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
     return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
@@ -2089,7 +2097,7 @@ fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   let sourceLength = byte_length(source_bytes())
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
-  let functions = collect_functions(nodes)
+  let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
   let bindingResult = collect_bindings(nodes, functions)
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
