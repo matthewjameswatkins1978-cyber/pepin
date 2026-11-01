@@ -322,7 +322,7 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
     def check_chunked(self, source):
         from tests.chunk_helper import (fields_map, nval, checked_fn_value,
                                          resolved_sig_value, slice_subtree, remap_chunk,
-                                         variant_to_union, sigs_from_tool)
+                                         variant_to_union, fetch_all_sigs, decl_closure)
         src = source.encode("utf-8")
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": "chunk-target", "bytes": list(src)})
@@ -331,11 +331,7 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         nodes = fields_map(parsed)["nodes"]["value"]
         sem0 = {"document": target["document"], "revision": target["revision"],
                 "entryFunctions": []}
-        sig_resp = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-                                       "tool": "pep-c23-checker-sigs",
-                                       "arguments": [parsed], "semanticTarget": sem0})
-        self.assertEqual(sig_resp.get("outcome"), "ok", sig_resp)
-        sigs = sigs_from_tool(sig_resp["result"])
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem0)
         v2u = variant_to_union(nodes)
         decl_by_id = {str(nval(n, "id")): n for n in nodes
                        if nval(n, "kind") in ("record_declaration", "union_declaration")

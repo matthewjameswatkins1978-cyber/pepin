@@ -128,6 +128,50 @@ def decl_closure(nodes, fn_sub, sigs_by_name, decl_name_to_id, v2u):
                     out.append(sn)
     return out
 
+def header_subtree(nodes, by_id, fn_id):
+    # Function header only (no statement-rooted bodies): tiny, always fits.
+    def in_body(n):
+        p = str(nval(n, "parentId"))
+        while p != "-1":
+            pn = by_id.get(p)
+            if pn is None:
+                return False
+            if nval(pn, "role") == "statement":
+                return True
+            p = str(nval(pn, "parentId"))
+        return False
+    keep = set()
+    stack = [str(fn_id)]
+    while stack:
+        cur = stack.pop()
+        if cur in keep:
+            continue
+        keep.add(cur)
+        for c in nodes:
+            if str(nval(c, "parentId")) == cur and nval(c, "role") != "statement" and not in_body(c):
+                stack.append(str(nval(c, "id")))
+    return [copy.deepcopy(n) for n in nodes if str(nval(n, "id")) in keep]
+
+def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-checker-sigs"):
+    # Authoritative signatures via per-function header chunks (each tiny).
+    # No host-side type reconstruction; transport only.
+    nodes = fields_map(parsed)["nodes"]["value"]
+    by_id = {str(nval(n, "id")): n for n in nodes}
+    fns = [n for n in nodes if nval(n, "kind") == "function" and str(nval(n, "parentId")) == "-1"]
+    allsigs = []
+    for fn in fns:
+        sub = header_subtree(nodes, by_id, nval(fn, "id"))
+        chunk = remap_chunk(sub)
+        hp = {"type": "ParserProgress", "fields": [
+            {"name": k, "value": ({"type": "List[FlatAstNode]", "value": chunk} if k == "nodes" else fields_map(parsed)[k])}
+            for k in [f["name"] for f in parsed["fields"]]]}
+        r = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                          "tool": tool_name, "arguments": [hp], "semanticTarget": sem})
+        if r.get("outcome") != "ok":
+            raise RuntimeError(f"signatures chunk failed: {r.get('error', {}).get('code')}")
+        allsigs.extend(sigs_from_tool(r["result"]))
+    return allsigs
+
 def variant_to_union(nodes):
     m = {}
     for n in nodes:
