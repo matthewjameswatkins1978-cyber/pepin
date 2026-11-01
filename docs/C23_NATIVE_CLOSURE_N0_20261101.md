@@ -133,6 +133,18 @@ Micro-gating is not useless, as an earlier version of this note claimed; it is s
 bounded by how many scans a statement performs. One scan removed, +24% on the cheapest
 shape.
 
+The same measurement sizes the structural fix. If removing one scan of `k` multiplies
+headroom by `k/(k-1)`, then 21/17 = 1.235 gives **k of about 5** — each statement
+performs roughly five full node-list scans. Cutting that to one or two would be worth
+2.6x to 5x, taking the emitter from about twenty expression nodes to roughly fifty to a
+hundred. That is worth doing and it is still far below `lexer_step`, so it is a real
+step rather than a solution, and `N4` remains required.
+
+Measured and reverted: making `pep_c23_requires_arena` answer both of its questions in
+one pass instead of two changed nothing on a call-heavy ladder (5 statements before and
+after), so it was reverted rather than kept as unmeasurable churn. Two no-gain changes
+have now been tried; the lever is scan *count per statement*, not scan tidiness.
+
 ## Backend-only blockers, ranked by use in the canonical sources
 
 Counted in `examples/pep_lexer.pep` and `examples/pep_parser.pep`. "Measured" means I
