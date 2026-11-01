@@ -31,38 +31,6 @@ def setnval(node, key, v):
 def children_of(nodes, pid):
     return [n for n in nodes if str(nval(n, "parentId")) == str(pid)]
 
-    # Purely textual over-approximation (no type reconstruction): a decl
-    # is included if its name appears anywhere it could be referenced.
-    # Over-inclusion is bounded waste; under-inclusion fails closed.
-    texts = {nval(x, "text") for x in fn_sub if nval(x, "text")}
-    refs = set(t for t in texts if t in decl_name_to_id)
-    for t in texts:
-        if t in v2u:
-            refs.add("__union:" + v2u[t])
-    for x in fn_sub:
-        if nval(x, "kind") == "call" and nval(x, "text") in sigs_by_name:
-            rt = sigs_by_name[nval(x, "text")].get("rtype", "") or ""
-            for d in decl_name_to_id:
-                if d and d in rt:
-                    refs.add(d)
-    if any(nval(x, "kind") == "field_access" for x in fn_sub):
-        for d, did in decl_name_to_id.items():
-            for n in nodes:
-                if str(nval(n, "id")) == did and nval(n, "kind") == "record_declaration":
-                    refs.add(d)
-                    break
-    out = []
-    seen = {str(nval(y, "id")) for y in fn_sub}
-    for dname, did in decl_name_to_id.items():
-        if dname in refs or ("__union:" + did) in refs:
-            for sn in slice_subtree(nodes, did):
-                sid = str(nval(sn, "id"))
-                if sid not in seen:
-                    seen.add(sid)
-                    out.append(sn)
-    return out
-
-
 def sigs_from_tool(result):
     # Parse List[ResolvedSignature] tool output into plain dicts.
     # Transport parsing only; all types were constructed by the checker.
@@ -111,12 +79,42 @@ def decl_closure(nodes, fn_sub, sigs_by_name, decl_name_to_id, v2u):
             for d in decl_name_to_id:
                 if d and d in rt:
                     refs.add(d)
-    if any(nval(x, "kind") == "field_access" for x in fn_sub):
-        for d, did in decl_name_to_id.items():
-            for n in nodes:
-                if str(nval(n, "id")) == did and nval(n, "kind") == "record_declaration":
-                    refs.add(d)
-                    break
+    # Field-access bases resolved precisely via a local binding map.
+    # Names come from annotation type_named texts (structural) or call
+    # rtype shapes from checker sigs (structured). No reconstruction.
+    bmap = {}
+    for x in fn_sub:
+        if nval(x, "kind") == "parameter":
+            tch = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "type"]
+            for t in tch:
+                for tn in [t] + [c for c in children_of(nodes, nval(t, "id"))]:
+                    if nval(tn, "kind") in ("type_named", "type_scalar"):
+                        bmap[nval(x, "text")] = nval(tn, "text")
+        if nval(x, "kind") in ("let", "var"):
+            nm = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "name"]
+            an = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "annotation"]
+            vl = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "value"]
+            if nm:
+                named = nval(nm[0], "text")
+                for a in an:
+                    for tn in [a] + [c for c in children_of(nodes, nval(a, "id"))]:
+                        if nval(tn, "kind") in ("type_named", "type_scalar"):
+                            bmap[named] = nval(tn, "text")
+                if named not in bmap:
+                    for v in vl:
+                        if nval(v, "kind") == "call" and nval(v, "text") in sigs_by_name:
+                            rs = sigs_by_name[nval(v, "text")].get("rshape", ("", "", 0))
+                            if rs[0] == "nominal" and rs[1]:
+                                bmap[named] = rs[1]
+    for x in fn_sub:
+        if nval(x, "kind") == "field_access":
+            v = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "value"]
+            if v and nval(v[0], "kind") == "name" and nval(v[0], "text") in bmap:
+                refs.add(bmap[nval(v[0], "text")])
+            if v and nval(v[0], "kind") == "call" and nval(v[0], "text") in sigs_by_name:
+                rs = sigs_by_name[nval(v[0], "text")].get("rshape", ("", "", 0))
+                if rs[0] == "nominal" and rs[1]:
+                    refs.add(rs[1])
     out = []
     seen = {str(nval(y, "id")) for y in fn_sub}
     for dname, did in decl_name_to_id.items():
