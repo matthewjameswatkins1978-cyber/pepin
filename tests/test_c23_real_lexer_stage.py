@@ -154,6 +154,37 @@ class PepC23RealLexerStageTests(unittest.TestCase):
                     "}\n")
                 self.run_native(source, expected)
 
+    def test_real_lex_token_zero_argument_constructor_runs_natively(self):
+        """A function returning a real lexer record with a List[Str] field.
+
+        The full `make_token` takes eight parameters and is checker-blocked, but the
+        constructor *shape* — a function whose body is one record construction with
+        literal fields, including a list — is reachable, and it is what a real
+        constructor reduces to once its parameters are supplied.
+        """
+        source = block("type LexToken") + (
+            "\nfn token_string() -> LexToken {\n"
+            "  return LexToken { kind: \"string\", text: \"\", integerValue: 0, "
+            "stringParts: [\"ab\", \"cd\"], startByte: 3, endByte: 9, line: 1, column: 4 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_string()\n"
+            "  return length(token.stringParts)\n"
+            "}\n")
+        self.run_native(source, 2)
+
+    def test_real_lex_token_zero_argument_constructor_with_empty_list(self):
+        source = block("type LexToken") + (
+            "\nfn token_empty() -> LexToken {\n"
+            "  return LexToken { kind: \"\", text: \"\", integerValue: 0, stringParts: [], "
+            "startByte: 0, endByte: 0, line: 0, column: 0 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_empty()\n"
+            "  return length(token.stringParts)\n"
+            "}\n")
+        self.run_native(source, 0)
+
     def test_real_utf8check_record_constructs_natively(self):
         """A real lexer result type, constructed and projected without its function body."""
         source = block("type Utf8Check") + (

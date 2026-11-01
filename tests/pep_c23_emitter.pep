@@ -1231,6 +1231,18 @@ fn pep_c23_list_parameter_of_type(nodes: List[FlatAstNode], function: FlatAstNod
 // three-or-more-argument call path, so programs that use neither pay no extra execution steps.
 fn pep_c23_infallible_value(nodes: List[FlatAstNode], node: FlatAstNode) -> Bool {
   if node.kind == "string" { return false } else {}
+  // A record constructor is infallible when every supplied field value is, which is what makes a
+  // zero-argument constructor returning a record with literal list fields safe to call.
+  if node.kind == "record" {
+    for supplied in nodes {
+      if supplied.parentId == node.id && supplied.role == "field" && supplied.kind == "record_field" {
+        let suppliedValue = pep_c23_child(nodes, supplied.id, "value", 0)
+        if !suppliedValue.found { return true } else {}
+        if pep_c23_infallible_value(nodes, suppliedValue.node) { return true } else {}
+      } else {}
+    }
+    return false
+  } else {}
   if node.kind == "list" {
     for element in nodes {
       if element.parentId == node.id && element.role == "element" {
@@ -2675,7 +2687,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       if argument.found || secondArgument.found || thirdArgument.found ||
          (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) &&
           !(recordResult && targetValue.found && targetValue.node.kind == "record" &&
-            !pep_c23_expression_may_fail(nodes, targetValue.node)) &&
+            !pep_c23_infallible_value(nodes, targetValue.node)) &&
           !safeRecursiveUnionConstruction) {
         return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result, safe record construction, or direct recursive-union constructor result")
       } else {}
