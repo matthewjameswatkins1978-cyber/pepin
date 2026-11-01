@@ -300,7 +300,8 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
                  pep_c23.parser_chunk_value(sample["document"], sample["revision"],
                                             finished_cursor)),
                 ("pep-c23-checker", "analyze_parsed", [empty_pp], empty_rep),
-                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext, empty_sig], empty_rep)]:
+                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext, empty_sig], empty_rep),
+                ("pep-c23-checker-sigs", "chunk_signatures", [empty_pp], empty_sig)]:
             cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
                               "tool": tool, "document": tool_document,
                               "revision": cls.tool_revision, "function": function})
@@ -319,16 +320,22 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         cls.session.process.terminate()
 
     def check_chunked(self, source):
-        from tests.chunk_helper import (fields_map, nval, extract_sigs, checked_fn_value,
+        from tests.chunk_helper import (fields_map, nval, checked_fn_value,
                                          resolved_sig_value, slice_subtree, remap_chunk,
-                                         variant_to_union)
+                                         variant_to_union, sigs_from_tool)
         src = source.encode("utf-8")
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": "chunk-target", "bytes": list(src)})
         self.assertEqual(target.get("outcome"), "ok", target)
         parsed = parse_target(self.session, src, target, self.tool_revision)
         nodes = fields_map(parsed)["nodes"]["value"]
-        sigs = extract_sigs(nodes)
+        sem0 = {"document": target["document"], "revision": target["revision"],
+                "entryFunctions": []}
+        sig_resp = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                       "tool": "pep-c23-checker-sigs",
+                                       "arguments": [parsed], "semanticTarget": sem0})
+        self.assertEqual(sig_resp.get("outcome"), "ok", sig_resp)
+        sigs = sigs_from_tool(sig_resp["result"])
         v2u = variant_to_union(nodes)
         decl_by_id = {str(nval(n, "id")): n for n in nodes
                        if nval(n, "kind") in ("record_declaration", "union_declaration")

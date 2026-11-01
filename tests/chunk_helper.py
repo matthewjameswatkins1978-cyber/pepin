@@ -31,104 +31,100 @@ def setnval(node, key, v):
 def children_of(nodes, pid):
     return [n for n in nodes if str(nval(n, "parentId")) == str(pid)]
 
-def type_string(nodes, tid):
-    tns = [n for n in nodes if str(nval(n, "id")) == str(tid)]
-    if not tns:
-        return ""
-    tn = tns[0]
-    k = nval(tn, "kind")
-    if k in ("type_scalar", "type_named"):
-        return nval(tn, "text")
-    if k == "type_list":
-        for c in children_of(nodes, tid):
-            if nval(c, "role") == "element_type":
-                return "List[" + type_string(nodes, nval(c, "id")) + "]"
-    return ""
-
-def type_shape(nodes, tid):
-    tns = [n for n in nodes if str(nval(n, "id")) == str(tid)]
-    if not tns:
-        return ("", "", 0)
-    tn = tns[0]
-    k = nval(tn, "kind")
-    if k == "type_scalar":
-        return ("builtin", nval(tn, "text"), 0)
-    if k == "type_named":
-        return ("nominal", nval(tn, "text"), 0)
-    if k == "type_list":
-        for c in children_of(nodes, tid):
-            if nval(c, "role") == "element_type":
-                sk, sn, sd = type_shape(nodes, nval(c, "id"))
-                return (sk, sn, sd + 1)
-    return ("", "", 0)
-
-def decl_closure(nodes, fn_sub, sigs_by_name, decl_name_to_id, v2u):
-    refs = set()
-    # 1. all nominal names inside type annotations in the function
-    def collect_type_names(tid):
-        tns = [n for n in nodes if str(nval(n, "id")) == str(tid)]
-        if not tns:
-            return
-        tn = tns[0]
-        k = nval(tn, "kind")
-        if k == "type_named":
-            refs.add(nval(tn, "text"))
-        for c in children_of(nodes, tid):
-            collect_type_names(nval(c, "id"))
-    fn_ids = {str(nval(x, "id")) for x in fn_sub}
-    for x in fn_sub:
-        if nval(x, "kind") in ("type_scalar", "type_named", "type_list"):
-            collect_type_names(nval(x, "id"))
-        if nval(x, "kind") == "record" and nval(x, "text"):
-            refs.add(nval(x, "text"))
-        if nval(x, "kind") in ("record", "call", "constructor_pattern") and nval(x, "text") in v2u:
-            refs.add("__union:" + v2u[nval(x, "text")])
-    # 2. call return types via signatures (local + external)
+    # Purely textual over-approximation (no type reconstruction): a decl
+    # is included if its name appears anywhere it could be referenced.
+    # Over-inclusion is bounded waste; under-inclusion fails closed.
+    texts = {nval(x, "text") for x in fn_sub if nval(x, "text")}
+    refs = set(t for t in texts if t in decl_name_to_id)
+    for t in texts:
+        if t in v2u:
+            refs.add("__union:" + v2u[t])
     for x in fn_sub:
         if nval(x, "kind") == "call" and nval(x, "text") in sigs_by_name:
-            rt = sigs_by_name[nval(x, "text")]["rtype"]
-            if rt and rt not in ("Int", "Bool", "Str", "Unit", "SourceBytes") and not rt.startswith("List["):
-                refs.add(rt)
-            elif rt.startswith("List[") and rt.endswith("]"):
-                inner = rt[5:-1]
-                if inner and inner not in ("Int", "Bool", "Str", "Unit", "SourceBytes"):
-                    refs.add(inner)
-    # 3. field-access base types via local binding map (params + annotated lets)
-    bmap = {}
-    for x in fn_sub:
-        if nval(x, "kind") == "parameter":
-            tch = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "type"]
-            if tch:
-                tn = type_string(nodes, nval(tch[0], "id"))
-                if tn:
-                    bmap[nval(x, "text")] = tn
-        if nval(x, "kind") in ("let", "var"):
-            nm = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "name"]
-            an = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "annotation"]
-            if nm and an:
-                tn = type_string(nodes, nval(an[0], "id"))
-                if tn:
-                    bmap[nval(nm[0], "text")] = tn
-    for x in fn_sub:
-        if nval(x, "kind") == "field_access":
-            v = [c for c in children_of(nodes, nval(x, "id")) if nval(c, "role") == "value"]
-            if v and nval(v[0], "kind") == "name" and nval(v[0], "text") in bmap:
-                bt = bmap[nval(v[0], "text")]
-                if bt and not bt.startswith("List["):
-                    refs.add(bt)
-                elif bt.startswith("List[") and bt.endswith("]"):
-                    refs.add(bt[5:-1])
-            if v and nval(v[0], "kind") == "call" and nval(v[0], "text") in sigs_by_name:
-                rt = sigs_by_name[nval(v[0], "text")]["rtype"]
-                if rt and not rt.startswith("List[") and rt not in ("Int", "Bool", "Str", "Unit", "SourceBytes"):
-                    refs.add(rt)
-    # 4. materialise referenced decl subtrees
+            rt = sigs_by_name[nval(x, "text")].get("rtype", "") or ""
+            for d in decl_name_to_id:
+                if d and d in rt:
+                    refs.add(d)
+    if any(nval(x, "kind") == "field_access" for x in fn_sub):
+        for d, did in decl_name_to_id.items():
+            for n in nodes:
+                if str(nval(n, "id")) == did and nval(n, "kind") == "record_declaration":
+                    refs.add(d)
+                    break
     out = []
+    seen = {str(nval(y, "id")) for y in fn_sub}
     for dname, did in decl_name_to_id.items():
         if dname in refs or ("__union:" + did) in refs:
             for sn in slice_subtree(nodes, did):
-                if str(nval(sn, "id")) not in fn_ids and \
-                        all(str(nval(y, "id")) != str(nval(sn, "id")) for y in out):
+                sid = str(nval(sn, "id"))
+                if sid not in seen:
+                    seen.add(sid)
+                    out.append(sn)
+    return out
+
+
+def sigs_from_tool(result):
+    # Parse List[ResolvedSignature] tool output into plain dicts.
+    # Transport parsing only; all types were constructed by the checker.
+    # Note: scalar fields are {type, value}; record fields are {type, fields}.
+    out = []
+    items = result.get("value", []) if isinstance(result, dict) else []
+    for i, s in enumerate(items):
+        f = fields_map(s)
+        params = []
+        plist = f.get("params", {})
+        plist = plist.get("value", []) if isinstance(plist, dict) else []
+        for p in plist:
+            pf = fields_map(p)
+            idx = pf.get("index", {}).get("value", "0")
+            tnm = pf.get("typeName", {}).get("value", "")
+            shp = fields_map(pf.get("shape", {}))
+            sk = shp.get("kind", {}).get("value", "")
+            sn = shp.get("name", {}).get("value", "")
+            sd = shp.get("listDepth", {}).get("value", "0")
+            params.append((tnm, (sk, sn, int(sd or 0)), int(idx or 0)))
+        rsh = fields_map(f.get("returnShape", {}))
+        rk = rsh.get("kind", {}).get("value", "")
+        rn = rsh.get("name", {}).get("value", "")
+        rd = rsh.get("listDepth", {}).get("value", "0")
+        out.append({"name": f.get("functionName", {}).get("value", ""),
+                    "arity": len(params),
+                    "rtype": f.get("returnType", {}).get("value", ""),
+                    "rshape": (rk, rn, int(rd or 0)),
+                    "semid": 9000 + i, "synid": 1000000000 + i, "ptypes": params,
+                    "id": f.get("functionId", {}).get("value", "0"),
+                    "start": "0", "end": "0"})
+    return out
+
+def decl_closure(nodes, fn_sub, sigs_by_name, decl_name_to_id, v2u):
+    # Purely textual over-approximation (no type reconstruction): a decl
+    # is included if its name appears anywhere it could be referenced.
+    # Over-inclusion is bounded waste; under-inclusion fails closed.
+    texts = {nval(x, "text") for x in fn_sub if nval(x, "text")}
+    refs = set(t for t in texts if t in decl_name_to_id)
+    for t in texts:
+        if t in v2u:
+            refs.add("__union:" + v2u[t])
+    for x in fn_sub:
+        if nval(x, "kind") == "call" and nval(x, "text") in sigs_by_name:
+            rt = sigs_by_name[nval(x, "text")].get("rtype", "") or ""
+            for d in decl_name_to_id:
+                if d and d in rt:
+                    refs.add(d)
+    if any(nval(x, "kind") == "field_access" for x in fn_sub):
+        for d, did in decl_name_to_id.items():
+            for n in nodes:
+                if str(nval(n, "id")) == did and nval(n, "kind") == "record_declaration":
+                    refs.add(d)
+                    break
+    out = []
+    seen = {str(nval(y, "id")) for y in fn_sub}
+    for dname, did in decl_name_to_id.items():
+        if dname in refs or ("__union:" + did) in refs:
+            for sn in slice_subtree(nodes, did):
+                sid = str(nval(sn, "id"))
+                if sid not in seen:
+                    seen.add(sid)
                     out.append(sn)
     return out
 
@@ -138,34 +134,6 @@ def variant_to_union(nodes):
         if nval(n, "kind") == "variant_declaration":
             m[nval(n, "text")] = str(nval(n, "parentId"))
     return m
-
-def extract_sigs(nodes):
-    sigs = []
-    for i, n in enumerate([x for x in nodes if nval(x, "kind") == "function" and str(nval(x, "parentId")) == "-1"]):
-        fid = nval(n, "id")
-        kids = children_of(nodes, fid)
-        params = [c for c in kids if nval(c, "kind") == "parameter"]
-        ptypes = []
-        for pi, p in enumerate(params):
-            tch = [c for c in children_of(nodes, nval(p, "id")) if nval(c, "role") == "type"]
-            if tch:
-                ptypes.append((type_string(nodes, nval(tch[0], "id")) or "",
-                               type_shape(nodes, nval(tch[0], "id")), pi))
-            else:
-                ptypes.append(("", ("", "", 0), pi))
-        ret = [c for c in kids if nval(c, "role") == "return_type"]
-        rtype, rshape = "Unit", ("builtin", "Unit", 0)
-        if ret:
-            rtype = type_string(nodes, nval(ret[0], "id")) or "Unit"
-            rshape = type_shape(nodes, nval(ret[0], "id"))
-            if rshape[0] == "":
-                rshape = ("builtin", "Unit", 0)
-        sigs.append({"name": nval(n, "text"), "arity": len(params),
-                     "rtype": rtype, "rshape": rshape, "semid": 9000 + i,
-                     "synid": 1000000000 + i, "ptypes": ptypes,
-                     "start": nval(n, "startByte"), "end": nval(n, "endByte"),
-                     "id": fid})
-    return sigs
 
 def resolved_sig_value(sig):
     pfacts = []
@@ -177,10 +145,16 @@ def resolved_sig_value(sig):
                 {"name": "kind", "value": T("Str", sk)},
                 {"name": "name", "value": T("Str", sn)},
                 {"name": "listDepth", "value": T("Int", sd)}]}}]})
+    rsk, rsn, rsd = sig.get("rshape", ("", "", 0))
     return {"type": "ResolvedSignature", "fields": [
         {"name": "functionId", "value": T("Int", sig["synid"])},
         {"name": "functionName", "value": T("Str", sig["name"])},
-        {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": pfacts}}]}
+        {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": pfacts}},
+        {"name": "returnType", "value": T("Str", sig.get("rtype", ""))},
+        {"name": "returnShape", "value": {"type": "PepTypeShape", "fields": [
+            {"name": "kind", "value": T("Str", rsk)},
+            {"name": "name", "value": T("Str", rsn)},
+            {"name": "listDepth", "value": T("Int", rsd)}]}}]}
 
 def checked_fn_value(sig):
     sk, sn, sd = sig["rshape"]

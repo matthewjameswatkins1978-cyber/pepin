@@ -585,22 +585,26 @@ fn is_expression_kind(kind: Str) -> Bool {
   return kind == "integer" || kind == "boolean" || kind == "string" || kind == "name" || kind == "call" || kind == "binary" || kind == "unary" || kind == "list" || kind == "if_expression" || kind == "record" || kind == "field_access" || kind == "match" || kind == "hole"
 }
 type ParamTypeFact { index: Int, typeName: Str, shape: PepTypeShape }
-type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact] }
-fn resolve_all_signatures(nodes: List[FlatAstNode]) -> List[ResolvedSignature] {
+type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact], returnType: Str, returnShape: PepTypeShape }
+fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool) -> List[ResolvedSignature] {
   var finished: List[ResolvedSignature] = []
   var currentId = -1
   var currentName = ""
   var currentParams: List[ParamTypeFact] = []
   var currentIndex = 0
+  var currentReturnType = ""
+  var currentReturnShape = empty_type_shape()
   for node in nodes {
     if node.kind == "function" && node.parentId == -1 {
       if currentId != -1 {
-        finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams })
+        finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape })
       } else {}
       currentId = node.id
       currentName = node.text
       currentParams = []
       currentIndex = 0
+      currentReturnType = ""
+      currentReturnShape = empty_type_shape()
     } else {
       if node.kind == "parameter" && node.parentId == currentId && currentId != -1 {
         let typeChild = child_at(nodes, node.id, "type", 0)
@@ -608,11 +612,16 @@ fn resolve_all_signatures(nodes: List[FlatAstNode]) -> List[ResolvedSignature] {
           currentParams = prepend(currentParams, ParamTypeFact { index: currentIndex, typeName: type_name_at(nodes, typeChild.node.id), shape: type_shape_at(nodes, typeChild.node.id) })
           currentIndex = currentIndex + 1
         } else {}
-      } else {}
+      } else {
+        if node.role == "return_type" && node.parentId == currentId && currentId != -1 && includeReturns {
+          currentReturnType = type_name_at(nodes, node.id)
+          currentReturnShape = type_shape_at(nodes, node.id)
+        } else {}
+      }
     }
   }
   if currentId != -1 {
-    finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams })
+    finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape })
   } else {}
   return reverse(finished)
 }
@@ -1910,7 +1919,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let target = find_function(functions, node.text)
         if target.found {
           if !resolvedSigsReady {
-            resolvedSigs = append_signatures(resolve_all_signatures(nodes), externalSignatures)
+            resolvedSigs = append_signatures(resolve_all_signatures(nodes, false), externalSignatures)
             resolvedSigsReady = true
           } else {}
           var index = 0
@@ -2220,6 +2229,16 @@ fn is_first_duplicate_function(functions: List[CheckedFunction], name: Str, synt
 }
 fn analyze_parsed(parsed: ParserProgress) -> CheckerReport {
   return analyze_chunk(parsed, [], [])
+}
+fn chunk_signatures(parsed: ParserProgress) -> List[ResolvedSignature] {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision { return [] } else {}
+  if !parsed.done { return [] } else {}
+  if parsed.status != "complete" { return [] } else {}
+  let sourceLength = byte_length(source_bytes())
+  let nodes = sort_nodes(parsed.nodes)
+  if !tree_is_valid(nodes, sourceLength) { return [] } else {}
+  return resolve_all_signatures(nodes, true)
 }
 fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
   let authority = semantic_snapshot()
