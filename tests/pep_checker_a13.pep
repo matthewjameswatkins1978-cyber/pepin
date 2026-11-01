@@ -12,6 +12,7 @@ type TypeAnalysis { expressionTypes: List[ExpressionTypeFact], diagnostics: List
 type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], calls: List[ResolvedCall], expressionTypes: List[ExpressionTypeFact], holes: List[HoleFact], diagnostics: List[CheckDiagnostic] }
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
+type FieldTypeFacts { field: FlatAstNode, duplicate: Bool, typeFound: Bool, shape: PepTypeShape, name: Str, supported: Bool, code: Str }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
@@ -1060,6 +1061,107 @@ fn supported_primitive_type(typeName: Str) -> Bool {
 fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
   return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found
 }
+fn support_code_for_shape(nodes: List[FlatAstNode], shape: PepTypeShape) -> Str {
+  let name = legacy_type_name(shape)
+  if shape.kind == "" { return "PEP_A13_TYPE_UNSUPPORTED" } else {}
+  if shape.kind == "builtin" {
+    if supported_primitive_type(name) { return "" } else {}
+    return "PEP_A13_TYPE_UNSUPPORTED"
+  } else {}
+  if shape.kind == "nominal" {
+    if record_declaration(nodes, shape.name).found || union_declaration(nodes, shape.name).found { return "" } else {}
+    return "PEP_UNKNOWN_TYPE"
+  } else {}
+  return "PEP_A13_TYPE_UNSUPPORTED"
+}
+fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int) -> List[FieldTypeFacts] {
+  var finished: List[FieldTypeFacts] = []
+  var pending = false
+  var pendingField = empty_node()
+  var pendingDuplicate = false
+  var walking = false
+  var walkField = empty_node()
+  var walkDuplicate = false
+  var walkNext = -1
+  var walkDepth = 0
+  for node in nodes {
+    if pending {
+      pending = false
+      if node.role == "type" && node.childIndex == 0 && node.parentId == pendingField.id {
+        if node.kind == "type_list" {
+          walking = true
+          walkField = pendingField
+          walkDuplicate = pendingDuplicate
+          walkNext = node.id + 1
+          walkDepth = 1
+        } else {
+          if node.kind == "type_scalar" {
+            let shape = PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }
+            let name = legacy_type_name(shape)
+            let code = support_code_for_shape(nodes, shape)
+            finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+          } else {
+            if node.kind == "type_named" {
+              let shape = PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 }
+              let name = legacy_type_name(shape)
+              let code = support_code_for_shape(nodes, shape)
+              finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+            } else {
+              finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+            }
+          }
+        }
+      } else {
+        finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" })
+      }
+    } else {}
+    if node.parentId == recordId && node.kind == "field_declaration" {
+      if walking {
+        finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+        walking = false
+      } else {}
+      var earlier = 0
+      for seen in finished {
+        if seen.field.text == node.text { earlier = earlier + 1 } else {}
+      }
+      pending = true
+      pendingField = node
+      pendingDuplicate = earlier == 1
+    } else {}
+    if walking && node.id == walkNext {
+      if node.kind == "type_list" {
+        walkNext = node.id + 1
+        walkDepth = walkDepth + 1
+      } else {
+        if node.kind == "type_scalar" {
+          let shape = PepTypeShape { kind: "builtin", name: node.text, listDepth: walkDepth }
+          let name = legacy_type_name(shape)
+          let code = support_code_for_shape(nodes, shape)
+          finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+        } else {
+          if node.kind == "type_named" {
+            let shape = PepTypeShape { kind: "nominal", name: node.text, listDepth: walkDepth }
+            let name = legacy_type_name(shape)
+            let code = support_code_for_shape(nodes, shape)
+            finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+          } else {
+            finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+          }
+        }
+        walking = false
+      }
+    } else {}
+  }
+  if pending {
+    finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" })
+  } else {}
+  if walking {
+    finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+  } else {}
+  var ordered: List[FieldTypeFacts] = []
+  for facts in finished { ordered = prepend(ordered, facts) }
+  return ordered
+}
 fn supported_type_at(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Bool {
   if supported_type(nodes, knownName) { return true } else {}
   let shape = type_shape_at(nodes, id)
@@ -1276,13 +1378,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     if node.kind == "record_declaration" {
       if is_first_duplicate_type_declaration(nodes, node.text, node.id) && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
       if supported_primitive_type(node.text) && is_first_type_declaration(nodes, node.text, node.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
-      for field in nodes {
-        if field.parentId == node.id && field.kind == "field_declaration" {
-          if is_first_duplicate_occurrence(nodes, node.id, "field_declaration", field.text, field.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", field)) } else {}
-          let fieldType = child_at(nodes, field.id, "type", 0)
-          if fieldType.found && !supported_type_at(nodes, fieldType.node.id, type_name_at(nodes, fieldType.node.id)) {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, fieldType.node.id, type_name_at(nodes, fieldType.node.id)), "Record field type is outside the implemented checker subset", field))
-          } else {}
+      for facts in resolve_record_fields(nodes, node.id) {
+        if facts.duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", facts.field)) } else {}
+        if facts.typeFound && !facts.supported {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(facts.code, "Record field type is outside the implemented checker subset", facts.field))
         } else {}
       }
     } else {}

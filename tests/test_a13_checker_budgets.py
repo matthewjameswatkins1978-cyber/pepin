@@ -135,15 +135,15 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
                 self.assert_ocaml_valid(source)
                 self.assertEqual(self.report_status(self.invoke_checker(source)), "valid")
 
-    def test_lexprogress_closure_hits_step_budget(self):
-        # A2's production failure (A2N-20261031-002): real LexToken/LexCursor/
-        # LexProgress closure stops with PEP_RUNTIME_STEP_LIMIT at 3413:8.
-        # Boundary pin: flip to "valid" when the checker gets cheaper.
+    def test_lexprogress_closure_checks_valid(self):
+        # A2's production failure (A2N-20261031-002), repaired by the
+        # single-pass record-field resolution: the real LexToken/LexCursor/
+        # LexProgress closure now checks valid under the unchanged 100k budget.
         source = self.fixtures["T5"]
         self.assert_ocaml_valid(source)
         result = self.invoke_checker(source)
-        self.assertEqual(result.get("outcome"), "error", result)
-        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
 
     def test_thirty_two_records_hit_step_budget(self):
         # Scale pin: 32 trivial one-field records exceed the unchanged budget.
