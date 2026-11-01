@@ -2545,6 +2545,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if !targetStatement.found || (targetStatement.node.kind != "return" && !conditionalTarget) || (!conditionalTarget && !targetValue.found) {
       return pep_c23_unsupported("Pep C23 calls require a direct-return or supported conditional-return target")
     } else {}
+    // A direct self-call that passes its own parameter through unchanged cannot terminate, and the
+    // C compilers reject the resulting function under -Winfinite-recursion with -Werror, so emitting
+    // it would break the emit-or-refuse contract. Name the shape instead.
+    if target.node.id == function.id && parameter.found && !secondParameter.found &&
+       !thirdParameter.found && argument.found && !secondArgument.found &&
+       argument.node.kind == "name" && argument.node.text == parameter.node.text {
+      return pep_c23_unsupported("Pep C23 recursive calls must pass a changed argument")
+    } else {}
     // Only four or more parameters or arguments use the general ordered path, detected through the
     // already-computed lookups so no extra traversal runs. Calls with one to three arguments keep
     // the fixed-slot paths and their exact previous behaviour and step cost: routing them here was
@@ -2622,6 +2630,12 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let safeRecursiveUnionConstruction = returnedUnion.found && constructorUnion.found &&
         returnedUnion.node.id == constructorUnion.node.id &&
         pep_c23_union_is_recursive(nodes, returnedUnion.node)
+      // A zero-argument function that calls itself has no base case and no progress argument, so
+      // name it explicitly instead of letting it fall into the generic result-shape refusal.
+      if targetValue.found && targetValue.node.kind == "call" &&
+         targetValue.node.text == target.node.text {
+        return pep_c23_unsupported("Pep C23 recursive calls are unsupported for zero-argument targets")
+      } else {}
       if argument.found || secondArgument.found || thirdArgument.found ||
          (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) &&
           !(recordResult && targetValue.found && targetValue.node.kind == "record" &&
