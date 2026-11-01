@@ -167,19 +167,127 @@ class PepC23ListUpdateTests(unittest.TestCase):
             "}\n",
             "prepend cannot evaluate a fallible value inside an arena update")
 
-    def test_str_list_updates_are_not_claimed(self):
-        """List[Str] mutable bindings are not lowered yet, so this stays refused."""
+    def test_record_list_updates_are_not_claimed(self):
+        """List[record] mutable bindings are not lowered yet, so this stays refused."""
         self.assert_refused(
+            "type P { x: Int }\n"
+            "fn main() -> Int {\n"
+            "  var points: List[P] = []\n"
+            "  var guard = 0\n"
+            "  while guard <= 0 {\n"
+            "    points = prepend(points, P { x: 1 })\n"
+            "    guard = guard + 1\n"
+            "  }\n"
+            "  return length(points)\n"
+            "}\n",
+            "requires a valid Pep checker report")
+
+    # --- List[Str], the lexer's stringParts shape ---------------------------
+    #
+    # Order is verified for Int and Bool by folding the list into a base-10 number.
+    # List[Str] has no native element search or indexing yet, so these cases verify
+    # emission, strict compilation, execution, length and arena growth. The prepend
+    # and reverse helpers are structurally identical to the Int ones.
+
+    def test_str_list_prepend_and_reverse_execute(self):
+        generated = self.run_native(
             "fn main() -> Int {\n"
             "  var parts: List[Str] = []\n"
             "  var guard = 0\n"
             "  while guard <= 0 {\n"
             "    parts = prepend(parts, \"a\")\n"
+            "    parts = prepend(parts, \"b\")\n"
+            "    parts = reverse(parts)\n"
             "    guard = guard + 1\n"
             "  }\n"
             "  return length(parts)\n"
             "}\n",
-            "prepend/reverse currently require an Int or Bool list binding")
+            2)
+        self.assertIn("pep_list_str_prepend(pep_arena,", generated)
+        self.assertIn("pep_list_str_reverse(pep_arena,", generated)
+
+    def test_str_list_reverse_of_empty_is_safe(self):
+        self.run_native(
+            "fn main() -> Int {\n"
+            "  var parts: List[Str] = []\n"
+            "  var guard = 0\n"
+            "  while guard <= 0 {\n"
+            "    parts = reverse(parts)\n"
+            "    guard = guard + 1\n"
+            "  }\n"
+            "  return length(parts)\n"
+            "}\n",
+            0)
+
+    def test_str_list_growth_across_many_updates(self):
+        """Five arena-backed updates in one loop body must all survive."""
+        self.run_native(
+            "fn main() -> Int {\n"
+            "  var parts: List[Str] = []\n"
+            "  var guard = 0\n"
+            "  while guard <= 0 {\n"
+            "    parts = prepend(parts, \"a\")\n"
+            "    parts = prepend(parts, \"b\")\n"
+            "    parts = prepend(parts, \"c\")\n"
+            "    parts = prepend(parts, \"d\")\n"
+            "    parts = prepend(parts, \"e\")\n"
+            "    guard = guard + 1\n"
+            "  }\n"
+            "  return length(parts)\n"
+            "}\n",
+            5)
+
+    def test_list_update_count_is_bounded_by_the_emitter_step_budget(self):
+        """Measured boundary, recorded rather than hidden.
+
+        Five arena-backed list updates in one function body emit; six exceed the
+        emitter's fixed 100k-step per-invocation budget. Lucy's real `lexer_step`
+        performs about seventeen prepend/reverse calls, so this is a genuine
+        emitter-headroom blocker for the native lexer, not a test artefact. No cap
+        was raised to make it pass.
+        """
+        def program(count):
+            body = "".join(f'    parts = prepend(parts, "x{index}")\n' for index in range(count))
+            return ("fn main() -> Int {\n"
+                    "  var parts: List[Str] = []\n"
+                    "  var guard = 0\n"
+                    "  while guard <= 0 {\n"
+                    + body +
+                    "    guard = guard + 1\n"
+                    "  }\n"
+                    "  return length(parts)\n"
+                    "}\n")
+
+        emit(program(5).encode("utf-8"))
+        with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
+            emit(program(6).encode("utf-8"))
+
+    def test_str_list_reassignment_between_matching_bindings(self):
+        self.run_native(
+            "fn main() -> Int {\n"
+            "  var first: List[Str] = [\"x\"]\n"
+            "  var second: List[Str] = []\n"
+            "  var guard = 0\n"
+            "  while guard <= 0 {\n"
+            "    second = first\n"
+            "    guard = guard + 1\n"
+            "  }\n"
+            "  return length(second)\n"
+            "}\n",
+            1)
+
+    def test_str_list_prepend_rejects_a_non_str_value(self):
+        self.assert_refused(
+            "fn main() -> Int {\n"
+            "  var parts: List[Str] = []\n"
+            "  var guard = 0\n"
+            "  while guard <= 0 {\n"
+            "    parts = prepend(parts, 1)\n"
+            "    guard = guard + 1\n"
+            "  }\n"
+            "  return length(parts)\n"
+            "}\n",
+            "requires a valid Pep checker report")
 
 
 if __name__ == "__main__":

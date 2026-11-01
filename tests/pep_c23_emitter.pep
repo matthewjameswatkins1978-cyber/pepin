@@ -92,6 +92,7 @@ fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstN
     let elementType = pep_c23_child(nodes, declared.node.id, "element_type", 0)
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Int" { return "integer" } else {}
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" { return "boolean" } else {}
+    if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Str" { return "string" } else {}
   } else {}
   let initial = pep_c23_child(nodes, binding.id, "value", 0)
   let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
@@ -2963,10 +2964,12 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
 fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, call: FlatAstNode,
   target: FlatAstNode) -> PepC23Emission {
   let elementKind = pep_c23_mutable_list_element_kind(nodes, target)
-  if elementKind != "integer" && elementKind != "boolean" {
-    return pep_c23_unsupported("Pep C23 prepend/reverse currently require an Int or Bool list binding")
+  if elementKind != "integer" && elementKind != "boolean" && elementKind != "string" {
+    return pep_c23_unsupported("Pep C23 prepend/reverse currently require an Int, Bool, or Str list binding")
   } else {}
-  let suffix = if elementKind == "boolean" { "_bool" } else { "_int" }
+  let suffix = if elementKind == "boolean" { "_bool" } else {
+    if elementKind == "string" { "_str" } else { "_int" }
+  }
   let argument = pep_c23_child(nodes, call.id, "argument", 0)
   let secondArgument = pep_c23_child(nodes, call.id, "argument", 1)
   let thirdArgument = pep_c23_child(nodes, call.id, "argument", 2)
@@ -2990,8 +2993,11 @@ fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, 
   if argument.node.kind != "name" || argument.node.text != target.text {
     return pep_c23_unsupported("Pep C23 prepend is currently limited to the binding being assigned")
   } else {}
-  if pep_c23_expression_may_fail(nodes, secondArgument.node) {
+  if pep_c23_infallible_value(nodes, secondArgument.node) {
     return pep_c23_unsupported("Pep C23 prepend cannot evaluate a fallible value inside an arena update")
+  } else {}
+  if elementKind == "string" && pep_c23_str_expression(nodes, function, secondArgument.node).found == false {
+    return pep_c23_unsupported("Pep C23 Str list prepend requires a Str literal, parameter, or local")
   } else {}
   let lowered = pep_c23_expression(nodes, function, secondArgument.node)
   if lowered.status != "emitted" { return lowered } else {}
@@ -3053,7 +3059,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
           } else {}
         }
         if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
-        let targetList = pep_c23_mutable_list_binding(nodes, function, statement.text)
+        let targetList = assignmentTargetList
         if targetList.found {
           let targetKind = pep_c23_mutable_list_element_kind(nodes, targetList.node)
           var sourceKind = if listUpdateFound { targetKind } else { "" }
@@ -3065,7 +3071,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
             if sourceIntParameter.found { sourceKind = "integer" } else {}
             if sourceBoolParameter.found { sourceKind = "boolean" } else {}
           } else {}
-          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean") {
+          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean" && sourceKind != "string") {
             return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
           } else {}
         } else {}
@@ -3133,7 +3139,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
             var hasRecordElement = false
             for item in nodes {
               if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
-              if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
+              if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && item.kind != "string" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
                 return pep_c23_unsupported("Pep C23 immutable collection bindings require Int, Bool, or supported record list literals")
               } else {}
             }
@@ -3303,6 +3309,7 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
   if requiresArena {
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_int pep_list_int_prepend(pep_arena_t *pep_a, pep_list_int pep_values, int64_t pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_count * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_int pep_list_int_reverse(pep_arena_t *pep_a, pep_list_int pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_int){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_values.length * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_values.length };\n}\n")
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_bool pep_list_bool_prepend(pep_arena_t *pep_a, pep_list_bool pep_values, _Bool pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_count * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_bool pep_list_bool_reverse(pep_arena_t *pep_a, pep_list_bool pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_bool){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_values.length * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_values.length };\n}\n")
+    reversed = prepend(reversed, "[[maybe_unused]] static pep_list_str pep_list_str_prepend(pep_arena_t *pep_a, pep_list_str pep_values, pep_str pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(pep_str)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  pep_str *pep_out = (pep_str *)pep_arena_alloc(pep_a, pep_count * sizeof(pep_str), _Alignof(pep_str));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_str){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_str pep_list_str_reverse(pep_arena_t *pep_a, pep_list_str pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_str){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(pep_str)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  pep_str *pep_out = (pep_str *)pep_arena_alloc(pep_a, pep_values.length * sizeof(pep_str), _Alignof(pep_str));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_str){ .data = pep_out, .length = pep_values.length };\n}\n")
   } else {}
   reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n[[maybe_unused]] static int64_t pep_checked_length(size_t length) { if ((uintmax_t)length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } return (int64_t)length; }\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
   for record in parsed.nodes {
@@ -3471,14 +3478,20 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           } else {
             if initialValue.node.kind == "list" && statement.kind == "var" {
               let elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
-              if elementKind != "boolean" && elementKind != "integer" {
-                return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int or Bool list")
+              if elementKind != "boolean" && elementKind != "integer" && elementKind != "string" {
+                return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int, Bool, or Str list")
               } else {}
               let initial = if elementKind == "boolean" {
                 pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
-              } else { pep_c23_int_list_argument(parsed.nodes, node, initialValue.node) }
+              } else {
+                if elementKind == "string" {
+                  pep_c23_str_list_argument(parsed.nodes, node, initialValue.node)
+                } else { pep_c23_int_list_argument(parsed.nodes, node, initialValue.node) }
+              }
               if initial.status != "emitted" { return initial } else {}
-              let cType = if elementKind == "boolean" { "pep_list_bool" } else { "pep_list_int" }
+              let cType = if elementKind == "boolean" { "pep_list_bool" } else {
+                if elementKind == "string" { "pep_list_str" } else { "pep_list_int" }
+              }
               for part in ["  ", cType, " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
               for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
               bodyParts = append(bodyParts, ";\n")
