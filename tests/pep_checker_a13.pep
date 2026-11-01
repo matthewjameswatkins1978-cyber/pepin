@@ -13,7 +13,7 @@ type CheckerReport { document: Str, revision: Str, status: Str, syntaxNodeCount:
 type NodeLookup { found: Bool, node: FlatAstNode }
 type UnreachableLookup { found: Bool, node: FlatAstNode }
 type FieldTypeFacts { field: FlatAstNode, duplicate: Bool, typeFound: Bool, shape: PepTypeShape, name: Str, supported: Bool, code: Str }
-type ResolvedRecord { duplicateType: Bool, firstType: Bool, fields: List[FieldTypeFacts] }
+type ResolvedRecord { recordId: Int, duplicateType: Bool, firstType: Bool, fields: List[FieldTypeFacts] }
 type ChildRoleCount { role: Str, count: Int }
 type ValidationFrame { nodeId: Int, node: FlatAstNode, roleCounts: List[ChildRoleCount] }
 type ValidationParent { found: Bool, frames: List[ValidationFrame], parent: ValidationFrame }
@@ -1062,7 +1062,7 @@ fn supported_primitive_type(typeName: Str) -> Bool {
 fn supported_type(nodes: List[FlatAstNode], typeName: Str) -> Bool {
   return supported_primitive_type(typeName) || record_declaration(nodes, typeName).found || union_declaration(nodes, typeName).found
 }
-fn support_code_for_shape(nodes: List[FlatAstNode], shape: PepTypeShape) -> Str {
+fn support_code_for_shape(knownTypes: List[Str], shape: PepTypeShape) -> Str {
   let name = legacy_type_name(shape)
   if shape.kind == "" { return "PEP_A13_TYPE_UNSUPPORTED" } else {}
   if shape.kind == "builtin" {
@@ -1070,13 +1070,20 @@ fn support_code_for_shape(nodes: List[FlatAstNode], shape: PepTypeShape) -> Str 
     return "PEP_A13_TYPE_UNSUPPORTED"
   } else {}
   if shape.kind == "nominal" {
-    if record_declaration(nodes, shape.name).found || union_declaration(nodes, shape.name).found { return "" } else {}
+    if contains(knownTypes, shape.name) { return "" } else {}
     return "PEP_UNKNOWN_TYPE"
   } else {}
   return "PEP_A13_TYPE_UNSUPPORTED"
 }
-fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int, recordName: Str) -> ResolvedRecord {
-  var finished: List[FieldTypeFacts] = []
+fn resolve_all_records(nodes: List[FlatAstNode]) -> List[ResolvedRecord] {
+  var finished: List[ResolvedRecord] = []
+  var seenTopNames: List[Str] = []
+  var allTypeNames: List[Str] = []
+  var currentId = -1
+  var currentName = ""
+  var currentDuplicate = false
+  var currentFirst = false
+  var currentFields: List[FieldTypeFacts] = []
   var pending = false
   var pendingField = empty_node()
   var pendingDuplicate = false
@@ -1085,12 +1092,37 @@ fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int, recordName: St
   var walkDuplicate = false
   var walkNext = -1
   var walkDepth = 0
-  var earlierTypes = 0
   for node in nodes {
-    if node.parentId == -1 && (node.kind == "record_declaration" || node.kind == "union_declaration") && node.text == recordName && node.id + 1 <= recordId {
-      earlierTypes = earlierTypes + 1
+    if node.kind == "record_declaration" {
+      if currentId != -1 {
+        finished = prepend(finished, ResolvedRecord { recordId: currentId, duplicateType: currentDuplicate, firstType: currentFirst, fields: currentFields })
+      } else {}
+      var earlier = 0
+      for seen in seenTopNames {
+        if seen == node.text { earlier = earlier + 1 } else {}
+      }
+      currentId = node.id
+      currentName = node.text
+      currentDuplicate = earlier == 1
+      currentFirst = earlier == 0
+      currentFields = []
+      pending = false
+      walking = false
     } else {}
-    if pending {
+    if (node.kind == "record_declaration" || node.kind == "union_declaration") && node.parentId == -1 {
+      seenTopNames = prepend(seenTopNames, node.text)
+      allTypeNames = prepend(allTypeNames, node.text)
+    } else {}
+    if node.parentId == currentId && currentId != -1 && node.kind == "field_declaration" {
+      var earlierField = 0
+      for seen in currentFields {
+        if seen.field.text == node.text { earlierField = earlierField + 1 } else {}
+      }
+      pending = true
+      pendingField = node
+      pendingDuplicate = earlierField == 1
+    } else {}
+    if pending && node.id != pendingField.id {
       pending = false
       if node.role == "type" && node.childIndex == 0 && node.parentId == pendingField.id {
         if node.kind == "type_list" {
@@ -1101,37 +1133,18 @@ fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int, recordName: St
           walkDepth = 1
         } else {
           if node.kind == "type_scalar" {
-            let shape = PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }
-            let name = legacy_type_name(shape)
-            let code = support_code_for_shape(nodes, shape)
-            finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+            currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "builtin", name: node.text, listDepth: 0 }, name: "", supported: false, code: "" })
           } else {
             if node.kind == "type_named" {
-              let shape = PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 }
-              let name = legacy_type_name(shape)
-              let code = support_code_for_shape(nodes, shape)
-              finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+              currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 }, name: "", supported: false, code: "" })
             } else {
-              finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+              currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "" })
             }
           }
         }
       } else {
-        finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" })
+        currentFields = prepend(currentFields, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" })
       }
-    } else {}
-    if node.parentId == recordId && node.kind == "field_declaration" {
-      if walking {
-        finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
-        walking = false
-      } else {}
-      var earlier = 0
-      for seen in finished {
-        if seen.field.text == node.text { earlier = earlier + 1 } else {}
-      }
-      pending = true
-      pendingField = node
-      pendingDuplicate = earlier == 1
     } else {}
     if walking && node.id == walkNext {
       if node.kind == "type_list" {
@@ -1139,33 +1152,42 @@ fn resolve_record_fields(nodes: List[FlatAstNode], recordId: Int, recordName: St
         walkDepth = walkDepth + 1
       } else {
         if node.kind == "type_scalar" {
-          let shape = PepTypeShape { kind: "builtin", name: node.text, listDepth: walkDepth }
-          let name = legacy_type_name(shape)
-          let code = support_code_for_shape(nodes, shape)
-          finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+          currentFields = prepend(currentFields, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: PepTypeShape { kind: "builtin", name: node.text, listDepth: walkDepth }, name: "", supported: false, code: "" })
         } else {
           if node.kind == "type_named" {
-            let shape = PepTypeShape { kind: "nominal", name: node.text, listDepth: walkDepth }
-            let name = legacy_type_name(shape)
-            let code = support_code_for_shape(nodes, shape)
-            finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: shape, name: name, supported: code == "", code: code })
+            currentFields = prepend(currentFields, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: walkDepth }, name: "", supported: false, code: "" })
           } else {
-            finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
+            currentFields = prepend(currentFields, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "" })
           }
         }
         walking = false
       }
     } else {}
   }
-  if pending {
-    finished = prepend(finished, FieldTypeFacts { field: pendingField, duplicate: pendingDuplicate, typeFound: false, shape: empty_type_shape(), name: "", supported: false, code: "" })
+  if currentId != -1 {
+    finished = prepend(finished, ResolvedRecord { recordId: currentId, duplicateType: currentDuplicate, firstType: currentFirst, fields: currentFields })
   } else {}
-  if walking {
-    finished = prepend(finished, FieldTypeFacts { field: walkField, duplicate: walkDuplicate, typeFound: true, shape: empty_type_shape(), name: "", supported: false, code: "PEP_A13_TYPE_UNSUPPORTED" })
-  } else {}
-  var ordered: List[FieldTypeFacts] = []
-  for facts in finished { ordered = prepend(ordered, facts) }
-  return ResolvedRecord { duplicateType: earlierTypes == 1, firstType: earlierTypes == 0, fields: ordered }
+  var ordered: List[ResolvedRecord] = []
+  for record in finished { ordered = prepend(ordered, record) }
+  var resolved: List[ResolvedRecord] = []
+  for record in ordered {
+    var mapped: List[FieldTypeFacts] = []
+    for facts in record.fields {
+      if facts.typeFound {
+        let name = legacy_type_name(facts.shape)
+        let code = support_code_for_shape(allTypeNames, facts.shape)
+        mapped = prepend(mapped, FieldTypeFacts { field: facts.field, duplicate: facts.duplicate, typeFound: true, shape: facts.shape, name: name, supported: code == "", code: code })
+      } else {
+        mapped = prepend(mapped, facts)
+      }
+    }
+    var inOrder: List[FieldTypeFacts] = []
+    for facts in mapped { inOrder = prepend(inOrder, facts) }
+    resolved = prepend(resolved, ResolvedRecord { recordId: record.recordId, duplicateType: record.duplicateType, firstType: record.firstType, fields: mapped })
+  }
+  var inOrderRecords: List[ResolvedRecord] = []
+  for record in resolved { inOrderRecords = prepend(inOrderRecords, record) }
+  return inOrderRecords
 }
 fn supported_type_at(nodes: List[FlatAstNode], id: Int, knownName: Str) -> Bool {
   if supported_type(nodes, knownName) { return true } else {}
@@ -1338,6 +1360,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
+  var resolvedRecords: List[ResolvedRecord] = []
+  var resolvedReady = false
   for node in nodes {
     if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
       let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
@@ -1381,13 +1405,20 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
     } else {}
     if node.kind == "record_declaration" {
-      let resolvedRecord = resolve_record_fields(nodes, node.id, node.text)
-      if resolvedRecord.duplicateType && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
-      if supported_primitive_type(node.text) && resolvedRecord.firstType { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
-      for facts in resolvedRecord.fields {
-        if facts.duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", facts.field)) } else {}
-        if facts.typeFound && !facts.supported {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(facts.code, "Record field type is outside the implemented checker subset", facts.field))
+      if !resolvedReady {
+        resolvedRecords = resolve_all_records(nodes)
+        resolvedReady = true
+      } else {}
+      for resolved in resolvedRecords {
+        if resolved.recordId == node.id {
+          if resolved.duplicateType && !supported_primitive_type(node.text) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is declared more than once", node)) } else {}
+          if supported_primitive_type(node.text) && resolved.firstType { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_TYPE", "Type name is already reserved by a built-in type", node)) } else {}
+          for facts in resolved.fields {
+            if facts.duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", facts.field)) } else {}
+            if facts.typeFound && !facts.supported {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(facts.code, "Record field type is outside the implemented checker subset", facts.field))
+            } else {}
+          }
         } else {}
       }
     } else {}

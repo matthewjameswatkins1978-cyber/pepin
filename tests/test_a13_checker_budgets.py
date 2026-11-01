@@ -145,13 +145,14 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
 
-    def test_thirty_two_records_hit_step_budget(self):
-        # Scale pin: 32 trivial one-field records exceed the unchanged budget.
+    def test_thirty_two_records_check_valid(self):
+        # Scale pin flipped by the global single-pass record resolution:
+        # 32 trivial records now check valid under the unchanged budget.
         source = self.fixtures["R32"]
         self.assert_ocaml_valid(source)
         result = self.invoke_checker(source)
-        self.assertEqual(result.get("outcome"), "error", result)
-        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
 
 
 if __name__ == "__main__":
