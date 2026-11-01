@@ -93,6 +93,8 @@ fn pep_c23_mutable_list_element_kind(nodes: List[FlatAstNode], binding: FlatAstN
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Int" { return "integer" } else {}
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Bool" { return "boolean" } else {}
     if elementType.found && elementType.node.kind == "type_scalar" && elementType.node.text == "Str" { return "string" } else {}
+    if elementType.found && elementType.node.kind == "type_named" &&
+       pep_c23_record_declaration(nodes, elementType.node.text).found { return "record" } else {}
   } else {}
   let initial = pep_c23_child(nodes, binding.id, "value", 0)
   let first = if initial.found { pep_c23_child(nodes, initial.node.id, "element", 0) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
@@ -3018,15 +3020,35 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
 // Arena-backed update of a mutable Int or Bool list binding. Only the binding being assigned may
 // be prepended to or reversed, which keeps the source and destination element types identical and
 // keeps this path free of any element-type inference.
+fn pep_c23_mutable_list_record_declaration(nodes: List[FlatAstNode], binding: FlatAstNode) -> PepC23NodeLookup {
+  let declared = pep_c23_child(nodes, binding.id, "annotation", 0)
+  if declared.found && declared.node.kind == "type_list" {
+    return pep_c23_record_list_declaration(nodes, declared.node)
+  } else {}
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+// Arena-backed updates for one declared record list type, emitted beside that record's
+// pep_list_record_N typedef so a record list accumulates exactly like the Int, Bool and Str lists.
+fn pep_c23_record_list_update_source(record: FlatAstNode) -> List[Str] {
+  let id = int_text(record.id)
+  return ["[[maybe_unused]] static pep_list_record_", id, " pep_list_record_", id, "_prepend(pep_arena_t *pep_a, pep_list_record_", id, " pep_values, pep_record_", id, " pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(pep_record_", id, ")) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  pep_record_", id, " *pep_out = (pep_record_", id, " *)pep_arena_alloc(pep_a, pep_count * sizeof(pep_record_", id, "), _Alignof(pep_record_", id, "));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_record_", id, "){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_record_", id, " pep_list_record_", id, "_reverse(pep_arena_t *pep_a, pep_list_record_", id, " pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_record_", id, "){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(pep_record_", id, ")) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  pep_record_", id, " *pep_out = (pep_record_", id, " *)pep_arena_alloc(pep_a, pep_values.length * sizeof(pep_record_", id, "), _Alignof(pep_record_", id, "));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_record_", id, "){ .data = pep_out, .length = pep_values.length };\n}\n"]
+}
 fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, call: FlatAstNode,
   target: FlatAstNode) -> PepC23Emission {
   let elementKind = pep_c23_mutable_list_element_kind(nodes, target)
-  if elementKind != "integer" && elementKind != "boolean" && elementKind != "string" {
-    return pep_c23_unsupported("Pep C23 prepend/reverse currently require an Int, Bool, or Str list binding")
+  if elementKind != "integer" && elementKind != "boolean" && elementKind != "string" && elementKind != "record" {
+    return pep_c23_unsupported("Pep C23 prepend/reverse currently require an Int, Bool, Str, or record list binding")
   } else {}
-  let suffix = if elementKind == "boolean" { "_bool" } else {
-    if elementKind == "string" { "_str" } else { "_int" }
-  }
+  var helperPrefix: List[Str] = ["pep_list_int_"]
+  if elementKind == "boolean" { helperPrefix = ["pep_list_bool_"] } else {}
+  if elementKind == "string" { helperPrefix = ["pep_list_str_"] } else {}
+  if elementKind == "record" {
+    let recordList = pep_c23_mutable_list_record_declaration(nodes, target)
+    if !recordList.found {
+      return pep_c23_unsupported("Pep C23 mutable record list binding requires a declared record element type")
+    } else {}
+    helperPrefix = ["pep_list_record_", int_text(recordList.node.id), "_"]
+  } else {}
   let argument = pep_c23_child(nodes, call.id, "argument", 0)
   let secondArgument = pep_c23_child(nodes, call.id, "argument", 1)
   let thirdArgument = pep_c23_child(nodes, call.id, "argument", 2)
@@ -3037,9 +3059,12 @@ fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, 
     if argument.node.kind != "name" || argument.node.text != target.text {
       return pep_c23_unsupported("Pep C23 reverse is currently limited to the binding being assigned")
     } else {}
-    return PepC23Emission { status: "emitted",
-      sourceParts: ["pep_list", suffix, "_reverse(pep_arena, pep_local_", int_text(target.id), ")"],
-      diagnostic: "" }
+    var reverseParts: List[Str] = []
+    for part in helperPrefix { reverseParts = append(reverseParts, part) }
+    reverseParts = append(reverseParts, "reverse(pep_arena, pep_local_")
+    reverseParts = append(reverseParts, int_text(target.id))
+    reverseParts = append(reverseParts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: reverseParts, diagnostic: "" }
   } else {}
   if call.text != "prepend" {
     return pep_c23_unsupported("Pep C23 mutable list updates support prepend and reverse only")
@@ -3058,7 +3083,11 @@ fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, 
   } else {}
   let lowered = pep_c23_expression(nodes, function, secondArgument.node)
   if lowered.status != "emitted" { return lowered } else {}
-  var parts: List[Str] = ["pep_list", suffix, "_prepend(pep_arena, pep_local_", int_text(target.id), ", "]
+  var parts: List[Str] = []
+  for part in helperPrefix { parts = append(parts, part) }
+  parts = append(parts, "prepend(pep_arena, pep_local_")
+  parts = append(parts, int_text(target.id))
+  parts = append(parts, ", ")
   for part in lowered.sourceParts { parts = append(parts, part) }
   parts = append(parts, ")")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
@@ -3136,7 +3165,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
             if sourceIntParameter.found { sourceKind = "integer" } else {}
             if sourceBoolParameter.found { sourceKind = "boolean" } else {}
           } else {}
-          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean" && sourceKind != "string") {
+          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean" && sourceKind != "string" && sourceKind != "record") {
             return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
           } else {}
         } else {}
@@ -3487,6 +3516,14 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
       } else {}
     }
   } else {}
+  // Record list updates live with the other arena helpers, after every pep_list_record_N typedef.
+  if requiresArena {
+    for declaration in parsed.nodes {
+      if declaration.parentId == -1 && declaration.kind == "record_declaration" {
+        for part in pep_c23_record_list_update_source(declaration) { reversed = prepend(reversed, part) }
+      } else {}
+    }
+  } else {}
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let functionParameters = pep_c23_parameters(parsed.nodes, node)
@@ -3543,21 +3580,34 @@ fn emit_c23_checked(parsed: ParserProgress, checked: CheckerReport) -> PepC23Emi
           } else {
             if initialValue.node.kind == "list" && statement.kind == "var" {
               let elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
-              if elementKind != "boolean" && elementKind != "integer" && elementKind != "string" {
-                return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int, Bool, or Str list")
+              if elementKind != "boolean" && elementKind != "integer" && elementKind != "string" && elementKind != "record" {
+                return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int, Bool, Str, or record list")
               } else {}
-              let initial = if elementKind == "boolean" {
-                pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
-              } else {
-                if elementKind == "string" {
-                  pep_c23_str_list_argument(parsed.nodes, node, initialValue.node)
-                } else { pep_c23_int_list_argument(parsed.nodes, node, initialValue.node) }
-              }
+              var initial = pep_c23_int_list_argument(parsed.nodes, node, initialValue.node)
+              if elementKind == "boolean" {
+                initial = pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
+              } else {}
+              if elementKind == "string" {
+                initial = pep_c23_str_list_argument(parsed.nodes, node, initialValue.node)
+              } else {}
+              if elementKind == "record" {
+                let annotation = pep_c23_child(parsed.nodes, statement.id, "annotation", 0)
+                initial = pep_c23_record_list_argument(parsed.nodes, node, initialValue.node, annotation)
+              } else {}
               if initial.status != "emitted" { return initial } else {}
-              let cType = if elementKind == "boolean" { "pep_list_bool" } else {
-                if elementKind == "string" { "pep_list_str" } else { "pep_list_int" }
-              }
-              for part in ["  ", cType, " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+              var cTypeParts: List[Str] = ["pep_list_int"]
+              if elementKind == "boolean" { cTypeParts = ["pep_list_bool"] } else {}
+              if elementKind == "string" { cTypeParts = ["pep_list_str"] } else {}
+              if elementKind == "record" {
+                let recordList = pep_c23_mutable_list_record_declaration(parsed.nodes, statement)
+                if !recordList.found {
+                  return pep_c23_unsupported("Pep C23 mutable record list binding requires a declared record element type")
+                } else {}
+                cTypeParts = ["pep_list_record_", int_text(recordList.node.id)]
+              } else {}
+              for part in ["  "] { bodyParts = append(bodyParts, part) }
+              for part in cTypeParts { bodyParts = append(bodyParts, part) }
+              for part in [" pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
               for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
               bodyParts = append(bodyParts, ";\n")
             } else {

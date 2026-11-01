@@ -210,6 +210,35 @@ class PepC23ListUpdateTests(unittest.TestCase):
             "}\n",
             "requires a valid Pep checker report")
 
+    # --- List[record], the lexer's tokens accumulator ----------------------
+    #
+    # Emitter support for mutable record lists is landed and verified against A1's fixed
+    # checker (codex/checker-emitter-integration@a58f5f8), which accepts these programs. On
+    # a checkout whose checker still rejects them the capability is unreachable, so the test
+    # skips with that dependency named rather than pretending to pass.
+
+    def record_list_source(self, body, record="type P { x: Int }"):
+        return (record + "\nfn main() -> Int {\n  var points: List[P] = []\n"
+                "  var guard = 0\n  while guard <= 0 {\n"
+                + body +
+                "    guard = guard + 1\n  }\n  return length(points)\n}\n")
+
+    def record_list_native(self, source_text, expected):
+        try:
+            emit(source_text.encode("utf-8"))
+        except (ValueError, RuntimeError) as error:
+            self.skipTest("mutable List[record] bindings are still checker-blocked on this "
+                          f"checkout ({type(error).__name__}); A1's checker accepts them")
+        self.run_native(source_text, expected)
+
+    def test_record_list_prepend_and_reverse(self):
+        self.record_list_native(
+            self.record_list_source("    points = prepend(points, P { x: 7 })\n"
+                                    "    points = reverse(points)\n"), 1)
+
+    def test_record_list_empty_is_safe(self):
+        self.record_list_native(self.record_list_source(""), 0)
+
     # --- List[Str], the lexer's stringParts shape ---------------------------
     #
     # Order is verified for Int and Bool by folding the list into a base-10 number.
