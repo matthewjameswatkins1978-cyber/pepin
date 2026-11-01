@@ -8,8 +8,12 @@ agree before either side writes transport code.
 ## Why this exists, in measured numbers
 
 The Pep-written emitter is itself a Pep program with a fixed 100,000-step
-per-invocation budget. Its cost is approximately **(full node-list scans) x (nodes)**,
-and each statement of a lowered function performs about five full scans:
+per-invocation budget. Its cost is **per AST node, not per scan**: adding a deliberately
+useless full node-list scan per statement changed nothing, while a single statement with
+a large expression chain tips the budget at the same place as many small statements. The
+capacity is roughly **30-60 AST nodes per invocation** at about 1.5k-3k steps per node,
+which is consistent with the cost being dominated by materialising the typed
+`ParserProgress` / `CheckerReport` arguments before any lowering runs.
 
 | probe | measured boundary |
 | --- | --- |
@@ -40,10 +44,19 @@ type EmitterChunk {
   revision: Str,        // exact source revision
   chunkIndex: Int,      // 0-based
   chunkCount: Int,      // total chunks for this document
-  part: Str,            // "header" | "function" | "main"
+  part: Str,            // "header" | "function-body" | "main"
   functionIds: List[Int],   // present nodes' top-level owner(s); empty for header/main
   nodes: List[FlatAstNode]  // the bounded subset for this chunk only
 }
+```
+
+**Chunks must be bounded by node count, not by function.** One function of a few hundred
+nodes still exceeds the budget, so the unit is "as many whole statements of one function
+as fit under a node ceiling" (start at 24 and measure), with the function's signature and
+declaration emitted in the first chunk of that function and its body split across the
+rest. `part` values must reflect that split.
+
+```
 ```
 
 and a matching checked-fact subset, because `emit_c23_checked` today refuses unless
@@ -97,11 +110,12 @@ change safe to land before any host work exists.
 
 ## What this costs, honestly
 
-Even with perfect chunking, per-unit cost is five scans times the unit's nodes, so a
-single function of a few hundred statements still will not fit. Chunking converts
-"no compiler-sized source can be emitted at all" into "each function can be emitted if
-it is small enough", and the structural scan reduction (worth a measured 2.6x-5x) is the
-complementary half. Both are needed; neither alone reaches `lexer_step`.
+Budget is linear in the nodes a chunk carries, so chunking gives a predictable
+linear win: at a 24-node ceiling a ~2,030-node lexer needs on the order of 85 chunks, and
+the emitter's own step cost per invocation must leave room for the header and helpers.
+Chunking converts "no compiler-sized source can be emitted at all" into "any function
+whose statements fit under the node ceiling can be emitted". It does not by itself make a
+single 2,030-node invocation possible — nothing emitter-side does.
 
 ## What I am not doing
 

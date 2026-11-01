@@ -94,7 +94,46 @@ function-statement loop and is not specific to loops, list updates or records.
   for the first and no measurable change for the second. The per-statement scans are
   real but are not where the budget goes.
 
-### The cost model, measured
+### Correction: cost is per AST *node*, not per scan
+
+Two turns of this report argued that cost was approximately (node-list scans) x (nodes)
+and that each statement performed about five scans. That model is **wrong**, and the
+measurement that falsified it also explains three failed optimisations.
+
+Adding one deliberately useless full node-list scan per statement — a no-op
+`pep_c23_count_children` whose result is discarded — changed the ladder **not at all**
+(21 statements before and after). A full scan is nearly free.
+
+What the budget actually tracks is the number of AST nodes. A single statement whose
+expression chain grows tips at the same place as many small statements:
+
+| program shape | nodes | result |
+| --- | --- | --- |
+| 21 x `let v = <literal>` | ~42 | tips |
+| 1 x `let total = 1 + 2 + ... + 12` | ~24 | emits |
+| 1 x `let total = 1 + 2 + ... + 16` | ~32 | tips |
+| 1 x `let total = 1 + 2 + ... + 20` | ~40 | tips |
+
+So the capacity is roughly **30-60 AST nodes per emitter invocation**, at about
+**1.5k-3k interpreter steps per node**, regardless of how the nodes are grouped into
+statements or how many times the emitter scans them.
+
+The most likely mechanism, consistent with every measurement including the earlier
+padding experiment, is that the cost is dominated by **materialising the typed
+`ParserProgress` / `CheckerReport` arguments**: every node's typed fields become Pep
+values before the emitter's first statement runs. That also explains why programs with
+no `main`, which refuse almost immediately, still tip at ~84 nodes — the arguments are
+materialised before any refusal can happen.
+
+Consequences:
+- emitter-side scan reduction is worth little, which is why three such attempts measured
+  as no-gain;
+- reducing *nodes per invocation* is worth nearly linear savings, which is exactly what
+  the bounded emitter contract proposes;
+- the earlier claim here that argument materialisation had been "eliminated" as the
+  dominant cost was an interpretation error and is now corrected: it is the dominant cost.
+
+### Superseded model, kept for the record
 
 Cost tracks **full node-list traversals times node count**, not branch logic. Holding
 the statement shape fixed (`acc = 1`, the cheapest statement) and adding only unrelated
