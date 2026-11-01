@@ -177,6 +177,22 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
 
+    def test_make_token_constructor_hits_step_budget(self):
+        # A2's key reproducer (native make_token): 8-param constructor with
+        # List field + record construction. Declaration alone checks valid;
+        # the full constructor exceeds the unchanged budget.
+        # Flip to valid when per-construct check cost drops further.
+        mk = ("type LexToken { kind: Str, text: Str, integerValue: Int, "
+              "stringParts: List[Str], startByte: Int, endByte: Int, line: Int, column: Int }\n"
+              "fn make_token(kind: Str, text: Str, integerValue: Int, stringParts: List[Str], startByte: Int, endByte: Int, line: Int, column: Int) -> LexToken {\n"
+              "  return LexToken { kind: kind, text: text, integerValue: integerValue, stringParts: stringParts, startByte: startByte, endByte: endByte, line: line, column: column }\n"
+              "}\n"
+              "fn main() -> Int { let t = make_token(\"s\", \"hi\", 7, [\"ab\", \"cd\"], 3, 9, 1, 4) return length(t.stringParts) }\n")
+        self.assert_ocaml_valid(mk)
+        result = self.invoke_checker(mk)
+        self.assertEqual(result.get("outcome"), "error", result)
+        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+
     def test_large_scales_hit_step_budget(self):
         # Documented frontier: 48+ trivial records still exceed the
         # unchanged 100k budget. Flip each to a valid-assertion when the
