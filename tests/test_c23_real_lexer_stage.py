@@ -194,6 +194,69 @@ class PepC23RealLexerStageTests(unittest.TestCase):
             "}\n")
         self.run_native(source, 20)
 
+    def test_constructor_with_nested_record_and_list_field_runs_natively(self):
+        """LexProgress-shaped: a record holding a nested record *and* a list field.
+
+        The real `LexProgress` needs `LexToken` and `LexCursor` alongside it, which is more
+        nodes than either stage allows, so the shape is exercised without those
+        dependencies — the same structure at a size that fits.
+        """
+        source = (
+            "type Inner { v: Int }\n"
+            "type Shape { inner: Inner, items: List[Int], count: Int }\n"
+            "fn make() -> Shape {\n"
+            "  return Shape { inner: Inner { v: 1 }, items: [2, 3], count: 4 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let shape = make()\n"
+            "  return length(shape.items) + shape.count\n"
+            "}\n")
+        self.run_native(source, 6)
+
+    def test_constructor_with_a_list_of_records_runs_natively(self):
+        """A token-list field populated with one record element, as the lexer does."""
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List[Tokenish] }\n"
+            "fn made() -> Progressish {\n"
+            "  return Progressish { status: \"ok\", "
+            "tokens: [Tokenish { kind: \"a\", parts: [\"x\"] }] }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let progress = made()\n"
+            "  return length(progress.tokens) + 5\n"
+            "}\n")
+        self.run_native(source, 6)
+
+    def test_empty_record_list_literal_is_checker_blocked(self):
+        """A distinct checker divergence, handed to the checker lane.
+
+        `tokens: []` where the element type is a record is accepted by the OCaml oracle
+        (`pep.ps1 check` reports valid) but rejected by the Pep-written checker, so the
+        emitter never sees it. An empty `List[Str]` field is fine, so the gap is specific
+        to record element types. If this starts emitting, the divergence is fixed and the
+        census should be re-run deliberately.
+        """
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List<Tokenish> }\n"
+            "fn made() -> Progressish {\n"
+            "  return Progressish { status: \"ok\", tokens: [] }\n"
+            "}\n"
+            "fn main() -> Int { let progress = made()\n"
+            "  return length(progress.tokens) + 5 }\n")
+        self.assertEqual(emitter_stage(source), "emitter-refused")
+        with self.assertRaises(ValueError) as caught:
+            emit(source.encode("utf-8"))
+        # The pipeline surfaces this as an input-revision mismatch, not as a checker
+        # rejection: the Pep-written checker returns a report whose node count does not
+        # cover the parsed source, so the emitter's own guard fires first. Both messages
+        # mean "the checker did not accept this program"; the mismatch wording is worth
+        # knowing because it reads like a stale-input bug rather than a rejection.
+        message = str(caught.exception)
+        self.assertTrue("authorised source revision" in message
+                        or "requires a valid Pep checker report" in message, message)
+
     # --- ledger: what the checker still blocks ------------------------------
 
     def test_real_constructors_are_blocked_by_the_checker_not_the_emitter(self):
