@@ -239,6 +239,37 @@ class PepC23ListRecordFieldTests(unittest.TestCase):
         self.assertIn("pep_list_str", generated)
         self.assertRegex(generated, r"pep_list_record_\d+ pep_field_3;")
 
+    def test_list_parameter_forwards_into_a_list_record_field_natively(self):
+        """A same-typed List[Str] parameter may be forwarded into a List[Str] record field.
+
+        This is the shape Lucy's real ``make_token`` uses for ``stringParts``.
+        """
+        generated = self.run_native(
+            "type Tok { kind: Str, parts: List[Str], count: Int }\n"
+            "fn make_tok(kind: Str, parts: List[Str], count: Int) -> Tok {\n"
+            "  return Tok { kind: kind, parts: parts, count: count }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let tok = make_tok(\"string\", [\"ab\", \"cd\"], 7)\n"
+            "  return length(tok.parts) + tok.count\n"
+            "}\n",
+            9)
+        self.assertIn("pep_list_str", generated)
+        self.assertIn(".pep_field_1 = pep_arg_", generated)
+
+    def test_list_str_argument_literal_and_parameter_forwarding(self):
+        """A List[Str] literal argument and a forwarded List[Str] parameter both lower.
+
+        Kept to one argument per call: two literal arguments are still refused by the
+        conservative evaluation-order guard on the one- and two-argument path, which is
+        deliberately left untouched because it runs for almost every program.
+        """
+        self.run_native(
+            "fn count_parts(a: List[Str]) -> Int { return length(a) }\n"
+            "fn relay(a: List[Str]) -> Int { return count_parts(a) }\n"
+            "fn main() -> Int { return relay([\"x\", \"y\"]) }\n",
+            2)
+
     # --- fail-closed boundaries that must survive the capability -------------
 
     def test_computed_list_field_element_still_fails_closed(self):
@@ -270,6 +301,13 @@ class PepC23ListRecordFieldTests(unittest.TestCase):
             "  return value.first + value.second\n"
             "}\n",
             "record construction rejects multiple fallible field expressions")
+
+    def test_nested_list_field_type_still_fails_closed(self):
+        """List-of-list fields have no C representation and must stay refused."""
+        self.assert_refused(
+            "type Tok { parts: List[List[Int]] }\n"
+            "fn main() -> Int { return 0 }\n",
+            "record fields require Int, Bool, or a preceding record declaration")
 
     def test_nested_list_field_access_is_not_silently_accepted(self):
         """A projection of one list field feeding another field must still fail closed."""
