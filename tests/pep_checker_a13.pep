@@ -584,6 +584,60 @@ fn inside_any_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: L
 fn is_expression_kind(kind: Str) -> Bool {
   return kind == "integer" || kind == "boolean" || kind == "string" || kind == "name" || kind == "call" || kind == "binary" || kind == "unary" || kind == "list" || kind == "if_expression" || kind == "record" || kind == "field_access" || kind == "match" || kind == "hole"
 }
+type ParamTypeFact { index: Int, typeName: Str, shape: PepTypeShape }
+type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact] }
+fn resolve_all_signatures(nodes: List[FlatAstNode]) -> List[ResolvedSignature] {
+  var finished: List[ResolvedSignature] = []
+  var currentId = -1
+  var currentName = ""
+  var currentParams: List[ParamTypeFact] = []
+  var currentIndex = 0
+  for node in nodes {
+    if node.kind == "function" && node.parentId == -1 {
+      if currentId != -1 {
+        finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams })
+      } else {}
+      currentId = node.id
+      currentName = node.text
+      currentParams = []
+      currentIndex = 0
+    } else {
+      if node.kind == "parameter" && node.parentId == currentId && currentId != -1 {
+        let typeChild = child_at(nodes, node.id, "type", 0)
+        if typeChild.found {
+          currentParams = prepend(currentParams, ParamTypeFact { index: currentIndex, typeName: type_name_at(nodes, typeChild.node.id), shape: type_shape_at(nodes, typeChild.node.id) })
+          currentIndex = currentIndex + 1
+        } else {}
+      } else {}
+    }
+  }
+  if currentId != -1 {
+    finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams })
+  } else {}
+  return reverse(finished)
+}
+fn signature_parameter_type(sigs: List[ResolvedSignature], functionId: Int, index: Int) -> Str {
+  for sig in sigs {
+    if sig.functionId == functionId {
+      for p in sig.params {
+        if p.index == index { return p.typeName } else {}
+      }
+      return ""
+    } else {}
+  }
+  return ""
+}
+fn signature_parameter_shape(sigs: List[ResolvedSignature], functionId: Int, index: Int) -> PepTypeShape {
+  for sig in sigs {
+    if sig.functionId == functionId {
+      for p in sig.params {
+        if p.index == index { return p.shape } else {}
+      }
+      return empty_type_shape()
+    } else {}
+  }
+  return empty_type_shape()
+}
 fn function_parameter_type(nodes: List[FlatAstNode], functionId: Int, index: Int) -> Str {
   let parameter = child_at(nodes, functionId, "parameter", index)
   if !parameter.found { return "" } else {}
@@ -1407,6 +1461,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
   var resolvedRecords: List[ResolvedRecord] = []
   var resolvedReady = false
+  var resolvedSigs: List[ResolvedSignature] = []
+  var resolvedSigsReady = false
   var reversedTaRecordFields: List[FlatAstNode] = []
   var reversedTaFieldDecls: List[FlatAstNode] = []
   var reversedTaTypeDecls: List[FlatAstNode] = []
@@ -1836,15 +1892,19 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if node.kind == "call" {
         let target = find_function(functions, node.text)
         if target.found {
+          if !resolvedSigsReady {
+            resolvedSigs = resolve_all_signatures(nodes)
+            resolvedSigsReady = true
+          } else {}
           var index = 0
           var argumentMismatchFound = false
           for argument in taArgs {
             if argument.parentId == node.id {
               if !argumentMismatchFound {
-                let expected = function_parameter_type(nodes, target.function.syntaxId, index)
+                let expected = signature_parameter_type(resolvedSigs, target.function.syntaxId, index)
                 let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
                 let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
-                let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, index) } else { empty_type_shape() }
+                let expectedShape = if needsExpectedShape { signature_parameter_shape(resolvedSigs, target.function.syntaxId, index) } else { empty_type_shape() }
                 let needsStructuralCheck = expected == "" || actualArgument == ""
                 let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
                 let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)

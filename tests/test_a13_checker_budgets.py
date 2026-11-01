@@ -168,6 +168,36 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "error", result)
         self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
 
+    def test_real_make_token_checks_valid(self):
+        # Structural win (d158044): the real 8-parameter make_token
+        # constructor with 8-field record construction now checks valid
+        # via resolved-record field consults (was PEP_RUNTIME_STEP_LIMIT).
+        decl = ("type LexToken {\n  kind: Str, text: Str, integerValue: Int, stringParts: List[Str],\n"
+                "  startByte: Int, endByte: Int, line: Int, column: Int\n}\n")
+        params = ", ".join(["kind: Str", "text: Str", "integerValue: Int", "stringParts: List[Str]",
+                              "startByte: Int", "endByte: Int", "line: Int", "column: Int"])
+        args = ", ".join(["kind: kind", "text: text", "integerValue: integerValue",
+                            "stringParts: stringParts", "startByte: startByte", "endByte: endByte",
+                            "line: line", "column: column"])
+        source = decl + f"fn make_token({params}) -> LexToken {{\n  return LexToken {{ {args} }}\n}}\n"
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
+
+    def test_sixteen_literal_args_hit_step_budget(self):
+        # Documented frontier: 16-argument calls exceed the unchanged
+        # 100k budget (per-arg signature + inference scans); 8 args fit.
+        # Flip to valid when call-arg checking is staged or memoized.
+        params = ", ".join(f"p{i}: Int" for i in range(16))
+        args = ", ".join(str(i) for i in range(16))
+        source = (f"fn f16({params}) -> Int {{\n  return 0\n}}\n"
+                  f"fn main() -> Int {{\n  return f16({args})\n}}\n")
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "error", result)
+        self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+
     def test_thirty_two_records_check_valid(self):
         # Scale pin flipped by the global single-pass record resolution:
         # 32 trivial records now check valid under the unchanged budget.
