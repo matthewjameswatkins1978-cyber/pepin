@@ -76,9 +76,20 @@ class PepC23ArityTests(unittest.TestCase):
     # --- positive capability -------------------------------------------------
 
     def test_scalar_arity_ladder_runs_natively(self):
-        for arity in range(3, 9):
+        for arity in range(4, 9):
             with self.subTest(arity=arity):
                 self.run_native(scalar_program(arity), arity * (arity + 1) // 2)
+
+    def test_three_parameter_calls_keep_the_fixed_slot_restriction(self):
+        """Pre-existing limitation, pinned so it is not mistaken for a regression.
+
+        Calls with one to three arguments still use the fixed-slot path, which requires
+        a call-free or conditional result. Routing them through the general path was
+        measured to break unrelated collection programs, so it was not done.
+        """
+        self.assert_refused(
+            scalar_program(3),
+            "Pep C23 three-parameter calls require three arguments and a call-free result")
 
     def test_every_parameter_binds_beyond_three(self):
         """The fourth and later parameters must resolve by name, not only the first three."""
