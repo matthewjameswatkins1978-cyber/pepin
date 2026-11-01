@@ -254,5 +254,133 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
                 self.assertEqual(self.report_status(result), "valid")
 
 
+class CheckerChunkedEquivalenceTests(unittest.TestCase):
+    # Per-function chunking (analyze_chunk + external signatures): a program
+    # that exceeds the whole-program budget must check valid via bounded
+    # chunks, with a combined verdict matching whole-program semantics.
+    @classmethod
+    def setUpClass(cls):
+        cls.session = Session()
+        bundle = NL.join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
+        opened = cls.session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                    "name": "pep-c23", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        cls.tool_revision = opened["revision"]
+        tool_document = opened["document"]
+        sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "validate", "bytes": []})
+        target_spec = {"document": sample["document"], "revision": sample["revision"],
+                       "entryFunctions": []}
+        start_cursor = pep_c23.parser_cursor_value(sample["document"], sample["revision"])
+        finished_cursor = pep_c23.parser_cursor_value(
+            sample["document"], sample["revision"], done=True, lex_done=True, lex_stage="done")
+        empty_pp = pep_c23.parser_progress(sample["document"], sample["revision"])
+        empty_rep = pep_c23.checker_report(sample["document"], sample["revision"])
+        empty_ext = {"type": "List[CheckedFunction]", "value": []}
+        for tool, function, arguments, expected in [
+                ("pep-c23-parser-start", "parser_start", [], start_cursor),
+                ("pep-c23-parser-step", "parser_step", [finished_cursor],
+                 pep_c23.parser_chunk_value(sample["document"], sample["revision"],
+                                            finished_cursor)),
+                ("pep-c23-checker", "analyze_parsed", [empty_pp], empty_rep),
+                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext], empty_rep)]:
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision, "function": function})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision,
+                              "testVectors": [{"arguments": arguments, "expect": expected,
+                                                "semanticTarget": target_spec}]})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.session.process.stdin.close()
+        cls.session.process.terminate()
+
+    def check_chunked(self, source):
+        from tests.chunk_helper import (fields_map, nval, extract_sigs, checked_fn_value,
+                                         slice_subtree, remap_chunk, variant_to_union)
+        src = source.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "chunk-target", "bytes": list(src)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, src, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        sigs = extract_sigs(nodes)
+        v2u = variant_to_union(nodes)
+        decl_by_id = {str(nval(n, "id")): n for n in nodes
+                       if nval(n, "kind") in ("record_declaration", "union_declaration")
+                       and str(nval(n, "parentId")) == "-1"}
+        decl_name_to_id = {nval(d, "text"): i for i, d in decl_by_id.items()}
+        fn_nodes = [n for n in nodes if nval(n, "kind") == "function"
+                    and str(nval(n, "parentId")) == "-1"]
+        self.assertGreater(len(fn_nodes), 1, "chunk test needs multiple functions")
+        statuses, diags = [], []
+        for fn in fn_nodes:
+            fname = nval(fn, "text")
+            sub = slice_subtree(nodes, nval(fn, "id"))
+            refs = {nval(x, "text") for x in sub
+                    if nval(x, "kind") in ("type_named", "record") and nval(x, "text")}
+            for x in sub:
+                if nval(x, "kind") in ("record", "call", "constructor_pattern") \
+                        and nval(x, "text") in v2u:
+                    refs.add("__union:" + v2u[nval(x, "text")])
+            for dname, did in decl_name_to_id.items():
+                if dname in refs or ("__union:" + did) in refs:
+                    for sn in slice_subtree(nodes, did):
+                        if all(str(nval(x, "id")) != str(nval(sn, "id")) for x in sub):
+                            sub.append(sn)
+            chunk = remap_chunk(sub)
+            self.assertLessEqual(len(chunk), 60, f"chunk for {fname} exceeds budget-sized bound")
+            sliced = {"type": "ParserProgress", "fields": [
+                {"name": k, "value": ({"type": "List[FlatAstNode]", "value": chunk}
+                                     if k == "nodes" else fields_map(parsed)[k])}
+                for k in [f["name"] for f in parsed["fields"]]]}
+            ext = [s for s in sigs if s["name"] != fname]
+            extv = {"type": "List[CheckedFunction]",
+                    "value": [checked_fn_value(s) for s in ext]}
+            sem = {"document": target["document"], "revision": target["revision"],
+                   "entryFunctions": []}
+            r = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                    "tool": "pep-c23-checker-chunk",
+                                    "arguments": [sliced, extv], "semanticTarget": sem})
+            self.assertEqual(r.get("outcome"), "ok", r)
+            statuses.append(fields_map(r["result"])["status"]["value"])
+            for d in fields_map(r["result"]).get("diagnostics", {}).get("value", []):
+                df = fields_map(d)
+                diags.append((df.get("code", {}).get("value"),
+                              df.get("startByte", {}).get("value"),
+                              df.get("endByte", {}).get("value")))
+        return statuses, sorted(set(diags))
+
+    def test_chunked_recpad6_valid(self):
+        # recpad-6 (66 nodes) exceeds the whole-program budget but must
+        # check valid via per-function chunks (each <= 60 nodes).
+        parts = []
+        for i in range(6):
+            parts.append(f"type P{i} {{ x: Int }}\nfn mk{i}(v: Int) -> P{i} {{\n"
+                           f"  return P{i} {{ x: v }}\n}}\n")
+        source = "".join(parts)
+        src = source.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "whole-target", "bytes": list(src)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, src, target, self.tool_revision)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        wr = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                "tool": "pep-c23-checker", "arguments": [parsed],
+                                "semanticTarget": sem})
+        self.assertEqual(wr.get("outcome"), "error", wr)
+        self.assertEqual(wr.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+        statuses, diags = self.check_chunked(source)
+        self.assertTrue(all(s == "valid" for s in statuses), statuses)
+        self.assertEqual(diags, [], diags)
+
+
 if __name__ == "__main__":
     unittest.main()
