@@ -167,6 +167,32 @@ class PepC23ListUpdateTests(unittest.TestCase):
             "}\n",
             "prepend cannot evaluate a fallible value inside an arena update")
 
+    def test_function_body_statement_count_is_bounded_by_the_emitter_budget(self):
+        """The dominant backend blocker, measured and pinned rather than assumed.
+
+        Six assignments in a while body emit; seven exceed the emitter's fixed
+        100k-step per-invocation budget, and this has nothing to do with list updates.
+        Lucy's `lexer_step` has dozens of statements, so this per-statement cost -- not
+        any missing feature -- is what currently bounds real compiler function bodies.
+        When the emitter becomes cheaper this test fails, which is the intended
+        reminder to re-measure and re-pin deliberately.
+        """
+        def program(statements):
+            body = "".join("    acc = acc + 1\n" for _ in range(statements))
+            return ("fn main() -> Int {\n"
+                    "  var acc = 0\n"
+                    "  var guard = 0\n"
+                    "  while guard <= 0 {\n"
+                    + body +
+                    "    guard = guard + 1\n"
+                    "  }\n"
+                    "  return acc\n"
+                    "}\n")
+
+        emit(program(6).encode("utf-8"))
+        with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
+            emit(program(7).encode("utf-8"))
+
     def test_record_list_updates_are_not_claimed(self):
         """List[record] mutable bindings are not lowered yet, so this stays refused."""
         self.assert_refused(

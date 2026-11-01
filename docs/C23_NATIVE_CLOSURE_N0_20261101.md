@@ -35,6 +35,42 @@ OCaml seed, checked by a Pep-written checker, and emitted to C23 by a Pep-writte
 emitter**; a standalone native compiler A (no OCaml/Python semantic stage during its
 normal operation) does not exist yet.
 
+## The dominant measured blocker: emitter cost per function-body statement
+
+Chasing why six arena-backed list updates tripped the emitter budget produced the
+answer, and it is not about list updates at all. A function that assigns a plain
+`Int` six times inside a `while` body emits; seven assignments exceed the emitter's
+fixed 100k-step per-invocation budget:
+
+```
+fn main() -> Int {
+  var acc = 0
+  var guard = 0
+  while guard <= 0 {
+    acc = acc + 1        // 1..6 of these emit
+    ...                  // 7 of them: PEP_RUNTIME_STEP_LIMIT
+    guard = guard + 1
+  }
+  return acc
+}
+```
+
+List updates hit the same wall at five instead of six, which is the same boundary
+seen from a slightly more expensive statement. **So the limiting factor for real
+compiler bodies is the emitter's per-statement cost, not any missing feature.**
+Lucy's `lexer_step` contains dozens of statements; no amount of feature work makes
+it compile while roughly six statements exhaust the budget.
+
+This is pinned by a test in `tests/test_c23_list_updates.py` so the boundary is
+recorded, not hidden, and so that whoever reduces the cost is told to re-measure and
+re-pin deliberately. No cap was raised.
+
+Likely cause to investigate next, not yet proven: each statement's lowering performs
+several full traversals of the node list (`pep_c23_child`, `pep_c23_mutable_list_binding`,
+`pep_c23_count_children`, ...), so cost grows with statements times nodes with a
+large constant. That is the first thing a dedicated emitter-cost slice should measure
+before changing anything.
+
 ## Backend-only blockers, ranked by use in the canonical sources
 
 Counted in `examples/pep_lexer.pep` and `examples/pep_parser.pep`. "Measured" means I
