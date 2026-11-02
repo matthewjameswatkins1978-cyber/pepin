@@ -1,0 +1,76 @@
+version: terrorbat/v1
+
+id: chunk-diagnostic-claims
+
+claim:
+  text: >
+    At the pinned repository commit, every claim case of the Agent 3
+    cross-chunk diagnostic preservation probe holds: single-error fixtures
+    yield one whole-source diagnostic, the chunked path reproduces every
+    (code, span) with no loss, no extras, and byte-identical message text
+    (probe exit 0; exit 1 = a claim falsified; exit 2 = harness error which
+    does not speak to the claim).
+
+requires:
+  - fs.read
+  - process.spawn
+  - git.inspect
+
+forbids:
+  - network
+  - git.remote.write
+
+environment:
+  relevant:
+    - os.name
+    - os.arch
+
+attack:
+  setup:
+    - adapter: git
+      action: worktree.snapshot
+  run:
+    - adapter: command
+      action: run
+      program:
+        $param: python_program
+      args:
+        - {$param: probe_script}
+        - .
+
+oracle:
+  any:
+    - type: exit_code
+      step: run:0
+      equals: 1
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+    - git_diff
+    - operation_log
+
+timeout:
+  run: 300s
+  total: 420s
+
+params:
+  python_program:
+    type: string
+    default: C:\Users\Matmus\AppData\Local\Python\pythoncore-3.15-64\python.exe
+  probe_script:
+    type: string
+    default: D:\Projects\pepin\_build\bootstrap-agent3-verification\verification\probes\chunk_diagnostic_preservation.py
+
+meta:
+  origin: ai-proposed
+  author: agent3
+  tags: [pepin, diagnostics, chunked-checker, agent3]
+  description: >
+    Content-addressed gate for Lucy advisory item "diagnostic preservation /
+    cross-chunk diagnostics". At 05add76 CD1/CD2/leakage hold and CD3
+    (message parity) is falsified 0/3, so this run is PROVEN there; the gate
+    flips to NOT OBSERVED only if/when the owner aligns chunked messages with
+    the seed (or the claim is formally downgraded with a dated receipt note).
+    Worktree mode is reversibility/observation, not containment.

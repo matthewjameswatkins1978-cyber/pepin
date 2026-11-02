@@ -1,0 +1,31 @@
+# Agent 3 standing gate pack — prepared adversarial regression suite for A1's
+# node-ID indexing / caching work and the open P1 regression (Lucy priorities 1–2).
+#
+# Every child Bat is content-addressed and independently receipted; the pack is
+# only the one-command ordering. Expected outcomes at the CURRENT head
+# (A1 codex/checker-emitter-integration@05add76, 2026-11-02): all three children
+# PROVEN (each claim falsified) — that is the armed gate, not a failure of the
+# pack. At A1's repair/index SHA the success criterion is every child NOT OBSERVED.
+#
+#   index-cache-claims      -> IDX3 duplicate child edge + STALE1 crossed provenance
+#                              (receipt sha256:86e0ca07...)
+#   chunk-diagnostic-claims -> CD3 message parity (codes/spans already held)
+#   regression-hole-guard   -> P1 d158044 regression (unchanged since first report)
+#
+# Validate: terrorbats pack check verification/bats/agent3-index-gates.yaml
+# Run:      terrorbats pack run  verification/bats/agent3-index-gates.yaml --repo <pinned-A1-worktree>
+
+version: terrorbat-pack/v1
+
+id: agent3-index-gates
+
+description: >
+  Agent 3's three standing falsification gates over the pinned A1 checkout:
+  chunk-contract index/cache integrity, cross-chunk diagnostic preservation,
+  and the unchanged P1 d158044 regression bat. One command; each child keeps
+  its own receipt and epistemic verdict.
+
+bats:
+  - path: index-cache-claims.yaml
+  - path: chunk-diagnostic-claims.yaml
+  - path: regression-hole-guard-passes.yaml
