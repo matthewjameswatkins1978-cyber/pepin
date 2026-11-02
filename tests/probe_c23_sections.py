@@ -98,6 +98,7 @@ def measure(session, tool_document, tool_revision, count):
     require(checked, "outcome", "ok", "check target")
     checked_value = checked["result"]
     row = {"functions": count}
+    whole_parts = None
 
     whole = invoke(session, "pep-c23-emitter", [parsed, checked_value], semantic_target)
     if whole["outcome"] != "ok":
