@@ -445,5 +445,107 @@ class CheckerChunkedEquivalenceTests(unittest.TestCase):
         self.assertLess(len(blob), 1048576, len(blob))
 
 
+class StagedParserBudgetBoundariesTests(unittest.TestCase):
+    """Parser-stage (A1-owned) per-token step-budget boundaries on this head.
+
+    A2 reported a 640-character string literal as emitter-accepted but
+    parser-rejected, measured on a different branch. Re-measured here on
+    the integrated head: 640 and 1,024 characters parse complete, and the
+    parser first stops between 1,024 and 1,280. The identifier path has a
+    separate boundary (1,280 complete, 1,536 stops), so the binding
+    constraint is cost per scanned literal byte inside one lexer_step
+    invocation, not a general source-size limit.
+
+    Flip a stopping assertion to complete when a cheaper literal scan
+    lands. Never raise the 100,000-step budget to make these pass.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.session = Session()
+        bundle = NL.join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
+        opened = cls.session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                    "name": "pep-c23", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        tool_document = opened["document"]
+        cls.tool_revision = opened["revision"]
+        sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "validate", "bytes": []})
+        target_spec = {"document": sample["document"], "revision": sample["revision"],
+                       "entryFunctions": []}
+        start_cursor = pep_c23.parser_cursor_value(sample["document"], sample["revision"])
+        finished_cursor = pep_c23.parser_cursor_value(
+            sample["document"], sample["revision"], done=True, lex_done=True, lex_stage="done")
+        for tool, function, arguments, expected in [
+                ("pep-c23-parser-start", "parser_start", [], start_cursor),
+                ("pep-c23-parser-step", "parser_step", [finished_cursor],
+                 pep_c23.parser_chunk_value(sample["document"], sample["revision"],
+                                            finished_cursor))]:
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision, "function": function})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision,
+                              "testVectors": [{"arguments": arguments, "expect": expected,
+                                                "semanticTarget": target_spec}]})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.session.process.stdin.close()
+        cls.session.process.terminate()
+
+    def parse_source(self, source):
+        src = source.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "parser-budget", "bytes": list(src)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        return parse_target(self.session, src, target, self.tool_revision)
+
+    def report_status(self, parsed):
+        for field in parsed["fields"]:
+            if field["name"] == "status":
+                return field["value"]["value"]
+        self.fail("ParserProgress has no status field")
+
+    def literal_program(self, length):
+        return ('fn main() -> Int {\n  let s = "' + ("a" * length)
+                + '"\n  return 0\n}\n')
+
+    def identifier_program(self, length):
+        name = "x" * length
+        return f"fn main() -> Int {{\n  let {name} = 7\n  return {name}\n}}\n"
+
+    def test_long_string_literal_parses_up_to_1024_characters(self):
+        # A2's 640-character reproducer does not reproduce on this head.
+        for length in (640, 1024):
+            with self.subTest(literalCharacters=length):
+                source = self.literal_program(length)
+                self.assertEqual(ocaml_check(source), "valid")
+                self.assertEqual(self.report_status(self.parse_source(source)), "complete")
+
+    def test_long_string_literal_stops_between_1024_and_1280_characters(self):
+        # Documented parser-stage frontier: OCaml-valid source, budget-bound
+        # inside one lexer_step scan. Flip when a cheaper literal scan lands.
+        source = self.literal_program(1280)
+        self.assertEqual(ocaml_check(source), "valid")
+        with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
+            self.parse_source(source)
+
+    def test_long_identifier_parses_at_1280_and_stops_at_1536(self):
+        # A separate boundary shows the literal limit is per scanned byte,
+        # not a general source-size ceiling.
+        accepted = self.identifier_program(1280)
+        self.assertEqual(ocaml_check(accepted), "valid")
+        self.assertEqual(self.report_status(self.parse_source(accepted)), "complete")
+        stopped = self.identifier_program(1536)
+        self.assertEqual(ocaml_check(stopped), "valid")
+        with self.assertRaisesRegex(RuntimeError, "PEP_RUNTIME_STEP_LIMIT"):
+            self.parse_source(stopped)
+
+
 if __name__ == "__main__":
     unittest.main()
