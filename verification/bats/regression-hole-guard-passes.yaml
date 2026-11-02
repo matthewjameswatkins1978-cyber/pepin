@@ -1,0 +1,74 @@
+version: terrorbat/v1
+
+id: regression-hole-guard-passes
+
+claim:
+  text: >
+    At the pinned repository commit, the native-path regression test
+    tests.test_c23_str_contains.PepC23StrContainsTests.
+    test_lucy_named_hole_continuation_guard_runs_natively passes: the Pep
+    checker checks Lucy's guarded-identifier fixture within the unchanged
+    100,000-step budget, so the unittest process exits 0.
+
+requires:
+  - fs.read
+  - process.spawn
+  - git.inspect
+
+forbids:
+  - network
+  - git.remote.write
+
+environment:
+  relevant:
+    - os.name
+    - os.arch
+
+attack:
+  setup:
+    - adapter: git
+      action: worktree.snapshot
+  run:
+    - adapter: command
+      action: run
+      program:
+        $param: python_program
+      args:
+        - -m
+        - unittest
+        - tests.test_c23_str_contains.PepC23StrContainsTests.test_lucy_named_hole_continuation_guard_runs_natively
+
+oracle:
+  any:
+    - type: exit_code
+      step: run:0
+      not_equals: 0
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+    - git_diff
+    - operation_log
+
+timeout:
+  run: 300s
+  total: 420s
+
+params:
+  python_program:
+    type: string
+    default: C:\Users\Matmus\AppData\Local\Python\pythoncore-3.15-64\python.exe
+
+meta:
+  origin: ai-proposed
+  author: agent3
+  tags: [pepin, regression, checker-budget, agent3]
+  description: >
+    Agent 3 falsification bat for the d158044 checker-cost regression on the
+    integration line: the test passes at d158044's parent 61f1d33 and fails at
+    d158044..05add76 (bisect-pinned, boundary re-verified on both sides). The
+    oracle fires whenever the unittest run does not exit 0, i.e. whenever the
+    claim "this test passes at this commit" is falsified. A non-firing oracle
+    is NOT OBSERVED, never a certificate about the rest of the suite.
+    Worktree mode is reversibility/observation, not containment.
