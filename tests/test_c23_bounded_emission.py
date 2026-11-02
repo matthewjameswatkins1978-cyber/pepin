@@ -94,6 +94,8 @@ class BoundedEmissionTests(unittest.TestCase):
              [empty_parsed, empty_checked, typed("Int", 0)], refused_bounded_unit()),
             ("pep-c23-prerequisites", "pep_c23_unit_prerequisites",
              [pep_c23.typed_list("FlatAstNode", []), typed("Int", 0)], empty_prerequisites()),
+            ("pep-c23-declarations-check", "pep_c23_unit_declarations_check",
+             [pep_c23.typed_list("FlatAstNode", []), typed("Int", 0)], ok_declarations()),
         ]
         for tool, function, arguments, expect in tools:
             registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -247,6 +249,44 @@ class BoundedEmissionTests(unittest.TestCase):
                     return int(fields["id"]["value"])
                 seen += 1
         raise AssertionError(f"no top-level function at index {index}")
+
+    def _declarations_check(self, parsed, semantic, index):
+        fields = pep_c23.typed_fields(parsed, "ParserProgress", "parser progress")
+        nodes = pep_c23.typed_field_value(fields, "nodes", "List[FlatAstNode]", "parser progress")
+        response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_invoke", "tool": "pep-c23-declarations-check",
+                                      "arguments": [{"type": "List[FlatAstNode]", "value": nodes},
+                                                    typed("Int", self._function_node_id(nodes, index))],
+                                      "semanticTarget": semantic})
+        require(response, "outcome", "ok", "declarations check")
+        result = {item["name"]: item["value"] for item in response["result"]["fields"]}
+        return {"status": result["status"]["value"], "diagnostic": result["diagnostic"]["value"]}
+
+    def test_prerequisite_emittability_is_answerable_without_emitting(self):
+        """A caller can decide whether a prerequisite lowers without running whole-program emission.
+
+        This is the gap slice 3 left open. The empty record is the proof case: the checker accepts
+        it, the emitter cannot lower it, and a caller holding only facts would assemble C that
+        references a typedef nobody emits.
+        """
+        parsed, checked, semantic = self._prepare(RECORD_PARAMETER, "emittable-record")
+        supported = self._declarations_check(parsed, semantic, 0)
+        self.assertEqual(supported["status"], "ok", supported["diagnostic"])
+
+        parsed, checked, semantic = self._prepare(EMPTY_RECORD, "unemittable-record")
+        unsupported = self._declarations_check(parsed, semantic, 0)
+        self.assertEqual(unsupported["status"], "unsupported")
+        self.assertIn("empty records", unsupported["diagnostic"])
+
+        closure = self._prerequisites(parsed, semantic, 0)
+        self.assertEqual(closure["status"], "ok", closure["diagnostic"])
+        self.assertEqual(closure["kinds"], ["record_declaration"])
+
+        # The unit itself still emits: bounded emission is per function, so the fact that a
+        # prerequisite cannot be lowered has to come from the check, not from the unit's status.
+        unit = self._bounded_unit(parsed, checked, semantic, 0)
+        self.assertEqual(unit["status"], "emitted", unit["diagnostic"])
+        self.assertIn(f"pep_record_{closure['ids'][0]}", "".join(unit["parts"]))
 
     def _prerequisites(self, parsed, semantic, index):
         fields = pep_c23.typed_fields(parsed, "ParserProgress", "parser progress")
@@ -535,6 +575,12 @@ FORWARD_TYPE = ("fn use_point(p: Point) -> Int { return 0 }\n"
 PARITY = ("fn increment(value: Int) -> Int { return value + 1 }\n"
           "fn main() -> Int { return increment(41) }\n")
 
+# An empty record passes the checker but has no C23 lowering, so it is a prerequisite that cannot
+# be emitted. A unit that merely names it in a signature still emits text referencing its typedef.
+EMPTY_RECORD = ("type Empty { }\n"
+                "fn use_empty(e: Empty) -> Int { return 0 }\n"
+                "fn main() -> Int { return 0 }\n")
+
 # `Outer` names `Inner` in its own field list, so a closure must report both declarations.
 NESTED_RECORD = ("type Inner { value: Int }\n"
                  "type Outer { inner: Inner }\n"
@@ -544,6 +590,14 @@ NESTED_RECORD = ("type Inner { value: Int }\n"
 # `value` is the first top-level function, so index 0 selects a scalar-only signature.
 SCALAR_ONLY = ("fn scalar(value: Int) -> Int { return value }\n"
                "fn main() -> Int { return 0 }\n")
+
+
+def ok_declarations():
+    """The expected record for a declarations check over an empty node list: nothing to refuse."""
+    return pep_c23.typed_record_value("PepC23DeclarationCheck", [
+        ("status", typed("Str", "ok")),
+        ("diagnostic", typed("Str", "")),
+    ])
 
 
 def empty_prerequisites():

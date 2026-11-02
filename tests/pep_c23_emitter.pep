@@ -2,6 +2,7 @@ type PepC23NodeLookup { found: Bool, node: FlatAstNode }
 type PepC23Emission { status: Str, sourceParts: List[Str], diagnostic: Str }
 type PepC23UnitPrerequisites { status: Str, diagnostic: Str, kinds: List[Str], nodeIds: List[Int] }
 type PepC23IdList { status: Str, diagnostic: Str, ids: List[Int] }
+type PepC23DeclarationCheck { status: Str, diagnostic: Str }
 type PepC23BoundedUnit { status: Str, diagnostic: Str, sourceParts: List[Str], prerequisiteKinds: List[Str], prerequisiteIds: List[Int], requiresArena: Bool }
 
 fn pep_c23_empty_ast_node() -> FlatAstNode {
@@ -3462,6 +3463,88 @@ fn pep_c23_unit_prerequisites(nodes: List[FlatAstNode], functionId: Int) -> PepC
     }
   }
   return PepC23UnitPrerequisites { status: "ok", diagnostic: "", kinds: kinds, nodeIds: ids }
+}
+
+// Prerequisite facts say what a unit depends on, not whether those declarations can be lowered.
+// Without this, a caller could only learn emittability by running whole-program emission -- the
+// cost the bounded contract exists to avoid. These predicates are the emitter's own support rules,
+// so the answer agrees with what emission would do rather than approximating it.
+fn pep_c23_declaration_check(nodes: List[FlatAstNode], nodeId: Int) -> PepC23DeclarationCheck {
+  let declaration = pep_c23_declaration_by_id(nodes, nodeId)
+  if !declaration.found {
+    return PepC23DeclarationCheck { status: "unsupported", diagnostic: "Pep C23 declaration is missing" }
+  } else {}
+  if declaration.node.parentId != -1 {
+    return PepC23DeclarationCheck { status: "unsupported", diagnostic: "Pep C23 declaration must be top level" }
+  } else {}
+  if declaration.node.kind == "record_declaration" {
+    return pep_c23_record_declaration_check(nodes, declaration.node, 0)
+  } else {}
+  if declaration.node.kind == "union_declaration" {
+    if !pep_c23_union_supported_layout(nodes, declaration.node) {
+      return PepC23DeclarationCheck {
+        status: "unsupported", diagnostic: "Pep C23 tagged union has an unsupported layout"
+      }
+    } else {}
+    return PepC23DeclarationCheck { status: "ok", diagnostic: "" }
+  } else {}
+  return PepC23DeclarationCheck {
+    status: "unsupported", diagnostic: "Pep C23 declaration kind has no C23 lowering"
+  }
+}
+
+fn pep_c23_record_declaration_check(nodes: List[FlatAstNode], record: FlatAstNode, depth: Int) -> PepC23DeclarationCheck {
+  if 16 <= depth {
+    return PepC23DeclarationCheck {
+      status: "unsupported", diagnostic: "Pep C23 record nesting is too deep to classify"
+    }
+  } else {}
+  var fields = 0
+  for field in nodes {
+    if field.parentId == record.id && field.role == "field" && field.kind == "field_declaration" {
+      fields = fields + 1
+      let fieldType = pep_c23_child(nodes, field.id, "type", 0)
+      if !fieldType.found {
+        return PepC23DeclarationCheck {
+          status: "unsupported", diagnostic: "Pep C23 record field has no type"
+        }
+      } else {}
+      let fieldKind = pep_c23_c_record_field_type(nodes, record, fieldType.node)
+      if fieldKind == "" {
+        return PepC23DeclarationCheck {
+          status: "unsupported",
+          diagnostic: "Pep C23 record fields require Int, Bool, or a preceding record declaration"
+        }
+      } else {}
+      if fieldKind == "record" {
+        let nested = pep_c23_declared_type(nodes, fieldType.node.text)
+        if !nested.found {
+          return PepC23DeclarationCheck {
+            status: "unsupported", diagnostic: "Pep C23 nested record field has no declaration"
+          }
+        } else {}
+        let inner = pep_c23_record_declaration_check(nodes, nested.node, depth + 1)
+        if inner.status != "ok" { return inner } else {}
+      } else {}
+    } else {}
+  }
+  if fields == 0 {
+    return PepC23DeclarationCheck { status: "unsupported", diagnostic: "Pep C23 does not lower empty records" }
+  } else {}
+  return PepC23DeclarationCheck { status: "ok", diagnostic: "" }
+}
+
+// The caller-facing answer: are every one of this function's prerequisites emittable?
+fn pep_c23_unit_declarations_check(nodes: List[FlatAstNode], functionId: Int) -> PepC23DeclarationCheck {
+  let prerequisites = pep_c23_unit_prerequisites(nodes, functionId)
+  if prerequisites.status != "ok" {
+    return PepC23DeclarationCheck { status: prerequisites.status, diagnostic: prerequisites.diagnostic }
+  } else {}
+  for id in prerequisites.nodeIds {
+    let check = pep_c23_declaration_check(nodes, id)
+    if check.status != "ok" { return check } else {}
+  }
+  return PepC23DeclarationCheck { status: "ok", diagnostic: "" }
 }
 
 // The bounded unit entry: the unit text comes from the already-gated bounded path, so its bytes
