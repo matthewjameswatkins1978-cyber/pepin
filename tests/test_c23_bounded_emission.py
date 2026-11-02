@@ -86,6 +86,8 @@ class BoundedEmissionTests(unittest.TestCase):
              [empty_parsed, empty_checked, typed("Str", "header")], refused),
             ("pep-c23-unit", "emit_c23_function_unit",
              [empty_parsed, empty_checked, typed("Int", 0)], refused),
+            ("pep-c23-bounded-unit", "emit_c23_function_unit_bounded",
+             [empty_parsed, empty_checked, typed("Int", 0)], refused_bounded_unit()),
         ]
         for tool, function, arguments, expect in tools:
             registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -179,6 +181,74 @@ class BoundedEmissionTests(unittest.TestCase):
         self.assertEqual(status, "unsupported")
         self.assertIn("index is out of range", diagnostic)
         self.assertEqual(parts, [])
+
+    def _bounded_unit(self, parsed, checked, semantic, index):
+        response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_invoke", "tool": "pep-c23-bounded-unit",
+                                      "arguments": [parsed, checked, typed("Int", index)],
+                                      "semanticTarget": semantic})
+        require(response, "outcome", "ok", f"bounded unit {index}")
+        fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+        return {
+            "status": fields["status"]["value"],
+            "diagnostic": fields["diagnostic"]["value"],
+            "parts": [part["value"] for part in fields["sourceParts"]["value"]],
+            "kinds": [item["value"] for item in fields["prerequisiteKinds"]["value"]],
+            "ids": [int(item["value"]) for item in fields["prerequisiteIds"]["value"]],
+            "requiresArena": fields["requiresArena"]["value"],
+        }
+
+    def test_bounded_unit_reports_declared_type_prerequisites(self):
+        """A record-typed signature names its declaration as a prerequisite fact."""
+        parsed, checked, semantic = self._prepare(RECORD_PARAMETER, "record-prerequisite")
+        unit = self._bounded_unit(parsed, checked, semantic, 0)
+        self.assertEqual(unit["status"], "emitted", unit["diagnostic"])
+        self.assertEqual(unit["kinds"], ["record_declaration"])
+        self.assertEqual(len(unit["ids"]), 1)
+        # Provenance is source-backed: the id is the one the emitted text refers to.
+        self.assertIn(f"pep_record_{unit['ids'][0]}", "".join(unit["parts"]))
+
+    def test_bounded_unit_has_no_prerequisites_for_scalars(self):
+        parsed, checked, semantic = self._prepare(SCALAR_ONLY, "scalar-prerequisite")
+        unit = self._bounded_unit(parsed, checked, semantic, 0)
+        self.assertEqual(unit["status"], "emitted", unit["diagnostic"])
+        self.assertEqual(unit["kinds"], [])
+        self.assertEqual(unit["ids"], [])
+
+    def test_bounded_unit_text_equals_the_section_unit(self):
+        """The bounded entry adds prerequisite facts, never different bytes."""
+        parsed, checked, semantic = self._prepare(SUPPORTED, "bounded-text")
+        for index in range(3):
+            section_status, section_diagnostic, section_parts = self._unit(
+                parsed, checked, semantic, index)
+            self.assertEqual(section_status, "emitted", section_diagnostic)
+            bounded = self._bounded_unit(parsed, checked, semantic, index)
+            self.assertEqual(bounded["status"], "emitted", bounded["diagnostic"])
+            self.assertEqual(bounded["parts"], section_parts)
+        out_of_range = self._bounded_unit(parsed, checked, semantic, 3)
+        self.assertEqual(out_of_range["status"], "unsupported")
+        self.assertIn("index is out of range", out_of_range["diagnostic"])
+
+
+RECORD_PARAMETER = ("type Point { x: Int y: Int }\n"
+                    "fn use_point(p: Point) -> Int { return p.x }\n"
+                    "fn main() -> Int { return 0 }\n")
+
+# `value` is the first top-level function, so index 0 selects a scalar-only signature.
+SCALAR_ONLY = ("fn scalar(value: Int) -> Int { return value }\n"
+               "fn main() -> Int { return 0 }\n")
+
+
+def refused_bounded_unit():
+    """The expected refusal record for a bounded-unit request against an empty program."""
+    return pep_c23.typed_record_value("PepC23BoundedUnit", [
+        ("status", typed("Str", "unsupported")),
+        ("diagnostic", typed("Str", "Pep C23 function unit index is out of range")),
+        ("sourceParts", pep_c23.typed_list("Str")),
+        ("prerequisiteKinds", pep_c23.typed_list("Str")),
+        ("prerequisiteIds", pep_c23.typed_list("Int")),
+        ("requiresArena", typed("Bool", False)),
+    ])
 
 
 if __name__ == "__main__":

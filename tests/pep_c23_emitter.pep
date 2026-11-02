@@ -1,5 +1,7 @@
 type PepC23NodeLookup { found: Bool, node: FlatAstNode }
 type PepC23Emission { status: Str, sourceParts: List[Str], diagnostic: Str }
+type PepC23UnitPrerequisites { status: Str, diagnostic: Str, kinds: List[Str], nodeIds: List[Int] }
+type PepC23BoundedUnit { status: Str, diagnostic: Str, sourceParts: List[Str], prerequisiteKinds: List[Str], prerequisiteIds: List[Int], requiresArena: Bool }
 
 fn pep_c23_empty_ast_node() -> FlatAstNode {
   return FlatAstNode {
@@ -3360,6 +3362,114 @@ fn pep_c23_function_at(functions: List[FlatAstNode], wanted: Int) -> PepC23NodeL
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
 
+// Prerequisites are facts, not text: a chunked caller needs to know which declarations a unit
+// depends on so it can assemble a compilable translation unit without whole-program emission.
+// Attribution uses the flat-AST preorder-contiguity property: a node's descendants occupy
+// [node.id, nextTopLevelId). tests/test_c23_bounded_emission.py pins that property, so this is
+// one scan plus a range test rather than an ancestor walk per candidate.
+fn pep_c23_declared_type(nodes: List[FlatAstNode], name: Str) -> PepC23NodeLookup {
+  for node in nodes {
+    if node.parentId == -1 &&
+       (node.kind == "record_declaration" || node.kind == "union_declaration") &&
+       node.text == name {
+      return PepC23NodeLookup { found: true, node: node }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+
+fn pep_c23_subtree_end(nodes: List[FlatAstNode], functionId: Int) -> Int {
+  var boundary = 0
+  var boundaryFound = false
+  for node in nodes {
+    if node.parentId == -1 && !(node.id <= functionId) {
+      if !boundaryFound || !(boundary <= node.id) { boundary = node.id; boundaryFound = true } else {}
+    } else {}
+  }
+  if boundaryFound { return boundary } else {}
+  return 2147483647
+}
+
+fn pep_c23_unit_prerequisites(nodes: List[FlatAstNode], functionId: Int) -> PepC23UnitPrerequisites {
+  let subtreeEnd = pep_c23_subtree_end(nodes, functionId)
+  var kinds: List[Str] = []
+  var ids: List[Int] = []
+  for candidate in nodes {
+    if functionId <= candidate.id && !(subtreeEnd <= candidate.id) && candidate.kind == "type_named" {
+      let declaration = pep_c23_declared_type(nodes, candidate.text)
+      if declaration.found {
+        if !contains(ids, declaration.node.id) {
+          kinds = append(kinds, declaration.node.kind)
+          ids = append(ids, declaration.node.id)
+        } else {}
+      } else {
+        return PepC23UnitPrerequisites {
+          status: "unsupported",
+          diagnostic: "Pep C23 unit references a type that this source does not declare",
+          kinds: [],
+          nodeIds: []
+        }
+      }
+    } else {}
+  }
+  return PepC23UnitPrerequisites { status: "ok", diagnostic: "", kinds: kinds, nodeIds: ids }
+}
+
+// The bounded unit entry: the unit text comes from the already-gated bounded path, so its bytes
+// are identical to emit_c23_function_unit by construction, and the prerequisite facts are the only
+// additional work. Nothing here scans the program for other functions' bodies, typedefs or the
+// epilogue.
+fn emit_c23_function_unit_bounded(parsed: ParserProgress, checked: CheckerReport, index: Int) -> PepC23BoundedUnit {
+  var selected = pep_c23_empty_ast_node()
+  var found = false
+  var seen = 0
+  for node in parsed.nodes {
+    if node.parentId == -1 && node.kind == "function" {
+      if seen == index { selected = node; found = true } else {}
+      seen = seen + 1
+    } else {}
+  }
+  if !found {
+    return PepC23BoundedUnit {
+      status: "unsupported",
+      diagnostic: "Pep C23 function unit index is out of range",
+      sourceParts: [],
+      prerequisiteKinds: [],
+      prerequisiteIds: [],
+      requiresArena: false
+    }
+  } else {}
+  let prerequisites = pep_c23_unit_prerequisites(parsed.nodes, selected.id)
+  if prerequisites.status != "ok" {
+    return PepC23BoundedUnit {
+      status: "unsupported",
+      diagnostic: prerequisites.diagnostic,
+      sourceParts: [],
+      prerequisiteKinds: [],
+      prerequisiteIds: [],
+      requiresArena: false
+    }
+  } else {}
+  let emission = emit_c23_function_unit(parsed, checked, index)
+  if emission.status != "emitted" {
+    return PepC23BoundedUnit {
+      status: "unsupported",
+      diagnostic: emission.diagnostic,
+      sourceParts: [],
+      prerequisiteKinds: [],
+      prerequisiteIds: [],
+      requiresArena: false
+    }
+  } else {}
+  return PepC23BoundedUnit {
+    status: "emitted",
+    diagnostic: "",
+    sourceParts: emission.sourceParts,
+    prerequisiteKinds: prerequisites.kinds,
+    prerequisiteIds: prerequisites.nodeIds,
+    requiresArena: pep_c23_requires_arena(parsed.nodes)
+  }
+}
 
 fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool) -> PepC23Emission {
   var reversed: List[Str] = []
