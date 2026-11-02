@@ -20,7 +20,10 @@ gate a merge.
 """
 
 import pathlib
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -57,6 +60,7 @@ class BoundedEmissionTests(unittest.TestCase):
         require(opened, "status", "valid", "check compiler bundle")
         cls.tool_document = opened["document"]
         cls.tool_revision = opened["revision"]
+        cls.temp = tempfile.TemporaryDirectory(prefix="pep-c23-bounded-")
         cls.sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
                                        "name": "stage-validation", "bytes": []})
         require(cls.sample, "outcome", "ok", "open validation source")
@@ -111,6 +115,7 @@ class BoundedEmissionTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.session.close()
+        cls.temp.cleanup()
 
     def _prepare(self, source, name):
         payload = source.encode("utf-8")
@@ -270,10 +275,69 @@ class BoundedEmissionTests(unittest.TestCase):
         self.assertEqual(len(set(closure["ids"])), 2)
         self.assertEqual(closure["kinds"], ["record_declaration", "record_declaration"])
 
+    def test_reassembled_unit_output_compiles_and_runs_under_clang_and_gcc(self):
+        """Byte identity is not the same claim as compilable output, so compile what a caller assembles.
+
+        A chunked caller never sees the one-shot text: it concatenates header + units + epilogue.
+        This compiles exactly that, under strict warnings-as-errors, runs it, and compares the result
+        with the Pep interpreter reference for the same source.
+        """
+        compilers = [name for name in ("clang", "gcc") if shutil.which(name)]
+        if not compilers:
+            self.skipTest("no C23 compiler on PATH")
+
+        parsed, checked, semantic = self._prepare(PARITY, "parity")
+        whole_status, whole_diagnostic, whole = self._section(parsed, checked, semantic, "all")
+        self.assertEqual(whole_status, "emitted", whole_diagnostic)
+        header_status, header_diagnostic, header_parts = self._section(
+            parsed, checked, semantic, "header")
+        self.assertEqual(header_status, "emitted", header_diagnostic)
+        epilogue_status, epilogue_diagnostic, epilogue_parts = self._section(
+            parsed, checked, semantic, "main")
+        self.assertEqual(epilogue_status, "emitted", epilogue_diagnostic)
+
+        assembled = list(header_parts)
+        for index in range(2):
+            unit_status, unit_diagnostic, unit_parts = self._unit(parsed, checked, semantic, index)
+            self.assertEqual(unit_status, "emitted", unit_diagnostic)
+            assembled.extend(unit_parts)
+        assembled.extend(epilogue_parts)
+        self.assertEqual(assembled, whole, "assembled sections must equal one-shot emission")
+
+        reference = self._interpreter_reference(PARITY)
+        self.assertEqual(reference.returncode, 0, reference.stdout + reference.stderr)
+        self.assertEqual(reference.stdout, "42\n")
+
+        generated = pathlib.Path(self.temp.name) / "assembled.c"
+        generated.write_text("".join(assembled), encoding="utf-8", newline="\n")
+        for name in compilers:
+            with self.subTest(compiler=name):
+                executable = pathlib.Path(self.temp.name) / f"assembled-{name}.exe"
+                built = subprocess.run(
+                    [shutil.which(name), "-std=c23", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                     "-O2", str(generated), "-o", str(executable)],
+                    text=True, capture_output=True, check=False)
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                ran = subprocess.run([str(executable)], text=True, capture_output=True, check=False)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(ran.stdout, reference.stdout)
+
+    def _interpreter_reference(self, source):
+        """The same source run by the Pep interpreter, printed the way the generated C prints it."""
+        path = pathlib.Path(self.temp.name) / "reference.pep"
+        path.write_text(source + "\nsay(int_text(main()))\n", encoding="utf-8", newline="\n")
+        return subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(path)],
+            cwd=ROOT, text=True, capture_output=True, check=False)
+
 
 RECORD_PARAMETER = ("type Point { x: Int y: Int }\n"
                     "fn use_point(p: Point) -> Int { return p.x }\n"
                     "fn main() -> Int { return 0 }\n")
+
+# Two functions is the smallest program where header + units + epilogue is a real reassembly.
+PARITY = ("fn increment(value: Int) -> Int { return value + 1 }\n"
+          "fn main() -> Int { return increment(41) }\n")
 
 # `Outer` names `Inner` in its own field list, so a closure must report both declarations.
 NESTED_RECORD = ("type Inner { value: Int }\n"
