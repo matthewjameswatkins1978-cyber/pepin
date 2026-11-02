@@ -3926,6 +3926,155 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
   return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
 }
 
+fn pep_c23_declaration_definitions(parsed: ParserProgress, requiresArena: Bool, wantedId: Int) -> PepC23Emission {
+  var reversed: List[Str] = []
+
+  for record in parsed.nodes {
+    if record.parentId == -1 && record.kind == "record_declaration" && (wantedId == -1 || record.id == wantedId) {
+      var parts: List[Str] = ["typedef struct { "]
+      var fieldCount = 0
+      for field in parsed.nodes {
+        if field.parentId == record.id && field.role == "field" && field.kind == "field_declaration" {
+          let fieldType = pep_c23_child(parsed.nodes, field.id, "type", 0)
+          let fieldKind = if fieldType.found { pep_c23_c_record_field_type(parsed.nodes, record, fieldType.node) } else { "" }
+          if fieldKind == "" { return pep_c23_unsupported("Pep C23 record fields require Int, Bool, or a preceding record declaration") } else {}
+          if fieldKind == "record" {
+            let nested = pep_c23_record_declaration(parsed.nodes, fieldType.node.text)
+            if !nested.found { return pep_c23_unsupported("Pep C23 nested record field has no declaration") } else {}
+            parts = append(parts, "pep_record_")
+            parts = append(parts, int_text(nested.node.id))
+          } else {
+            if fieldKind == "list" {
+              for fieldPart in pep_c23_c_list_field_type_parts(parsed.nodes, record, fieldType.node) {
+                parts = append(parts, fieldPart)
+              }
+            } else {
+              parts = append(parts, fieldKind)
+            }
+          }
+          parts = append(parts, " pep_field_")
+          parts = append(parts, int_text(field.childIndex))
+          parts = append(parts, "; ")
+          fieldCount = fieldCount + 1
+        } else {}
+      }
+      if fieldCount == 0 { return pep_c23_unsupported("Pep C23 does not lower empty records") } else {}
+      parts = append(parts, "} pep_record_")
+      parts = append(parts, int_text(record.id))
+      parts = append(parts, ";\n")
+      for part in parts { reversed = prepend(reversed, part) }
+      var listParts: List[Str] = ["typedef struct { const pep_record_", int_text(record.id), "*data; size_t length; } pep_list_record_", int_text(record.id), ";\n"]
+      for part in listParts { reversed = prepend(reversed, part) }
+    } else {}
+  }
+  for declaration in parsed.nodes {
+    if declaration.parentId == -1 && declaration.kind == "union_declaration" && (wantedId == -1 || declaration.id == wantedId) {
+      if !pep_c23_union_supported_layout(parsed.nodes, declaration) {
+        return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
+      } else {}
+      let recursiveUnion = pep_c23_union_is_recursive(parsed.nodes, declaration)
+      if pep_c23_union_has_recursive_list_payload(parsed.nodes, declaration) {
+        var listParts: List[Str] = ["typedef struct { const struct pep_union_",
+          int_text(declaration.id), " *data; size_t length; } pep_list_union_",
+          int_text(declaration.id), ";\n"]
+        for part in listParts { reversed = prepend(reversed, part) }
+      } else {}
+      var parts: List[Str] = []
+      if recursiveUnion {
+        parts = ["typedef struct pep_union_", int_text(declaration.id), " { uint32_t tag; union { "]
+      } else {
+        parts = ["typedef struct { uint32_t tag; union { "]
+      }
+      var payloadCount = 0
+      for variant in parsed.nodes {
+        if variant.parentId == declaration.id && variant.role == "variant" &&
+           variant.kind == "variant_declaration" {
+          let payload = pep_c23_child(parsed.nodes, variant.id, "field_type", 0)
+          if payload.found {
+            if payloadCount != 0 { parts = append(parts, " ") } else {}
+            parts = append(parts, "struct { ")
+            for payloadField in parsed.nodes {
+              if payloadField.parentId == variant.id && payloadField.role == "field_type" {
+                if payloadField.kind == "type_named" && payloadField.text == declaration.text {
+                  parts = append(parts, "struct pep_union_")
+                  parts = append(parts, int_text(declaration.id))
+                  parts = append(parts, " *")
+                } else {
+                  for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, payloadField) {
+                    parts = append(parts, typePart)
+                  }
+                }
+                parts = append(parts, " field_")
+                parts = append(parts, int_text(payloadField.childIndex))
+                parts = append(parts, "; ")
+              } else {}
+            }
+            parts = append(parts, "} payload_")
+            parts = append(parts, int_text(variant.childIndex))
+            parts = append(parts, ";")
+            payloadCount = payloadCount + 1
+          } else {}
+        } else {}
+      }
+      parts = append(parts, " } payload; } pep_union_")
+      parts = append(parts, int_text(declaration.id))
+      parts = append(parts, ";\n")
+      for part in parts { reversed = prepend(reversed, part) }
+    } else {}
+  }
+  if requiresArena {
+    for declaration in parsed.nodes {
+      if declaration.parentId == -1 && declaration.kind == "union_declaration" &&
+         (wantedId == -1 || declaration.id == wantedId) &&
+         pep_c23_union_is_recursive(parsed.nodes, declaration) {
+        for part in pep_c23_recursive_union_guard_source(declaration) { reversed = prepend(reversed, part) }
+        for variant in parsed.nodes {
+          if variant.parentId == declaration.id && variant.role == "variant" &&
+             variant.kind == "variant_declaration" &&
+             pep_c23_union_has_recursive_payload(parsed.nodes, declaration, variant) {
+            for part in pep_c23_union_constructor_helper_source(parsed.nodes, declaration, variant) {
+              reversed = prepend(reversed, part)
+            }
+          } else {}
+        }
+      } else {}
+    }
+  } else {}
+  // Record list updates live with the other arena helpers, after every pep_list_record_N typedef.
+  if requiresArena {
+    for declaration in parsed.nodes {
+      if declaration.parentId == -1 && declaration.kind == "record_declaration" && (wantedId == -1 || declaration.id == wantedId) {
+        for part in pep_c23_record_list_update_source(declaration) { reversed = prepend(reversed, part) }
+      } else {}
+    }
+  } else {}
+  return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
+}
+
+// One top-level record or union declaration, without the header, the prototypes or any other
+// declaration. Its text is the same bytes the header contributes for that declaration, so a caller
+// can assemble a translation unit from units plus the declarations it actually needs.
+fn emit_c23_declaration_unit(parsed: ParserProgress, checked: CheckerReport, nodeId: Int) -> PepC23Emission {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision ||
+     checked.document != authority.document || checked.revision != authority.revision ||
+     checked.syntaxNodeCount != length(parsed.nodes) {
+    return pep_c23_unsupported("Pep C23 emission inputs do not match the authorised source revision")
+  } else {}
+  if parsed.status != "complete" || checked.status != "valid" {
+    return pep_c23_unsupported("Pep C23 emission requires a valid Pep checker report")
+  } else {}
+  let declaration = pep_c23_declaration_by_id(parsed.nodes, nodeId)
+  if !declaration.found || declaration.node.parentId != -1 {
+    return pep_c23_unsupported("Pep C23 declaration unit requires a top-level declaration id")
+  } else {}
+  if declaration.node.kind != "record_declaration" && declaration.node.kind != "union_declaration" {
+    return pep_c23_unsupported("Pep C23 declaration unit requires a record or union declaration")
+  } else {}
+  return pep_c23_declaration_definitions(parsed, pep_c23_requires_arena(parsed.nodes), nodeId)
+}
+
+
 fn emit_c23() -> PepC23Emission {
   let parsed = parser_parse_program()
   if parsed.status != "complete" {
@@ -4042,124 +4191,9 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_str pep_list_str_prepend(pep_arena_t *pep_a, pep_list_str pep_values, pep_str pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(pep_str)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  pep_str *pep_out = (pep_str *)pep_arena_alloc(pep_a, pep_count * sizeof(pep_str), _Alignof(pep_str));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_str){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_str pep_list_str_reverse(pep_arena_t *pep_a, pep_list_str pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_str){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(pep_str)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  pep_str *pep_out = (pep_str *)pep_arena_alloc(pep_a, pep_values.length * sizeof(pep_str), _Alignof(pep_str));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_str){ .data = pep_out, .length = pep_values.length };\n}\n")
   } else {}
   reversed = prepend(reversed, "int64_t pep_add(int64_t a, int64_t b) {\n  if ((b > 0 && a > INT64_MAX - b) || (b < 0 && a < INT64_MIN - b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a + b;\n}\nint64_t pep_sub(int64_t a, int64_t b) {\n  if ((b < 0 && a > INT64_MAX + b) || (b > 0 && a < INT64_MIN + b)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a - b;\n}\nint64_t pep_mul(int64_t a, int64_t b) {\n  if (a > 0) { if ((b > 0 && a > INT64_MAX / b) || (b < 0 && b < INT64_MIN / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  else if (a < 0) { if ((b > 0 && a < INT64_MIN / b) || (b < 0 && b < INT64_MAX / a)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } }\n  return a * b;\n}\nint64_t pep_div(int64_t a, int64_t b) {\n  if (b == 0) { fputs(\"PEP_RUNTIME_DIVISION_BY_ZERO\\n\", stderr); exit(1); }\n  if (a == INT64_MIN && b == -1) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return a / b;\n}\nint64_t pep_neg(int64_t a) {\n  if (a == INT64_MIN) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  return -a;\n}\n[[maybe_unused]] static int64_t pep_checked_length(size_t length) { if ((uintmax_t)length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); } return (int64_t)length; }\nstatic int pep_call_depth = 0;\nstatic void pep_enter(void) { if (pep_call_depth >= 512) { fputs(\"PEP_RUNTIME_CALL_DEPTH\\n\", stderr); exit(1); } pep_call_depth += 1; }\nstatic void pep_leave(void) { pep_call_depth -= 1; }\n[[maybe_unused]] static int64_t pep_invalid_union_tag(void) { fputs(\"PEP_RUNTIME_INVALID_UNION\\n\", stderr); exit(1); }\n")
-  for record in parsed.nodes {
-    if record.parentId == -1 && record.kind == "record_declaration" {
-      var parts: List[Str] = ["typedef struct { "]
-      var fieldCount = 0
-      for field in parsed.nodes {
-        if field.parentId == record.id && field.role == "field" && field.kind == "field_declaration" {
-          let fieldType = pep_c23_child(parsed.nodes, field.id, "type", 0)
-          let fieldKind = if fieldType.found { pep_c23_c_record_field_type(parsed.nodes, record, fieldType.node) } else { "" }
-          if fieldKind == "" { return pep_c23_unsupported("Pep C23 record fields require Int, Bool, or a preceding record declaration") } else {}
-          if fieldKind == "record" {
-            let nested = pep_c23_record_declaration(parsed.nodes, fieldType.node.text)
-            if !nested.found { return pep_c23_unsupported("Pep C23 nested record field has no declaration") } else {}
-            parts = append(parts, "pep_record_")
-            parts = append(parts, int_text(nested.node.id))
-          } else {
-            if fieldKind == "list" {
-              for fieldPart in pep_c23_c_list_field_type_parts(parsed.nodes, record, fieldType.node) {
-                parts = append(parts, fieldPart)
-              }
-            } else {
-              parts = append(parts, fieldKind)
-            }
-          }
-          parts = append(parts, " pep_field_")
-          parts = append(parts, int_text(field.childIndex))
-          parts = append(parts, "; ")
-          fieldCount = fieldCount + 1
-        } else {}
-      }
-      if fieldCount == 0 { return pep_c23_unsupported("Pep C23 does not lower empty records") } else {}
-      parts = append(parts, "} pep_record_")
-      parts = append(parts, int_text(record.id))
-      parts = append(parts, ";\n")
-      for part in parts { reversed = prepend(reversed, part) }
-      var listParts: List[Str] = ["typedef struct { const pep_record_", int_text(record.id), "*data; size_t length; } pep_list_record_", int_text(record.id), ";\n"]
-      for part in listParts { reversed = prepend(reversed, part) }
-    } else {}
-  }
-  for declaration in parsed.nodes {
-    if declaration.parentId == -1 && declaration.kind == "union_declaration" {
-      if !pep_c23_union_supported_layout(parsed.nodes, declaration) {
-        return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
-      } else {}
-      let recursiveUnion = pep_c23_union_is_recursive(parsed.nodes, declaration)
-      if pep_c23_union_has_recursive_list_payload(parsed.nodes, declaration) {
-        var listParts: List[Str] = ["typedef struct { const struct pep_union_",
-          int_text(declaration.id), " *data; size_t length; } pep_list_union_",
-          int_text(declaration.id), ";\n"]
-        for part in listParts { reversed = prepend(reversed, part) }
-      } else {}
-      var parts: List[Str] = []
-      if recursiveUnion {
-        parts = ["typedef struct pep_union_", int_text(declaration.id), " { uint32_t tag; union { "]
-      } else {
-        parts = ["typedef struct { uint32_t tag; union { "]
-      }
-      var payloadCount = 0
-      for variant in parsed.nodes {
-        if variant.parentId == declaration.id && variant.role == "variant" &&
-           variant.kind == "variant_declaration" {
-          let payload = pep_c23_child(parsed.nodes, variant.id, "field_type", 0)
-          if payload.found {
-            if payloadCount != 0 { parts = append(parts, " ") } else {}
-            parts = append(parts, "struct { ")
-            for payloadField in parsed.nodes {
-              if payloadField.parentId == variant.id && payloadField.role == "field_type" {
-                if payloadField.kind == "type_named" && payloadField.text == declaration.text {
-                  parts = append(parts, "struct pep_union_")
-                  parts = append(parts, int_text(declaration.id))
-                  parts = append(parts, " *")
-                } else {
-                  for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, payloadField) {
-                    parts = append(parts, typePart)
-                  }
-                }
-                parts = append(parts, " field_")
-                parts = append(parts, int_text(payloadField.childIndex))
-                parts = append(parts, "; ")
-              } else {}
-            }
-            parts = append(parts, "} payload_")
-            parts = append(parts, int_text(variant.childIndex))
-            parts = append(parts, ";")
-            payloadCount = payloadCount + 1
-          } else {}
-        } else {}
-      }
-      parts = append(parts, " } payload; } pep_union_")
-      parts = append(parts, int_text(declaration.id))
-      parts = append(parts, ";\n")
-      for part in parts { reversed = prepend(reversed, part) }
-    } else {}
-  }
-  if requiresArena {
-    for declaration in parsed.nodes {
-      if declaration.parentId == -1 && declaration.kind == "union_declaration" &&
-         pep_c23_union_is_recursive(parsed.nodes, declaration) {
-        for part in pep_c23_recursive_union_guard_source(declaration) { reversed = prepend(reversed, part) }
-        for variant in parsed.nodes {
-          if variant.parentId == declaration.id && variant.role == "variant" &&
-             variant.kind == "variant_declaration" &&
-             pep_c23_union_has_recursive_payload(parsed.nodes, declaration, variant) {
-            for part in pep_c23_union_constructor_helper_source(parsed.nodes, declaration, variant) {
-              reversed = prepend(reversed, part)
-            }
-          } else {}
-        }
-      } else {}
-    }
-  } else {}
-  // Record list updates live with the other arena helpers, after every pep_list_record_N typedef.
-  if requiresArena {
-    for declaration in parsed.nodes {
-      if declaration.parentId == -1 && declaration.kind == "record_declaration" {
-        for part in pep_c23_record_list_update_source(declaration) { reversed = prepend(reversed, part) }
-      } else {}
-    }
-  } else {}
+  let declarations = pep_c23_declaration_definitions(parsed, requiresArena, -1)
+  if declarations.status != "emitted" { return declarations } else {}
+  for part in declarations.sourceParts { reversed = prepend(reversed, part) }
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let functionParameters = pep_c23_parameters(parsed.nodes, node)

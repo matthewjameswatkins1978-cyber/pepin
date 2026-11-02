@@ -96,6 +96,8 @@ class BoundedEmissionTests(unittest.TestCase):
              [pep_c23.typed_list("FlatAstNode", []), typed("Int", 0)], empty_prerequisites()),
             ("pep-c23-declarations-check", "pep_c23_unit_declarations_check",
              [pep_c23.typed_list("FlatAstNode", []), typed("Int", 0)], ok_declarations()),
+            ("pep-c23-declaration-unit", "emit_c23_declaration_unit",
+             [empty_parsed, empty_checked, typed("Int", 0)], refused_declaration_unit()),
         ]
         for tool, function, arguments, expect in tools:
             registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -261,6 +263,57 @@ class BoundedEmissionTests(unittest.TestCase):
         require(response, "outcome", "ok", "declarations check")
         result = {item["name"]: item["value"] for item in response["result"]["fields"]}
         return {"status": result["status"]["value"], "diagnostic": result["diagnostic"]["value"]}
+
+    def _declaration_unit(self, parsed, checked, semantic, node_id):
+        response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_invoke", "tool": "pep-c23-declaration-unit",
+                                      "arguments": [parsed, checked, typed("Int", node_id)],
+                                      "semanticTarget": semantic})
+        require(response, "outcome", "ok", f"declaration unit {node_id}")
+        return emission_of(response)
+
+    @staticmethod
+    def _declaration_node_ids(nodes):
+        ids = []
+        for node in nodes:
+            fields = {item["name"]: item["value"] for item in node["fields"]}
+            if int(fields["parentId"]["value"]) == -1 and fields["kind"]["value"] in (
+                    "record_declaration", "union_declaration"):
+                ids.append(int(fields["id"]["value"]))
+        return ids
+
+    def test_declaration_unit_emits_one_declaration_without_the_header(self):
+        """A caller needing one typedef must not have to take the whole header.
+
+        The declaration unit's text has to be the same bytes the header contributes for that
+        declaration, or assembling units plus declarations would drift from one-shot emission.
+        """
+        parsed, checked, semantic = self._prepare(UNION_AND_RECORD, "declaration-unit")
+        header_status, header_diagnostic, header_parts = self._section(parsed, checked, semantic, "header")
+        self.assertEqual(header_status, "emitted", header_diagnostic)
+        header_text = "".join(header_parts)
+        fields = pep_c23.typed_fields(parsed, "ParserProgress", "parser progress")
+        nodes = pep_c23.typed_field_value(fields, "nodes", "List[FlatAstNode]", "parser progress")
+        ids = self._declaration_node_ids(nodes)
+        self.assertEqual(len(ids), 2, ids)
+
+        for node_id in ids:
+            status, diagnostic, parts = self._declaration_unit(parsed, checked, semantic, node_id)
+            self.assertEqual(status, "emitted", diagnostic)
+            text = "".join(parts)
+            self.assertTrue(text.strip())
+            self.assertIn(text, header_text, "declaration text must match the header bytes")
+            self.assertLess(len(text), len(header_text), "a declaration is smaller than the header")
+
+        function_id = self._function_node_id(nodes, 0)
+        status, diagnostic, parts = self._declaration_unit(parsed, checked, semantic, function_id)
+        self.assertEqual(status, "unsupported")
+        self.assertIn("record or union declaration", diagnostic)
+        self.assertEqual(parts, [])
+
+        missing = self._declaration_unit(parsed, checked, semantic, 999999)
+        self.assertEqual(missing[0], "unsupported")
+        self.assertEqual(missing[2], [])
 
     def test_prerequisite_emittability_is_answerable_without_emitting(self):
         """A caller can decide whether a prerequisite lowers without running whole-program emission.
@@ -575,6 +628,12 @@ FORWARD_TYPE = ("fn use_point(p: Point) -> Int { return 0 }\n"
 PARITY = ("fn increment(value: Int) -> Int { return value + 1 }\n"
           "fn main() -> Int { return increment(41) }\n")
 
+# One record and one union: both are declarations whose text a caller may need individually.
+UNION_AND_RECORD = ("type Point { x: Int y: Int }\n"
+                    "type Flag = On(Int) | Off(Int)\n"
+                    "fn use_point(p: Point) -> Int { return 0 }\n"
+                    "fn main() -> Int { return 0 }\n")
+
 # An empty record passes the checker but has no C23 lowering, so it is a prerequisite that cannot
 # be emitted. A unit that merely names it in a signature still emits text referencing its typedef.
 EMPTY_RECORD = ("type Empty { }\n"
@@ -590,6 +649,12 @@ NESTED_RECORD = ("type Inner { value: Int }\n"
 # `value` is the first top-level function, so index 0 selects a scalar-only signature.
 SCALAR_ONLY = ("fn scalar(value: Int) -> Int { return value }\n"
                "fn main() -> Int { return 0 }\n")
+
+
+def refused_declaration_unit():
+    """The expected refusal for a declaration-unit request against an empty program."""
+    return typed_record("unsupported", (),
+                        "Pep C23 declaration unit requires a top-level declaration id")
 
 
 def ok_declarations():
