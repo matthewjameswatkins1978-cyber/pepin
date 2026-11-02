@@ -81,6 +81,32 @@ Chunk-time: `CHUNK_VERSION_UNKNOWN`, `CHUNK_STALE_REVISION`,
 A refusal is a correctness signal, not a retry hint. Python never "repairs"
 a refused chunk.
 
+## Scalar rules (Agent 3 finding, repaired)
+
+Two classes of integer, deliberately distinguished:
+
+- **Typed Pep scalar** — a `{"type": "Int", "value": ...}` field on a node or
+  a checker report. The Pep JSONL wire format carries `Int` as a *canonical
+  decimal string* (`-?(0|[1-9][0-9]*)`), so that shape is accepted exactly.
+  `3.7`, `True`, `1.0`, `" 1"`, `"1_0"`, `"0x10"` and `"abc"` are refused
+  with `CHUNK_SCALAR_TYPE` (wrong kind) or `CHUNK_SCALAR_FORMAT`
+  (non-canonical text) — never a bare `ValueError`.
+- **Host envelope integer** — `index`, `coveredNodeIds` entries and
+  `suppliedSignatures` entries that the host itself authored. These must be
+  exact Python `int` values; strings, floats and booleans are refused.
+  `bool` is rejected explicitly because Python's `bool` is an `int` subclass.
+
+This replaced an `int()`-on-anything path that measurably coerced `1.5` and
+`True` to node id `1` and let `"abc"` escape as an uncaught `ValueError`.
+A wrong node id that parses silently is worse than a refusal: it can
+misidentify a chunk's contents while every later check passes.
+
+A wrong record type tag is `CHUNK_TYPE_MISMATCH`; a wrong or unparsable
+scalar is `CHUNK_SCALAR_TYPE` / `CHUNK_SCALAR_FORMAT`. Refusal codes for
+type and format are distinct from coverage codes on purpose, so callers can
+tell "you sent me a different kind of thing" from "you sent me a different
+chunk".
+
 ## Who holds what
 
 - **Pep checker** (`analyze_chunk`, `chunk_signatures`): local, sound facts

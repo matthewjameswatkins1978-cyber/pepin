@@ -29,6 +29,8 @@ meant to move into Pep-written Lucy; until then they must not grow any
 type, scope or signature logic.
 """
 
+import re
+
 CONTRACT_VERSION = "pep-checked-chunk-v1"
 
 CONTRACT = {
@@ -63,6 +65,7 @@ CONTRACT = {
         "CHUNK_UNSUPPLIED_SIGNATURE", "CHUNK_INCOMPLETE",
         "CHUNK_PLAN_OVERLAP", "CHUNK_PLAN_INCOMPLETE", "CHUNK_PLAN_OPEN_PARENT",
         "CHUNK_PLAN_EMPTY", "CHUNK_PLAN_SHARED_NOT_PLANNED",
+        "CHUNK_TYPE_MISMATCH", "CHUNK_SCALAR_TYPE", "CHUNK_SCALAR_FORMAT",
     ),
 }
 
@@ -82,23 +85,63 @@ class ContractRefusal(RuntimeError):
 
 def _fields(value, type_name):
     if not isinstance(value, dict) or value.get("type") != type_name:
-        raise ContractRefusal("CHUNK_COVERAGE_MISMATCH",
+        raise ContractRefusal("CHUNK_TYPE_MISMATCH",
                               f"expected a {type_name} value, got {type(value).__name__}")
     return {field["name"]: field["value"] for field in value.get("fields", [])}
 
 
 def _scalar(value, type_name, label):
     if not isinstance(value, dict) or value.get("type") != type_name:
-        raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", f"{label} is not {type_name}")
+        raise ContractRefusal("CHUNK_SCALAR_TYPE", f"{label} is not a {type_name} value")
     return value.get("value")
+
+
+def _str_scalar(value, label):
+    raw = _scalar(value, "Str", label)
+    if not isinstance(raw, str):
+        raise ContractRefusal("CHUNK_SCALAR_TYPE", f"{label} is not a string")
+    return raw
+
+
+_INT_TEXT = re.compile(r"-?(?:0|[1-9][0-9]*)\Z")
+
+
+def _int_scalar(value, label):
+    """Return an exact typed integer, or refuse. Never coerce a lossy value.
+
+    Measured hazard this replaces: the old code called int() on whatever the
+    envelope carried, so 3.7, True and "12" all became integers and "abc"
+    escaped as a bare ValueError instead of a contract refusal. The Pep JSONL
+    wire format does carry Int as a canonical decimal string, so that shape is
+    accepted exactly; every other shape is refused.
+    """
+    return _exact_int(_scalar(value, "Int", label), label)
+
+
+def _exact_int(raw, label):
+    if isinstance(raw, bool) or isinstance(raw, float):
+        raise ContractRefusal("CHUNK_SCALAR_TYPE", f"{label} is not an integer")
+    if isinstance(raw, int):
+        return raw
+    # Pep's JSONL transport encodes Int as a canonical decimal string.
+    if isinstance(raw, str) and _INT_TEXT.match(raw):
+        return int(raw)
+    raise ContractRefusal("CHUNK_SCALAR_FORMAT", f"{label} is not a canonical integer")
+
+
+def _chunk_int(raw, label):
+    """Envelope integers are exact: no bools, floats, strings or coercions."""
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ContractRefusal("CHUNK_SCALAR_TYPE", f"{label} is not an integer")
+    return raw
 
 
 def _node_fields(node):
     fields = _fields(node, "FlatAstNode")
     return {
-        "id": int(_scalar(fields["id"], "Int", "node id")),
-        "parentId": int(_scalar(fields["parentId"], "Int", "node parentId")),
-        "childIndex": int(_scalar(fields["childIndex"], "Int", "node childIndex")),
+        "id": _int_scalar(fields["id"], "node id"),
+        "parentId": _int_scalar(fields["parentId"], "node parentId"),
+        "childIndex": _int_scalar(fields["childIndex"], "node childIndex"),
     }
 
 
@@ -140,9 +183,9 @@ class DocumentIndex:
     def from_parsed(cls, parsed):
         """Build an index from a staged ParserProgress value."""
         fields = _fields(parsed, "ParserProgress")
-        document = _scalar(fields["document"], "Str", "parser document")
-        revision = _scalar(fields["revision"], "Str", "parser revision")
-        status = _scalar(fields["status"], "Str", "parser status")
+        document = _str_scalar(fields["document"], "parser document")
+        revision = _str_scalar(fields["revision"], "parser revision")
+        status = _str_scalar(fields["status"], "parser status")
         if status != "complete":
             raise ContractRefusal("CHUNK_COVERAGE_MISMATCH",
                                   f"an incomplete parse cannot be planned over (status {status!r})")
@@ -177,9 +220,9 @@ class ChunkPlan:
         self.index = index
         self.document = index.document
         self.revision = index.revision
-        self.shared_roots = tuple(sorted(int(root) for root in shared_roots))
+        self.shared_roots = tuple(sorted(_chunk_int(root, "shared root") for root in shared_roots))
         self.chunk_ids = tuple(tuple(ids) for ids in chunk_ids)
-        self.signatures = frozenset(int(value) for value in signatures)
+        self.signatures = frozenset(_exact_int(value, "signature id") for value in signatures)
 
     @property
     def chunk_count(self):
@@ -231,7 +274,7 @@ def plan_ids(index, chunk_ids, shared_roots=(), signatures=()):
 
 
 def _plan(index, chunk_ids, shared_roots, signatures):
-    roots = tuple(int(root) for root in shared_roots)
+    roots = tuple(_exact_int(root, "shared root") for root in shared_roots)
     for root in roots:
         if root not in index.parents:
             raise ContractRefusal("CHUNK_UNKNOWN_NODE",
@@ -246,15 +289,15 @@ def _plan(index, chunk_ids, shared_roots, signatures):
             raise ContractRefusal("CHUNK_PLAN_EMPTY", "a planned chunk covers no nodes")
         previous = None
         chunk_set = set()
-        for node_id in ids:
-            node_id = int(node_id)
+        chunk_values = [_exact_int(value, "planned node id") for value in ids]
+        for node_id in chunk_values:
             if node_id not in index.parents:
                 raise ContractRefusal("CHUNK_UNKNOWN_NODE",
                                       f"planned node {node_id} is not in this document")
             if previous is not None and node_id <= previous:
                 raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", "planned chunk ids must ascend")
             parent_id = index.parents[node_id]
-            if parent_id != -1 and parent_id not in set(int(v) for v in ids):
+            if parent_id != -1 and parent_id not in set(chunk_values):
                 raise ContractRefusal("CHUNK_PLAN_OPEN_PARENT",
                                       f"planned node {node_id} needs parent {parent_id} in its chunk")
             if node_id in owned and node_id not in shared_ids:
@@ -279,8 +322,10 @@ def _plan(index, chunk_ids, shared_roots, signatures):
     if missing:
         raise ContractRefusal("CHUNK_PLAN_INCOMPLETE",
                               f"{len(missing)} document node(s) are in no chunk, first {missing[0]}")
-    for value in signatures:
-        if int(value) not in index.parents:
+    signature_ids = frozenset(_exact_int(value, "signature provenance id")
+                              for value in signatures)
+    for value in signature_ids:
+        if value not in index.parents:
             raise ContractRefusal("CHUNK_COVERAGE_MISMATCH",
                                   f"signature provenance names unknown node {value}")
 
@@ -290,7 +335,7 @@ def _plan(index, chunk_ids, shared_roots, signatures):
     plan.revision = index.revision
     plan.shared_roots = roots
     plan.chunk_ids = tuple(ordered)
-    plan.signatures = frozenset(int(value) for value in signatures)
+    plan.signatures = signature_ids
     plan._shared_ids = frozenset(shared_ids)
     return plan
 
@@ -324,14 +369,13 @@ def validate_chunk(plan, chunk):
     if chunk.get("document") != plan.document or chunk.get("revision") != plan.revision:
         raise ContractRefusal("CHUNK_STALE_REVISION",
                               "chunk document or revision is not the planned target")
-    position = chunk.get("index")
-    if not isinstance(position, int):
-        raise ContractRefusal("CHUNK_INDEX_OUT_OF_RANGE", "chunk index is not an integer")
+    position = _chunk_int(chunk.get("index"), "chunk index")
     planned = plan.node_ids(position)
 
     covered = chunk.get("coveredNodeIds")
-    if not isinstance(covered, list) or any(not isinstance(value, int) for value in covered):
-        raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", "coveredNodeIds is not an int list")
+    if not isinstance(covered, list):
+        raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", "coveredNodeIds is not a list")
+    covered = [_chunk_int(value, "covered node id") for value in covered]
     if covered != list(planned):
         raise ContractRefusal("CHUNK_COVERAGE_MISMATCH",
                               f"chunk {position} claims {len(covered)} ids, plan says {len(planned)}")
@@ -370,25 +414,28 @@ def validate_chunk(plan, chunk):
                                   f"chunk {position} node {fields['id']} has childIndex {fields['childIndex']}")
 
     report = _fields(chunk.get("report"), "CheckerReport")
-    if (_scalar(report["document"], "Str", "report document") != plan.document or
-            _scalar(report["revision"], "Str", "report revision") != plan.revision):
+    if (_str_scalar(report["document"], "report document") != plan.document or
+            _str_scalar(report["revision"], "report revision") != plan.revision):
         raise ContractRefusal("CHUNK_REPORT_MISMATCH",
                               f"chunk {position} report belongs to another revision")
-    node_count = int(_scalar(report["syntaxNodeCount"], "Int", "report syntaxNodeCount"))
+    node_count = _int_scalar(report["syntaxNodeCount"], "report syntaxNodeCount")
     if node_count != len(planned):
         raise ContractRefusal("CHUNK_REPORT_COUNT_MISMATCH",
                               f"chunk {position} report covers {node_count} nodes, "
                               f"plan has {len(planned)}")
-    status = _scalar(report["status"], "Str", "report status")
+    status = _str_scalar(report["status"], "report status")
     if status not in REPORT_STATUSES:
         raise ContractRefusal("CHUNK_REPORT_STATUS_UNKNOWN",
                               f"chunk {position} report status {status!r} is unknown")
 
     supplied = chunk.get("suppliedSignatures") or []
-    if len(set(supplied)) != len(supplied):
+    if not isinstance(supplied, list):
+        raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", "suppliedSignatures is not a list")
+    supplied_ids = [_chunk_int(value, "supplied signature id") for value in supplied]
+    if len(set(supplied_ids)) != len(supplied_ids):
         raise ContractRefusal("CHUNK_COVERAGE_MISMATCH", "suppliedSignatures contains duplicates")
-    for value in supplied:
-        if int(value) not in plan.signatures:
+    for value in supplied_ids:
+        if value not in plan.signatures:
             raise ContractRefusal("CHUNK_UNSUPPLIED_SIGNATURE",
                                   f"chunk {position} cites signature {value} the checker never certified")
     return status
