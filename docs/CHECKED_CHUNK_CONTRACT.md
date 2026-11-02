@@ -48,12 +48,15 @@ read a chunk report as whole-program coverage. Whole-program coverage is
 
 - Every document node is in at least one planned chunk.
 - A node repeats across chunks **only** inside a declared shared root, and
-  each declared shared root must be planned as its own whole chunk. Measured
-  reason: the current chunker (`tests/chunk_helper.py`) sends each function's
-  subtree plus the declaration subtrees it textually references, so
+  each declared shared root must be whole inside at least one planned chunk.
+  Measured reason: the current chunker (`tests/chunk_helper.py`) sends each
+  function's subtree plus the declaration subtrees it textually references, so
   declaration nodes repeat. A contract forbidding that would not describe the
   pipeline that exists; a contract allowing arbitrary repetition could not
-  detect a forged overlap.
+  detect a forged overlap. The earlier "shared root must be its own whole
+  chunk" rule was relaxed after measurement: a declaration chunk needs its
+  **transitive** type closure, so one declaration chunk legitimately contains
+  another declaration's subtree.
 - Each chunk is parent-closed: a node's parent is `-1` or in the same chunk.
 - `parentId < id` and `childIndex >= 0` for every node.
 - A chunk's `nodes` are exactly its covered ids — no extras, no gaps.
@@ -103,13 +106,64 @@ deliberate textual over-approximation (over-inclusion is bounded waste,
 under-inclusion fails closed). It is not part of the contract and must not be
 mistaken for checker-certified dependency analysis.
 
+## Signature provenance (measured)
+
+Two id spaces exist and must stay separate:
+
+- **checker side** (`id`/`synid` in `tests/chunk_helper.py`): a synthetic,
+  chunk-local key the Pep checker uses to look up external signatures for a
+  call site. It must never be a document id.
+- **contract side** (`node`): the original document node id of the function
+  whose header chunk produced the signature. This is the only identity the
+  contract can tie to a revision, and the only thing that belongs in
+  `suppliedSignatures` or plan provenance.
+
+Both mistakes were measured. Feeding the checker's synthetic key to the
+contract produced duplicate provenance and `CHUNK_COVERAGE_MISMATCH`. Feeding
+a document id to the checker collided with a body chunk's remapped ids and
+**silently stopped cross-chunk type checking from reporting `invalid`** — the
+existing chunked-mismatch regression caught it. Keep the two fields apart, and
+keep that regression running.
+
+## Measured on the real lexer
+
+`tests/test_lexer_chunk_ledger.py` drives the whole contract over
+`examples/pep_lexer.pep` at `87c9fec`: parse complete in 567 steps / 2,030
+nodes, plan of 15 chunks (5 transitively closed declaration chunks + 10
+functions, 2,340 node assignments), one `analyze_chunk` call per chunk.
+
+| chunk | nodes | result |
+|---|---|---|
+| 5 declaration chunks | 5, 5, 18, 34, 76 | valid |
+| `ascii_continue` | 10 | valid |
+| `ascii_digit` | 12 | valid |
+| `ascii_letter` | 24 | valid |
+| `advance_position` | 33 | valid |
+| `make_token` | 55 | valid |
+| `lexer_start` | 59 | `PEP_RUNTIME_STEP_LIMIT` |
+| `make_cursor` | 103 | `PEP_RUNTIME_STEP_LIMIT` |
+| `make_progress` | 125 | `PEP_RUNTIME_STEP_LIMIT` |
+| `utf8_check` | 268 | `PEP_RUNTIME_STEP_LIMIT` |
+| `lexer_step` | 1,513 | host transport limit (> 1 MiB request) |
+
+Two things that matter for the A2 seam:
+
+1. The checker limit is **construct-driven, not node-count-driven**:
+   `lexer_start` stops at 59 nodes while `make_token` passes at 55, and
+   `utf8_check` is still ~234 KB of request. A universal "~24 nodes is safe"
+   ceiling does not describe this stage.
+2. A declaration-only chunk is not checkable alone. The first run of the real
+   lexer produced `PEP_UNKNOWN_TYPE` on a 24-node declaration chunk whose
+   record field named a type declared elsewhere; transitive closure fixed it.
+
 ## Evidence
 
 `tests/test_checked_chunk_contract.py`: 24 synthetic hostile cases covering
 every refusal code, plus 2 integration cases that drive the real staged
 parser, the real `chunk_signatures` and the real `analyze_chunk` over the
-shared-declaration chunk shape and assert a `valid` completed sequence. Every
-existing-file edit in this work was applied through Threadmoth with
+shared-declaration chunk shape and assert a `valid` completed sequence.
+`tests/test_lexer_chunk_ledger.py`: 4 pinned real-lexer ledger cases.
+Every existing-file edit in this work was applied through Threadmoth with
 `unrelated_bytes_changed=false`.
 
 ## Still open (A2 seam)

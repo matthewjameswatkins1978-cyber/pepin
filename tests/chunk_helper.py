@@ -158,6 +158,7 @@ def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-check
     fns = [n for n in nodes if nval(n, "kind") == "function" and str(nval(n, "parentId")) == "-1"]
     allsigs = []
     for fn in fns:
+        original_id = str(nval(fn, "id"))
         sub = header_subtree(nodes, by_id, nval(fn, "id"))
         chunk = remap_chunk(sub)
         hp = {"type": "ParserProgress", "fields": [
@@ -167,7 +168,20 @@ def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-check
                           "tool": tool_name, "arguments": [hp], "semanticTarget": sem})
         if r.get("outcome") != "ok":
             raise RuntimeError(f"signatures chunk failed: {r.get('error', {}).get('code')}")
-        allsigs.extend(sigs_from_tool(r["result"]))
+        chunk_sigs = sigs_from_tool(r["result"])
+        if len(chunk_sigs) != 1:
+            raise RuntimeError("a header chunk must certify exactly one function signature")
+        # Two id spaces, kept separate on purpose:
+        #   id/synid  - the chunk-local identity the checker keys external
+        #               signatures by (synthetic, never a document id);
+        #   node      - the original document node id the host cut this header
+        #               chunk from, which is the only identity the checked-chunk
+        #               contract can tie to this revision.
+        # Using a document id as the checker-side key collides with the
+        # remapped ids of a body chunk and silently loses cross-chunk type
+        # checking (measured).
+        chunk_sigs[0]["node"] = original_id
+        allsigs.extend(chunk_sigs)
     return allsigs
 
 def variant_to_union(nodes):

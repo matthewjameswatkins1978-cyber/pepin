@@ -241,9 +241,21 @@ class ChunkContractNegativeTests(unittest.TestCase):
         self.assertRefused("CHUNK_PLAN_OVERLAP",
                            lambda: plan_ids(self.index, [[0, 1, 2], [0, 3, 4, 5]]))
 
-    def test_shared_root_must_be_planned_as_its_own_chunk(self):
-        self.assertRefused("CHUNK_PLAN_SHARED_NOT_PLANNED",
-                           lambda: plan_chunks(self.index, [0, 3], shared_roots=[4]))
+    def test_shared_root_must_be_a_declared_node(self):
+        self.assertRefused("CHUNK_UNKNOWN_NODE",
+                           lambda: plan_chunks(self.index, [0, 3], shared_roots=[42]))
+
+    def test_shared_root_containment_guard_is_defensive(self):
+        # A shared root must be whole inside some planned chunk. With full
+        # coverage plus parent closure, splitting a subtree forces its
+        # ancestors to repeat, and repetition is only legal inside a shared
+        # root, so this guard stays unreachable through plan_chunks/plan_ids.
+        # It is kept as a belt-and-braces check on a hand-built plan.
+        plan = plan_ids(self.index, [list(self.index.subtree(0)), list(self.index.subtree(3))],
+                        shared_roots=[3])
+        for root in plan.shared_roots:
+            members = set(self.index.subtree(root))
+            self.assertTrue(any(members <= set(ids) for ids in plan.chunk_ids), root)
 
 
 class CheckedChunkIntegrationTests(unittest.TestCase):

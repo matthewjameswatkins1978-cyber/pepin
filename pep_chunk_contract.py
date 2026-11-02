@@ -46,7 +46,7 @@ CONTRACT = {
     "invariants": (
         "every document node is in at least one planned chunk",
         "a node repeats across chunks only inside a declared shared root",
-        "each declared shared root is itself one of the planned chunks",
+        "each declared shared root is whole inside at least one planned chunk",
         "each chunk is parent-closed: a parent is -1 or in the same chunk",
         "parentId < id and childIndex >= 0 for every node",
         "a chunk's nodes are exactly its covered ids: no extras, no gaps",
@@ -272,9 +272,9 @@ def _plan(index, chunk_ids, shared_roots, signatures):
 
     for root in roots:
         members = set(index.subtree(root))
-        if members not in [set(ids) for ids in ordered]:
+        if not any(members <= set(ids) for ids in ordered):
             raise ContractRefusal("CHUNK_PLAN_SHARED_NOT_PLANNED",
-                                  f"shared root {root} is not planned as its own whole chunk")
+                                  f"shared root {root} is not whole inside any planned chunk")
     missing = [node_id for node_id in index.ids if node_id not in owned]
     if missing:
         raise ContractRefusal("CHUNK_PLAN_INCOMPLETE",
