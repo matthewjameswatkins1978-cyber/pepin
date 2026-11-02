@@ -1,6 +1,7 @@
 type PepC23NodeLookup { found: Bool, node: FlatAstNode }
 type PepC23Emission { status: Str, sourceParts: List[Str], diagnostic: Str }
 type PepC23UnitPrerequisites { status: Str, diagnostic: Str, kinds: List[Str], nodeIds: List[Int] }
+type PepC23IdList { status: Str, diagnostic: Str, ids: List[Int] }
 type PepC23BoundedUnit { status: Str, diagnostic: Str, sourceParts: List[Str], prerequisiteKinds: List[Str], prerequisiteIds: List[Int], requiresArena: Bool }
 
 fn pep_c23_empty_ast_node() -> FlatAstNode {
@@ -3390,27 +3391,75 @@ fn pep_c23_subtree_end(nodes: List[FlatAstNode], functionId: Int) -> Int {
   return 2147483647
 }
 
-fn pep_c23_unit_prerequisites(nodes: List[FlatAstNode], functionId: Int) -> PepC23UnitPrerequisites {
-  let subtreeEnd = pep_c23_subtree_end(nodes, functionId)
-  var kinds: List[Str] = []
+fn pep_c23_declaration_by_id(nodes: List[FlatAstNode], wanted: Int) -> PepC23NodeLookup {
+  for node in nodes {
+    if node.id == wanted { return PepC23NodeLookup { found: true, node: node } } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+
+// Direct type references owned by one declaration or function: its own subtree range only.
+// `type_named` is the sole form that names another declaration, so this is the whole edge set.
+fn pep_c23_owned_type_ids(nodes: List[FlatAstNode], ownerId: Int) -> PepC23IdList {
+  let subtreeEnd = pep_c23_subtree_end(nodes, ownerId)
   var ids: List[Int] = []
   for candidate in nodes {
-    if functionId <= candidate.id && !(subtreeEnd <= candidate.id) && candidate.kind == "type_named" {
+    if ownerId <= candidate.id && !(subtreeEnd <= candidate.id) && candidate.kind == "type_named" {
       let declaration = pep_c23_declared_type(nodes, candidate.text)
       if declaration.found {
-        if !contains(ids, declaration.node.id) {
-          kinds = append(kinds, declaration.node.kind)
-          ids = append(ids, declaration.node.id)
-        } else {}
+        if !contains(ids, declaration.node.id) { ids = append(ids, declaration.node.id) } else {}
       } else {
-        return PepC23UnitPrerequisites {
+        return PepC23IdList {
           status: "unsupported",
           diagnostic: "Pep C23 unit references a type that this source does not declare",
-          kinds: [],
-          nodeIds: []
+          ids: []
         }
       }
     } else {}
+  }
+  return PepC23IdList { status: "ok", diagnostic: "", ids: ids }
+}
+
+// Prerequisite closure: direct references of the function, then each prerequisite's own
+// references, until nothing new appears. Recursive and mutually recursive declarations terminate
+// because an id already in the set is never enqueued again. A partial answer would be worse than a
+// refusal here: the caller would assemble C with a missing typedef and no diagnostic.
+fn pep_c23_unit_prerequisites(nodes: List[FlatAstNode], functionId: Int) -> PepC23UnitPrerequisites {
+  let direct = pep_c23_owned_type_ids(nodes, functionId)
+  if direct.status != "ok" {
+    return PepC23UnitPrerequisites {
+      status: "unsupported", diagnostic: direct.diagnostic, kinds: [], nodeIds: []
+    }
+  } else {}
+  var ids = direct.ids
+  var pending = direct.ids
+  var index = 0
+  while !(length(pending) <= index) {
+    let expanded = pep_c23_owned_type_ids(nodes, pep_c23_list_int_at(pending, index))
+    if expanded.status != "ok" {
+      return PepC23UnitPrerequisites {
+        status: "unsupported", diagnostic: expanded.diagnostic, kinds: [], nodeIds: []
+      }
+    } else {}
+    for id in expanded.ids {
+      if !contains(ids, id) {
+        ids = append(ids, id)
+        pending = append(pending, id)
+      } else {}
+    }
+    index = index + 1
+  }
+  var kinds: List[Str] = []
+  for id in ids {
+    let declaration = pep_c23_declaration_by_id(nodes, id)
+    if declaration.found { kinds = append(kinds, declaration.node.kind) } else {
+      return PepC23UnitPrerequisites {
+        status: "unsupported",
+        diagnostic: "Pep C23 unit prerequisite has no declaration node",
+        kinds: [],
+        nodeIds: []
+      }
+    }
   }
   return PepC23UnitPrerequisites { status: "ok", diagnostic: "", kinds: kinds, nodeIds: ids }
 }

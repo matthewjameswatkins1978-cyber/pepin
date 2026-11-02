@@ -88,6 +88,8 @@ class BoundedEmissionTests(unittest.TestCase):
              [empty_parsed, empty_checked, typed("Int", 0)], refused),
             ("pep-c23-bounded-unit", "emit_c23_function_unit_bounded",
              [empty_parsed, empty_checked, typed("Int", 0)], refused_bounded_unit()),
+            ("pep-c23-prerequisites", "pep_c23_unit_prerequisites",
+             [pep_c23.typed_list("FlatAstNode", []), typed("Int", 0)], empty_prerequisites()),
         ]
         for tool, function, arguments, expect in tools:
             registered = cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
@@ -229,14 +231,69 @@ class BoundedEmissionTests(unittest.TestCase):
         self.assertEqual(out_of_range["status"], "unsupported")
         self.assertIn("index is out of range", out_of_range["diagnostic"])
 
+    @staticmethod
+    def _function_node_id(nodes, index):
+        """The prerequisite entry point takes a source node id, not a positional index."""
+        seen = 0
+        for node in nodes:
+            fields = {item["name"]: item["value"] for item in node["fields"]}
+            if int(fields["parentId"]["value"]) == -1 and fields["kind"]["value"] == "function":
+                if seen == index:
+                    return int(fields["id"]["value"])
+                seen += 1
+        raise AssertionError(f"no top-level function at index {index}")
+
+    def _prerequisites(self, parsed, semantic, index):
+        fields = pep_c23.typed_fields(parsed, "ParserProgress", "parser progress")
+        nodes = pep_c23.typed_field_value(fields, "nodes", "List[FlatAstNode]", "parser progress")
+        nodes_argument = {"type": "List[FlatAstNode]", "value": nodes}
+        response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_invoke", "tool": "pep-c23-prerequisites",
+                                      "arguments": [nodes_argument,
+                                                    typed("Int", self._function_node_id(nodes, index))],
+                                      "semanticTarget": semantic})
+        require(response, "outcome", "ok", "unit prerequisites")
+        result = {item["name"]: item["value"] for item in response["result"]["fields"]}
+        return {
+            "status": result["status"]["value"],
+            "diagnostic": result["diagnostic"]["value"],
+            "kinds": [item["value"] for item in result["kinds"]["value"]],
+            "ids": [int(item["value"]) for item in result["nodeIds"]["value"]],
+        }
+
+    def test_prerequisite_closure_includes_nested_declaration(self):
+        """Direct references are not enough: `Outer` names `Inner` in its own field list."""
+        parsed, _checked, semantic = self._prepare(NESTED_RECORD, "nested-closure")
+        closure = self._prerequisites(parsed, semantic, 0)
+        self.assertEqual(closure["status"], "ok", closure["diagnostic"])
+        self.assertEqual(len(closure["ids"]), 2)
+        self.assertEqual(len(set(closure["ids"])), 2)
+        self.assertEqual(closure["kinds"], ["record_declaration", "record_declaration"])
+
 
 RECORD_PARAMETER = ("type Point { x: Int y: Int }\n"
                     "fn use_point(p: Point) -> Int { return p.x }\n"
                     "fn main() -> Int { return 0 }\n")
 
+# `Outer` names `Inner` in its own field list, so a closure must report both declarations.
+NESTED_RECORD = ("type Inner { value: Int }\n"
+                 "type Outer { inner: Inner }\n"
+                 "fn use_outer(o: Outer) -> Int { return 0 }\n"
+                 "fn main() -> Int { return 0 }\n")
+
 # `value` is the first top-level function, so index 0 selects a scalar-only signature.
 SCALAR_ONLY = ("fn scalar(value: Int) -> Int { return value }\n"
                "fn main() -> Int { return 0 }\n")
+
+
+def empty_prerequisites():
+    """The expected record for a prerequisite query over an empty node list."""
+    return pep_c23.typed_record_value("PepC23UnitPrerequisites", [
+        ("status", typed("Str", "ok")),
+        ("diagnostic", typed("Str", "")),
+        ("kinds", pep_c23.typed_list("Str")),
+        ("nodeIds", pep_c23.typed_list("Int")),
+    ])
 
 
 def refused_bounded_unit():
