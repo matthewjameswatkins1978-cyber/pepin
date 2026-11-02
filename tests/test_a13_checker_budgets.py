@@ -168,6 +168,37 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         self.assertEqual(result.get("outcome"), "error", result)
         self.assertEqual(result.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
 
+    def test_real_make_token_checks_valid(self):
+        # Structural win (d158044): the real 8-parameter make_token
+        # constructor with 8-field record construction now checks valid
+        # via resolved-record field consults (was PEP_RUNTIME_STEP_LIMIT).
+        decl = ("type LexToken {\n  kind: Str, text: Str, integerValue: Int, stringParts: List[Str],\n"
+                "  startByte: Int, endByte: Int, line: Int, column: Int\n}\n")
+        params = ", ".join(["kind: Str", "text: Str", "integerValue: Int", "stringParts: List[Str]",
+                              "startByte: Int", "endByte: Int", "line: Int", "column: Int"])
+        args = ", ".join(["kind: kind", "text: text", "integerValue: integerValue",
+                            "stringParts: stringParts", "startByte: startByte", "endByte: endByte",
+                            "line: line", "column: column"])
+        source = decl + f"fn make_token({params}) -> LexToken {{\n  return LexToken {{ {args} }}\n}}\n"
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
+
+    def test_sixteen_literal_args_check_valid(self):
+        # Structural win (literal fast-path): 16-argument calls with
+        # literal args now check valid under the unchanged budget
+        # (was PEP_RUNTIME_STEP_LIMIT). Per-literal infer/shape scans
+        # eliminated in the main expression path + arg checking.
+        params = ", ".join(f"p{i}: Int" for i in range(16))
+        args = ", ".join(str(i) for i in range(16))
+        source = (f"fn f16({params}) -> Int {{\n  return 0\n}}\n"
+                  f"fn main() -> Int {{\n  return f16({args})\n}}\n")
+        self.assert_ocaml_valid(source)
+        result = self.invoke_checker(source)
+        self.assertEqual(result.get("outcome"), "ok", result)
+        self.assertEqual(self.report_status(result), "valid")
+
     def test_thirty_two_records_check_valid(self):
         # Scale pin flipped by the global single-pass record resolution:
         # 32 trivial records now check valid under the unchanged budget.
@@ -237,6 +268,181 @@ class CheckerBudgetBoundaryTests(unittest.TestCase):
         result = self.invoke_checker(source)
         self.assertEqual(result.get("outcome"), "ok", result)
         self.assertEqual(self.report_status(result), "valid")
+
+
+class CheckerChunkedEquivalenceTests(unittest.TestCase):
+    # Per-function chunking (analyze_chunk + external signatures): a program
+    # that exceeds the whole-program budget must check valid via bounded
+    # chunks, with a combined verdict matching whole-program semantics.
+    @classmethod
+    def setUpClass(cls):
+        cls.session = Session()
+        bundle = NL.join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
+        opened = cls.session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                    "name": "pep-c23", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        cls.tool_revision = opened["revision"]
+        tool_document = opened["document"]
+        sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "validate", "bytes": []})
+        target_spec = {"document": sample["document"], "revision": sample["revision"],
+                       "entryFunctions": []}
+        start_cursor = pep_c23.parser_cursor_value(sample["document"], sample["revision"])
+        finished_cursor = pep_c23.parser_cursor_value(
+            sample["document"], sample["revision"], done=True, lex_done=True, lex_stage="done")
+        empty_pp = pep_c23.parser_progress(sample["document"], sample["revision"])
+        empty_rep = pep_c23.checker_report(sample["document"], sample["revision"])
+        empty_ext = {"type": "List[CheckedFunction]", "value": []}
+        empty_sig = {"type": "List[ResolvedSignature]", "value": []}
+        for tool, function, arguments, expected in [
+                ("pep-c23-parser-start", "parser_start", [], start_cursor),
+                ("pep-c23-parser-step", "parser_step", [finished_cursor],
+                 pep_c23.parser_chunk_value(sample["document"], sample["revision"],
+                                            finished_cursor)),
+                ("pep-c23-checker", "analyze_parsed", [empty_pp], empty_rep),
+                ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext, empty_sig], empty_rep),
+                ("pep-c23-checker-sigs", "chunk_signatures", [empty_pp], empty_sig)]:
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision, "function": function})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision,
+                              "testVectors": [{"arguments": arguments, "expect": expected,
+                                                "semanticTarget": target_spec}]})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+                              "tool": tool, "document": tool_document,
+                              "revision": cls.tool_revision})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.session.process.stdin.close()
+        cls.session.process.terminate()
+
+    def check_chunked(self, source):
+        from tests.chunk_helper import (fields_map, nval, checked_fn_value,
+                                         resolved_sig_value, slice_subtree, remap_chunk,
+                                         variant_to_union, fetch_all_sigs, decl_closure)
+        src = source.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "chunk-target", "bytes": list(src)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, src, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        sem0 = {"document": target["document"], "revision": target["revision"],
+                "entryFunctions": []}
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem0)
+        v2u = variant_to_union(nodes)
+        decl_by_id = {str(nval(n, "id")): n for n in nodes
+                       if nval(n, "kind") in ("record_declaration", "union_declaration")
+                       and str(nval(n, "parentId")) == "-1"}
+        decl_name_to_id = {nval(d, "text"): i for i, d in decl_by_id.items()}
+        fn_nodes = [n for n in nodes if nval(n, "kind") == "function"
+                    and str(nval(n, "parentId")) == "-1"]
+        self.assertGreater(len(fn_nodes), 1, "chunk test needs multiple functions")
+        from tests.chunk_helper import decl_closure
+        statuses, diags = [], []
+        for fn in fn_nodes:
+            fname = nval(fn, "text")
+            sub = slice_subtree(nodes, nval(fn, "id"))
+            sigs_by_name = {s["name"]: s for s in sigs}
+            for sn in decl_closure(nodes, sub, sigs_by_name, decl_name_to_id, v2u):
+                sub.append(sn)
+            chunk = remap_chunk(sub)
+            self.assertLessEqual(len(chunk), 60, f"chunk for {fname} exceeds budget-sized bound")
+            sliced = {"type": "ParserProgress", "fields": [
+                {"name": k, "value": ({"type": "List[FlatAstNode]", "value": chunk}
+                                     if k == "nodes" else fields_map(parsed)[k])}
+                for k in [f["name"] for f in parsed["fields"]]]}
+            ext = [s for s in sigs if s["name"] != fname]
+            extv = {"type": "List[CheckedFunction]",
+                    "value": [checked_fn_value(s) for s in ext]}
+            exts = {"type": "List[ResolvedSignature]",
+                    "value": [resolved_sig_value(s) for s in ext]}
+            sem = {"document": target["document"], "revision": target["revision"],
+                   "entryFunctions": []}
+            r = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                    "tool": "pep-c23-checker-chunk",
+                                    "arguments": [sliced, extv, exts], "semanticTarget": sem})
+            self.assertEqual(r.get("outcome"), "ok", r)
+            statuses.append(fields_map(r["result"])["status"]["value"])
+            for d in fields_map(r["result"]).get("diagnostics", {}).get("value", []):
+                df = fields_map(d)
+                diags.append((df.get("code", {}).get("value"),
+                              df.get("startByte", {}).get("value"),
+                              df.get("endByte", {}).get("value")))
+        return statuses, sorted(set(diags))
+
+    def test_chunked_recpad6_valid(self):
+        # recpad-6 (66 nodes) exceeds the whole-program budget but must
+        # check valid via per-function chunks (each <= 60 nodes).
+        parts = []
+        for i in range(6):
+            parts.append(f"type P{i} {{ x: Int }}\nfn mk{i}(v: Int) -> P{i} {{\n"
+                           f"  return P{i} {{ x: v }}\n}}\n")
+        source = "".join(parts)
+        src = source.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "whole-target", "bytes": list(src)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, src, target, self.tool_revision)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        wr = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                                "tool": "pep-c23-checker", "arguments": [parsed],
+                                "semanticTarget": sem})
+        self.assertEqual(wr.get("outcome"), "error", wr)
+        self.assertEqual(wr.get("error", {}).get("code"), "PEP_RUNTIME_STEP_LIMIT")
+        statuses, diags = self.check_chunked(source)
+        self.assertTrue(all(s == "valid" for s in statuses), statuses)
+        self.assertEqual(diags, [], diags)
+
+    def test_chunked_cross_call_match_valid(self):
+        # Cross-chunk calls resolve via external signatures: correct
+        # argument types check valid.
+        source = ("fn callee(x: Int) -> Int {\n  return x\n}\n"
+                  "fn caller(y: Int) -> Int {\n  return callee(y)\n}\n")
+        statuses, diags = self.check_chunked(source)
+        self.assertTrue(all(s == "valid" for s in statuses), statuses)
+        self.assertEqual(diags, [], diags)
+
+    def test_chunked_cross_call_mismatch_invalid(self):
+        # Cross-chunk calls are fully checked (not weakened): wrong
+        # argument types draw PEP_TYPE_MISMATCH via external param sigs.
+        source = ("fn callee(x: Int) -> Int {\n  return x\n}\n"
+                  "fn caller(y: Str) -> Int {\n  return callee(y)\n}\n")
+        statuses, diags = self.check_chunked(source)
+        self.assertIn("invalid", statuses, statuses)
+        codes = [c for c, _, _ in diags]
+        self.assertIn("PEP_TYPE_MISMATCH", codes, codes)
+
+    def test_compact_lexer_step_fits_transport(self):
+        # Transport gate (A2 field audit): the compact projection drops
+        # exactly stringParts/line/column, keeps the other 10 fields,
+        # and the 1,503-node lexer_step fits the 1 MiB JSONL message.
+        import json
+        from tests.chunk_helper import (fields_map, nval, slice_subtree,
+                                         remap_chunk, compact_node)
+        from pathlib import Path
+        lex = (Path(__file__).resolve().parent.parent
+               / "examples" / "pep_lexer.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "lex-transport", "bytes": list(lex)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, lex, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        step = [n for n in nodes if nval(n, "kind") == "function"
+                and nval(n, "text") == "lexer_step"]
+        self.assertEqual(len(step), 1, "lexer_step must exist")
+        sub = slice_subtree(nodes, nval(step[0], "id"))
+        chunk = remap_chunk(sub)
+        compact = [compact_node(n) for n in chunk]
+        kept = {"id", "parentId", "childIndex", "role", "kind", "text",
+                "integerValue", "booleanValue", "startByte", "endByte"}
+        for n in compact:
+            self.assertEqual({f["name"] for f in n["fields"]}, kept, n)
+        blob = json.dumps([{"fields": n["fields"]} for n in compact]).encode()
+        self.assertLess(len(blob), 1048576, len(blob))
 
 
 if __name__ == "__main__":
