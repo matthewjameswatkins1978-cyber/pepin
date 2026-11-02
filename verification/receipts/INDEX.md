@@ -9,6 +9,7 @@ groups. **Current blocker map at the bottom.**
 |---|---|
 | `CHECKED-CHUNK-malformed-scalars-8130276.md` | **8/11 malformed-input claim cases falsified** at A1 `81302766` (7 malformed scalars accepted as `valid`, 1 raw `ValueError` instead of `ContractRefusal`): Terror Bats `receipt:sha256:e2d49d13eec842f71ad3721efe36a7e89b27cf04930802145a4e0f79d4d7da07`, verdict `PROVEN` (claim falsified under recorded conditions; execution `d0702492`). Test commit `45f0ee0` (probe + bat spec). Repro: `terrorbats run verification/bats/checked-chunk-malformed-scalars.yaml --repo <pinned-A1-worktree>`. Owner: Agent 1 — checker contract repair; Agent 3 does not edit builder files. |
 | `CHECKED-CHUNK-fix-verified-05add76.md` | **D1/D2 repaired, re-verified** at A1 `05add76`: same bat unchanged → probe exit 0, verdict `NOT OBSERVED` (`receipt:sha256:cd5195b5e38e4d43e0e52e47dc19f7bff59000cf001b3baf4b7a33b939ecd9a8`, exec `0647bb92`); builder's own 42 tests independently rerun OK. |
+| `A2-SECTION-c70d5eb-bounded-no-main.md` | A2 bounded-emitter slice verified at `c70d5eb`: builder suite **6 OK / 1 documented skip** rerun; own probe C1–C5 (one-shot guard intact, header/function/unit emit without main) **claim_falsified=0**; reconciliation probe at A1 `05add76` → no-main `valid`, +reconstructed caller `PEP_RUNTIME_STEP_LIMIT 2443:23` (corroborates A2's 2428:3). Native `make_token` compile `NOT_RUN` (integration-gated). |
 
 ## Lean 4 (DEC-001 value-copy model)
 
