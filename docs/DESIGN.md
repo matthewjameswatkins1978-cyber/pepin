@@ -2,6 +2,8 @@
 
 This is the implementation-status index. The intended language vision is [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md); the binding accepted technical decisions are in [Technical Resolution 001](TECHNICAL_RESOLUTION_001.md), as amended by [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md). They describe the direction of the language and must not be read as a feature inventory.
 
+**Reader's guide:** This document inventories the **accepted `master` implementation**, not the whole future language. For the public-facing explanation and release milestones, read the [project README](../README.md) and [Road to 1.0](ROADMAP_TO_1_0.md). Later language-design and compiler work is tracked on separate review/development branches; the [documentation guide](README.md) explains which sources are implemented, designed or provisional. In particular, a self-hosted compiler alone would not meet Pepin 1.0's full-language acceptance criteria.
+
 ## Implemented in the primary OCaml seed
 The primary compiler is `pep_ocaml.ml`, invoked by the PowerShell 7 CLI `pep.ps1` and built with the project OCaml 5.5.2 switch. Current implemented behavior includes:
 
