@@ -1,0 +1,77 @@
+version: terrorbat/v1
+
+id: chunk-forged-facts
+
+claim:
+  text: >
+    At the pinned repository commit, the pep-checked-chunk-v1 validator
+    refuses every documented forged-facts edge in the Agent 3 probe: all 12
+    claim cases (empty plan, parent-opening plan chunk, wrong record type
+    tags, cross-document report and envelope, bool and mis-cased report
+    status, non-ascending and duplicate coveredNodeIds, bool
+    suppliedSignatures) raise ContractRefusal with the documented code, so
+    the probe exits 0 and reports claim_falsified=0.
+
+requires:
+  - fs.read
+  - process.spawn
+  - git.inspect
+
+forbids:
+  - network
+  - git.remote.write
+
+environment:
+  relevant:
+    - os.name
+    - os.arch
+
+attack:
+  setup:
+    - adapter: git
+      action: worktree.snapshot
+  run:
+    - adapter: command
+      action: run
+      program:
+        $param: python_program
+      args:
+        - {$param: probe_script}
+        - .
+
+oracle:
+  any:
+    - type: exit_code
+      step: run:0
+      equals: 1
+
+evidence:
+  capture:
+    - stdout
+    - stderr
+    - git_diff
+    - operation_log
+
+timeout:
+  run: 300s
+  total: 420s
+
+params:
+  python_program:
+    type: string
+    default: C:\Users\Matmus\AppData\Local\Python\pythoncore-3.15-64\python.exe
+  probe_script:
+    type: string
+    default: D:\Projects\pepin\_build\bootstrap-agent3-verification\verification\probes\hostile_chunk_forged_facts.py
+
+meta:
+  origin: ai-proposed
+  author: agent3
+  tags: [pepin, checked-chunk, forged-facts, agent3]
+  description: >
+    Agent 3 falsification bat for the documented refusal-code list of
+    pep-checked-chunk-v1 (docs/CHECKED_CHUNK_CONTRACT.md), deliberately
+    additive to A1's 27-case suite. The probe exits 1 when at least one claim
+    case is not refused with its documented code, which is exactly when this
+    oracle fires. A non-firing oracle is NOT OBSERVED, never a correctness
+    certificate. Worktree mode is reversibility/observation, not containment.
