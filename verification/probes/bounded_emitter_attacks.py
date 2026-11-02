@@ -19,11 +19,14 @@ Attacks:
       status + checker outcome + attribution result as the gate datum.
       Attribution was consistent there (prereq id == text tag).
   CT3 UNSUPPORTED PREREQUISITE (ask 3) — `Outer` carries a List field
-      (checker-valid, emitter-unsupported; the known list-record gap) and
-      references `Inner`. Claim: the bounded unit either refuses or
-      satisfies the text<->prerequisite provenance invariant. Observation:
-      whether Inner (Outer's own reference) is reported — the pre-announced
-      direct-facts-not-closure gap, pinned with exact ids.
+      (checker-valid, emitter-unsupported) and references `Inner`. Claim:
+      the bounded unit either refuses or satisfies provenance SOUNDNESS —
+      every record tag in its text appears in the prerequisite set (one-way
+      since A2 slice-4 closure; the original bidirectional form was corrected
+      after closure legitimately made prereqs exceed text — disclosed in the
+      receipt). Observation O1 records whether `Inner` is in the
+      prerequisites; it flipped to TRUE at cbdce20, independently confirming
+      the closure landed.
 
 Pure checker/session emit layer: no native build, no execution.
 Exit: 0 = no claim falsified, 1 = a claim falsified, 2 = harness error.
@@ -155,9 +158,16 @@ def main():
                     "ids": [int(i["value"]) for i in fields["prerequisiteIds"]["value"]]}
 
         def invariant_holds(unit):
+            """Provenance SOUNDNESS (one-way since A2 slice-4 closure): every
+            record tag the unit text emits must be supplied by the prerequisite
+            set. The reverse direction (prereq subset of text) held only for
+            direct-only facts and is now correctly EXCEEDED by the closure —
+            that flip is recorded by O1, not asserted here (disclosed: my
+            bidirectional claim was over-strong and 'falsified' at cbdce20
+            only because closure works)."""
             text_tags = set(tags_in("".join(unit["parts"])))
             prereq = set(unit["ids"])
-            return text_tags <= prereq and prereq <= text_tags
+            return text_tags <= prereq
 
         # ---- CT0 control --------------------------------------------------
         parsed, checked, semantic = prepare(FIX_CONTROL, "control")
