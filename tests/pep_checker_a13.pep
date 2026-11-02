@@ -1146,6 +1146,12 @@ fn is_first_duplicate_type_declaration(nodes: List[FlatAstNode], name: Str, node
   }
   return earlierMatches == 1
 }
+fn record_field_value(values: List[FlatAstNode], fieldId: Int) -> NodeLookup {
+  for value in values {
+    if value.parentId == fieldId && value.childIndex == 0 { return NodeLookup { found: true, node: value } } else {}
+  }
+  return NodeLookup { found: false, node: empty_node() }
+}
 fn is_first_duplicate_occurrence(nodes: List[FlatAstNode], parentId: Int, kind: Str, name: Str, nodeId: Int) -> Bool {
   var earlierMatches = 0
   for node in nodes {
@@ -1494,6 +1500,18 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   }
   let taRecordFields = reverse(reversedTaRecordFields)
   let taFieldDecls = reverse(reversedTaFieldDecls)
+  // Record-literal field values, collected once. Looking each one up with a
+  // full child_at scan cost one whole-node pass per field (measured: a
+  // 16-field literal needs ~4 whole-node scans per field and exceeds the
+  // unchanged step budget at 12 fields). One pass plus a 16-entry scan
+  // removes that term without changing which node is selected.
+  var taRecordFieldIds: List[Int] = []
+  for taField in taRecordFields { taRecordFieldIds = prepend(taRecordFieldIds, taField.id) }
+  var reversedTaFieldValues: List[FlatAstNode] = []
+  for taValue in nodes {
+    if taValue.role == "value" && contains(taRecordFieldIds, taValue.parentId) { reversedTaFieldValues = prepend(reversedTaFieldValues, taValue) } else {}
+  }
+  let taFieldValues = reverse(reversedTaFieldValues)
   let taTypeDecls = reverse(reversedTaTypeDecls)
   let taVariants = reverse(reversedTaVariants)
   let taParams = reverse(reversedTaParams)
@@ -1680,7 +1698,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 let resolvedFacts = resolved_field_facts(resolvedRecords, declaration.node.id, field.text)
                 let expected = resolvedFacts.name
                 let expectedShape = resolvedFacts.shape
-                let value = child_at(nodes, field.id, "value", 0)
+                let value = record_field_value(taFieldValues, field.id)
                 let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
                 let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
                 let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
