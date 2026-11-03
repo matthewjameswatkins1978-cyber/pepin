@@ -838,5 +838,22 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(fields["total"], 0, "unlexable input has no trustworthy token classes")
 
 
+    def test_census_consumes_a_real_pep_program_end_to_end(self):
+        """Connected capability on real Pep source: a whole function definition goes through
+        lex_source and out the lex_census consumer -- comments skipped as non-tokens, delimiter
+        balance holds, and the class counts match a hand count of the program."""
+        program = "fn f(x: Int) -> Int {\n  // double it\n  return x * 2; // done\n}\n"
+        fields = self._census(program)
+        self.assertEqual(fields["status"], "ok", fields["diagnostic"])
+        self.assertEqual(fields["sourceBytes"], len(program))
+        self.assertEqual(fields["identifiers"], 7, "fn f x Int Int return x")
+        self.assertEqual(fields["integers"], 1, "the literal 2")
+        self.assertEqual(fields["symbols"], 8, "( : ) -> { * ; }")
+        self.assertEqual(fields["strings"], 0)
+        self.assertEqual(fields["holes"], 0)
+        self.assertEqual(fields["total"], 16, "eof is termination, not input")
+        self.assertEqual(fields["errorStart"], -1)
+
+
 if __name__ == "__main__":
     unittest.main()
