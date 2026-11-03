@@ -1,0 +1,326 @@
+"""Body-only chunks with checker-certified external type facts (slice 4b).
+
+Uses the new `pep-c23-checker-chunk-typed` tool (`analyze_chunk_typed`):
+the chunk carries only the function subtree while record shapes arrive as
+`ResolvedTypeDecl` facts derived by `chunk_type_declarations` from the
+declaration chunks. No plan/contract change: the frozen `analyze_chunk`
+3-arg tool is untouched; stale facts are refused with PEP_STALE_REVISION.
+
+Expected flips (measured): lexer_start body-only 25 nodes + LexCursor
+fact becomes valid (was PEP_UNKNOWN_TYPE without facts); make_token
+37 nodes stays valid without carrying 18 declaration nodes.
+make_progress/make_cursor bodies alone still exceed the step budget -
+statement-group continuation remains queued (slice 4c/5).
+"""
+import copy
+import pathlib
+import unittest
+
+import pep_c23
+import pep_chunk_contract as contract
+from pep_c23 import Session, parse_target, require
+from tests.chunk_helper import (checked_fn_value, fetch_all_sigs, fields_map,
+                                nval, remap_chunk, resolved_sig_value)
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def diag_tuples(report):
+    out = []
+    for item in report.get("diagnostics", {}).get("value", []):
+        fields = fields_map(item)
+        out.append((fields["code"]["value"], int(fields["startByte"]["value"]),
+                    int(fields["endByte"]["value"])))
+    return sorted(out)
+
+
+def host_builtins(document, revision):
+    """Host-authorised contract for chunked checking of host builtins.
+
+    `semantic_snapshot` has no Pep-written definition; the host is its
+    authority (v2 semanticTarget grant), so the harness supplies its
+    CheckedFunction + ResolvedSignature exactly as fetch_all_sigs does
+    for user functions (synthetic ids in dedicated ranges, never real
+    node ids). `ProgramInfo` facts carry the fields lexer_start needs
+    (document/revision/status: Str); the full host record also has
+    functions/calls/roots/diagnostics (see pep_ocaml.ml
+    semantic_record_info) - unlisted fields stay fail-closed unknown,
+    which is sound for bodies that do not touch them. Facts are stamped
+    with the target document/revision at provision time, so the typed
+    chunk's provenance check treats them as current for this target.
+    """
+    typed = lambda t, v: {"type": t, "value": str(v) if t == "Int" else v}
+    shape = lambda kind, name, depth: {"type": "PepTypeShape", "fields": [
+        {"name": "kind", "value": typed("Str", kind)},
+        {"name": "name", "value": typed("Str", name)},
+        {"name": "listDepth", "value": typed("Int", depth)}]}
+    field = lambda name, tname, kind, sname, depth, code, sb, eb, ln, co: {
+        "type": "ResolvedTypeField", "fields": [
+            {"name": "fieldName", "value": typed("Str", name)},
+            {"name": "fieldTypeName", "value": typed("Str", tname)},
+            {"name": "fieldShape", "value": shape(kind, sname, depth)},
+            {"name": "fieldCode", "value": typed("Str", code)},
+            {"name": "startByte", "value": typed("Int", sb)},
+            {"name": "endByte", "value": typed("Int", eb)},
+            {"name": "line", "value": typed("Int", ln)},
+            {"name": "column", "value": typed("Int", co)}]}
+    checked_fn = {"type": "CheckedFunction", "fields": [
+        {"name": "semanticId", "value": typed("Int", 9500)},
+        {"name": "syntaxId", "value": typed("Int", 2000000000)},
+        {"name": "name", "value": typed("Str", "semantic_snapshot")},
+        {"name": "arity", "value": typed("Int", 0)},
+        {"name": "returnType", "value": typed("Str", "ProgramInfo")},
+        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)},
+        {"name": "startByte", "value": typed("Int", 0)},
+        {"name": "endByte", "value": typed("Int", 0)}]}
+    sig = {"type": "ResolvedSignature", "fields": [
+        {"name": "functionId", "value": typed("Int", 2000000000)},
+        {"name": "functionName", "value": typed("Str", "semantic_snapshot")},
+        {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": []}},
+        {"name": "returnType", "value": typed("Str", "ProgramInfo")},
+        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)}]}
+    prog_info = {"type": "ResolvedTypeDecl", "fields": [
+        {"name": "typeName", "value": typed("Str", "ProgramInfo")},
+        {"name": "typeKind", "value": typed("Str", "record")},
+        {"name": "declStartByte", "value": typed("Int", 0)},
+        {"name": "declEndByte", "value": typed("Int", 0)},
+        {"name": "declLine", "value": typed("Int", 1)},
+        {"name": "declColumn", "value": typed("Int", 1)},
+        {"name": "duplicateType", "value": {"type": "Bool", "value": False}},
+        {"name": "document", "value": typed("Str", document)},
+        {"name": "revision", "value": typed("Str", revision)},
+        {"name": "fields", "value": {"type": "List[ResolvedTypeField]", "value": [
+            field("document", "Str", "builtin", "Str", 0, "", 0, 0, 1, 1),
+            field("revision", "Str", "builtin", "Str", 0, "", 0, 0, 1, 1),
+            field("status", "Str", "builtin", "Str", 0, "", 0, 0, 1, 1)]}}]}
+    return [checked_fn], [sig], [prog_info]
+
+
+class TypedChunkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.session = Session()
+        bundle = "\n".join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
+        opened = cls.session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                                    "name": "pep-c23", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        cls.tool_revision = opened["revision"]
+        tool_document = opened["document"]
+        sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "validate", "bytes": []})
+        target_spec = {"document": sample["document"], "revision": sample["revision"],
+                       "entryFunctions": []}
+        start_cursor = pep_c23.parser_cursor_value(sample["document"], sample["revision"])
+        finished_cursor = pep_c23.parser_cursor_value(
+            sample["document"], sample["revision"],
+            done=True, lex_done=True, lex_stage="done")
+        empty_pp = pep_c23.parser_progress(sample["document"], sample["revision"])
+        empty_rep = pep_c23.checker_report(sample["document"], sample["revision"])
+        empty_ext = {"type": "List[CheckedFunction]", "value": []}
+        empty_sig = {"type": "List[ResolvedSignature]", "value": []}
+        empty_types = {"type": "List[ResolvedTypeDecl]", "value": []}
+        for tool, function, arguments, expected in [
+                ("pep-c23-parser-start", "parser_start", [], start_cursor),
+                ("pep-c23-parser-step", "parser_step", [finished_cursor],
+                 pep_c23.parser_chunk_value(sample["document"], sample["revision"],
+                                            finished_cursor)),
+                ("pep-c23-checker", "analyze_parsed",
+                 [empty_pp], empty_rep),
+                ("pep-c23-checker-chunk", "analyze_chunk",
+                 [empty_pp, empty_ext, empty_sig], empty_rep),
+                ("pep-c23-checker-typedecls", "chunk_type_declarations",
+                 [empty_pp], empty_types),
+                ("pep-c23-checker-sigs", "chunk_signatures",
+                 [empty_pp], empty_sig),
+                ("pep-c23-checker-chunk-typed", "analyze_chunk_typed",
+                 [empty_pp, empty_ext, empty_sig, empty_types], empty_rep)]:
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                              "op": "tool_register", "tool": tool,
+                              "document": tool_document,
+                              "revision": cls.tool_revision, "function": function})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                              "op": "tool_validate", "tool": tool,
+                              "document": tool_document,
+                              "revision": cls.tool_revision,
+                              "testVectors": [{"arguments": arguments, "expect": expected,
+                                                "semanticTarget": target_spec}]})
+            cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                              "op": "tool_activate", "tool": tool,
+                              "document": tool_document,
+                              "revision": cls.tool_revision})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.session.process.stdin.close()
+        cls.session.process.terminate()
+
+    def sliced(self, parsed, node_ids):
+        nodes = fields_map(parsed)["nodes"]["value"]
+        by_id = {str(nval(node, "id")): node for node in nodes}
+        sub = [copy.deepcopy(by_id[str(node_id)]) for node_id in node_ids]
+        chunk = remap_chunk(sub)
+        return {"type": "ParserProgress", "fields": [
+            {"name": key, "value": ({"type": "List[FlatAstNode]", "value": chunk}
+                                    if key == "nodes" else fields_map(parsed)[key])}
+            for key in [field["name"] for field in parsed["fields"]]]}
+
+    def type_facts(self, parsed, sem, node_ids):
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-typedecls",
+             "arguments": [self.sliced(parsed, node_ids)], "semanticTarget": sem})
+        self.assertEqual(response.get("outcome"), "ok", response)
+        return response["result"]["value"]
+
+    def invoke_typed(self, sliced, extfns, extsigs, exttypes, sem):
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-chunk-typed",
+             "arguments": [sliced, extfns, extsigs, exttypes],
+             "semanticTarget": sem})
+        self.assertEqual(response.get("outcome"), "ok", response)
+        return response["result"]
+
+    def check_whole(self, source_bytes, name):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source_bytes)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source_bytes, target, self.tool_revision)
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker",
+             "arguments": [parsed], "semanticTarget": sem})
+        self.assertEqual(response.get("outcome"), "ok", response)
+        report = fields_map(response["result"])
+        return target, sem, parsed, report["status"]["value"], diag_tuples(report)
+
+    def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=()):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source_bytes)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source_bytes, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(node, "id")) for node in nodes
+                      if str(nval(node, "parentId")) == "-1"
+                      and nval(node, "kind") in ("record_declaration", "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        functions = [node for node in nodes if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"]
+        bodies = {str(nval(fn, "text")): index.subtree(int(nval(fn, "id")))
+                  for fn in functions}
+        self.assertIn(entry, bodies)
+        ext = [s for s in sigs if s["name"] != entry]
+        host_fns, host_sigs, host_types = [], [], []
+        if host_builtin_names:
+            assert set(host_builtin_names) <= {"semantic_snapshot"}
+            host_fns, host_sigs, host_types = host_builtins(
+                target["document"], target["revision"])
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, bodies[entry]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in ext] + host_fns},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+            {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}, sem))
+        return report["status"]["value"], diag_tuples(report)
+
+    def test_lexer_start_body_only_flips_with_facts(self):
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        status, diags = self.check_body_with_facts(
+            source, "lexer-facts", "lexer_start",
+            host_builtin_names=("semantic_snapshot",))
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_make_token_body_only_stays_valid_with_facts(self):
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        status, diags = self.check_body_with_facts(source, "lexer-facts", "make_token")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_stale_facts_are_refused(self):
+        source = (b"type Box { f: Int }\n"
+                  b"fn main() -> Int { return 0 }\n")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "stale-rev1", "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem1 = {"document": target["document"], "revision": target["revision"],
+                "entryFunctions": []}
+        parsed1 = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed1)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed1)
+        decl_roots = [int(nval(node, "id")) for node in nodes
+                      if str(nval(node, "parentId")) == "-1"
+                      and nval(node, "kind") in ("record_declaration", "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed1, sem1, index.subtree(root)))
+        advance = self.session.send({"schemaVersion": 3, "op": "apply_edit",
+                                      "document": target["document"],
+                                      "expected_revision": target["revision"],
+                                      "start_byte": 0, "end_byte": 0,
+                                      "replacement": "//x\n"})
+        self.assertEqual(advance.get("outcome"), "ok", advance)
+        fresh = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "stale-rev2",
+                                    "bytes": list(b"//x\n" + source)})
+        self.assertEqual(fresh.get("outcome"), "ok", fresh)
+        sem2 = {"document": fresh["document"], "revision": fresh["revision"],
+                "entryFunctions": []}
+        parsed2 = parse_target(self.session, b"//x\n" + source, fresh,
+                               self.tool_revision)
+        nodes2 = fields_map(parsed2)["nodes"]["value"]
+        mains = [int(nval(node, "id")) for node in nodes2
+                 if nval(node, "kind") == "function"
+                 and str(nval(node, "parentId")) == "-1"]
+        empty = lambda t: {"type": t, "value": []}
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-chunk-typed",
+             "arguments": [self.sliced(parsed2, index.subtree(mains[0])),
+                           empty("List[CheckedFunction]"),
+                           empty("List[ResolvedSignature]"),
+                           {"type": "List[ResolvedTypeDecl]", "value": facts}],
+             "semanticTarget": sem2})
+        self.assertEqual(response.get("outcome"), "ok", response)
+        report = fields_map(response["result"])
+        self.assertEqual(report["status"]["value"], "invalid", report)
+        diags = report.get("diagnostics", {}).get("value", [])
+        codes = [fields_map(item)["code"]["value"] for item in diags]
+        self.assertIn("PEP_STALE_REVISION", codes)
+        messages = [fields_map(item)["message"]["value"] for item in diags]
+        self.assertTrue(
+            any("External type facts" in message for message in messages),
+            messages)
+
+    def test_missing_field_matches_whole_path(self):
+        source = (b"type Box { f: Int, g: Int }\n"
+                  b"fn build() -> Box { return Box { f: 1 } }\n"
+                  b"fn main() -> Int { return 0 }\n")
+        _, _, _, whole_status, whole_diags = self.check_whole(source, "miss-whole")
+        self.assertEqual(whole_status, "invalid")
+        status, diags = self.check_body_with_facts(source, "miss-chunk", "build")
+        self.assertEqual(status, "invalid")
+        self.assertEqual(diags, whole_diags)
+
+    def test_wrong_field_type_matches_whole_path(self):
+        source = (b'type Box { f: Int, g: Str }\n'
+                  b'fn build() -> Box { return Box { f: 1, g: 2 } }\n'
+                  b'fn main() -> Int { return 0 }\n')
+        _, _, _, whole_status, whole_diags = self.check_whole(source, "mistype-whole")
+        self.assertEqual(whole_status, "invalid")
+        status, diags = self.check_body_with_facts(source, "mistype-chunk", "build")
+        self.assertEqual(status, "invalid")
+        self.assertEqual(diags, whole_diags)
+
+
+if __name__ == "__main__":
+    unittest.main()
