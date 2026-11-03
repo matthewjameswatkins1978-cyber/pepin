@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## A1 host repairs verified (2026-11-03 — A1 fix pin `ba4b057`, baseline `8396b63`)
+
+| receipt | one-line |
+|---|---|
+| `HOST-REPAIR-VERIFIED-ba4b057.md` | **IDX3 and STALE1 repaired and independently verified at `ba4b057`**: duplicate child edge now refused `CHUNK_DUPLICATE_EDGE` at `DocumentIndex` construction; crossed provenance now refused `PEP_STALE_REVISION` before the tool runs (was `ok` + a rev2-labelled 0-node report). Unchanged `index_cache_adversarial.py` → **9 cases, claim_falsified=0** (CACHE1–3 + controls intact). New `edge_identity_boundary.py` closes the over-refusal blind spot the original claim could not see: **E0 HELD on 9 real example parses** (`refused=[]`, `pep_parser.pep` a bounded 65,536-byte skip), and **274 duplicate `(parent, childIndex)` pairs** in real parses prove `role` is load-bearing — a coarser key would have refused real documents. Same probe at `8396b63` falsifies E1/E2 = old baseline. CD3 **still open** (owner align-or-declare). Also records my own gate defect: the probe's `"any refusal"` helper scored correct refusals as failures, so the repair would have read as still-broken — repaired, frozen artifacts untouched. **No frozen Full run**: `ba4b057` is an A1 fix branch, not an integrated successor of `8396b63`. |
+
 ## Host defects + A2 scanner differential (2026-11-03 — pins A1 `8396b63` / A2 `9d4ab42`)
 
 | receipt | one-line |

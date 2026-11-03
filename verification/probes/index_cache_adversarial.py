@@ -92,7 +92,7 @@ def try_refusal(case, claim, expect, thunk):
     try:
         result = thunk()
     except ContractRefusal as refusal:
-        outcome = "REFUSED" if expect == "any refusal" else refusal.code
+        outcome = expect if expect == "any refusal" else refusal.code
         record(case, claim, expect, outcome, refusal.code)
     except Exception as error:  # noqa: BLE001
         record(case, claim, expect, "NON_CONTRACT_EXCEPTION",
