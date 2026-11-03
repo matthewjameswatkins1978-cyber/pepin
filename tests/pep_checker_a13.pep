@@ -660,10 +660,7 @@ fn function_parameter_shape(nodes: List[FlatAstNode], functionId: Int, index: In
   let declared = child_at(nodes, parameter.node.id, "type", 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
-fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
-  let found = lookup_node(nodes, id)
-  if !found.found { return "" } else {}
-  let node = found.node
+fn infer_expression_type_at(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   if node.kind == "integer" { return "Int" } else {}
   if node.kind == "boolean" { return "Bool" } else {}
   if node.kind == "string" { return "Str" } else {}
@@ -684,7 +681,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if node.text == "contains" { return "Bool" } else {}
     if node.text == "append" || node.text == "prepend" || node.text == "reverse" {
       let collection = child_at(nodes, node.id, "argument", 0)
-      if collection.found { return infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { return "" }
+      if collection.found { return infer_expression_type_at(nodes, collection.node, functions, bindings, references) } else { return "" }
     } else {}
     if is_constructor(nodes, node.text) { return constructor_union_type(nodes, node.text) } else {}
     return ""
@@ -704,7 +701,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if expectedElement != "" && (nestedListContext || count_children(nodes, node.id, "element") == 0) { return expected } else {}
     for element in nodes {
       if element.parentId == node.id && element.role == "element" && element.kind != "hole" {
-        let actual = infer_expression_type(nodes, element.id, functions, bindings, references)
+        let actual = infer_expression_type_at(nodes, element, functions, bindings, references)
         if actual != "" { return list_type_name(actual) } else {}
       } else {}
     }
@@ -715,16 +712,16 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if expected != "" { return expected } else {}
     let thenValue = child_at(nodes, node.id, "then", 1)
     if thenValue.found {
-      let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
+      let thenType = infer_expression_type_at(nodes, thenValue.node, functions, bindings, references)
       if thenType != "" { return thenType } else {}
     } else {}
     let elseValue = child_at(nodes, node.id, "else", 2)
-    if elseValue.found { return infer_expression_type(nodes, elseValue.node.id, functions, bindings, references) } else { return "" }
+    if elseValue.found { return infer_expression_type_at(nodes, elseValue.node, functions, bindings, references) } else { return "" }
   } else {}
   if node.kind == "record" { if record_declaration(nodes, node.text).found { return node.text } else { return "" } } else {}
   if node.kind == "field_access" {
     let value = child_at(nodes, node.id, "value", 0)
-    if value.found { return record_field_type(nodes, infer_expression_type(nodes, value.node.id, functions, bindings, references), node.text) } else { return "" }
+    if value.found { return record_field_type(nodes, infer_expression_type_at(nodes, value.node, functions, bindings, references), node.text) } else { return "" }
   } else {}
   if node.kind == "match" {
     let expected = contextual_expected_type(nodes, node, functions, bindings, references)
@@ -734,7 +731,7 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
       if arm.parentId == node.id && arm.kind == "match_arm" {
         let result = child_at(nodes, arm.id, "result", 1)
         if resultType == "" && result.found {
-          let actual = infer_expression_type(nodes, result.node.id, functions, bindings, references)
+          let actual = infer_expression_type_at(nodes, result.node, functions, bindings, references)
           if actual != "" { resultType = actual } else {}
         } else {}
       } else {}
@@ -742,6 +739,11 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     if resultType != "" { return resultType } else { return "" }
   } else {}
   return ""
+}
+fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
+  let found = lookup_node(nodes, id)
+  if !found.found { return "" } else {}
+  return infer_expression_type_at(nodes, found.node, functions, bindings, references)
 }
 fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let found = lookup_node(nodes, id)
@@ -1281,7 +1283,7 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
           }
         } else {
           let value = child_at(nodes, declaration.node.id, "value", 0)
-          if value.found { typeName = infer_expression_type(nodes, value.node.id, functions, typed, references) } else {}
+          if value.found { typeName = infer_expression_type_at(nodes, value.node, functions, typed, references) } else {}
         }
       }
     } else {}
@@ -1802,7 +1804,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let litType = if node.kind == "integer" { "Int" } else { if node.kind == "boolean" { "Bool" } else { "Str" } }
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: litType, typeShape: legacy_type_shape(nodes, litType), startByte: node.startByte, endByte: node.endByte })
       } else {
-      let actual = infer_expression_type(nodes, node.id, functions, bindings, references)
+      let actual = infer_expression_type_at(nodes, node, functions, bindings, references)
       if actual == "" {
         let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
         if shape.kind != "" { reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: "", typeShape: shape, startByte: node.startByte, endByte: node.endByte }) } else {}
@@ -2083,8 +2085,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if node.kind == "binary" {
         let left = child_at(nodes, node.id, "left", 0)
         let right = child_at(nodes, node.id, "right", 1)
-        let leftType = if left.found { infer_expression_type(nodes, left.node.id, functions, bindings, references) } else { "" }
-        let rightType = if right.found { infer_expression_type(nodes, right.node.id, functions, bindings, references) } else { "" }
+        let leftType = if left.found { infer_expression_type_at(nodes, left.node, functions, bindings, references) } else { "" }
+        let rightType = if right.found { infer_expression_type_at(nodes, right.node, functions, bindings, references) } else { "" }
         let expected = if node.text == "&&" || node.text == "||" { "Bool" } else { if node.text == "==" || node.text == "!=" { leftType } else { "Int" } }
         if (node.text == "==" || node.text == "!=") && leftType != "" && !equality_supported_type(leftType) && left.found {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNSUPPORTED", "Equality is not defined for this value type", left.node))
@@ -2095,7 +2097,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if node.kind == "unary" {
         let operand = child_at(nodes, node.id, "operand", 0)
         let expected = if node.text == "!" { "Bool" } else { "Int" }
-        if operand.found && operand.node.kind != "hole" && infer_expression_type(nodes, operand.node.id, functions, bindings, references) != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Unary operator operand has an incompatible type", operand.node)) } else {}
+        if operand.found && operand.node.kind != "hole" && infer_expression_type_at(nodes, operand.node, functions, bindings, references) != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Unary operator operand has an incompatible type", operand.node)) } else {}
       } else {}
       if node.kind == "call" {
         let target = find_function(functions, node.text)
@@ -2110,7 +2112,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             if argument.parentId == node.id {
               if !argumentMismatchFound {
                 let expected = signature_parameter_type(resolvedSigs, target.function.syntaxId, index)
-                let actualArgument = if argument.kind == "integer" { "Int" } else { if argument.kind == "boolean" { "Bool" } else { if argument.kind == "string" { "Str" } else { infer_expression_type(nodes, argument.id, functions, bindings, references) } } }
+                let actualArgument = if argument.kind == "integer" { "Int" } else { if argument.kind == "boolean" { "Bool" } else { if argument.kind == "string" { "Str" } else { infer_expression_type_at(nodes, argument, functions, bindings, references) } } }
                 let needsExpectedShape = expected == "" || actualArgument == "" || argument.kind == "list"
                 let expectedShape = if needsExpectedShape { signature_parameter_shape(resolvedSigs, target.function.syntaxId, index) } else { empty_type_shape() }
                 let needsStructuralCheck = expected == "" || actualArgument == ""
@@ -2138,7 +2140,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               if argument.parentId == node.id {
                 let expected = fixed_builtin_parameter_type(node.text, index)
                 if expected != "" {
-                  let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                  let actualArgument = infer_expression_type_at(nodes, argument, functions, bindings, references)
                   if actualArgument != "" && expected != actualArgument {
                     reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
                   } else {}
