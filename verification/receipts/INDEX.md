@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## Composition stress (2026-11-03 — pins A1 `ba4b057` and `8396b63`, identical)
+
+| receipt | one-line |
+|---|---|
+| `COMPOSITION-STRESS-ba4b057-8396b63.md` | **No short demanding program reaches emission at either pin**: 6 fixtures (nested records, list pipeline, `List[Str]` token filter, 3-arm union match, 3-function record program, `List[Token]` loop), each 14–30 lines and seed-valid + seed-runs-clean, all through seed check → seed run → `pep_c23.emit`. Result identical at both pins: **3 `VALID_BLOCKED_BUDGET`** (Pep-written checker `PEP_RUNTIME_STEP_LIMIT`) and **3 `UNSUPPORTED_BACKEND`** (precise emitter subset refusals: "functions require local bindings and supported loops followed by one return", "calls require a known target", "for-in lowering requires a supported list literal…"). The 100k checker budget wall therefore reproduces on ordinary composition, not only the 66n acceptance fixture; the S2 structural slices change nothing measurable here; and the emitter's native document shape is narrower than "records + calls + lists". Two own-classifier errors corrected before recording; fixture-validity guard fails fast with exit 2 so a bad fixture can never read as a verdict. |
+
 ## A2 lexer differential (2026-11-03 — A2 pins `9d4ab42` → `68e72bf`)
 
 | receipt | one-line |
