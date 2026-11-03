@@ -1,9 +1,46 @@
 # Bounded emitter input: the emitter-side contract (proposal for A1)
 
 Mission `LUCY-20261101-004`, gate **N4**. Owner of this document and of the emitter-side
-surface: A2-NATIVE. Owner of the checker and the host adapter: A1. Nothing here changes
-a limit, and nothing here is implemented yet — this is the contract A1 and A2 need to
-agree before either side writes transport code.
+surface: A2-NATIVE. Owner of the checker and the host adapter: A1. Nothing here changes a
+limit. The sections below are the original proposal; **the implemented surface, its gating
+tests and the parts of the proposal that are deliberately not built are recorded in
+"Implemented state" first**, which is what a caller should code against.
+
+## Implemented state (A2, 2026-11-03)
+
+Shipped on `codex/a2-bounded-emission`. Every claim names the test that gates it, so a reader
+can check the guarantee instead of trusting this page.
+
+| entry point | bounded by | gate |
+| --- | --- | --- |
+| `emit_c23_function_unit(parsed, checked, index)` | one function; no header, no peer body, no epilogue | fails on `c70d5eb` at `test_unit_does_not_lower_peer_functions` |
+| `emit_c23_declaration_unit(parsed, checked, nodeId)` | one record/union declaration; no other declaration, no prototype | `test_declaration_unit_emits_one_declaration_without_the_header` |
+| `emit_c23_section(parsed, checked, "header")` | types + prototypes only; the body loop does not run | `test_header_and_main_do_not_run_the_body_loop` |
+| `emit_c23_section(parsed, checked, "main")` | the epilogue only | same test |
+| `pep_c23_unit_prerequisites(nodes, functionId)` | closure over the function's own type references | `test_prerequisite_closure_includes_nested_declaration` (control: `1 != 2` at `eebd5cd`) |
+| `pep_c23_unit_declarations_check(nodes, functionId)` | closure only; answers emittability without emitting | `test_prerequisite_emittability_is_answerable_without_emitting`, `test_first_refusal_text_matches_emission_for_a_union_of_an_empty_record` |
+
+Still O(program), and stated as such: `emit_c23_checked` (whole program) and the `"all"` and
+`"function"` section values. At 13 trivial functions `all` exceeds the fixed budget while
+`header`, `main` and every unit still emit, so a caller can assemble `header + units + main`
+at a program size where one-shot emission is impossible.
+
+Byte identity is not assumed: `header + every unit + main == one-shot` is asserted by
+`test_sections_reassemble_to_the_one_shot_output`, and the assembled text is compiled under
+strict Clang **and** GCC and run against the Pep interpreter for scalar, record and
+arena-dependent programs.
+
+Deliberately not built from the proposal below:
+
+- the `EmitterChunk` value itself, and with it chunk-index/chunk-count validation, out-of-chunk
+  parent marking, node-presence refusal and replay refusal. The shipped entries take
+  `(parsed, checked, index|nodeId)`, so those checks have no home yet.
+- host-side node trimming and single-value literal text. Those are the highest-value transport
+  items in this document and they are **A1's side of the boundary**; nothing here reduces
+  per-request transport, which is why unit cost is bounded in emitter work but not constant
+  end-to-end.
+- prerequisites are reported, not inlined. A caller asks for declaration units from the closure;
+  the emitter does not silently attach them.
 
 ## Why this exists, in measured numbers
 
@@ -114,7 +151,7 @@ and a matching checked-fact subset, because `emit_c23_checked` today refuses unl
 forged or stale input and must not simply be dropped; it has to be replaced by an
 equally strong per-chunk invariant.
 
-## Proposed emitter-side entry points (A2 owns these)
+## Proposed emitter-side entry points (A2 owns these — proposal only; see "Implemented state")
 
 ```
 emit_c23_header(       chunk: EmitterChunk, checked: CheckerReport) -> PepC23Emission
