@@ -33,6 +33,9 @@ fn scan_is_space(byte: Int) -> Bool {
 // Advance past spaces, tabs, CR and LF. Never reads past the end.
 fn scan_skip_space(source: SourceBytes, offset: Int) -> Int {
   let length = byte_length(source)
+  // A position, not a verdict: a negative offset clamps to the start instead of asking byte_at for a
+  // negative index, which would raise PEP_RUNTIME_BYTE_RANGE. The scanners themselves refuse it.
+  if !(0 <= offset) { return 0 } else {}
   var current = offset
   while !(length <= current) && scan_is_space(byte_at(source, current)) {
     current = current + 1
@@ -53,6 +56,7 @@ fn scan_refused(diagnostic: Str, offset: Int) -> ScanInt {
 // zero, so a caller cannot mistake "nothing here" for "the value 0".
 fn scan_int_at(source: SourceBytes, offset: Int) -> ScanInt {
   let length = byte_length(source)
+  if !(0 <= offset) { return scan_refused("Pep scan offset is negative", offset) } else {}
   if !(offset <= length) { return scan_refused("Pep scan offset is past the end of the source", offset) } else {}
   if length <= offset { return scan_refused("Pep scan found no digits at the end of the source", offset) } else {}
   if !scan_is_digit(byte_at(source, offset)) { return scan_refused("Pep scan found a non-digit where an integer was required", offset) } else {}
@@ -60,10 +64,21 @@ fn scan_int_at(source: SourceBytes, offset: Int) -> ScanInt {
   var current = offset
   var digits = 0
   while !(length <= current) && scan_is_digit(byte_at(source, current)) {
+    let digit = byte_at(source, current) - 48
+    // Guarding the MULTIPLY would reject Int64 max itself: 922337203685477580 * 10 still fits, and
+    // only the final digit decides whether the result does. So the last digit is what is bounded.
     if scan_max_before_digit() <= value {
-      return scan_refused("Pep scan integer is too large for Int", current)
+      if scan_max_before_digit() == value {
+        // At exactly 922337203685477580 only a final digit of 7 or less keeps the result in range.
+        if 8 <= digit {
+          return scan_refused("Pep scan integer is too large for Int", current)
+        } else {}
+      } else {
+        // Any value already above that threshold overflowed on the next multiply, whatever the digit.
+        return scan_refused("Pep scan integer is too large for Int", current)
+      }
     } else {}
-    value = value * 10 + (byte_at(source, current) - 48)
+    value = value * 10 + digit
     digits = digits + 1
     current = current + 1
   }
@@ -123,6 +138,9 @@ type ScanIdent {
 
 fn scan_ident_at(source: SourceBytes, offset: Int) -> ScanIdent {
   let length = byte_length(source)
+  if !(0 <= offset) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan offset is negative", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
   if !(offset <= length) {
     return ScanIdent { status: "unsupported", diagnostic: "Pep scan offset is past the end of the source", text: "", byteLength: 0, nextOffset: offset }
   } else {}
@@ -166,18 +184,24 @@ type ScanCount {
 // are \n \t \r \\ and \" only, and \0 is refused because a NUL cannot be written as a Pep literal. An
 // unknown escape refuses instead of being passed through, so a caller never silently loses a backslash.
 
+// `isNul` exists because the language accepts `\0` (verified against the OCaml seed: a program with
+// `say("a\0b")` runs and emits the NUL) but Pep source has no way to WRITE a NUL character, so a
+// fragment cannot carry one. The escape is therefore accepted, contributes no fragment, and is
+// counted so a caller can materialise the byte itself instead of the scanner silently dropping it.
 type ScanEscape {
   supported: Bool,
+  isNul: Bool,
   text: Str
 }
 
 fn scan_escape_text(byte: Int) -> ScanEscape {
-  if byte == 110 { return ScanEscape { supported: true, text: "\n" } } else {}
-  if byte == 116 { return ScanEscape { supported: true, text: "\t" } } else {}
-  if byte == 114 { return ScanEscape { supported: true, text: "\r" } } else {}
-  if byte == 92 { return ScanEscape { supported: true, text: "\\" } } else {}
-  if byte == 34 { return ScanEscape { supported: true, text: "\"" } } else {}
-  return ScanEscape { supported: false, text: "" }
+  if byte == 110 { return ScanEscape { supported: true, isNul: false, text: "\n" } } else {}
+  if byte == 116 { return ScanEscape { supported: true, isNul: false, text: "\t" } } else {}
+  if byte == 114 { return ScanEscape { supported: true, isNul: false, text: "\r" } } else {}
+  if byte == 92 { return ScanEscape { supported: true, isNul: false, text: "\\" } } else {}
+  if byte == 34 { return ScanEscape { supported: true, isNul: false, text: "\"" } } else {}
+  if byte == 48 { return ScanEscape { supported: true, isNul: true, text: "" } } else {}
+  return ScanEscape { supported: false, isNul: false, text: "" }
 }
 
 type ScanString {
@@ -185,15 +209,24 @@ type ScanString {
   diagnostic: Str,
   parts: List[Str],
   byteLength: Int,
-  nextOffset: Int
+  nextOffset: Int,
+  nulCount: Int
 }
 
 fn scan_string_refused(diagnostic: Str, offset: Int) -> ScanString {
-  return ScanString { status: "unsupported", diagnostic: diagnostic, parts: [], byteLength: 0, nextOffset: offset }
+  return ScanString {
+    status: "unsupported",
+    diagnostic: diagnostic,
+    parts: [],
+    byteLength: 0,
+    nextOffset: offset,
+    nulCount: 0
+  }
 }
 
 fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
   let length = byte_length(source)
+  if !(0 <= offset) { return scan_string_refused("Pep scan offset is negative", offset) } else {}
   if !(offset <= length) {
     return scan_string_refused("Pep scan offset is past the end of the source", offset)
   } else {}
@@ -204,6 +237,7 @@ fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
     return scan_string_refused("Pep scan found no quote where a string literal was required", offset)
   } else {}
   var parts: List[Str] = []
+  var nuls = 0
   var current = offset + 1
   var runStart = current
   while !(length <= current) {
@@ -219,7 +253,8 @@ fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
         diagnostic: "",
         parts: parts,
         byteLength: current + 1 - offset,
-        nextOffset: current + 1
+        nextOffset: current + 1,
+        nulCount: nuls
       }
     } else {}
     if byte == 10 {
@@ -238,7 +273,12 @@ fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
       if !escape.supported {
         return scan_string_refused("Pep scan found an unsupported string escape", current)
       } else {}
-      parts = append(parts, escape.text)
+      if escape.isNul {
+        // Accepted like the canonical lexer, but a NUL cannot be a Pep Str fragment; count it.
+        nuls = nuls + 1
+      } else {
+        parts = append(parts, escape.text)
+      }
       current = current + 2
       runStart = current
     } else {

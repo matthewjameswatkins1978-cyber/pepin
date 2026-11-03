@@ -115,6 +115,7 @@ class ScanTests(unittest.TestCase):
                           ("parts", {"type": "List[Str]", "value": []}),
                           ("byteLength", typed("Int", "0")),
                           ("nextOffset", typed("Int", "0")),
+                          ("nulCount", typed("Int", "0")),
                       ]))
 
     @classmethod
@@ -225,6 +226,17 @@ class ScanTests(unittest.TestCase):
         self.assertIn("non-identifier start byte", diagnostic)
 
 
+    def _string_fields(self, payload, offset=0):
+        fields = self._invoke("pep-scan-string", payload, [typed("Int", offset)])
+        return {
+            "status": fields["status"]["value"],
+            "parts": [part["value"] for part in fields["parts"]["value"]],
+            "byteLength": int(fields["byteLength"]["value"]),
+            "nextOffset": int(fields["nextOffset"]["value"]),
+            "nulCount": int(fields["nulCount"]["value"]),
+            "diagnostic": fields["diagnostic"]["value"],
+        }
+
     def _string_at(self, payload, offset=0):
         fields = self._invoke("pep-scan-string", payload, [typed("Int", offset)])
         return (fields["status"]["value"],
@@ -267,6 +279,39 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(status, "unsupported")
         self.assertEqual(parts, [])
         self.assertIn("unsupported string escape", diagnostic)
+
+    def test_nul_escape_is_accepted_and_counted_not_dropped(self):
+        """The OCaml seed accepts `\\0` and emits a NUL byte (verified by running it), so refusing it
+        would make this scanner reject valid programs. Pep source cannot WRITE a NUL fragment, so the
+        escape is accepted, contributes no fragment, and is counted for the caller to materialise."""
+        fields = self._string_fields('"a\\0b"')
+        self.assertEqual(fields["status"], "ok", fields["diagnostic"])
+        self.assertEqual(fields["parts"], ["a", "b"])
+        self.assertEqual(fields["nulCount"], 1)
+        self.assertEqual(fields["byteLength"], 6,
+                         'source "a\\\\0b" is six bytes: quote, a, backslash, 0, b, quote')
+
+    def test_int64_max_is_accepted_and_max_plus_one_refuses(self):
+        """Guarding the multiply rejected legal Int64 max; the last digit is what must be bounded."""
+        status, value, next_offset, _ = self._int_at("9223372036854775807")
+        self.assertEqual((status, value, next_offset), ("ok", 9223372036854775807, 19))
+
+        status, _, _, diagnostic = self._int_at("9223372036854775808")
+        self.assertEqual(status, "unsupported")
+        self.assertIn("too large", diagnostic)
+
+    def test_negative_offsets_refuse_instead_of_raising_from_byte_at(self):
+        int_status, _, _, int_diagnostic = self._int_at("42", -1)
+        self.assertEqual(int_status, "unsupported")
+        self.assertIn("negative", int_diagnostic)
+
+        ident_fields = self._invoke("pep-scan-ident", "abc", [typed("Int", -1)])
+        self.assertEqual(ident_fields["status"]["value"], "unsupported")
+        self.assertIn("negative", ident_fields["diagnostic"]["value"])
+
+        string_fields = self._string_fields('"abc"', -1)
+        self.assertEqual(string_fields["status"], "unsupported")
+        self.assertIn("negative", string_fields["diagnostic"])
 
 
 if __name__ == "__main__":
