@@ -1,0 +1,193 @@
+"""Pinned integration probe: report the checker stage and the emitter stage separately.
+
+The discriminating bounded-emission case (a chunk holding `LexToken` and `make_token`) cannot be
+judged from one number. If it fails, the question is always "checker or emitter?", and a single
+`PEP_RUNTIME_STEP_LIMIT` hides which. This probe runs each stage as its own tool invocation and
+labels the outcome, so a budget failure names its stage and a refusal names its diagnostic.
+
+It is deliberately host-side: it drives the real `pep_c23` session, the real emitter bundle and the
+real step limit. Nothing here is a model of the emitter.
+
+    python tests/probe_integration_case.py --case all
+    python tests/probe_integration_case.py --case lexer-chunk --json
+"""
+import argparse
+import json
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+import pep_c23  # noqa: E402
+from pep_c23 import Session, require, parse_target, typed, typed_record  # noqa: E402
+
+LEXER = ROOT / "examples" / "pep_lexer.pep"
+
+REGRESSION_FIXTURE = (
+    "fn ascii_digit(byte: Int) -> Bool {\n"
+    "  return 97 <= byte && byte <= 122 || byte == 95 || byte == 58 || byte == 44 || byte == 40 \n"
+    "}\n\n"
+    "fn ascii_continue(byte: Int) -> Bool {\n"
+    "  return byte == 102 || byte == 95 || ascii_digit(byte)\n"
+    "}\n\n"
+    "fn has_next_identifier_byte(source: SourceBytes, offset: Int) -> Bool {\n"
+    "  let length = byte_length(source)\n"
+    "  return !(length <= offset) && ascii_continue(byte_at(source, offset))\n"
+    "}\n"
+    "fn main() -> Int { return 0 }\n")
+
+
+def lexer_chunk():
+    """`type LexToken` plus `make_token`, extracted by source span, not by rewriting."""
+    lines = LEXER.read_text(encoding="utf-8").split("\n")
+    declaration = "\n".join(lines[2:12])          # lines 3-12: type LexToken { ... }
+    function = "\n".join(lines[112:122])           # lines 113-122: fn make_token(...) -> LexToken
+    return declaration + "\n" + function + "\n"
+
+
+def synthetic(count):
+    functions = "\n".join(f"fn helper_{index}() -> Int {{ return {index} }}" for index in range(count))
+    return functions + "\nfn main() -> Int { return 0 }\n"
+
+
+CASES = {
+    "lexer-chunk": lexer_chunk,
+    "regression": lambda: REGRESSION_FIXTURE,
+    "synthetic-8": lambda: synthetic(8),
+    "synthetic-12": lambda: synthetic(12),
+}
+
+
+def stage(response, label):
+    """One stage outcome, labelled. A budget failure names the stage that ran out."""
+    if response.get("outcome") != "ok":
+        error = response.get("error") or {}
+        return {"stage": label, "outcome": response.get("outcome"),
+                "code": error.get("code"), "detail": (error.get("message") or "")[:120]}
+    return {"stage": label, "outcome": "ok"}
+
+
+def emission_summary(response, label):
+    if response.get("outcome") != "ok":
+        return stage(response, label)
+    fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+    status = fields["status"]["value"]
+    parts = [part["value"] for part in fields["sourceParts"]["value"]]
+    return {"stage": label, "outcome": "ok", "status": status,
+            "bytes": sum(len(part) for part in parts),
+            "detail": (fields["diagnostic"]["value"] or "")[:120]}
+
+
+def register(session, document, revision, sample_document, sample_revision):
+    target_spec = {"document": sample_document, "revision": sample_revision, "entryFunctions": []}
+    empty_parsed = pep_c23.parser_progress(sample_document, sample_revision)
+    empty_checked = pep_c23.checker_report(sample_document, sample_revision)
+    refused = typed_record("unsupported", (), "Pep C23 emission requires a top-level function named main")
+    start_cursor = pep_c23.parser_cursor_value(sample_document, sample_revision)
+    finished_cursor = pep_c23.parser_cursor_value(sample_document, sample_revision,
+                                                  done=True, lex_done=True, lex_stage="done")
+    tools = [
+        ("pep-c23-parser-start", "parser_start", [], start_cursor),
+        ("pep-c23-parser-step", "parser_step", [finished_cursor],
+         pep_c23.parser_chunk_value(sample_document, sample_revision, finished_cursor)),
+        ("pep-c23-checker", "analyze_parsed", [empty_parsed], empty_checked),
+        ("pep-c23-emitter", "emit_c23_checked", [empty_parsed, empty_checked], refused),
+        ("pep-c23-unit", "emit_c23_function_unit",
+         [empty_parsed, empty_checked, typed("Int", 0)], refused),
+        ("pep-c23-declaration-unit", "emit_c23_declaration_unit",
+         [empty_parsed, empty_checked, typed("Int", 0)],
+         typed_record("unsupported", (),
+                      "Pep C23 declaration unit requires a top-level declaration id")),
+    ]
+    for tool, function, arguments, expect in tools:
+        registered = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
+                                   "tool": tool, "document": document, "revision": revision,
+                                   "function": function})
+        require(registered, "status", "Registered", f"register {tool}")
+        validated = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_validate",
+                                  "tool": tool, "document": document, "revision": revision,
+                                  "testVectors": [{"arguments": arguments, "expect": expect,
+                                                   "semanticTarget": target_spec}]})
+        require(validated, "status", "Validated", f"validate {tool}")
+        activated = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_activate",
+                                  "tool": tool, "document": document, "revision": revision})
+        require(activated, "status", "Active", f"activate {tool}")
+
+
+def run_case(session, tool_revision, name):
+    source = CASES[name]()
+    payload = source.encode("utf-8")
+    row = {"case": name, "source_bytes": len(payload)}
+    target = session.send({"schemaVersion": 3, "op": "open_bytes", "name": name, "bytes": list(payload)})
+    if target.get("outcome") != "ok":
+        row["open"] = stage(target, "open")
+        return row
+    semantic = {"document": target["document"], "revision": target["revision"], "entryFunctions": []}
+    try:
+        parsed = parse_target(session, payload, target, tool_revision)
+    except Exception as error:  # noqa: BLE001
+        row["parse"] = {"stage": "parse", "outcome": "error", "detail": str(error)[:120]}
+        return row
+    row["parse"] = {"stage": "parse", "outcome": "ok",
+                    "nodes": session.parser_measurements.get("parser_node_count")}
+    checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                            "tool": "pep-c23-checker", "arguments": [parsed], "semanticTarget": semantic})
+    row["check"] = stage(checked, "check")
+    if checked.get("outcome") != "ok":
+        return row
+    fields = {item["name"]: item["value"] for item in checked["result"]["fields"]}
+    row["check"]["status"] = fields["status"]["value"]
+    if fields["status"]["value"] != "valid":
+        return row
+
+    whole = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                          "tool": "pep-c23-emitter", "arguments": [parsed, checked["result"]],
+                          "semanticTarget": semantic})
+    row["emit_all"] = emission_summary(whole, "emit_all")
+    unit = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                         "tool": "pep-c23-unit",
+                         "arguments": [parsed, checked["result"], typed("Int", 0)],
+                         "semanticTarget": semantic})
+    row["emit_unit_0"] = emission_summary(unit, "emit_unit_0")
+    return row
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--case", default="all", choices=sorted(CASES) + ["all"])
+    parser.add_argument("--json", action="store_true")
+    arguments = parser.parse_args()
+
+    session = Session()
+    try:
+        bundle = "\n".join(path.read_text(encoding="utf-8") for path in pep_c23.SOURCES)
+        opened = session.send({"schemaVersion": 3, "op": "open", "source": bundle,
+                               "name": "pep-c23-emitter", "metadataOnly": True})
+        require(opened, "outcome", "ok", "open compiler bundle")
+        require(opened, "status", "valid", "check compiler bundle")
+        document, revision = opened["document"], opened["revision"]
+        sample = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "validate", "bytes": []})
+        require(sample, "outcome", "ok", "open validation source")
+        register(session, document, revision, sample["document"], sample["revision"])
+        names = sorted(CASES) if arguments.case == "all" else [arguments.case]
+        rows = [run_case(session, revision, name) for name in names]
+    finally:
+        session.close()
+
+    if arguments.json:
+        print(json.dumps(rows, indent=2))
+        return
+    print(f"compiler bundle sha256 {__import__('hashlib').sha256(bundle.encode()).hexdigest()}")
+    for row in rows:
+        check = row.get("check", {})
+        verdict = check.get("code") or check.get("status") or check.get("outcome")
+        unit = row.get("emit_unit_0", {})
+        print(f"{row['case']:14s} bytes={row['source_bytes']:5d} "
+              f"nodes={row.get('parse', {}).get('nodes')} check={verdict} "
+              f"unit0={unit.get('status') or unit.get('code')} "
+              f"all={row.get('emit_all', {}).get('status') or row.get('emit_all', {}).get('code')}")
+
+
+if __name__ == "__main__":
+    main()

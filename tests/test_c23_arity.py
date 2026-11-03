@@ -133,6 +133,27 @@ class PepC23ArityTests(unittest.TestCase):
 
     # --- fail-closed boundaries ---------------------------------------------
 
+    def test_direct_self_call_passing_its_own_parameter_is_refused(self):
+        """A compilability refusal, not a termination claim.
+
+        Clang rejects the emitted function under -Winfinite-recursion with -Werror. A call
+        that passes a *changed* argument is still allowed and is not asserted to terminate.
+        """
+        self.assert_refused(
+            "fn loop(value: Int) -> Int { return loop(value) }\n"
+            "fn main() -> Int { return loop(2) }\n",
+            "cannot lower a direct self-call that passes its own parameter unchanged")
+
+    def test_recursion_with_a_changed_argument_is_still_emitted(self):
+        """The refusal above is about the call shape; progress is not proven by the emitter."""
+        source = ("fn total(n: Int) -> Int {\n"
+                  "  if n <= 0 { return 0 } else { return n + total(n - 1) }\n"
+                  "}\n"
+                  "fn main() -> Int { return total(10) }\n")
+        generated = emit(source.encode("utf-8"))
+        self.assertRegex(generated, r"pep_fn_\d+\(")
+        self.assertIn("pep_enter()", generated)
+
     def test_multiple_fallible_arguments_still_fail_closed(self):
         self.assert_refused(
             "fn add4(a: Int, b: Int, c: Int, d: Int) -> Int { return a + b + c + d }\n"
