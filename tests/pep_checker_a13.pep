@@ -86,6 +86,14 @@ fn child_at(nodes: List[FlatAstNode], parent: Int, role: Str, index: Int) -> Nod
   }
   return NodeLookup { found: false, node: empty_node() }
 }
+fn child_in_list(candidates: List[FlatAstNode], parentId: Int, childIndex: Int) -> NodeLookup {
+  for candidate in candidates {
+    if candidate.parentId == parentId && (childIndex == -1 || candidate.childIndex == childIndex) {
+      return NodeLookup { found: true, node: candidate }
+    } else {}
+  }
+  return NodeLookup { found: false, node: empty_node() }
+}
 fn type_name_at(nodes: List[FlatAstNode], id: Int) -> Str {
   return legacy_type_name(type_shape_at(nodes, id))
 }
@@ -1653,6 +1661,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   var reversedTaElements: List[FlatAstNode] = []
   var reversedTaArgs: List[FlatAstNode] = []
   var reversedTaArms: List[FlatAstNode] = []
+  var reversedTaLefts: List[FlatAstNode] = []
+  var reversedTaRights: List[FlatAstNode] = []
+  var reversedTaOperands: List[FlatAstNode] = []
+  var reversedTaValues: List[FlatAstNode] = []
   for taScan in nodes {
     if taScan.kind == "record_field" { reversedTaRecordFields = prepend(reversedTaRecordFields, taScan) } else {}
     if taScan.kind == "field_declaration" { reversedTaFieldDecls = prepend(reversedTaFieldDecls, taScan) } else {}
@@ -1663,6 +1675,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     if taScan.role == "element" { reversedTaElements = prepend(reversedTaElements, taScan) } else {}
     if taScan.role == "argument" { reversedTaArgs = prepend(reversedTaArgs, taScan) } else {}
     if taScan.kind == "match_arm" { reversedTaArms = prepend(reversedTaArms, taScan) } else {}
+    if taScan.role == "left" { reversedTaLefts = prepend(reversedTaLefts, taScan) } else {}
+    if taScan.role == "right" { reversedTaRights = prepend(reversedTaRights, taScan) } else {}
+    if taScan.role == "operand" { reversedTaOperands = prepend(reversedTaOperands, taScan) } else {}
+    if taScan.role == "value" { reversedTaValues = prepend(reversedTaValues, taScan) } else {}
   }
   let taRecordFields = reverse(reversedTaRecordFields)
   let taFieldDecls = reverse(reversedTaFieldDecls)
@@ -1685,6 +1701,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
   let taElements = reverse(reversedTaElements)
   let taArgs = reverse(reversedTaArgs)
   let taArms = reverse(reversedTaArms)
+  let taLefts = reverse(reversedTaLefts)
+  let taRights = reverse(reversedTaRights)
+  let taOperands = reverse(reversedTaOperands)
+  let taValues = reverse(reversedTaValues)
   for node in nodes {
     if !unreachable.found && (node.kind == "return" || node.kind == "block" || node.kind == "if_statement") && statement_always_returns(nodes, node) {
       let nextStatement = child_at(nodes, node.parentId, node.role, node.childIndex + 1)
@@ -2083,8 +2103,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         } else {}
       } else {}
       if node.kind == "binary" {
-        let left = child_at(nodes, node.id, "left", 0)
-        let right = child_at(nodes, node.id, "right", 1)
+        let left = child_in_list(taLefts, node.id, 0)
+        let right = child_in_list(taRights, node.id, 1)
         let leftType = if left.found { infer_expression_type_at(nodes, left.node, functions, bindings, references) } else { "" }
         let rightType = if right.found { infer_expression_type_at(nodes, right.node, functions, bindings, references) } else { "" }
         let expected = if node.text == "&&" || node.text == "||" { "Bool" } else { if node.text == "==" || node.text == "!=" { leftType } else { "Int" } }
@@ -2095,7 +2115,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if expected != "" && rightType != "" && rightType != expected && right.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", right.node)) } else {}
       } else {}
       if node.kind == "unary" {
-        let operand = child_at(nodes, node.id, "operand", 0)
+        let operand = child_in_list(taOperands, node.id, 0)
         let expected = if node.text == "!" { "Bool" } else { "Int" }
         if operand.found && operand.node.kind != "hole" && infer_expression_type_at(nodes, operand.node, functions, bindings, references) != expected { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Unary operator operand has an incompatible type", operand.node)) } else {}
       } else {}
@@ -2149,7 +2169,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
               } else {}
             }
           if (node.text == "length" || node.text == "reverse" || node.text == "append" || node.text == "prepend" || node.text == "contains") && count_children(nodes, node.id, "argument") == requiredArity {
-              let collection = child_at(nodes, node.id, "argument", 0)
+              let collection = child_in_list(taArgs, node.id, 0)
               let collectionShape = if collection.found { expression_type_shape(nodes, collection.node.id, functions, bindings, references) } else { empty_type_shape() }
               let elementShape = without_one_list(collectionShape)
               let collectionType = if collection.found && collectionShape.listDepth == 0 { infer_expression_type(nodes, collection.node.id, functions, bindings, references) } else { "" }
@@ -2163,7 +2183,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 } else {}
               } else {}
               if node.text == "append" || node.text == "prepend" || node.text == "contains" {
-                let value = child_at(nodes, node.id, "argument", 1)
+                let value = child_in_list(taArgs, node.id, 1)
                 if value.found && value.node.kind != "hole" {
                   let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
                   let actualValueShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
@@ -2269,7 +2289,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       let owner = if sequentialFunctionOwner {
         FunctionLookup { found: activeFunctionFound && activeFunction.startByte <= node.startByte && node.endByte <= activeFunction.endByte, function: activeFunction }
       } else { owner_function(nodes, node, functions) }
-      let returned = child_at(nodes, node.id, "value", 0)
+      let returned = child_in_list(taValues, node.id, 0)
       if owner.found && returned.found {
         let actualReturnChecked = infer_expression_type_and_shape(nodes, returned.node, functions, bindings, references)
         let actualReturn = actualReturnChecked.typeName
@@ -2287,7 +2307,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     } else {}
     if (node.kind == "let" || node.kind == "var") {
       let annotation = child_at(nodes, node.id, "annotation", 0)
-      let value = child_at(nodes, node.id, "value", 0)
+      let value = child_in_list(taValues, node.id, 0)
       if annotation.found && value.found {
         let expected = type_name_at(nodes, annotation.node.id)
         let expectedShape = type_shape_at(nodes, annotation.node.id)
