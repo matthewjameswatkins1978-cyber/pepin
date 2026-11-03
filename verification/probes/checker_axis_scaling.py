@@ -112,6 +112,7 @@ def main():
 
         for axis, generator in (("breadth", breadth), ("depth", depth)):
             rows = []
+            refusals = 0
             for rung in range(1, MAX_RUNG + 1):
                 source = generator(rung)
                 target = session.send({"schemaVersion": 3, "op": "open_bytes",
@@ -142,6 +143,10 @@ def main():
                              "state": state})
                 print(f"{axis:<8} rung={rung:>3} bytes={len(source):>5} nodes={nodes:>4} "
                       f"state={state}")
+                # Two consecutive refusals bracket the ceiling; no need to ladder past it.
+                refusals = refusals + 1 if state != "ok" else 0
+                if refusals >= 2:
+                    break
             curves[axis] = rows
     finally:
         session.close()
