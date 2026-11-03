@@ -304,16 +304,67 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(parts, [])
         self.assertIn("unsupported string escape", diagnostic)
 
-    def test_nul_escape_is_accepted_and_counted_not_dropped(self):
-        """The OCaml seed accepts `\\0` and emits a NUL byte (verified by running it), so refusing it
-        would make this scanner reject valid programs. Pep source cannot WRITE a NUL fragment, so the
-        escape is accepted, contributes no fragment, and is counted for the caller to materialise."""
+    def test_nul_escape_emits_an_ordered_fragment_and_still_counts(self):
+        """Measured: seed `say("a\\0b")` emits `61 00 62`, so the NUL belongs to the decoded value.
+        The scanner now emits it as its own ordered fragment -- the seed decodes the source escape
+        `\\0` to a one-byte NUL string -- while `nulCount` stays as a cross-check total."""
         fields = self._string_fields('"a\\0b"')
         self.assertEqual(fields["status"], "ok", fields["diagnostic"])
-        self.assertEqual(fields["parts"], ["a", "b"])
+        self.assertEqual(fields["parts"], ["a", "\x00", "b"])
         self.assertEqual(fields["nulCount"], 1)
         self.assertEqual(fields["byteLength"], 6,
                          'source "a\\\\0b" is six bytes: quote, a, backslash, 0, b, quote')
+
+    def test_nul_position_is_distinguishable(self):
+        """The defect this slice closes: count-only NULs made `\\0ab` and `ab\\0` return identical
+        fields. Measured seed `say` outputs are `00 61 62` and `61 62 00`."""
+        leading = self._string_fields('"\\0ab"')
+        trailing = self._string_fields('"ab\\0"')
+        middle = self._string_fields('"a\\0b"')
+        self.assertEqual(leading["parts"], ["\x00", "ab"])
+        self.assertEqual(trailing["parts"], ["ab", "\x00"])
+        self.assertEqual(middle["parts"], ["a", "\x00", "b"])
+        self.assertNotEqual(leading["parts"], trailing["parts"])
+        self.assertEqual(leading["nulCount"], 1)
+        self.assertEqual(trailing["nulCount"], 1)
+
+    def test_multiple_nuls_keep_every_fragment_in_order(self):
+        # Seed `say("a\\0\\0b")` emits `61 00 00 62`.
+        fields = self._string_fields('"a\\0\\0b"')
+        self.assertEqual(fields["parts"], ["a", "\x00", "\x00", "b"])
+        self.assertEqual(fields["nulCount"], 2)
+        self.assertEqual(fields["byteLength"], 8)
+
+    def test_mixed_unicode_and_escapes_decode_like_the_seed(self):
+        # Seed `say("é\\0中")` emits `c3 a9 00 e4 b8 ad`; multibyte runs stay whole fragments and
+        # the width is bytes, not characters.
+        fields = self._string_fields('"é\\0中"')
+        self.assertEqual(fields["parts"], ["é", "\x00", "中"])
+        self.assertEqual(fields["byteLength"], 9, "quote + e-acute (2) + backslash 0 (2) + CJK (3) + quote")
+
+        # Seed `say("a\\n\\t\\\\\\"\\0b")` emits `61 0a 09 5c 22 00 62`: seven ordered fragments.
+        fields = self._string_fields('"a\\n\\t\\\\\\"\\0b"')
+        self.assertEqual(fields["parts"], ["a", "\n", "\t", "\\", "\"", "\x00", "b"])
+        self.assertEqual(fields["byteLength"], 14)
+        self.assertEqual(fields["nulCount"], 1)
+
+    def test_joined_fragments_reproduce_the_seed_say_bytes(self):
+        """Round trip against the oracle: joining the ordered fragments must equal the exact bytes
+        the OCaml seed printed for the same literal (recorded from `pep.ps1 run` probes)."""
+        cases = [
+            ('"a\\0b"', bytes([0x61, 0x00, 0x62])),
+            ('"\\0ab"', bytes([0x00, 0x61, 0x62])),
+            ('"ab\\0"', bytes([0x61, 0x62, 0x00])),
+            ('"a\\0\\0b"', bytes([0x61, 0x00, 0x00, 0x62])),
+            ('"é\\0中"', bytes([0xc3, 0xa9, 0x00, 0xe4, 0xb8, 0xad])),
+            ('"a\\n\\t\\\\\\"\\0b"', bytes([0x61, 0x0a, 0x09, 0x5c, 0x22, 0x00, 0x62])),
+            ('"\\\\0"', bytes([0x5c, 0x30])),
+        ]
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                fields = self._string_fields(payload)
+                self.assertEqual(fields["status"], "ok", fields["diagnostic"])
+                self.assertEqual("".join(fields["parts"]).encode("utf-8"), expected)
 
     def test_int64_max_is_accepted_and_max_plus_one_refuses(self):
         """Guarding the multiply rejected legal Int64 max; the last digit is what must be bounded."""

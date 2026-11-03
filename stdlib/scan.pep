@@ -180,14 +180,18 @@ type ScanCount {
 // or a refusal that names the byte that stopped it. Fragments are returned rather than one joined
 // `Str` because the seed cannot concatenate strings; the caller joins.
 //
-// Scope, stated rather than implied: single-line literals only (an unescaped newline refuses), escapes
-// are \n \t \r \\ and \" only, and \0 is refused because a NUL cannot be written as a Pep literal. An
-// unknown escape refuses instead of being passed through, so a caller never silently loses a backslash.
+// Scope, stated rather than implied: single-line literals only (an unescaped newline refuses);
+// escapes are \n \t \r \\ \" and \0; an unknown escape refuses instead of being passed through, so
+// a caller never silently loses a backslash.
 
-// `isNul` exists because the language accepts `\0` (verified against the OCaml seed: a program with
-// `say("a\0b")` runs and emits the NUL) but Pep source has no way to WRITE a NUL character, so a
-// fragment cannot carry one. The escape is therefore accepted, contributes no fragment, and is
-// counted so a caller can materialise the byte itself instead of the scanner silently dropping it.
+// `\0` produces a real NUL FRAGMENT at its exact position in `parts`. Measured against the seed:
+// `say("a\0b")`, `say("\0ab")` and `say("ab\0")` emit `61 00 62`, `00 61 62` and `61 62 00`, so the
+// previous count-without-fragment form made those three literals indistinguishable here (both
+// leading and trailing NUL cases returned `["ab"]` with a count of 1). The seed itself decodes the
+// source escape `"\0"` to a one-byte NUL string, so the scanner emits that same fragment: ordering
+// is preserved inside `parts` with no string concatenation anywhere. `isNul` stays so a caller that
+// cannot carry a NUL (a C string, say) can identify it, and `nulCount` remains as a cross-check
+// total that still equals the number of NUL fragments in `parts`.
 type ScanEscape {
   supported: Bool,
   isNul: Bool,
@@ -200,7 +204,7 @@ fn scan_escape_text(byte: Int) -> ScanEscape {
   if byte == 114 { return ScanEscape { supported: true, isNul: false, text: "\r" } } else {}
   if byte == 92 { return ScanEscape { supported: true, isNul: false, text: "\\" } } else {}
   if byte == 34 { return ScanEscape { supported: true, isNul: false, text: "\"" } } else {}
-  if byte == 48 { return ScanEscape { supported: true, isNul: true, text: "" } } else {}
+  if byte == 48 { return ScanEscape { supported: true, isNul: true, text: "\0" } } else {}
   return ScanEscape { supported: false, isNul: false, text: "" }
 }
 
@@ -274,11 +278,11 @@ fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
         return scan_string_refused("Pep scan found an unsupported string escape", current)
       } else {}
       if escape.isNul {
-        // Accepted like the canonical lexer, but a NUL cannot be a Pep Str fragment; count it.
+        // Counted AND emitted below as its own fragment, so leading, trailing and doubled NULs
+        // stay distinguishable in order.
         nuls = nuls + 1
-      } else {
-        parts = append(parts, escape.text)
-      }
+      } else {}
+      parts = append(parts, escape.text)
       current = current + 2
       runStart = current
     } else {
