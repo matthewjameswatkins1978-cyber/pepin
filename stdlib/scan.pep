@@ -155,6 +155,99 @@ type ScanCount {
   offset: Int
 }
 
+// Quoted-literal scanning: the third input a lexer needs beside identifiers and integers.
+//
+// `examples/pep_lexer.pep` tracks `escapePending` and `stringPartsReversed` by hand inside its cursor.
+// This is the reusable form: it returns the decoded fragments and the offset after the closing quote,
+// or a refusal that names the byte that stopped it. Fragments are returned rather than one joined
+// `Str` because the seed cannot concatenate strings; the caller joins.
+//
+// Scope, stated rather than implied: single-line literals only (an unescaped newline refuses), escapes
+// are \n \t \r \\ and \" only, and \0 is refused because a NUL cannot be written as a Pep literal. An
+// unknown escape refuses instead of being passed through, so a caller never silently loses a backslash.
+
+type ScanEscape {
+  supported: Bool,
+  text: Str
+}
+
+fn scan_escape_text(byte: Int) -> ScanEscape {
+  if byte == 110 { return ScanEscape { supported: true, text: "\n" } } else {}
+  if byte == 116 { return ScanEscape { supported: true, text: "\t" } } else {}
+  if byte == 114 { return ScanEscape { supported: true, text: "\r" } } else {}
+  if byte == 92 { return ScanEscape { supported: true, text: "\\" } } else {}
+  if byte == 34 { return ScanEscape { supported: true, text: "\"" } } else {}
+  return ScanEscape { supported: false, text: "" }
+}
+
+type ScanString {
+  status: Str,
+  diagnostic: Str,
+  parts: List[Str],
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_string_refused(diagnostic: Str, offset: Int) -> ScanString {
+  return ScanString { status: "unsupported", diagnostic: diagnostic, parts: [], byteLength: 0, nextOffset: offset }
+}
+
+fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
+  let length = byte_length(source)
+  if !(offset <= length) {
+    return scan_string_refused("Pep scan offset is past the end of the source", offset)
+  } else {}
+  if length <= offset {
+    return scan_string_refused("Pep scan found no string literal at the end of the source", offset)
+  } else {}
+  if !(byte_at(source, offset) == 34) {
+    return scan_string_refused("Pep scan found no quote where a string literal was required", offset)
+  } else {}
+  var parts: List[Str] = []
+  var current = offset + 1
+  var runStart = current
+  while !(length <= current) {
+    let byte = byte_at(source, current)
+    if byte == 34 {
+      if runStart == current {
+        // Nothing pending; the literal closed exactly on a run boundary.
+      } else {
+        parts = append(parts, utf8_slice(source, runStart, current))
+      }
+      return ScanString {
+        status: "ok",
+        diagnostic: "",
+        parts: parts,
+        byteLength: current + 1 - offset,
+        nextOffset: current + 1
+      }
+    } else {}
+    if byte == 10 {
+      return scan_string_refused("Pep scan found an unterminated string literal", offset)
+    } else {}
+    if byte == 92 {
+      if runStart == current {
+        // Escape immediately after the opening quote or a previous escape.
+      } else {
+        parts = append(parts, utf8_slice(source, runStart, current))
+      }
+      if length <= current + 1 {
+        return scan_string_refused("Pep scan found an unterminated escape sequence", current)
+      } else {}
+      let escape = scan_escape_text(byte_at(source, current + 1))
+      if !escape.supported {
+        return scan_string_refused("Pep scan found an unsupported string escape", current)
+      } else {}
+      parts = append(parts, escape.text)
+      current = current + 2
+      runStart = current
+    } else {
+      current = current + 1
+    }
+  }
+  return scan_string_refused("Pep scan found an unterminated string literal", offset)
+}
+
 fn scan_ident_count(source: SourceBytes) -> ScanCount {
   let length = byte_length(source)
   var offset = 0

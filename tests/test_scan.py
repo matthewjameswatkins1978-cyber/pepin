@@ -38,6 +38,10 @@ fn scan_probe_ident(offset: Int) -> ScanIdent {
 fn scan_probe_ident_count() -> ScanCount {
   return scan_ident_count(source_bytes())
 }
+
+fn scan_probe_string(offset: Int) -> ScanString {
+  return scan_string_at(source_bytes(), offset)
+}
 """
 
 
@@ -102,6 +106,15 @@ class ScanTests(unittest.TestCase):
                           ("diagnostic", typed("Str", "")),
                           ("count", typed("Int", "0")),
                           ("offset", typed("Int", "0")),
+                      ]))
+        cls._register("pep-scan-string", "scan_probe_string", [typed("Int", 0)],
+                      typed_record_value("ScanString", [
+                          ("status", typed("Str", "unsupported")),
+                          ("diagnostic", typed("Str",
+                                               "Pep scan found no string literal at the end of the source")),
+                          ("parts", {"type": "List[Str]", "value": []}),
+                          ("byteLength", typed("Int", "0")),
+                          ("nextOffset", typed("Int", "0")),
                       ]))
 
     @classmethod
@@ -210,6 +223,50 @@ class ScanTests(unittest.TestCase):
         status, _, _, _, diagnostic = self._ident_at("é")
         self.assertEqual(status, "unsupported")
         self.assertIn("non-identifier start byte", diagnostic)
+
+
+    def _string_at(self, payload, offset=0):
+        fields = self._invoke("pep-scan-string", payload, [typed("Int", offset)])
+        return (fields["status"]["value"],
+                [part["value"] for part in fields["parts"]["value"]],
+                int(fields["byteLength"]["value"]),
+                int(fields["nextOffset"]["value"]),
+                fields["diagnostic"]["value"])
+
+    def test_string_literal_returns_parts_width_and_next_offset(self):
+        status, parts, byte_length, next_offset, _ = self._string_at('"abc" tail')
+        self.assertEqual((status, parts, byte_length, next_offset), ("ok", ["abc"], 5, 5))
+
+    def test_escapes_decode_to_their_real_characters(self):
+        status, parts, byte_length, next_offset, _ = self._string_at('"a\\nb\\\\c\\"d"')
+        self.assertEqual(status, "ok")
+        self.assertEqual(parts, ["a", "\n", "b", "\\", "c", "\"", "d"])
+        self.assertEqual(byte_length, len('"a\\nb\\\\c\\"d"'))
+        self.assertEqual(next_offset, byte_length)
+
+    def test_multi_byte_body_is_one_fragment_with_a_byte_length(self):
+        payload = '"é"'
+        status, parts, byte_length, next_offset, _ = self._string_at(payload)
+        self.assertEqual((status, parts), ("ok", ["é"]))
+        self.assertEqual(byte_length, 4, "quote + two UTF-8 bytes + quote")
+        self.assertEqual(next_offset, 4)
+
+    def test_unterminated_literal_refuses(self):
+        status, parts, _, _, diagnostic = self._string_at('"abc')
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(parts, [])
+        self.assertIn("unterminated", diagnostic)
+
+    def test_unescaped_newline_refuses_as_unterminated(self):
+        status, _, _, _, diagnostic = self._string_at('"abc\ndef"')
+        self.assertEqual(status, "unsupported")
+        self.assertIn("unterminated", diagnostic)
+
+    def test_unknown_escape_refuses_instead_of_passing_through(self):
+        status, parts, _, _, diagnostic = self._string_at('"bad\\q"')
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(parts, [])
+        self.assertIn("unsupported string escape", diagnostic)
 
 
 if __name__ == "__main__":
