@@ -595,6 +595,8 @@ fn is_expression_kind(kind: Str) -> Bool {
 }
 type ParamTypeFact { index: Int, typeName: Str, shape: PepTypeShape }
 type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact], returnType: Str, returnShape: PepTypeShape }
+type ResolvedTypeField { fieldName: Str, fieldTypeName: Str, fieldShape: PepTypeShape, fieldCode: Str, startByte: Int, endByte: Int, line: Int, column: Int }
+type ResolvedTypeDecl { typeName: Str, typeKind: Str, declStartByte: Int, declEndByte: Int, declLine: Int, declColumn: Int, duplicateType: Bool, document: Str, revision: Str, fields: List[ResolvedTypeField] }
 fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool) -> List[ResolvedSignature] {
   var finished: List[ResolvedSignature] = []
   var currentId = -1
@@ -2460,6 +2462,35 @@ fn chunk_signatures(parsed: ParserProgress) -> List[ResolvedSignature] {
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return [] } else {}
   return resolve_all_signatures(nodes, true)
+}
+fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision { return [] } else {}
+  if !parsed.done { return [] } else {}
+  if parsed.status != "complete" { return [] } else {}
+  let sourceLength = byte_length(source_bytes())
+  let nodes = sort_nodes(parsed.nodes)
+  if !tree_is_valid(nodes, sourceLength) { return [] } else {}
+  var finished: List[ResolvedTypeDecl] = []
+  var seenTypeNames: List[Str] = []
+  for resolved in resolve_all_records(nodes) {
+    if !contains(seenTypeNames, resolved.recordName) {
+    seenTypeNames = prepend(seenTypeNames, resolved.recordName)
+    if !resolved.duplicateType && !supported_primitive_type(resolved.recordName) {
+      let declNode = lookup_node(nodes, resolved.recordId)
+      if declNode.found {
+        var typeFields: List[ResolvedTypeField] = []
+        for facts in resolved.fields {
+          if !facts.duplicate {
+            typeFields = prepend(typeFields, ResolvedTypeField { fieldName: facts.field.text, fieldTypeName: facts.name, fieldShape: facts.shape, fieldCode: facts.code, startByte: facts.field.startByte, endByte: facts.field.endByte, line: facts.field.line, column: facts.field.column })
+          } else {}
+        }
+        finished = prepend(finished, ResolvedTypeDecl { typeName: resolved.recordName, typeKind: "record", declStartByte: declNode.node.startByte, declEndByte: declNode.node.endByte, declLine: declNode.node.line, declColumn: declNode.node.column, duplicateType: false, document: parsed.document, revision: parsed.revision, fields: reverse(typeFields) })
+      } else {}
+    } else {}
+    } else {}
+  }
+  return reverse(finished)
 }
 fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
   let authority = semantic_snapshot()
