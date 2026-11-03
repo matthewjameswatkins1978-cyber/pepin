@@ -60,6 +60,16 @@ FIXTURES = [
     ("int_range", b"99999999999999999999"),
     ("invalid_utf8", b"let a = \x80;"),
     ("mixed_comment_hole", b'x _ = "s\\0" ?n # gone\n99'),
+    # second wave: position semantics around multi-byte text, lone CR, raw NUL and EOF edges
+    ("multibyte_before_error", 'say("\u00e9") @'.encode("utf-8")),
+    ("lf_multiline_positions", b"a\nb\nc @"),
+    ("two_comments_lines", b"# one\n# two\n@"),
+    ("lone_cr_positions", b"let a = @\r"),
+    ("crlf_in_string", b'"a\r\nb"'),
+    ("raw_nul_in_string", b'say("a\x00b")'),
+    ("escaped_quote_at_eof", b'"abc\\"'),
+    ("hole_underscore_named", b"_x ?y"),
+    ("long_digit_run", b"1" * 40),
 ]
 
 RESULTS = []
