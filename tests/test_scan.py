@@ -74,6 +74,10 @@ fn scan_probe_kind(offset: Int) -> ScanKind {
 fn lex_probe() -> LexResult {
   return lex_source(source_bytes())
 }
+
+fn census_probe() -> LexCensus {
+  return lex_census(source_bytes())
+}
 """
 
 
@@ -223,6 +227,21 @@ class ScanTests(unittest.TestCase):
                                   ("column", typed("Int", "1")),
                               ])
                           ]}),
+                      ]))
+        cls._register("pep-census", "census_probe", [],
+                      typed_record_value("LexCensus", [
+                          ("status", typed("Str", "ok")),
+                          ("diagnostic", typed("Str", "")),
+                          ("errorStart", typed("Int", "-1")),
+                          ("errorLine", typed("Int", "-1")),
+                          ("errorColumn", typed("Int", "-1")),
+                          ("sourceBytes", typed("Int", "0")),
+                          ("total", typed("Int", "0")),
+                          ("identifiers", typed("Int", "0")),
+                          ("integers", typed("Int", "0")),
+                          ("strings", typed("Int", "0")),
+                          ("holes", typed("Int", "0")),
+                          ("symbols", typed("Int", "0")),
                       ]))
 
     @classmethod
@@ -732,7 +751,7 @@ class ScanTests(unittest.TestCase):
     def test_driver_reports_explicit_seed_error_codes(self):
         status, code, _, start, end, line, column, tokens = self._lex("@")
         self.assertEqual((status, code), ("error", "PEP_UNEXPECTED_CHARACTER"))
-        self.assertEqual((start, end, line, column, tokens), (0, 0, 1, 1, []))
+        self.assertEqual((start, end, line, column, tokens), (0, 1, 1, 1, []))
 
         status, code, _, start, _, _, _, tokens = self._lex('"abc')
         self.assertEqual((status, code), ("error", "PEP_UNTERMINATED_STRING"))
@@ -747,7 +766,7 @@ class ScanTests(unittest.TestCase):
 
         status, code, _, start, end, _, _, _ = self._lex("99999999999999999999")
         self.assertEqual((status, code), ("error", "PEP_INT_LITERAL_RANGE"))
-        self.assertEqual((start, end), (0, 18))
+        self.assertEqual((start, end), (0, 20))
 
         status, code, _, start, end, line, column, _ = self._lex(b"let a = \x80;")
         self.assertEqual((status, code), ("error", "PEP_INVALID_UTF8"))
@@ -767,6 +786,56 @@ class ScanTests(unittest.TestCase):
                           ("identifier", 3, 4, 2, 1),
                           ("identifier", 5, 6, 2, 3),
                           ("eof", 6, 6, 2, 4)])
+
+
+    def _census(self, payload):
+        fields = self._invoke("pep-census", payload, [])
+        numeric = ("errorStart", "errorLine", "errorColumn", "sourceBytes",
+                   "total", "identifiers", "integers", "strings", "holes", "symbols")
+        return {name: (int(fields[name]["value"]) if name in numeric else fields[name]["value"])
+                for name in ("status", "diagnostic") + numeric}
+
+    def test_census_counts_every_token_class_but_not_eof(self):
+        fields = self._census('f(1, "s") ?x')
+        self.assertEqual(fields["status"], "ok")
+        self.assertEqual(fields["total"], 7)
+        self.assertEqual(fields["identifiers"], 1)
+        self.assertEqual(fields["integers"], 1)
+        self.assertEqual(fields["strings"], 1)
+        self.assertEqual(fields["holes"], 1)
+        self.assertEqual(fields["symbols"], 3)
+        self.assertEqual(fields["errorStart"], -1, "success carries no error position")
+
+    def test_census_accepts_balanced_delimiters(self):
+        fields = self._census("([{}])")
+        self.assertEqual(fields["status"], "ok", fields["diagnostic"])
+        self.assertEqual((fields["total"], fields["symbols"]), (6, 6))
+
+    def test_census_reports_unclosed_delimiters_at_end_of_input(self):
+        fields = self._census("(a")
+        self.assertEqual(fields["status"], "error")
+        self.assertIn("unclosed", fields["diagnostic"])
+        self.assertEqual((fields["errorStart"], fields["errorLine"], fields["errorColumn"]),
+                         (2, 1, 3), "reported at the end-of-input position")
+
+    def test_census_reports_the_unmatched_closer_its_own_position(self):
+        fields = self._census("a)")
+        self.assertEqual(fields["status"], "error")
+        self.assertIn("unmatched closing parenthesis", fields["diagnostic"])
+        self.assertEqual((fields["errorStart"], fields["errorLine"], fields["errorColumn"]),
+                         (1, 1, 2))
+
+        fields = self._census("(]")
+        self.assertEqual(fields["status"], "error")
+        self.assertIn("unmatched closing bracket", fields["diagnostic"])
+        self.assertEqual(fields["errorStart"], 1)
+
+    def test_census_passes_lex_errors_through_with_zero_counts(self):
+        fields = self._census("@")
+        self.assertEqual(fields["status"], "error")
+        self.assertEqual(fields["diagnostic"], "PEP_UNEXPECTED_CHARACTER")
+        self.assertEqual(fields["errorStart"], 0)
+        self.assertEqual(fields["total"], 0, "unlexable input has no trustworthy token classes")
 
 
 if __name__ == "__main__":

@@ -740,6 +740,34 @@ fn lex_error_code(kind: Str, diagnostic: Str) -> Str {
   return "PEP_LEXER_INPUT"
 }
 
+// Seed span END per error code, measured against pep.ps1 check --json: unexpected character ends
+// one byte past the byte (a multi-byte character in code position still spans ONE byte to the
+// seed); integer range ends past the whole digit run (the seed lexes all digits, then converts);
+// unterminated string ends at end of source (the seed fails where input ran out); newline-in-
+// string ends past the first unescaped newline; invalid escape ends past the bad escape char
+// (backslash + 2). `fallback` is the refusing scanner offset.
+fn lex_error_end(source: SourceBytes, errorCode: Str, start: Int, fallback: Int) -> Int {
+  let length = byte_length(source)
+  if errorCode == "PEP_UNEXPECTED_CHARACTER" { return start + 1 } else {}
+  if errorCode == "PEP_INT_LITERAL_RANGE" {
+    var p = start
+    while !(length <= p) && scan_is_digit(byte_at(source, p)) {
+      p = p + 1
+    }
+    return p
+  } else {}
+  if errorCode == "PEP_UNTERMINATED_STRING" { return length } else {}
+  if errorCode == "PEP_NEWLINE_IN_STRING" {
+    var p = start
+    while !(length <= p) && !(byte_at(source, p) == 10) {
+      p = p + 1
+    }
+    if length <= p { return p } else { return p + 1 }
+  } else {}
+  if errorCode == "PEP_INVALID_ESCAPE" { return fallback + 2 } else {}
+  return fallback
+}
+
 // Advance line/column over the consumed byte range [from, to): byte-based like the seed, only
 // byte 10 starts a line. Total driver cost stays linear because every byte is advanced once.
 fn lex_advance_pos(source: SourceBytes, from: Int, to: Int, line: Int, column: Int) -> ScanPos {
@@ -816,7 +844,8 @@ fn lex_source(source: SourceBytes) -> LexResult {
       status = "error"
       errorCode = lex_error_code(classified.kind, classified.diagnostic)
       errorStart = offset
-      errorEnd = classified.nextOffset
+      // Seed span end differs per code; measured, not assumed (see lex_error_end).
+      errorEnd = lex_error_end(source, errorCode, offset, classified.nextOffset)
       errorLine = pos.line
       errorColumn = pos.column
       finished = true
@@ -853,5 +882,119 @@ fn lex_source(source: SourceBytes) -> LexResult {
     status: status, errorCode: errorCode, sourceBytes: length,
     errorStart: errorStart, errorEnd: errorEnd, errorLine: errorLine, errorColumn: errorColumn,
     tokens: tokens
+  }
+}
+
+// --- A real consumer of the token stream: a census with delimiter-balance preflight.
+//
+// The shape a compiler driver needs before parsing: how many of each token class, and are the
+// brackets balanced. It consumes ONLY the driver's token stream (it never re-reads source bytes),
+// fails closed on the first unmatched closer with that token's exact position, and reports
+// unclosed openers at the end-of-input position. Boundary stated: depth balance is not nesting
+// grammar -- `([)]` balances by depth and is correctly left to the parser. A lex error passes
+// through as the driver's own error code with its position; counts are then zero, because input
+// that cannot be lexed has no trustworthy token classes. The eof token marks termination and is
+// not counted as input.
+
+type LexCensus {
+  status: Str,
+  diagnostic: Str,
+  errorStart: Int,
+  errorLine: Int,
+  errorColumn: Int,
+  sourceBytes: Int,
+  total: Int,
+  identifiers: Int,
+  integers: Int,
+  strings: Int,
+  holes: Int,
+  symbols: Int
+}
+
+fn lex_census(source: SourceBytes) -> LexCensus {
+  let lexed = lex_source(source)
+  var status = "ok"
+  var diagnostic = ""
+  var errorStart = -1
+  var errorLine = -1
+  var errorColumn = -1
+  var total = 0
+  var identifiers = 0
+  var integers = 0
+  var strings = 0
+  var holes = 0
+  var symbols = 0
+  var parens = 0
+  var brackets = 0
+  var braces = 0
+  var eofStart = -1
+  var eofLine = -1
+  var eofColumn = -1
+  if lexed.status == "ok" {
+    for token in lexed.tokens {
+      if token.kind == "eof" {
+        eofStart = token.startByte
+        eofLine = token.line
+        eofColumn = token.column
+      } else {
+        total = total + 1
+        if token.kind == "identifier" { identifiers = identifiers + 1 } else {}
+        if token.kind == "integer" { integers = integers + 1 } else {}
+        if token.kind == "string" { strings = strings + 1 } else {}
+        if token.kind == "hole" { holes = holes + 1 } else {}
+        if token.kind == "symbol" {
+          symbols = symbols + 1
+          if token.text == "(" { parens = parens + 1 } else {}
+          if token.text == "[" { brackets = brackets + 1 } else {}
+          if token.text == "{" { braces = braces + 1 } else {}
+          if token.text == ")" {
+            if parens <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing parenthesis"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { parens = parens - 1 }
+          } else {}
+          if token.text == "]" {
+            if brackets <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing bracket"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { brackets = brackets - 1 }
+          } else {}
+          if token.text == "}" {
+            if braces <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing brace"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { braces = braces - 1 }
+          } else {}
+        } else {}
+      }
+    }
+    if status == "ok" && !(parens <= 0 && brackets <= 0 && braces <= 0) {
+      status = "error"
+      diagnostic = "Pep census found unclosed delimiters at end of input"
+      errorStart = eofStart
+      errorLine = eofLine
+      errorColumn = eofColumn
+    } else {}
+  } else {
+    status = "error"
+    diagnostic = lexed.errorCode
+    errorStart = lexed.errorStart
+    errorLine = lexed.errorLine
+    errorColumn = lexed.errorColumn
+  }
+  return LexCensus {
+    status: status, diagnostic: diagnostic,
+    errorStart: errorStart, errorLine: errorLine, errorColumn: errorColumn,
+    sourceBytes: lexed.sourceBytes, total: total,
+    identifiers: identifiers, integers: integers, strings: strings, holes: holes, symbols: symbols
   }
 }
