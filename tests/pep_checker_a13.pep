@@ -146,7 +146,7 @@ fn sort_nodes(nodes: List[FlatAstNode]) -> List[FlatAstNode] {
   return quick_sort_nodes(nodes)
 }
 fn known_builtin(name: Str) -> Bool {
-  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains"
+  return name == "say" || name == "int_text" || name == "length" || name == "append" || name == "prepend" || name == "reverse" || name == "source_bytes" || name == "byte_length" || name == "byte_at" || name == "byte_slice" || name == "utf8_slice" || name == "contains" || name == "str_concat"
 }
 fn is_constructor(nodes: List[FlatAstNode], name: Str) -> Bool {
   for node in nodes { if node.kind == "variant_declaration" && node.text == name { return true } else {} }
@@ -552,7 +552,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           }
         }
         if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", "No visible variable has this name", node))
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_VARIABLE", str_concat(str_concat("Unknown variable '", node.text), "'"), node))
         }
       } else {}
     }
@@ -575,7 +575,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
 
         if found { reversedReferences = prepend(reversedReferences, ResolvedName { syntaxId: node.id, bindingId: resolved, name: node.text, startByte: node.startByte, endByte: node.endByte }) } else {
           let code = "PEP_UNKNOWN_VARIABLE"
-          let message = "No visible variable has this name"
+          let message = str_concat(str_concat("Unknown variable '", node.text), "'")
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, message, node))
         }
       } else {}
@@ -682,7 +682,7 @@ fn infer_expression_type_at(nodes: List[FlatAstNode], node: FlatAstNode, functio
     let target = find_function(functions, node.text)
     if target.found { return target.function.returnType } else {}
     if node.text == "source_bytes" { return "SourceBytes" } else {}
-    if node.text == "int_text" || node.text == "utf8_slice" { return "Str" } else {}
+    if node.text == "int_text" || node.text == "utf8_slice" || node.text == "str_concat" { return "Str" } else {}
     if node.text == "say" { return "Unit" } else {}
     if node.text == "length" || node.text == "byte_length" || node.text == "byte_at" { return "Int" } else {}
     if node.text == "byte_slice" { return "SourceBytes" } else {}
@@ -793,6 +793,7 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     } else {}
     if found.node.text == "length" || found.node.text == "byte_length" || found.node.text == "byte_at" { return PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } else {}
     if found.node.text == "contains" { return PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } else {}
+    if found.node.text == "str_concat" { return PepTypeShape { kind: "builtin", name: "Str", listDepth: 0 } } else {}
     let inferredName = infer_expression_type(nodes, id, functions, bindings, references)
     return legacy_type_shape(nodes, inferredName)
   } else {}
@@ -846,7 +847,7 @@ fn infer_expression_type_and_shape(nodes: List[FlatAstNode], node: FlatAstNode, 
       let sourceBytesShape = legacy_type_shape(nodes, "SourceBytes")
       return ExpressionTypeAndShape { typeName: "SourceBytes", shape: sourceBytesShape }
     } else {}
-    if node.text == "int_text" || node.text == "utf8_slice" {
+    if node.text == "int_text" || node.text == "utf8_slice" || node.text == "str_concat" {
       let strShape = legacy_type_shape(nodes, "Str")
       return ExpressionTypeAndShape { typeName: "Str", shape: strShape }
     } else {}
@@ -1595,6 +1596,7 @@ fn fixed_builtin_arity(name: Str) -> Int {
   if name == "say" || name == "int_text" || name == "byte_length" || name == "length" || name == "reverse" { return 1 } else {}
   if name == "append" || name == "prepend" || name == "contains" { return 2 } else {}
   if name == "byte_at" { return 2 } else {}
+  if name == "str_concat" { return 2 } else {}
   if name == "byte_slice" || name == "utf8_slice" { return 3 } else {}
   if name == "source_bytes" { return 0 } else {}
   return -1
@@ -1607,6 +1609,7 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if (name == "byte_slice" || name == "utf8_slice") && index == 0 { return "SourceBytes" } else {}
   if name == "byte_at" && index == 1 { return "Int" } else {}
   if (name == "byte_slice" || name == "utf8_slice") && (index == 1 || index == 2) { return "Int" } else {}
+  if name == "str_concat" && (index == 0 || index == 1) { return "Str" } else {}
   return ""
 }
 fn branch_always_returns(nodes: List[FlatAstNode], parentId: Int, role: Str) -> Bool {
@@ -1718,7 +1721,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     if node.kind == "function" {
       let returnType = child_at(nodes, node.id, "return_type", 0)
       if !returnType.found || !supported_type_at(nodes, returnType.node.id, declared_return_type(nodes, node.id)) {
-        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, returnType.node.id, declared_return_type(nodes, node.id)), "Function result type is outside the implemented primitive checker subset", node))
+        let returnCode = unsupported_type_code(nodes, returnType.node.id, declared_return_type(nodes, node.id))
+        let returnMessage = if returnCode == "PEP_UNKNOWN_TYPE" { str_concat(str_concat("Unknown type '", declared_return_type(nodes, node.id)), "'") } else { "Function result type is outside the implemented primitive checker subset" }
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(returnCode, returnMessage, node))
       } else {}
       if (known_builtin(node.text) || is_constructor(nodes, node.text)) && is_first_function_declaration(functions, node.text, node.id) {
         reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_RESERVED_FUNCTION", "Function name is reserved for a builtin or constructor", node))
@@ -1727,7 +1732,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if parameter.parentId == node.id {
           let parameterType = child_at(nodes, parameter.id, "type", 0)
           if !parameterType.found || !supported_type_at(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)) {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, parameterType.node.id, declared_binding_type(nodes, parameter)), "Parameter type is outside the implemented primitive checker subset", parameter))
+            let paramCode = unsupported_type_code(nodes, parameterType.node.id, declared_binding_type(nodes, parameter))
+            let paramMessage = if paramCode == "PEP_UNKNOWN_TYPE" { str_concat(str_concat("Unknown type '", declared_binding_type(nodes, parameter)), "'") } else { "Parameter type is outside the implemented primitive checker subset" }
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(paramCode, paramMessage, parameter))
           } else {}
         } else {}
       }
@@ -1744,7 +1751,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
     if (node.kind == "let" || node.kind == "var") {
       let annotation = child_at(nodes, node.id, "annotation", 0)
       if annotation.found && !supported_type_at(nodes, annotation.node.id, type_name_at(nodes, annotation.node.id)) {
-        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, annotation.node.id, type_name_at(nodes, annotation.node.id)), "Binding annotation is outside the implemented primitive checker subset", node))
+        let annotCode = unsupported_type_code(nodes, annotation.node.id, type_name_at(nodes, annotation.node.id))
+        let annotMessage = if annotCode == "PEP_UNKNOWN_TYPE" { str_concat(str_concat("Unknown type '", type_name_at(nodes, annotation.node.id)), "'") } else { "Binding annotation is outside the implemented primitive checker subset" }
+        reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(annotCode, annotMessage, node))
       } else {}
     } else {}
     if node.kind == "record_declaration" {
@@ -1759,7 +1768,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           for facts in resolved.fields {
             if facts.duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_FIELD", "Record field is declared more than once", facts.field)) } else {}
             if facts.typeFound && !facts.supported {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(facts.code, "Record field type is outside the implemented checker subset", facts.field))
+              let fieldCode = facts.code
+              let fieldMessage = if fieldCode == "PEP_UNKNOWN_TYPE" { str_concat(str_concat("Unknown type '", facts.name), "'") } else { "Record field type is outside the implemented checker subset" }
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldCode, fieldMessage, facts.field))
             } else {}
           }
         } else {}
@@ -1773,7 +1784,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           if is_first_duplicate_constructor(taVariants, variant.text, variant.id) { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_DUPLICATE_CONSTRUCTOR", "Constructor name is declared more than once", variant)) } else {}
           for payload in nodes {
             if payload.parentId == variant.id && payload.role == "field_type" && !supported_type_at(nodes, payload.id, type_name_at(nodes, payload.id)) {
-              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(unsupported_type_code(nodes, payload.id, type_name_at(nodes, payload.id)), "Union constructor payload type is outside the implemented checker subset", payload))
+              let payloadCode = unsupported_type_code(nodes, payload.id, type_name_at(nodes, payload.id))
+              let payloadMessage = if payloadCode == "PEP_UNKNOWN_TYPE" { str_concat(str_concat("Unknown type '", type_name_at(nodes, payload.id)), "'") } else { "Union constructor payload type is outside the implemented checker subset" }
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(payloadCode, payloadMessage, payload))
             } else {}
           }
         } else {}
