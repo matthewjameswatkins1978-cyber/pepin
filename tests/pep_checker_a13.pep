@@ -1824,9 +1824,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let litType = if node.kind == "integer" { "Int" } else { if node.kind == "boolean" { "Bool" } else { "Str" } }
         reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: litType, typeShape: legacy_type_shape(nodes, litType), startByte: node.startByte, endByte: node.endByte })
       } else {
-      let actual = infer_expression_type_at(nodes, node, functions, bindings, references)
+      let fusedFact = infer_expression_type_and_shape(nodes, node, functions, bindings, references)
+      let actual = fusedFact.typeName
       if actual == "" {
-        let shape = expression_type_shape(nodes, node.id, functions, bindings, references)
+        let shape = fusedFact.shape
         if shape.kind != "" { reversedFacts = prepend(reversedFacts, ExpressionTypeFact { syntaxId: node.id, typeName: "", typeShape: shape, startByte: node.startByte, endByte: node.endByte }) } else {}
         if node.kind == "hole" { } else {
         if node.kind == "call" {
