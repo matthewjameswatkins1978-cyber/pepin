@@ -262,7 +262,8 @@ fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
       }
     } else {}
     if byte == 10 {
-      return scan_string_refused("Pep scan found an unterminated string literal", offset)
+      // The seed distinguishes this from EOF: PEP_NEWLINE_IN_STRING, not PEP_UNTERMINATED_STRING.
+      return scan_string_refused("Pep scan found an unescaped newline in a string literal", offset)
     } else {}
     if byte == 92 {
       if runStart == current {
@@ -671,5 +672,186 @@ fn scan_classify(source: SourceBytes, offset: Int) -> ScanKind {
   } else {
     return ScanKind { status: "unsupported", diagnostic: symbol.diagnostic, kind: "unexpected",
                       byteLength: 0, nextOffset: offset }
+  }
+}
+
+// --- The lexer driver: one source-backed pass that connects every scanner above into real tokens.
+//
+// The token shape is DELIBERATELY the canonical one from `examples/pep_lexer.pep` -- kind, text,
+// integerValue, stringParts, startByte, endByte, line, column -- so the slice-4 differential can
+// compare token-by-token without a translation layer. Canonical text semantics are mirrored:
+// integers and strings carry `text: ""` (their value lives in integerValue / stringParts), a bare
+// `_` word is a `hole` token like the seed's `Hole None`, a bare `?` is `hole` with empty text and
+// `?name` carries the name, comments and whitespace emit NO token, and `eof` is a real token at
+// the end position. String fragments carry the ordered NUL form (the canonical lexer itself
+// prepends "\0" for escaped NUL, so fragments agree by construction).
+//
+// Termination is bounded by construction: every loop iteration either consumes at least one byte
+// (all scanners return byteLength >= 1 on success -- each covered by its own unit test) or sets
+// `finished`. The explicit PEP_LEXER_NO_PROGRESS guard fail-closes that invariant if a scanner
+// regresses, instead of spinning. UTF-8 is validated BEFORE the ladder, exactly as the seed
+// validates the whole source before lexing. Errors carry the seed's own codes via
+// `lex_error_code`, with the token-start position the canonical lexer reports.
+
+type LexToken {
+  kind: Str,
+  text: Str,
+  integerValue: Int,
+  stringParts: List[Str],
+  startByte: Int,
+  endByte: Int,
+  line: Int,
+  column: Int
+}
+
+type LexResult {
+  status: Str,
+  errorCode: Str,
+  sourceBytes: Int,
+  errorStart: Int,
+  errorEnd: Int,
+  errorLine: Int,
+  errorColumn: Int,
+  tokens: List[LexToken]
+}
+
+fn lex_token(kind: Str, text: Str, integerValue: Int, stringParts: List[Str],
+             startByte: Int, endByte: Int, line: Int, column: Int) -> LexToken {
+  return LexToken {
+    kind: kind, text: text, integerValue: integerValue, stringParts: stringParts,
+    startByte: startByte, endByte: endByte, line: line, column: column
+  }
+}
+
+// Map a failed classification onto the seed's lexer error codes. The string sub-causes are
+// distinguished by the exact diagnostics scan_string_at produces (unit-tested on both sides), and
+// an unexpected byte is PEP_UNEXPECTED_CHARACTER whether it is ASCII or a valid multi-byte
+// character standing in code position (measured: `é` in code fails at its lead byte).
+fn lex_error_code(kind: Str, diagnostic: Str) -> Str {
+  if kind == "unexpected" { return "PEP_UNEXPECTED_CHARACTER" } else {}
+  if kind == "integer" { return "PEP_INT_LITERAL_RANGE" } else {}
+  if kind == "string" {
+    if diagnostic == "Pep scan found an unescaped newline in a string literal" {
+      return "PEP_NEWLINE_IN_STRING"
+    } else {}
+    if diagnostic == "Pep scan found an unsupported string escape" { return "PEP_INVALID_ESCAPE" } else {}
+    return "PEP_UNTERMINATED_STRING"
+  } else {}
+  return "PEP_LEXER_INPUT"
+}
+
+// Advance line/column over the consumed byte range [from, to): byte-based like the seed, only
+// byte 10 starts a line. Total driver cost stays linear because every byte is advanced once.
+fn lex_advance_pos(source: SourceBytes, from: Int, to: Int, line: Int, column: Int) -> ScanPos {
+  var currentLine = line
+  var currentColumn = column
+  var p = from
+  while !(to <= p) {
+    if byte_at(source, p) == 10 {
+      currentLine = currentLine + 1
+      currentColumn = 1
+    } else {
+      currentColumn = currentColumn + 1
+    }
+    p = p + 1
+  }
+  return ScanPos { status: "ok", diagnostic: "", line: currentLine, column: currentColumn }
+}
+
+// Build the emitted token for one classified non-skipped input. Re-scans integers and strings for
+// their values (classify returns spans only); that keeps scan_classify generic and costs at most
+// one extra linear pass over the source overall.
+fn lex_token_for(source: SourceBytes, kindName: Str, startByte: Int, endByte: Int,
+                 line: Int, column: Int) -> LexToken {
+  if kindName == "identifier" {
+    let word = utf8_slice(source, startByte, endByte)
+    if word == "_" {
+      return lex_token("hole", "", 0, [], startByte, endByte, line, column)
+    } else {
+      return lex_token("identifier", word, 0, [], startByte, endByte, line, column)
+    }
+  } else {}
+  if kindName == "integer" {
+    let number = scan_int_at(source, startByte)
+    return lex_token("integer", "", number.value, [], startByte, endByte, line, column)
+  } else {}
+  if kindName == "string" {
+    let literal = scan_string_at(source, startByte)
+    return lex_token("string", "", 0, literal.parts, startByte, endByte, line, column)
+  } else {}
+  if kindName == "hole" {
+    let hole = scan_hole_at(source, startByte)
+    return lex_token("hole", hole.name, 0, [], startByte, endByte, line, column)
+  } else {}
+  let symbol = scan_sym_at(source, startByte)
+  return lex_token("symbol", symbol.text, 0, [], startByte, endByte, line, column)
+}
+
+fn lex_source(source: SourceBytes) -> LexResult {
+  let length = byte_length(source)
+  let utf8 = scan_utf8_valid(source)
+  if !utf8.valid {
+    let pos = scan_position_at(source, utf8.errorOffset)
+    return LexResult {
+      status: "error", errorCode: "PEP_INVALID_UTF8", sourceBytes: length,
+      errorStart: utf8.errorOffset, errorEnd: utf8.errorOffset + 1,
+      errorLine: pos.line, errorColumn: pos.column, tokens: []
+    }
+  } else {}
+  var tokens: List[LexToken] = []
+  var offset = 0
+  var line = 1
+  var column = 1
+  var status = "ok"
+  var errorCode = ""
+  var errorStart = -1
+  var errorEnd = -1
+  var errorLine = -1
+  var errorColumn = -1
+  var finished = false
+  while !finished {
+    let classified = scan_classify(source, offset)
+    if classified.status != "ok" {
+      let pos = scan_position_at(source, offset)
+      status = "error"
+      errorCode = lex_error_code(classified.kind, classified.diagnostic)
+      errorStart = offset
+      errorEnd = classified.nextOffset
+      errorLine = pos.line
+      errorColumn = pos.column
+      finished = true
+    } else {}
+    if !finished && classified.kind == "eof" {
+      tokens = append(tokens, lex_token("eof", "", 0, [], offset, offset, line, column))
+      finished = true
+    } else {}
+    if !finished && classified.byteLength <= 0 {
+      // Fail-closed bounded-progress guard: a successful classification must consume something.
+      status = "error"
+      errorCode = "PEP_LEXER_NO_PROGRESS"
+      errorStart = offset
+      errorEnd = offset
+      errorLine = line
+      errorColumn = column
+      finished = true
+    } else {}
+    if !finished && (classified.kind == "space" || classified.kind == "comment") {
+      let moved = lex_advance_pos(source, offset, classified.nextOffset, line, column)
+      line = moved.line
+      column = moved.column
+      offset = classified.nextOffset
+    } else {}
+    if !finished && classified.kind != "space" && classified.kind != "comment" && classified.kind != "eof" {
+      tokens = append(tokens, lex_token_for(source, classified.kind, offset, classified.nextOffset, line, column))
+      let moved = lex_advance_pos(source, offset, classified.nextOffset, line, column)
+      line = moved.line
+      column = moved.column
+      offset = classified.nextOffset
+    } else {}
+  }
+  return LexResult {
+    status: status, errorCode: errorCode, sourceBytes: length,
+    errorStart: errorStart, errorEnd: errorEnd, errorLine: errorLine, errorColumn: errorColumn,
+    tokens: tokens
   }
 }

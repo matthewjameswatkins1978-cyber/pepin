@@ -70,6 +70,10 @@ fn scan_probe_pos(offset: Int) -> ScanPos {
 fn scan_probe_kind(offset: Int) -> ScanKind {
   return scan_classify(source_bytes(), offset)
 }
+
+fn lex_probe() -> LexResult {
+  return lex_source(source_bytes())
+}
 """
 
 
@@ -197,6 +201,28 @@ class ScanTests(unittest.TestCase):
                           ("kind", typed("Str", "eof")),
                           ("byteLength", typed("Int", "0")),
                           ("nextOffset", typed("Int", "0")),
+                      ]))
+        cls._register("pep-lex", "lex_probe", [],
+                      typed_record_value("LexResult", [
+                          ("status", typed("Str", "ok")),
+                          ("errorCode", typed("Str", "")),
+                          ("sourceBytes", typed("Int", "0")),
+                          ("errorStart", typed("Int", "-1")),
+                          ("errorEnd", typed("Int", "-1")),
+                          ("errorLine", typed("Int", "-1")),
+                          ("errorColumn", typed("Int", "-1")),
+                          ("tokens", {"type": "List[LexToken]", "value": [
+                              typed_record_value("LexToken", [
+                                  ("kind", typed("Str", "eof")),
+                                  ("text", typed("Str", "")),
+                                  ("integerValue", typed("Int", "0")),
+                                  ("stringParts", {"type": "List[Str]", "value": []}),
+                                  ("startByte", typed("Int", "0")),
+                                  ("endByte", typed("Int", "0")),
+                                  ("line", typed("Int", "1")),
+                                  ("column", typed("Int", "1")),
+                              ])
+                          ]}),
                       ]))
 
     @classmethod
@@ -350,10 +376,14 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(parts, [])
         self.assertIn("unterminated", diagnostic)
 
-    def test_unescaped_newline_refuses_as_unterminated(self):
-        status, _, _, _, diagnostic = self._string_at('"abc\ndef"')
+    def test_unescaped_newline_refuses_with_its_own_diagnostic(self):
+        """Split from the EOF case because the seed reports PEP_NEWLINE_IN_STRING here and
+        PEP_UNTERMINATED_STRING there -- the driver maps diagnostics onto those codes."""
+        status, parts, _, _, diagnostic = self._string_at('"abc\ndef"')
         self.assertEqual(status, "unsupported")
-        self.assertIn("unterminated", diagnostic)
+        self.assertIn("newline", diagnostic)
+        _, _, _, _, eof_diagnostic = self._string_at('"abc')
+        self.assertIn("unterminated", eof_diagnostic)
 
     def test_unknown_escape_refuses_instead_of_passing_through(self):
         status, parts, _, _, diagnostic = self._string_at('"bad\\q"')
@@ -653,6 +683,90 @@ class ScanTests(unittest.TestCase):
                 status, kind, byte_length, _, _ = self._kind(payload, offset)
                 self.assertEqual((status, kind, byte_length),
                                  (expected_status, expected_kind, expected_length))
+
+
+    def _lex(self, payload):
+        fields = self._invoke("pep-lex", payload, [])
+        tokens = []
+        for item in fields["tokens"]["value"]:
+            entry = {field["name"]: field["value"] for field in item["fields"]}
+            parts = [part["value"] for part in entry["stringParts"]["value"]]
+            tokens.append((entry["kind"]["value"], entry["text"]["value"],
+                           int(entry["integerValue"]["value"]), parts,
+                           int(entry["startByte"]["value"]), int(entry["endByte"]["value"]),
+                           int(entry["line"]["value"]), int(entry["column"]["value"])))
+        return (fields["status"]["value"], fields["errorCode"]["value"],
+                int(fields["sourceBytes"]["value"]), int(fields["errorStart"]["value"]),
+                int(fields["errorEnd"]["value"]), int(fields["errorLine"]["value"]),
+                int(fields["errorColumn"]["value"]), tokens)
+
+    def test_driver_tokenises_a_real_statement_with_positions(self):
+        status, code, source_bytes, error_start, _, _, _, tokens = self._lex("let a = 1;")
+        self.assertEqual((status, code), ("ok", ""))
+        self.assertEqual(source_bytes, 10)
+        self.assertEqual(error_start, -1, "a clean run reports no error position")
+        self.assertEqual([(k, t, v, s, e, l, c) for k, t, v, _, s, e, l, c in tokens],
+                         [("identifier", "let", 0, 0, 3, 1, 1),
+                          ("identifier", "a", 0, 4, 5, 1, 5),
+                          ("symbol", "=", 0, 6, 7, 1, 7),
+                          ("integer", "", 1, 8, 9, 1, 9),
+                          ("symbol", ";", 0, 9, 10, 1, 10),
+                          ("eof", "", 0, 10, 10, 1, 11)])
+
+    def test_driver_token_shapes_match_the_canonical_lexer(self):
+        """Canonical semantics from examples/pep_lexer.pep: integers and strings carry text \"\",
+        a bare `_` word is a hole, comments emit no token, and string fragments carry the ordered
+        NUL (the canonical lexer prepends \"\\0\" the same way)."""
+        payload = 'x _ = "s\\0" ?n # gone\n99'
+        status, code, _, _, _, _, _, tokens = self._lex(payload)
+        self.assertEqual((status, code), ("ok", ""))
+        self.assertEqual([t[0] for t in tokens],
+                         ["identifier", "hole", "symbol", "string", "hole", "integer", "eof"])
+        self.assertEqual(tokens[1], ("hole", "", 0, [], 2, 3, 1, 3), "bare `_` has no name")
+        self.assertEqual(tokens[3], ("string", "", 0, ["s", "\x00"], 6, 11, 1, 7))
+        self.assertEqual(tokens[4], ("hole", "n", 0, [], 12, 14, 1, 13))
+        self.assertEqual(tokens[5], ("integer", "", 99, [], 22, 24, 2, 1),
+                         "value in integerValue, text stays empty, line 2 after the comment")
+        self.assertEqual(tokens[6], ("eof", "", 0, [], 24, 24, 2, 3))
+
+    def test_driver_reports_explicit_seed_error_codes(self):
+        status, code, _, start, end, line, column, tokens = self._lex("@")
+        self.assertEqual((status, code), ("error", "PEP_UNEXPECTED_CHARACTER"))
+        self.assertEqual((start, end, line, column, tokens), (0, 0, 1, 1, []))
+
+        status, code, _, start, _, _, _, tokens = self._lex('"abc')
+        self.assertEqual((status, code), ("error", "PEP_UNTERMINATED_STRING"))
+        self.assertEqual((start, tokens), (0, []))
+
+        status, code, _, start, _, _, _, _ = self._lex('"a\nb"')
+        self.assertEqual((status, code), ("error", "PEP_NEWLINE_IN_STRING"))
+        self.assertEqual(start, 0, "string errors report from the token start, like the seed")
+
+        status, code, _, start, end, _, _, _ = self._lex('"bad\\q"')
+        self.assertEqual((status, code), ("error", "PEP_INVALID_ESCAPE"))
+
+        status, code, _, start, end, _, _, _ = self._lex("99999999999999999999")
+        self.assertEqual((status, code), ("error", "PEP_INT_LITERAL_RANGE"))
+        self.assertEqual((start, end), (0, 18))
+
+        status, code, _, start, end, line, column, _ = self._lex(b"let a = \x80;")
+        self.assertEqual((status, code), ("error", "PEP_INVALID_UTF8"))
+        self.assertEqual((start, end, line, column), (8, 9, 1, 9))
+
+    def test_driver_empty_source_returns_only_eof(self):
+        status, code, source_bytes, _, _, _, _, tokens = self._lex("")
+        self.assertEqual((status, code, source_bytes), ("ok", "", 0))
+        self.assertEqual(tokens, [("eof", "", 0, [], 0, 0, 1, 1)])
+
+    def test_driver_multiline_positions_follow_only_lf(self):
+        """Measured seed rule: only byte 10 starts a line -- `a\r\nb\rc` puts b at line 2 column 1
+        and keeps c on line 2 (a lone CR only advances the column)."""
+        _, _, _, _, _, _, _, tokens = self._lex("a\r\nb\rc")
+        self.assertEqual([(t[0], t[4], t[5], t[6], t[7]) for t in tokens],
+                         [("identifier", 0, 1, 1, 1),
+                          ("identifier", 3, 4, 2, 1),
+                          ("identifier", 5, 6, 2, 3),
+                          ("eof", 6, 6, 2, 4)])
 
 
 if __name__ == "__main__":
