@@ -7,6 +7,10 @@ groups. **Current blocker map at the bottom.**
 
 | receipt | one-line |
 |---|---|
+| `A2-DRIVER-DIFFERENTIAL-cf02095.md` | **A2's lexer driver verified against the OCAML SEED (not the canonical Pep lexer, so the two oracles are independent) — 5/5 claims HELD.** E1 code+offset parity on 8 lexer fixtures (`PEP_UNEXPECTED_CHARACTER` incl. 4-byte emoji and `café`, `PEP_UNTERMINATED_STRING`, `PEP_NEWLINE_IN_STRING`, `PEP_INT_LITERAL_RANGE`, `PEP_INVALID_UTF8@8`); E2 valid sources lex clean (`say("a\0b")`, comment at EOF); **E3 position parity incl. CRLF `2:9` and tab `1:10`** — the cases most likely to break; E4 later-stage refusals stay later-stage (`PEP_UNKNOWN_VARIABLE`/`PEP_PARSE_EXPRESSION` vs driver `ok`). O1: bare `?` = seed `incomplete`, driver `hole`. Two own reporting defects (silent parser-level rows; missing valid-comment fixture) fixed before recording. |
+
+| receipt | one-line |
+|---|---|
 | `PINNED-ROUND-20261103-0c5f12b.md` | **CD3 is closed and gate 15's pack reaches its target state at A1's head.** Frozen probe `chunk_diagnostic_preservation` → `cases=6 claim_falsified=0` and my independent CD3 repro → `HELD`: A1 chose *align* (chunked wording now matches the seed), retiring the open decision I escalated. Unchanged pack on that tree: **`NOT OBSERVED=3 PROVEN=0 INCONCLUSIVE=0`** (`95f4275f…`, `1d0f68db…`, `ac225a7b…`) — all three children green under baseline v2, where v1 could not even measure the first. No regression from slice-4a: `index_cache_adversarial` 9/9, `edge_identity_boundary` 7/7 (no over-refusal), `hostile_chunk_forged_facts` 14/14. **The 66-node row is now the sole known red gate**: `PEP_RUNTIME_STEP_LIMIT` at `2454:8`, unchanged across `abd372c`→`611616b`→`94373fb`→`ba4b057`→`0c5f12b`. Not an acceptance run: no integrated successor exists, so the Frozen Full was deliberately not executed. |
 
 ## Acceptance baseline re-freeze (2026-11-03, Matthew's ruling — option (a))
