@@ -101,3 +101,77 @@ fn scan_int_sum(source: SourceBytes) -> ScanSum {
   }
   return ScanSum { status: "ok", diagnostic: "", count: count, total: total }
 }
+
+// Identifier scanning, the companion to digit scanning: a lexer needs both and should not re-roll
+// either. The slice is taken with `utf8_slice`, so a multi-byte identifier body is returned intact
+// and the reported width is bytes, not characters.
+fn scan_is_ident_start(byte: Int) -> Bool {
+  return (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122) || byte == 95
+}
+
+fn scan_is_ident_continue(byte: Int) -> Bool {
+  return scan_is_ident_start(byte) || scan_is_digit(byte)
+}
+
+type ScanIdent {
+  status: Str,
+  diagnostic: Str,
+  text: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_ident_at(source: SourceBytes, offset: Int) -> ScanIdent {
+  let length = byte_length(source)
+  if !(offset <= length) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan offset is past the end of the source", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  if length <= offset {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan found no identifier at the end of the source", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  if !scan_is_ident_start(byte_at(source, offset)) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan found a non-identifier start byte", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  var current = offset
+  while !(length <= current) && scan_is_ident_continue(byte_at(source, current)) {
+    current = current + 1
+  }
+  return ScanIdent {
+    status: "ok",
+    diagnostic: "",
+    text: utf8_slice(source, offset, current),
+    byteLength: current - offset,
+    nextOffset: current
+  }
+}
+
+// Consumer-shaped entry: count whitespace-separated identifiers, refusing on anything that is neither
+// whitespace nor a valid identifier start. A lexer built on this reports a precise offset instead of
+// skipping silently.
+type ScanCount {
+  status: Str,
+  diagnostic: Str,
+  count: Int,
+  offset: Int
+}
+
+fn scan_ident_count(source: SourceBytes) -> ScanCount {
+  let length = byte_length(source)
+  var offset = 0
+  var count = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      offset = length
+    } else {
+      let scanned = scan_ident_at(source, offset)
+      if scanned.status == "ok" {
+        count = count + 1
+        offset = scanned.nextOffset
+      } else {
+        return ScanCount { status: "unsupported", diagnostic: scanned.diagnostic, count: count, offset: offset }
+      }
+    }
+  }
+  return ScanCount { status: "ok", diagnostic: "", count: count, offset: offset }
+}

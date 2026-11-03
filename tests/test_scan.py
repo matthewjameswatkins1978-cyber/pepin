@@ -30,6 +30,14 @@ fn scan_probe_after_space(offset: Int) -> ScanInt {
 fn scan_probe_sum() -> ScanSum {
   return scan_int_sum(source_bytes())
 }
+
+fn scan_probe_ident(offset: Int) -> ScanIdent {
+  return scan_ident_at(source_bytes(), offset)
+}
+
+fn scan_probe_ident_count() -> ScanCount {
+  return scan_ident_count(source_bytes())
+}
 """
 
 
@@ -38,6 +46,16 @@ def scan_int_record(status, diagnostic, value, next_offset):
         ("status", typed("Str", status)),
         ("diagnostic", typed("Str", diagnostic)),
         ("value", typed("Int", str(value))),
+        ("nextOffset", typed("Int", str(next_offset))),
+    ])
+
+
+def scan_ident_record(status, diagnostic, text, byte_length, next_offset):
+    return typed_record_value("ScanIdent", [
+        ("status", typed("Str", status)),
+        ("diagnostic", typed("Str", diagnostic)),
+        ("text", typed("Str", text)),
+        ("byteLength", typed("Int", str(byte_length))),
         ("nextOffset", typed("Int", str(next_offset))),
     ])
 
@@ -75,6 +93,16 @@ class ScanTests(unittest.TestCase):
                                       "Pep scan found no digits at the end of the source", 0, 0))
         cls._register("pep-scan-sum", "scan_probe_sum", [],
                       scan_sum_record("ok", "", 0, 0))
+        cls._register("pep-scan-ident", "scan_probe_ident", [typed("Int", 0)],
+                      scan_ident_record("unsupported",
+                                        "Pep scan found no identifier at the end of the source", "", 0, 0))
+        cls._register("pep-scan-ident-count", "scan_probe_ident_count", [],
+                      typed_record_value("ScanCount", [
+                          ("status", typed("Str", "ok")),
+                          ("diagnostic", typed("Str", "")),
+                          ("count", typed("Int", "0")),
+                          ("offset", typed("Int", "0")),
+                      ]))
 
     @classmethod
     def _register(cls, tool, function, arguments, expect):
@@ -156,6 +184,32 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(fields["status"]["value"], "ok")
         self.assertEqual(int(fields["value"]["value"]), 17)
         self.assertEqual(int(fields["nextOffset"]["value"]), 4)
+
+
+    def _ident_at(self, payload, offset=0):
+        fields = self._invoke("pep-scan-ident", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], fields["text"]["value"],
+                int(fields["byteLength"]["value"]), int(fields["nextOffset"]["value"]),
+                fields["diagnostic"]["value"])
+
+    def test_identifier_scan_returns_text_width_and_offset(self):
+        status, text, byte_length, next_offset, _ = self._ident_at("alpha_1 beta")
+        self.assertEqual((status, text, byte_length, next_offset), ("ok", "alpha_1", 7, 7))
+
+    def test_identifier_count_skips_space_and_refuses_on_a_digit_start(self):
+        fields = self._invoke("pep-scan-ident-count", "alpha beta_2 gamma", [])
+        self.assertEqual(fields["status"]["value"], "ok")
+        self.assertEqual(int(fields["count"]["value"]), 3)
+
+        refused = self._invoke("pep-scan-ident-count", "alpha 9beta", [])
+        self.assertEqual(refused["status"]["value"], "unsupported")
+        self.assertEqual(int(refused["count"]["value"]), 1, "the count reports how far scanning got")
+        self.assertEqual(int(refused["offset"]["value"]), 6, "and it names the refusing offset")
+
+    def test_identifier_start_must_be_ascii_or_underscore(self):
+        status, _, _, _, diagnostic = self._ident_at("é")
+        self.assertEqual(status, "unsupported")
+        self.assertIn("non-identifier start byte", diagnostic)
 
 
 if __name__ == "__main__":

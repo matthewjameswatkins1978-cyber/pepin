@@ -49,3 +49,32 @@ fn c_int_array(name: Str, nameBytes: Int, source: SourceBytes) -> CArrayInit {
   parts = append(parts, "};")
   return CArrayInit { status: "ok", diagnostic: "", count: count, parts: parts }
 }
+
+// `static const char *<name>[] = { "alpha", "beta", };` built from scanned identifiers. Same consumer
+// contract as the integer array: the emitted text is a fragment, not a translation unit.
+fn c_str_array(name: Str, nameBytes: Int, source: SourceBytes) -> CArrayInit {
+  let length = byte_length(source)
+  var parts: List[Str] = ["static const char *", name, "[] = { "]
+  var offset = 0
+  var count = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      offset = length
+    } else {
+      let scanned = scan_ident_at(source, offset)
+      if scanned.status == "ok" {
+        parts = append(parts, "\"")
+        parts = append(parts, scanned.text)
+        parts = append(parts, "\", ")
+        count = count + 1
+        offset = scanned.nextOffset
+      } else {
+        return c_array_refused(scanned.diagnostic, count)
+      }
+    }
+  }
+  if count == 0 { return c_array_refused("Pep C array initializer needs at least one identifier", 0) } else {}
+  parts = append(parts, "};")
+  return CArrayInit { status: "ok", diagnostic: "", count: count, parts: parts }
+}

@@ -32,6 +32,10 @@ fn c_int_array_probe(name: Str, nameBytes: Int) -> CArrayInit {
 fn scan_sum_probe() -> ScanSum {
   return scan_int_sum(source_bytes())
 }
+
+fn c_str_array_probe(name: Str, nameBytes: Int) -> CArrayInit {
+  return c_str_array(name, nameBytes, source_bytes())
+}
 """
 
 
@@ -84,6 +88,10 @@ class CInitTests(unittest.TestCase):
                           ("count", typed("Int", "0")),
                           ("total", typed("Int", "0")),
                       ]))
+        cls._register("pep-c-str-array", "c_str_array_probe",
+                      [typed("Str", "pep_names"), typed("Int", "9")],
+                      array_record("unsupported",
+                                   "Pep C array initializer needs at least one identifier", 0))
 
     @classmethod
     def _register(cls, tool, function, arguments, expect):
@@ -174,6 +182,51 @@ class CInitTests(unittest.TestCase):
         self.assertEqual(status, "unsupported")
         self.assertEqual(count, 2, "the count reports how far scanning got")
         self.assertEqual(parts, [], "a refused declaration emits no text at all")
+
+
+    def test_generated_string_array_compiles_and_runs_under_clang_and_gcc(self):
+        """Identifiers scanned from the document become a C string array that actually executes."""
+        payload = "alpha beta\n"
+        raw = payload.encode("utf-8")
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "ident-payload", "bytes": list(raw)})
+        require(target, "outcome", "ok", "open identifier payload")
+        response = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                      "op": "tool_invoke", "tool": "pep-c-str-array",
+                                      "arguments": [typed("Str", "pep_names"), typed("Int", "9")],
+                                      "semanticTarget": {"document": target["document"],
+                                                         "revision": target["revision"],
+                                                         "entryFunctions": []}})
+        require(response, "outcome", "ok", "invoke string array")
+        fields = {item["name"]: item["value"] for item in response["result"]["fields"]}
+        self.assertEqual(fields["status"]["value"], "ok")
+        self.assertEqual(int(fields["count"]["value"]), 2)
+        text = "".join(part["value"] for part in fields["parts"]["value"])
+        self.assertEqual(text, 'static const char *pep_names[] = { "alpha", "beta", };')
+
+        compilers = [name for name in ("clang", "gcc") if shutil.which(name)]
+        if not compilers:
+            self.skipTest("no C23 compiler on PATH")
+        driver = ('int main(void) {\n'
+                  '  for (size_t index = 0; index < sizeof(pep_names) / sizeof(pep_names[0]); ++index) {\n'
+                  '    printf("%s\\n", pep_names[index]);\n'
+                  '  }\n'
+                  '  return 0;\n'
+                  '}\n')
+        source = pathlib.Path(self.temp.name) / "strings.c"
+        source.write_text("#include <stdint.h>\n#include <stdio.h>\n" + text + "\n" + driver,
+                          encoding="utf-8", newline="\n")
+        for name in compilers:
+            with self.subTest(compiler=name):
+                executable = pathlib.Path(self.temp.name) / f"strings-{name}.exe"
+                built = subprocess.run([shutil.which(name), "-std=c23", "-Wall", "-Wextra",
+                                        "-Wpedantic", "-Werror", "-O2", str(source),
+                                        "-o", str(executable)],
+                                       text=True, capture_output=True, check=False)
+                self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                ran = subprocess.run([str(executable)], text=True, capture_output=True, check=False)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertEqual(ran.stdout, "alpha\nbeta\n")
 
 
 if __name__ == "__main__":
