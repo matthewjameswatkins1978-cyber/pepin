@@ -127,6 +127,12 @@ if ($Mode -eq 'Full') {
     $expectReg   = 'PEP_RUNTIME_STEP_LIMIT'
 }
 
+# Full mode validates the CANDIDATE tree: every probe targets the combined
+# worktree (never the separate lane trees - false-green risk otherwise).
+$a2Label = if ($Mode -eq 'Full') { 'combined candidate' } else { 'A2 line' }
+$a1Label = if ($Mode -eq 'Full') { 'combined candidate' } else { 'A1 line R-baseline' }
+if ($Mode -eq 'Full') { $targetA2 = $wt; $targetA1 = $wt }
+
 # --- combined suites (5 modules, A2 combined set) --------------------------
 $suiteMods = @('tests.test_c23_bounded_emission', 'tests.test_c23_arity', 'tests.test_c23_cli',
                'tests.test_c23_emitter_invariants', 'tests.test_c23_emitter_field_use')
@@ -177,7 +183,7 @@ foreach ($p in $a2Probes) {
     $claimOk = if ($isPerUnit) { $true } else { $sum -match 'claim_falsified=0' }
     $expected = if ($isPerUnit) { 'exit 0 + byte_identity=True' } else { 'exit 0 + claim_falsified=0' }
     $ok = ($r.code -eq 0) -and $claimOk -and $ident
-    Add-Result -Name "probe $p (A2 line)" -Expected $expected -Actual "exit=$($r.code) $sum" `
+    Add-Result -Name "probe $p ($a2Label)" -Expected $expected -Actual "exit=$($r.code) $sum" `
         -Pass $ok -Repro "python verification\probes\$p.py $targetA2"
 }
 
@@ -187,7 +193,7 @@ foreach ($p in $a1Probes) {
     $r = Invoke-Cmd 'python' @((Join-Path $verify "probes\$p.py"), $targetA1) $VerifyRoot
     $sum = Get-Summary $r.text
     $ok = ($r.code -eq 0) -and ($sum -match 'claim_falsified=0')
-    Add-Result -Name "probe $p (A1 line R-baseline)" -Expected 'exit 0 + claim_falsified=0' `
+    Add-Result -Name "probe $p ($a1Label)" -Expected 'exit 0 + claim_falsified=0' `
         -Actual "exit=$($r.code) $sum" -Pass $ok -Repro "python verification\probes\$p.py $targetA1"
 }
 
@@ -195,11 +201,18 @@ foreach ($p in $a1Probes) {
 if ($Mode -eq 'Full') {
     $pr = Invoke-Cmd 'terrorbats' @('pack', 'run', (Join-Path $verify 'bats\agent3-index-gates.yaml'),
             '--repo', $wt, '--json') $VerifyRoot
-    $no = if ($pr.text -match 'NOT OBSERVED') { ([regex]::Matches($pr.text, 'NOT OBSERVED')).Count } else { -1 }
-    $ok = ($pr.code -eq 0) -and ($no -eq 3)
-    Add-Result -Name 'pack run at integrated SHA' -Expected 'exit 0 + NOT OBSERVED = 3' `
-        -Actual "exit=$($pr.code) NOT_OBSERVED_count=$no" -Pass $ok `
-        -Repro 'terrorbats pack run verification\bats\agent3-index-gates.yaml --repo <combined> --json'
+    # Parse the structured summary (a phrase count would match the KEY name
+    # and falsely fail even a perfect run - validated on the pack JSON shape).
+    $no = -1; $prov = -1
+    try {
+        $pj = $pr.text | ConvertFrom-Json
+        $no = $pj.summary.'NOT OBSERVED'
+        $prov = $pj.summary.PROVEN
+    } catch { }
+    $ok = ($pr.code -eq 0) -and ($no -eq 3) -and ($prov -eq 0)
+    Add-Result -Name 'pack run at integrated SHA' -Expected 'exit 0 + summary NOT OBSERVED=3 PROVEN=0' `
+        -Actual "exit=$($pr.code) NOT_OBSERVED=$no PROVEN=$prov" -Pass $ok `
+        -Repro 'terrorbats pack run verification\bats\agent3-index-gates.yaml --repo <combined> --json (parse summary)'
 }
 
 }  # end manifest-guarded block
