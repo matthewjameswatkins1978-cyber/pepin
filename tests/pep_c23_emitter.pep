@@ -4225,8 +4225,17 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     } else {}
   }
   let sectionHeaderCount = length(reversed)
+  // `header` is everything up to here and nothing after it, so it can return before the body loop
+  // runs. Assembling every body only to slice it off is what made a header request cost the whole
+  // program.
+  if part == "header" {
+    return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
+  } else {}
+  // `main` is the epilogue alone; the bodies are not part of it.
+  var functionsToEmit: List[FlatAstNode] = topLevelFunctions
+  if part == "main" { functionsToEmit = [] } else {}
   var sectionFunctionEnds: List[Int] = []
-  for node in topLevelFunctions {
+  for node in functionsToEmit {
     let definition = pep_c23_function_definition(parsed, node, requiresArena)
     if definition.status != "emitted" { return definition } else {}
     for part in definition.sourceParts { reversed = prepend(reversed, part) }
@@ -4253,6 +4262,15 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     reversed = prepend(reversed, "  return 0;\n")
     reversed = prepend(reversed, "}\n")
   }
+  // The epilogue parts are the ones prepended after the last body, i.e. the front of `reversed`.
+  if part == "main" {
+    let epilogueCount = length(reversed) - sectionBodyCount
+    return PepC23Emission {
+      status: "emitted",
+      sourceParts: reverse(pep_c23_take_prefix(reversed, epilogueCount)),
+      diagnostic: ""
+    }
+  } else {}
   let allParts = reverse(reversed)
   var selected: List[Str] = allParts
   if part == "header" {

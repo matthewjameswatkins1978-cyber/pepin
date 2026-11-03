@@ -282,6 +282,31 @@ class BoundedEmissionTests(unittest.TestCase):
                 ids.append(int(fields["id"]["value"]))
         return ids
 
+    def test_header_and_main_do_not_run_the_body_loop(self):
+        """Deterministic form of the boundedness claim, without depending on the step budget.
+
+        A program with an unsupported function body cannot be emitted whole, but its header (types
+        and prototypes) and its epilogue do not depend on any body. If either still assembled the
+        bodies first, both would fail closed with the body's diagnostic instead of emitting.
+        """
+        parsed, checked, semantic = self._prepare(MIXED, "section-boundedness")
+        whole_status, whole_diagnostic, whole_parts = self._section(parsed, checked, semantic, "all")
+        self.assertEqual(whole_status, "unsupported")
+        self.assertIn("scalar or record results", whole_diagnostic)
+        self.assertEqual(whole_parts, [])
+
+        header_status, header_diagnostic, header_parts = self._section(parsed, checked, semantic, "header")
+        self.assertEqual(header_status, "emitted", header_diagnostic)
+        header_text = "".join(header_parts)
+        self.assertIn("int64_t pep_fn_", header_text)
+        self.assertTrue(header_text.endswith(";\n"), "a header ends at the last prototype")
+
+        epilogue_status, epilogue_diagnostic, epilogue_parts = self._section(parsed, checked, semantic, "main")
+        self.assertEqual(epilogue_status, "emitted", epilogue_diagnostic)
+        epilogue_text = "".join(epilogue_parts)
+        self.assertIn("int main(void)", epilogue_text)
+        self.assertNotIn("int64_t pep_fn_", epilogue_text, "the epilogue is not the definitions")
+
     def test_declaration_unit_emits_one_declaration_without_the_header(self):
         """A caller needing one typedef must not have to take the whole header.
 
