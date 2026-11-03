@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## A2 NUL repair verified (2026-11-03 — A2 `68e72bf` → `1164a01`)
+
+| receipt | one-line |
+|---|---|
+| `A2-NUL-REPAIR-VERIFIED-1164a01.md` | **A2's lossless NUL fragments verified at `1164a01` with the same instrument that failed `68e72bf`**: S1–S5 all HELD (`claim_falsified=0`) — `"\0ab"` → `parts ["\0","ab"]`, `"ab\0"` differs, `"\0"` matches seed `00`, so NUL content/count/**position** are recoverable; previously S4 and S5 both FALSIFIED (NUL dropped, positions indistinguishable). Symbol scanner re-run **P1–P5 all HELD** → no regression from the NUL change. Criterion integrity recorded: S4's byte comparison was tightened to *exact* (NUL included) after the repair changed the contract, and the unrepaired pin still fails it — so the change cannot make a broken scanner pass. Fourth instance of the session's "string comparison standing in for a boolean" helper bug disclosed and recorded as a pattern. |
+
 ## Composition stress (2026-11-03 — pins A1 `ba4b057` and `8396b63`, identical)
 
 | receipt | one-line |

@@ -282,7 +282,10 @@ def main():
             scan = scanner.string_at(payload)
             decoded = bytes(int(pair, 16) for pair in (seed["string_bytes"][0].split()
                                                        if seed["string_bytes"] else []))
-            expected_text = decoded.replace(b"\x00", b"")
+            # Exact byte parity, NUL included: once the scanner emits a NUL fragment,
+            # `parts` must reproduce the seed bytes exactly (a stricter claim than the
+            # old NUL-dropping behaviour allowed).
+            expected_text = decoded
             nul_expected = decoded.count(b"\x00")
             joined = "".join(scan["parts"]).encode("utf-8")
             rows.append({"escape": body, "seed_status": seed["status"],
@@ -332,7 +335,7 @@ def main():
         distinct = (positions["\\0ab"]["scan_parts"] != positions["ab\\0"]["scan_parts"]
                     or positions["\\0ab"]["scan_next"] != positions["ab\\0"]["scan_next"])
         record("S5 escaped-NUL position distinguishable", True,
-               "distinct scanner output for leading vs trailing NUL",
+               "distinguishable",
                "distinguishable" if distinct else "INDISTINGUISHABLE",
                json.dumps(positions, sort_keys=True),
                label="HELD" if distinct else "DISCLOSED_GAP")
