@@ -39,6 +39,19 @@ fn text_builder_parts(builder: TextBuilder) -> List[Str] {
   return builder.parts
 }
 
+// Prefer `text_builder_push_span` whenever the text came from a source document: the span width is
+// exact by construction, and a hand-counted width is unverifiable by design because no `Str` -> bytes
+// conversion exists in the seed. A miscount is caught only by a test that compares the total against
+// the joined text, which is exactly how one was caught in this branch.
+//
+// Refusal styles differ on purpose, and callers should choose handling accordingly:
+//  - a reversed span (`end < start`) or a negative width is a SILENT refusal: the builder comes back
+//    unchanged, so check `text_builder_part_count` to notice it;
+//  - a span beyond the source, or one that splits a multi-byte character, is a HARD error raised by
+//    `utf8_slice` (`PEP_RUNTIME_BYTE_RANGE`, `PEP_RUNTIME_BYTE_BOUNDARY`) and aborts the call.
+// An empty span is not a refusal: it appends one empty fragment (`partCount` grows, `byteCount` does
+// not), so a caller that iterates parts will see an empty string rather than nothing.
+//
 // Append a fragment whose UTF-8 width the caller knows exactly. A negative width is refused by
 // returning the builder unchanged rather than letting the byte count run backwards; a caller that
 // cares checks `text_builder_part_count` grew.

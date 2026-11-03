@@ -127,11 +127,16 @@ class TextBuilderTests(unittest.TestCase):
                              cwd=ROOT, text=True, capture_output=True, check=False)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         rows = [json.loads(line) for line in ran.stdout.splitlines() if line.strip().startswith("{")]
-        self.assertEqual(len(rows), 4, rows)
+        self.assertEqual(len(rows), 6, rows)
         self.assertTrue(all(row["ok"] for row in rows), rows)
         self.assertTrue(all(row["roundTrip"] for row in rows), rows)
         self.assertTrue(any(row["characters"] != row["bytes"] for row in rows),
                         "at least one case must show byte width differing from character count")
+        by_case = {row["case"]: row for row in rows}
+        # The two behaviours A3 measured: an empty span still appends one empty part, and a reversed
+        # span is a silent refusal that leaves the builder untouched.
+        self.assertEqual((by_case["empty-span"]["parts"], by_case["empty-span"]["bytes"]), (1, 0))
+        self.assertEqual((by_case["reversed-span"]["parts"], by_case["reversed-span"]["bytes"]), (0, 0))
 
     def test_native_lowering_is_classified_not_assumed(self):
         """Report which of success / refusal / step limit the C23 emitter gives this module."""

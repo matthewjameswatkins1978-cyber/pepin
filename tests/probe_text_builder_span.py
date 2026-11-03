@@ -38,10 +38,15 @@ fn text_builder_span_probe(start: Int, finish: Int) -> PepTextSpanProbe {
 """
 
 CASES = [
-    ("ascii", "abc", 3),
-    ("multibyte", "é", 2),
-    ("embedded-nul", "a\0b", 3),
-    ("multibyte-and-nul", "é\0z", 4),
+    # name, payload, start, end, expectedBytes, expectedParts
+    ("ascii", "abc", 0, 3, 3, 1),
+    ("multibyte", "é", 0, 2, 2, 1),
+    ("embedded-nul", "a\0b", 0, 3, 3, 1),
+    ("multibyte-and-nul", "é\0z", 0, 4, 4, 1),
+    # Two behaviours A3 measured on this path that the interpreter suite cannot reach; pinning them
+    # here means this lane's own suite guards them, not only their adversarial probe.
+    ("empty-span", "abc", 0, 0, 0, 1),
+    ("reversed-span", "abc", 2, 1, 0, 0),
 ]
 
 
@@ -89,7 +94,7 @@ def main():
                                   "tool": "text-builder-span", "document": document, "revision": revision})
         require(activated, "status", "Active", "activate span probe")
 
-        for name, payload, expected_bytes in CASES:
+        for name, payload, start, finish, expected_bytes, expected_parts in CASES:
             raw = payload.encode("utf-8")
             target = session.send({"schemaVersion": 3, "op": "open_bytes", "name": name,
                                    "bytes": list(raw)})
@@ -98,17 +103,20 @@ def main():
                         "entryFunctions": []}
             invoked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
                                     "tool": "text-builder-span",
-                                    "arguments": [typed("Int", 0), typed("Int", len(raw))],
+                                    "arguments": [typed("Int", start), typed("Int", finish)],
                                     "semanticTarget": semantic})
             require(invoked, "outcome", "ok", f"invoke span probe {name}")
             fields = fields_of(invoked)
             byte_count = int(fields["byteCount"]["value"])
             part_count = int(fields["partCount"]["value"])
             fragments = [item["value"] for item in fields["fragments"]["value"]]
+            expected_text = raw[start:finish].decode("utf-8") if start <= finish else ""
             results.append({"case": name, "bytes": byte_count, "expectedBytes": expected_bytes,
-                            "characters": len(payload), "parts": part_count,
-                            "roundTrip": "".join(fragments) == payload,
-                            "ok": byte_count == expected_bytes and "".join(fragments) == payload})
+                            "characters": len(expected_text), "parts": part_count,
+                            "expectedParts": expected_parts,
+                            "roundTrip": "".join(fragments) == expected_text,
+                            "ok": byte_count == expected_bytes and part_count == expected_parts
+                                  and "".join(fragments) == expected_text})
     finally:
         session.close()
 
