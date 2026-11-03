@@ -40,13 +40,26 @@ param(
 $ErrorActionPreference = 'Stop'
 $verify = Join-Path $VerifyRoot 'verification'
 
+# --- acceptance baseline version (Matthew's ruling, option (a): controlled re-freeze) ---
+# v2 is an EXPLICITLY VERSIONED SUCCESSOR of v1, NOT the original unchanged suite.
+# Only one probe's outcome-recognition line changed; claims, bats, gate list,
+# limit budgets and every acceptance expectation are untouched. v1 is preserved
+# byte-for-byte under verification/acceptance/v1 for audit.
+$BaselineVersion = 'v2'
+$BaselineSupersedes = 'v1 runner e5cad4df7884168055bafd9acea08045c0d64d90'
+$BaselineNote = 'verification/acceptance/ACCEPTANCE-BASELINE.md'
+$PreservedBaseline = [ordered]@{
+    'verification/acceptance/v1/run_acceptance_gates.ps1'          = 'e5cad4df7884168055bafd9acea08045c0d64d90'
+    'verification/acceptance/v1/probes/index_cache_adversarial.py' = 'e819607c2f844fd6c213f9df52fd7218b95f9804'
+}
+
 # --- frozen manifest (path -> git blob sha) --------------------------------
 $Manifest = [ordered]@{
     'verification/bats/agent3-index-gates.yaml'                   = 'f6086280bca7115df79d0f412b8f8975f71e3898'
     'verification/bats/index-cache-claims.yaml'                   = '3fe77b42058b83d54697b4c4d2570feccf9993e2'
     'verification/bats/chunk-diagnostic-claims.yaml'              = '204a62bc5315714afaab840307080e76a4c382c4'
     'verification/bats/regression-hole-guard-passes.yaml'         = '3dc134df5ef922f6876e4a5ce212e90550f39aa6'
-    'verification/probes/index_cache_adversarial.py'              = 'e819607c2f844fd6c213f9df52fd7218b95f9804'
+    'verification/probes/index_cache_adversarial.py'              = '688042d7d394144aafb208ff641fb0a26dafd5e2'
     'verification/probes/chunk_diagnostic_preservation.py'        = 'b0ef73686971f230a3a0a4d309a910f44d88c8cf'
     'verification/probes/declaration_emittability_agreement.py'   = 'c5a0dec8627926f2a1b8ff22ea777fbc0702b6c4'
     'verification/probes/prereq_closure_attacks.py'               = 'd2fb7c8020b0f9759c2f5094f9ef80afae031bed'
@@ -98,13 +111,27 @@ foreach ($p in ($Manifest.Keys | Sort-Object)) {
 $manPass = ($drift.Count -eq 0)
 Add-Result -Name 'frozen-manifest (13 entries)' -Expected 'all blob SHAs match' `
     -Actual $(if ($manPass) { '13/13 match' } else { $drift -join '; ' }) -Pass $manPass `
-    -Repro 'git -C <VerifyRoot> hash-object <path> vs BOOT-A3-20261103-002'
-if (-not $manPass) { $FirstFail = 'frozen-manifest'; } else {
+    -Repro 'git -C <VerifyRoot> hash-object <path> vs ACCEPTANCE-BASELINE.md (v2 adopts 688042d7)'
+
+# --- preserved v1 baseline (audit): superseded bytes must stay retrievable ---
+$preserved = @()
+foreach ($p in ($PreservedBaseline.Keys | Sort-Object)) {
+    $file = Join-Path $VerifyRoot ($p -replace '/', [IO.Path]::DirectorySeparatorChar)
+    if (-not (Test-Path $file)) { $preserved += "$p MISSING"; continue }
+    $h = git -C $VerifyRoot hash-object $p
+    if ($h -ne $PreservedBaseline[$p]) { $preserved += "$p actual=$h expected=$($PreservedBaseline[$p])" }
+}
+$presPass = ($preserved.Count -eq 0)
+Add-Result -Name "acceptance baseline $BaselineVersion (supersedes $BaselineSupersedes; v1 preserved for audit)" `
+    -Expected 'v1 archive bytes match e5cad4df (runner) + e819607c (probe)' `
+    -Actual $(if ($presPass) { 'v1 archive intact' } else { $preserved -join '; ' }) -Pass $presPass `
+    -Repro 'git hash-object verification/acceptance/v1/run_acceptance_gates.ps1 verification/acceptance/v1/probes/index_cache_adversarial.py'
+if (-not ($manPass -and $presPass)) { $FirstFail = 'frozen-manifest'; } else {
 
 $head    = git -C $VerifyRoot rev-parse HEAD
 $branch  = git -C $VerifyRoot rev-parse --abbrev-ref HEAD
 $dirty   = @(git -C $VerifyRoot status --short)
-Write-Host "== runner: mode=$Mode verifyRoot head=$($head.Substring(0,8)) branch=$branch dirty=$($dirty.Count) =="
+Write-Host "== runner: baseline=$BaselineVersion mode=$Mode verifyRoot head=$($head.Substring(0,8)) branch=$branch dirty=$($dirty.Count) =="
 
 # pack parse-check (both modes): pack must be valid before any run
 $pc = Invoke-Cmd 'terrorbats' @('pack', 'check', (Join-Path $verify 'bats\agent3-index-gates.yaml')) $VerifyRoot
@@ -221,6 +248,9 @@ if ($Mode -eq 'Full') {
 $overall = (-not $FirstFail)
 $out = [pscustomobject]@{
     runner        = 'verification/tools/run_acceptance_gates.ps1'
+    baseline      = $BaselineVersion
+    baseline_supersedes = $BaselineSupersedes
+    baseline_note = $BaselineNote
     mode          = $Mode
     generated_utc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     verify_head   = $head

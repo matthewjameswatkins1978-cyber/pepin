@@ -84,8 +84,16 @@ misfire. `per_unit_cost_baseline.py` does not use the pattern at all.
 
 ## Boundaries
 
-- No frozen artifact modified: probe restored to pinned bytes, runner blob unchanged
-  (`e5cad4df7884168055bafd9acea08045c0d64d90`), manifest 13/13 verified by `git hash-object`.
+- **RESOLVED 2026-11-03 — Matthew's ruling, option (a), controlled re-freeze.** The one-line fix was
+  adopted as `verification/probes/index_cache_adversarial.py` (`e819607c` → `688042d7`) with the runner
+  manifest updated, publishing baseline **v2** (runner `b464e00e`). v1 is preserved byte-for-byte in
+  `verification/acceptance/v1/` and re-verified by the runner on every run; see
+  `verification/acceptance/ACCEPTANCE-BASELINE.md` and `verification/acceptance/v1/BASELINE-v1.md`.
+  v2 is **not** the original unchanged suite and must not be described as one. No exemption granted.
+  Measured after adoption: bat `index-cache-claims` = `NOT OBSERVED` at `ba4b057`
+  (`receipt:sha256:395ceef5…`) and `PROVEN` at `8396b63` (`receipt:sha256:8e71e23c…`).
+- At the time of writing (before the ruling), no frozen artifact was modified: probe restored to
+  pinned bytes, runner blob `e5cad4df`, manifest 13/13 verified by `git hash-object`.
 - No bat, claim, expectation, budget, limit or gate definition changed.
 - The pinned probe copy used for the measurement was materialised from `356a14e` into a temp path
   (hash verified `e819607c…`), never written back over the working tree.

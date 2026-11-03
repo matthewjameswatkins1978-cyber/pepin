@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## Acceptance baseline re-freeze (2026-11-03, Matthew's ruling — option (a))
+
+| record | one-line |
+|---|---|
+| `verification/acceptance/ACCEPTANCE-BASELINE.md` | **Acceptance baseline is now v2 — an explicitly versioned successor to v1, NOT the original unchanged suite.** Authorised by Matthew (option (a), controlled re-freeze; no exemption). Only one line changed: the frozen IDX3 probe now recognises a correct refusal (`688042d7`, was `e819607c`). Claims, bats, gate list, budgets and every expectation — including the 66-node regression, `PROVEN=0`, `NOT OBSERVED=3`, 15/15 and exit 0 — are untouched. New runner blob `b464e00e` (supersedes `e5cad4df`) adds `$BaselineVersion`, carries the adopted probe hash, and verifies the archived v1 bytes on every run. **v1 preserved byte-for-byte** in `verification/acceptance/v1/` (runner `e5cad4df`, probe `e819607c`, verbatim 13-entry manifest, defect record). Validated: manifest 13/13 ok + new baseline gate ok + `baseline=v2` in the header; the re-frozen gate now discriminates — bat `index-cache-claims` gives **NOT OBSERVED** at repaired `ba4b057` (`receipt:sha256:395ceef5…`) and **PROVEN** at unrepaired `8396b63` (`receipt:sha256:8e71e23c…`). The 66-node regression remains a separate, unmoved blocker: re-freezing a test cannot make an exhausted checker work. |
+
 ## Findings — A1 line (2026-11-03)
 
 | receipt | one-line |
