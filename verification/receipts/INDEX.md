@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## Pinned rounds (2026-11-03 — A1 `0c5f12b`, A2 `cf02095`, `1164a01`)
+
+| receipt | one-line |
+|---|---|
+| `PINNED-ROUND-20261103-0c5f12b.md` | **CD3 is closed and gate 15's pack reaches its target state at A1's head.** Frozen probe `chunk_diagnostic_preservation` → `cases=6 claim_falsified=0` and my independent CD3 repro → `HELD`: A1 chose *align* (chunked wording now matches the seed), retiring the open decision I escalated. Unchanged pack on that tree: **`NOT OBSERVED=3 PROVEN=0 INCONCLUSIVE=0`** (`95f4275f…`, `1d0f68db…`, `ac225a7b…`) — all three children green under baseline v2, where v1 could not even measure the first. No regression from slice-4a: `index_cache_adversarial` 9/9, `edge_identity_boundary` 7/7 (no over-refusal), `hostile_chunk_forged_facts` 14/14. **The 66-node row is now the sole known red gate**: `PEP_RUNTIME_STEP_LIMIT` at `2454:8`, unchanged across `abd372c`→`611616b`→`94373fb`→`ba4b057`→`0c5f12b`. Not an acceptance run: no integrated successor exists, so the Frozen Full was deliberately not executed. |
+
 ## Acceptance baseline re-freeze (2026-11-03, Matthew's ruling — option (a))
 
 | record | one-line |
