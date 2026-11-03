@@ -50,6 +50,26 @@ fn scan_probe_sym(offset: Int) -> ScanSym {
 fn scan_probe_sym_count() -> ScanSymCount {
   return scan_sym_count(source_bytes())
 }
+
+fn scan_probe_comment(offset: Int) -> ScanComment {
+  return scan_comment_at(source_bytes(), offset)
+}
+
+fn scan_probe_hole(offset: Int) -> ScanHole {
+  return scan_hole_at(source_bytes(), offset)
+}
+
+fn scan_probe_utf8() -> ScanUtf8 {
+  return scan_utf8_valid(source_bytes())
+}
+
+fn scan_probe_pos(offset: Int) -> ScanPos {
+  return scan_position_at(source_bytes(), offset)
+}
+
+fn scan_probe_kind(offset: Int) -> ScanKind {
+  return scan_classify(source_bytes(), offset)
+}
 """
 
 
@@ -141,6 +161,43 @@ class ScanTests(unittest.TestCase):
                           ("count", typed("Int", "0")),
                           ("offset", typed("Int", "0")),
                       ]))
+        cls._register("pep-scan-comment", "scan_probe_comment", [typed("Int", 0)],
+                      typed_record_value("ScanComment", [
+                          ("status", typed("Str", "unsupported")),
+                          ("diagnostic", typed("Str",
+                                               "Pep scan found no comment at the end of the source")),
+                          ("byteLength", typed("Int", "0")),
+                          ("nextOffset", typed("Int", "0")),
+                      ]))
+        cls._register("pep-scan-hole", "scan_probe_hole", [typed("Int", 0)],
+                      typed_record_value("ScanHole", [
+                          ("status", typed("Str", "unsupported")),
+                          ("diagnostic", typed("Str",
+                                               "Pep scan found no hole marker at the end of the source")),
+                          ("name", typed("Str", "")),
+                          ("byteLength", typed("Int", "0")),
+                          ("nextOffset", typed("Int", "0")),
+                      ]))
+        cls._register("pep-scan-utf8", "scan_probe_utf8", [],
+                      typed_record_value("ScanUtf8", [
+                          ("valid", typed("Bool", True)),
+                          ("errorOffset", typed("Int", "-1")),
+                      ]))
+        cls._register("pep-scan-pos", "scan_probe_pos", [typed("Int", 0)],
+                      typed_record_value("ScanPos", [
+                          ("status", typed("Str", "ok")),
+                          ("diagnostic", typed("Str", "")),
+                          ("line", typed("Int", "1")),
+                          ("column", typed("Int", "1")),
+                      ]))
+        cls._register("pep-scan-kind", "scan_probe_kind", [typed("Int", 0)],
+                      typed_record_value("ScanKind", [
+                          ("status", typed("Str", "ok")),
+                          ("diagnostic", typed("Str", "")),
+                          ("kind", typed("Str", "eof")),
+                          ("byteLength", typed("Int", "0")),
+                          ("nextOffset", typed("Int", "0")),
+                      ]))
 
     @classmethod
     def _register(cls, tool, function, arguments, expect):
@@ -165,7 +222,7 @@ class ScanTests(unittest.TestCase):
         cls.session.close()
 
     def _invoke(self, tool, payload, arguments):
-        raw = payload.encode("utf-8")
+        raw = payload if isinstance(payload, bytes) else payload.encode("utf-8")
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                     "name": f"payload-{len(raw)}", "bytes": list(raw)})
         require(target, "outcome", "ok", "open payload")
@@ -486,6 +543,116 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(fields["status"]["value"], "unsupported")
         self.assertEqual(int(fields["count"]["value"]), 1, "one symbol before the refusal")
         self.assertEqual(int(fields["offset"]["value"]), 2, "and it names the refusing offset")
+
+
+    def _comment_at(self, payload, offset=0):
+        fields = self._invoke("pep-scan-comment", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], int(fields["byteLength"]["value"]),
+                int(fields["nextOffset"]["value"]), fields["diagnostic"]["value"])
+
+    def _hole_at(self, payload, offset=0):
+        fields = self._invoke("pep-scan-hole", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], fields["name"]["value"],
+                int(fields["byteLength"]["value"]), int(fields["nextOffset"]["value"]),
+                fields["diagnostic"]["value"])
+
+    def _utf8(self, payload):
+        fields = self._invoke("pep-scan-utf8", payload, [])
+        return (fields["valid"]["value"], int(fields["errorOffset"]["value"]))
+
+    def _pos(self, payload, offset=0):
+        fields = self._invoke("pep-scan-pos", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], int(fields["line"]["value"]),
+                int(fields["column"]["value"]), fields["diagnostic"]["value"])
+
+    def _kind(self, payload, offset=0):
+        fields = self._invoke("pep-scan-kind", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], fields["kind"]["value"],
+                int(fields["byteLength"]["value"]), int(fields["nextOffset"]["value"]),
+                fields["diagnostic"]["value"])
+
+    def test_comment_runs_to_the_newline_and_leaves_it(self):
+        # Measured: a full-line comment before `let a = 1;` puts that statement at line 2 column 1.
+        status, byte_length, next_offset, _ = self._comment_at("# trailing words")
+        self.assertEqual((status, byte_length, next_offset), ("ok", 16, 16))
+        status, byte_length, next_offset, _ = self._comment_at("// ab\ncd")
+        self.assertEqual((status, byte_length, next_offset), ("ok", 5, 5), "stops AT the newline")
+        status, _, _, diagnostic = self._comment_at("plain")
+        self.assertEqual(status, "unsupported")
+        self.assertIn("no comment", diagnostic)
+
+    def test_double_slash_is_a_comment_but_a_lone_slash_is_division(self):
+        # Measured: `let a = 6 / 2;` checks valid, so a single slash must classify as a symbol.
+        status, kind, byte_length, _, _ = self._kind("// x")
+        self.assertEqual((status, kind, byte_length), ("ok", "comment", 4))
+        status, kind, byte_length, next_offset, _ = self._kind("/")
+        self.assertEqual((status, kind, byte_length, next_offset), ("ok", "symbol", 1, 1))
+
+    def test_hole_scanning_matches_the_seed_shapes(self):
+        # Measured against check --json: bare `?` is a 1-byte unnamed hole; `?name` spans 5 bytes;
+        # `?9` is a 1-byte bare hole followed by the number 9.
+        status, name, byte_length, _, _ = self._hole_at("?")
+        self.assertEqual((status, name, byte_length), ("ok", "", 1))
+        status, name, byte_length, _, _ = self._hole_at("?name")
+        self.assertEqual((status, name, byte_length), ("ok", "name", 5))
+        status, name, byte_length, _, _ = self._hole_at("?9")
+        self.assertEqual((status, name, byte_length), ("ok", "", 1), "a digit does not join the name")
+        status, name, byte_length, _, _ = self._hole_at("?_x9")
+        self.assertEqual((status, name, byte_length), ("ok", "_x9", 4))
+        status, _, _, _, diagnostic = self._hole_at("x")
+        self.assertEqual(status, "unsupported")
+        self.assertIn("no hole marker", diagnostic)
+
+    def test_utf8_validation_reproduces_the_seed_offsets(self):
+        # Measured PEP_INVALID_UTF8 offsets for these exact byte strings: 15, 16, 15, 15, and a
+        # truncated lead at end of source reports at its own offset (3), all via pep.ps1 check.
+        pre = b"let a = [1, 2, "
+        self.assertEqual(self._utf8(pre + b"\x80" + b"];"), (False, 15),
+                         "raw continuation byte at its own offset")
+        self.assertEqual(self._utf8(pre + b"\xc3" + b"];"), (False, 16),
+                         "non-continuation after a lead reports at that byte")
+        self.assertEqual(self._utf8(pre + b"\xc0\x80" + b"];"), (False, 15), "overlong at the lead")
+        self.assertEqual(self._utf8(pre + b"\xf8\x88\x80\x80\x80" + b"];"), (False, 15),
+                         "width-0 lead at the lead")
+        self.assertEqual(self._utf8(pre + b"\xed\xa0\x80" + b"];"), (False, 15),
+                         "UTF-16 surrogate sequence reported at its lead")
+        self.assertEqual(self._utf8(b"abc\xc3"), (False, 3), "truncated lead at end of source")
+        self.assertEqual(self._utf8(pre + b"\xc3\xa9" + b"];"), (True, -1), "valid e-acute passes")
+        self.assertEqual(self._utf8(b""), (True, -1))
+
+    def test_position_tracking_matches_measured_seed_spans(self):
+        crlf = "let a = 1\r\nlet b = <;"
+        cr = "let a = 1\rlet b = <;"
+        # Measured: the same error byte reports line 2 column 9 under CRLF but line 1 column 20
+        # under a lone CR -- only byte 10 starts a line.
+        self.assertEqual(self._pos(crlf, 19), ("ok", 2, 9, ""))
+        self.assertEqual(self._pos(cr, 19), ("ok", 1, 20, ""))
+        # Measured EOF spans: `let a =` errors at line 1 column 8; `let a =\n` at line 2 column 1.
+        self.assertEqual(self._pos("let a =", 7), ("ok", 1, 8, ""))
+        self.assertEqual(self._pos("let a =\n", 8), ("ok", 2, 1, ""))
+        self.assertEqual(self._pos("", 0), ("ok", 1, 1, ""))
+        status, _, _, diagnostic = self._pos("x", -1)
+        self.assertEqual(status, "unsupported")
+        self.assertIn("negative", diagnostic)
+
+    def test_classify_ladder_names_every_input_class(self):
+        cases = [
+            ("  x", 0, "space", 2, "ok"),
+            ("  x", 2, "identifier", 1, "ok"),
+            ("123", 0, "integer", 3, "ok"),
+            ("99999999999999999999", 0, "integer", 0, "unsupported"),
+            ('"s"', 0, "string", 3, "ok"),
+            ("?h", 0, "hole", 2, "ok"),
+            ("<=", 0, "symbol", 2, "ok"),
+            ("@", 0, "unexpected", 0, "unsupported"),
+            ("# c", 0, "comment", 3, "ok"),
+            ("", 0, "eof", 0, "ok"),
+        ]
+        for payload, offset, expected_kind, expected_length, expected_status in cases:
+            with self.subTest(payload=payload, offset=offset):
+                status, kind, byte_length, _, _ = self._kind(payload, offset)
+                self.assertEqual((status, kind, byte_length),
+                                 (expected_status, expected_kind, expected_length))
 
 
 if __name__ == "__main__":

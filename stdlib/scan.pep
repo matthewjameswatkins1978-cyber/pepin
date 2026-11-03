@@ -428,3 +428,248 @@ fn scan_sym_count(source: SourceBytes) -> ScanSymCount {
   }
   return ScanSymCount { status: "ok", diagnostic: "", count: count, offset: offset }
 }
+
+// --- Token input coverage: comments, holes, UTF-8 validation, position tracking, classification.
+//
+// Every rule below was measured against the seed before writing: `#` and `//` start a comment that
+// stops BEFORE the newline and a lone `/` is division (`6 / 2` checks valid); `?` carries a name
+// only when the byte after it is an identifier start (`?9` is a bare hole then the number 9);
+// source UTF-8 is validated with the seed's exact width/minimum/surrogate rules BEFORE any token
+// is read (measured PEP_INVALID_UTF8 offsets: a raw continuation byte is reported at its own
+// offset, a non-continuation after a lead at that non-continuation byte, overlong and width-0
+// leads at the lead); line/column advance is byte-based -- every byte increments the column and
+// ONLY `\n` resets it. Measured: the error byte in `let a = 1;\rlet b = <;` reports line 1 column
+// 20 (a lone CR is NOT a line break), while CRLF reports line 2 column 9, and EOF reports the
+// position AFTER all consumed whitespace (`let a =` -> line 1 column 8; `let a =\n` -> line 2
+// column 1).
+
+type ScanComment {
+  status: Str,
+  diagnostic: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_comment_refused(diagnostic: Str, offset: Int) -> ScanComment {
+  return ScanComment { status: "unsupported", diagnostic: diagnostic, byteLength: 0, nextOffset: offset }
+}
+
+// Consume a comment and stop AT the newline (or at end of source), exactly like the seed's
+// `while source.[i] <> '\n'` loop: the newline itself is left for the whitespace pass.
+fn scan_comment_at(source: SourceBytes, offset: Int) -> ScanComment {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_comment_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_comment_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_comment_refused("Pep scan found no comment at the end of the source", offset) } else {}
+  let head = byte_at(source, offset)
+  var starts = false
+  if head == 35 { starts = true } else {}
+  if head == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47 { starts = true } else {}
+  if !starts { return scan_comment_refused("Pep scan found no comment at this offset", offset) } else {}
+  var current = offset
+  while !(length <= current) && !(byte_at(source, current) == 10) {
+    current = current + 1
+  }
+  return ScanComment { status: "ok", diagnostic: "", byteLength: current - offset, nextOffset: current }
+}
+
+type ScanHole {
+  status: Str,
+  diagnostic: Str,
+  name: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_hole_refused(diagnostic: Str, offset: Int) -> ScanHole {
+  return ScanHole { status: "unsupported", diagnostic: diagnostic, name: "", byteLength: 0, nextOffset: offset }
+}
+
+// `?` alone (or before a non-identifier byte) is an unnamed hole; `?name` carries the name. The
+// seed requires an identifier-start byte directly after `?`, so `?9` is a bare hole followed by
+// the number 9, and the name slice is pure ASCII by construction.
+fn scan_hole_at(source: SourceBytes, offset: Int) -> ScanHole {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_hole_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_hole_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_hole_refused("Pep scan found no hole marker at the end of the source", offset) } else {}
+  if !(byte_at(source, offset) == 63) {
+    return scan_hole_refused("Pep scan found no hole marker at this offset", offset)
+  } else {}
+  var current = offset + 1
+  var name = ""
+  if !(length <= current) && scan_is_ident_start(byte_at(source, current)) {
+    current = current + 1
+    while !(length <= current) && scan_is_ident_continue(byte_at(source, current)) {
+      current = current + 1
+    }
+    name = utf8_slice(source, offset + 1, current)
+  } else {}
+  return ScanHole { status: "ok", diagnostic: "", name: name, byteLength: current - offset, nextOffset: current }
+}
+
+type ScanUtf8 {
+  valid: Bool,
+  errorOffset: Int
+}
+
+// The seed's `invalid_utf8_offset`, ported without bitwise operators: the continuation test uses
+// range 128..191 (the seed `(byte land 0xc0) = 0x80`) and the low lead masks use division. Checks, in seed order: width ladder
+// (a continuation byte or a lead above 0xF7 has width 0), truncation, first non-continuation
+// byte, then overlong / above-0x10ffff / UTF-16-surrogate code points at the lead byte.
+fn scan_utf8_valid(source: SourceBytes) -> ScanUtf8 {
+  let length = byte_length(source)
+  var i = 0
+  while !(length <= i) {
+    let head = byte_at(source, i)
+    if !(128 <= head) {
+      i = i + 1
+    } else {
+      var width = 0
+      var minimum = 0
+      var codepoint = 0
+      if 192 <= head && head <= 223 {
+        width = 2
+        minimum = 128
+        codepoint = head - (head / 32) * 32
+      } else {}
+      if 224 <= head && head <= 239 {
+        width = 3
+        minimum = 2048
+        codepoint = head - (head / 16) * 16
+      } else {}
+      if 240 <= head && head <= 247 {
+        width = 4
+        minimum = 65536
+        codepoint = head - (head / 8) * 8
+      } else {}
+      if width == 0 || !(width <= length - i) {
+        return ScanUtf8 { valid: false, errorOffset: i }
+      } else {}
+      var bad = -1
+      var j = 1
+      while !(width <= j) {
+        let nextByte = byte_at(source, i + j)
+        let isContinuation = 128 <= nextByte && nextByte <= 191
+        if !isContinuation {
+          if bad == -1 { bad = i + j } else {}
+        } else {
+          codepoint = codepoint * 64 + (nextByte - (nextByte / 64) * 64)
+        }
+        j = j + 1
+      }
+      if !(bad == -1) { return ScanUtf8 { valid: false, errorOffset: bad } } else {}
+      if !(minimum <= codepoint) || 1114112 <= codepoint || (55296 <= codepoint && codepoint <= 57343) {
+        return ScanUtf8 { valid: false, errorOffset: i }
+      } else {}
+      i = i + width
+    }
+  }
+  return ScanUtf8 { valid: true, errorOffset: -1 }
+}
+
+type ScanPos {
+  status: Str,
+  diagnostic: Str,
+  line: Int,
+  column: Int
+}
+
+// Byte-based position at `offset`, seed rules: start at line 1 column 1, every byte advances the
+// column, and only byte 10 starts a new line at column 1; a lone CR is an ordinary byte. Calling
+// this at byte_length yields the seed's EOF position once whitespace has been consumed.
+fn scan_position_at(source: SourceBytes, offset: Int) -> ScanPos {
+  let length = byte_length(source)
+  if !(0 <= offset) {
+    return ScanPos { status: "unsupported", diagnostic: "Pep scan offset is negative", line: 1, column: 1 }
+  } else {}
+  if !(offset <= length) {
+    return ScanPos { status: "unsupported", diagnostic: "Pep scan offset is past the end of the source", line: 1, column: 1 }
+  } else {}
+  var line = 1
+  var column = 1
+  var i = 0
+  while !(offset <= i) {
+    if byte_at(source, i) == 10 {
+      line = line + 1
+      column = 1
+    } else {
+      column = column + 1
+    }
+    i = i + 1
+  }
+  return ScanPos { status: "ok", diagnostic: "", line: line, column: column }
+}
+
+type ScanKind {
+  status: Str,
+  diagnostic: Str,
+  kind: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_kind_refused(diagnostic: Str, offset: Int) -> ScanKind {
+  return ScanKind { status: "unsupported", diagnostic: diagnostic, kind: "", byteLength: 0, nextOffset: offset }
+}
+
+// The seed's classification ladder as one callable step: whitespace, comment, identifier,
+// integer, string, hole, symbol, unexpected -- and `eof` at end of source, which is what the
+// driver turns into the EOF token. The span is exactly what consuming that input consumes. Input
+// whose scan FAILS (unterminated string, overflowing integer, unexpected byte) comes back
+// unsupported with its kind still named, so a driver can report the class that failed. Source
+// UTF-8 is validated separately BEFORE the ladder, exactly as the seed validates before lexing.
+fn scan_classify(source: SourceBytes, offset: Int) -> ScanKind {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_kind_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_kind_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset {
+    return ScanKind { status: "ok", diagnostic: "", kind: "eof", byteLength: 0, nextOffset: offset }
+  } else {}
+  let head = byte_at(source, offset)
+  if scan_is_space(head) {
+    let next = scan_skip_space(source, offset)
+    return ScanKind { status: "ok", diagnostic: "", kind: "space", byteLength: next - offset, nextOffset: next }
+  } else {}
+  let isComment = head == 35 || (head == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47)
+  if isComment {
+    let comment = scan_comment_at(source, offset)
+    return ScanKind { status: comment.status, diagnostic: comment.diagnostic, kind: "comment",
+                      byteLength: comment.byteLength, nextOffset: comment.nextOffset }
+  } else {}
+  if scan_is_ident_start(head) {
+    let ident = scan_ident_at(source, offset)
+    return ScanKind { status: ident.status, diagnostic: ident.diagnostic, kind: "identifier",
+                      byteLength: ident.byteLength, nextOffset: ident.nextOffset }
+  } else {}
+  if scan_is_digit(head) {
+    let number = scan_int_at(source, offset)
+    if number.status == "ok" {
+      return ScanKind { status: "ok", diagnostic: "", kind: "integer",
+                        byteLength: number.nextOffset - offset, nextOffset: number.nextOffset }
+    } else {
+      // On failure nothing is consumed: byteLength is 0 and nextOffset is the digit that refused,
+      // so a driver names the exact position (the seed reports PEP_INT_LITERAL_RANGE over the run).
+      return ScanKind { status: "unsupported", diagnostic: number.diagnostic, kind: "integer",
+                        byteLength: 0, nextOffset: number.nextOffset }
+    }
+  } else {}
+  if head == 34 {
+    let literal = scan_string_at(source, offset)
+    return ScanKind { status: literal.status, diagnostic: literal.diagnostic, kind: "string",
+                      byteLength: literal.byteLength, nextOffset: literal.nextOffset }
+  } else {}
+  if head == 63 {
+    let hole = scan_hole_at(source, offset)
+    return ScanKind { status: hole.status, diagnostic: hole.diagnostic, kind: "hole",
+                      byteLength: hole.byteLength, nextOffset: hole.nextOffset }
+  } else {}
+  let symbol = scan_sym_at(source, offset)
+  if symbol.status == "ok" {
+    return ScanKind { status: "ok", diagnostic: "", kind: "symbol",
+                      byteLength: symbol.byteLength, nextOffset: symbol.nextOffset }
+  } else {
+    return ScanKind { status: "unsupported", diagnostic: symbol.diagnostic, kind: "unexpected",
+                      byteLength: 0, nextOffset: offset }
+  }
+}
