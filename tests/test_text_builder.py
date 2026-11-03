@@ -3,17 +3,20 @@
 The seed cannot measure a `Str` (no length, no conversion to bytes, no concatenation), so a
 fragment's width is supplied by the caller. These tests pin that contract in the interpreter.
 
-Scope note, stated rather than implied: `text_builder_push_span` cannot be tested here.
+Scope note, stated rather than implied: `text_builder_push_span` cannot run in the interpreter.
 `source_bytes()` is authorised only under a host-provided v2 semantic target, and `pep.ps1 run`
-refuses it with `PEP_RUNTIME_SOURCE_CONTEXT` (measured, not assumed), so the span path needs a
-tool-host probe. Until that exists this suite covers the explicit-width path only, including the
-UTF-8 payload case where the caller must supply byte width rather than character count.
+refuses it with `PEP_RUNTIME_SOURCE_CONTEXT` (measured, not assumed). The span path is therefore
+covered twice over: one test pins that refusal so nobody mistakes the interpreter suite for coverage,
+and another runs `tests/probe_text_builder_span.py`, which registers this module against the tool host
+and passes ASCII, multi-byte, embedded-NUL and combined payloads as the semantic target.
 
 `pep.ps1 run` executes top-level statements, not `main`, so every probe ends in `say(...)`.
 """
 
+import json
 import pathlib
 import subprocess
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -89,6 +92,22 @@ class TextBuilderTests(unittest.TestCase):
         ran = run_pep(composed.encode("utf-8"), "text_builder_span")
         self.assertEqual(ran.returncode, 1)
         self.assertIn("PEP_RUNTIME_SOURCE_CONTEXT", ran.stdout + ran.stderr)
+
+    def test_span_entry_point_is_covered_through_the_tool_host(self):
+        """The interpreter cannot reach `source_bytes()`, so the span path is proved where it works.
+
+        The probe registers the module against the tool host and passes each payload as the v2
+        semantic target, which is the only context where `source_bytes()` is authorised.
+        """
+        ran = subprocess.run([sys.executable, str(ROOT / "tests" / "probe_text_builder_span.py")],
+                             cwd=ROOT, text=True, capture_output=True, check=False)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        rows = [json.loads(line) for line in ran.stdout.splitlines() if line.strip().startswith("{")]
+        self.assertEqual(len(rows), 4, rows)
+        self.assertTrue(all(row["ok"] for row in rows), rows)
+        self.assertTrue(all(row["roundTrip"] for row in rows), rows)
+        self.assertTrue(any(row["characters"] != row["bytes"] for row in rows),
+                        "at least one case must show byte width differing from character count")
 
     def test_native_lowering_is_classified_not_assumed(self):
         """Report which of success / refusal / step limit the C23 emitter gives this module."""
