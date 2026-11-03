@@ -59,7 +59,7 @@ CONTRACT = {
     "refusals": (
         "CHUNK_VERSION_UNKNOWN", "CHUNK_STALE_REVISION", "CHUNK_INDEX_OUT_OF_RANGE",
         "CHUNK_OUT_OF_ORDER", "CHUNK_REPEATED", "CHUNK_COVERAGE_MISMATCH",
-        "CHUNK_UNKNOWN_NODE", "CHUNK_DUPLICATE_NODE", "CHUNK_MISSING_NODE",
+        "CHUNK_UNKNOWN_NODE", "CHUNK_DUPLICATE_NODE", "CHUNK_DUPLICATE_EDGE", "CHUNK_MISSING_NODE",
         "CHUNK_OPEN_PARENT", "CHUNK_INVALID_PARENT_ORDER", "CHUNK_NEGATIVE_CHILD_INDEX",
         "CHUNK_REPORT_MISMATCH", "CHUNK_REPORT_COUNT_MISMATCH", "CHUNK_REPORT_STATUS_UNKNOWN",
         "CHUNK_UNSUPPLIED_SIGNATURE", "CHUNK_INCOMPLETE",
@@ -142,6 +142,7 @@ def _node_fields(node):
         "id": _int_scalar(fields["id"], "node id"),
         "parentId": _int_scalar(fields["parentId"], "node parentId"),
         "childIndex": _int_scalar(fields["childIndex"], "node childIndex"),
+        "role": _str_scalar(fields["role"], "node role"),
     }
 
 
@@ -159,6 +160,7 @@ class DocumentIndex:
         self.nodes = list(nodes)
         self.parents = {}
         self.children = {}
+        edge_seen = set()
         for node in self.nodes:
             fields = _node_fields(node)
             node_id = fields["id"]
@@ -167,6 +169,12 @@ class DocumentIndex:
                                       f"document lists node {node_id} twice")
             self.parents[node_id] = fields["parentId"]
             self.children.setdefault(fields["parentId"], []).append(node_id)
+            if fields["parentId"] != -1:
+                edge = (fields["parentId"], fields["role"], fields["childIndex"])
+                if edge in edge_seen:
+                    raise ContractRefusal("CHUNK_DUPLICATE_EDGE",
+                                          f"document has two children with parent {edge[0]}, role {edge[1]!r}, childIndex {edge[2]}")
+                edge_seen.add(edge)
         self.ids = tuple(sorted(self.parents))
         if self.ids and self.ids != tuple(range(self.ids[0], self.ids[0] + len(self.ids))):
             raise ContractRefusal("CHUNK_COVERAGE_MISMATCH",

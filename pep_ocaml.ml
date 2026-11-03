@@ -1696,6 +1696,47 @@ let session_tool_list fields =
       (json_string entry.tool_status) (if entry.tool_status="Active" then "true" else "false")) entries in
   Printf.sprintf "{\"schemaVersion\":3,\"toolProtocolVersion\":%d,\"outcome\":\"ok\",\"operation\":\"tool_list\",\"tools\":[%s]}" protocol (String.concat "," rows)
 
+let session_argument_provenance arg =
+  let rec scan document revision = function
+    | [] -> document, revision
+    | JObject item_fields :: rest ->
+        let document, revision =
+          match session_member item_fields "name", session_member item_fields "value" with
+          | Some (JString "document"), Some (JObject value_fields) ->
+              (match session_member value_fields "type", session_member value_fields "value" with
+               | Some (JString "Str"), Some (JString text) -> Some text, revision
+               | _ -> document, revision)
+          | Some (JString "revision"), Some (JObject value_fields) ->
+              (match session_member value_fields "type", session_member value_fields "value" with
+               | Some (JString "Str"), Some (JString text) -> document, Some text
+               | _ -> document, revision)
+          | _ -> document, revision
+        in
+        scan document revision rest
+    | _ :: rest -> scan document revision rest
+  in
+  match arg with
+  | JObject arg_fields ->
+      (match session_member arg_fields "fields" with
+       | Some (JArray items) -> scan None None items
+       | _ -> None, None)
+  | _ -> None, None
+
+let session_refuse_crossed_provenance fields args =
+  match session_member fields "semanticTarget" with
+  | Some (JObject target_fields) ->
+      (match session_member target_fields "document", session_member target_fields "revision" with
+       | Some (JString target_document), Some (JString target_revision) ->
+           List.iter (fun arg ->
+             match session_argument_provenance arg with
+             | Some arg_document, Some arg_revision
+               when arg_document <> target_document || arg_revision <> target_revision ->
+                 raise (Session_error ("PEP_STALE_REVISION",
+                   "Tool arguments derive from a different source revision than the semantic target; re-parse for the target revision"))
+             | _ -> ()) args
+       | _ -> ())
+  | _ -> ()
+
 let session_tool_invoke fields =
   let protocol=session_tool_version fields in
   let name = session_required_string fields "tool" in
@@ -1717,6 +1758,7 @@ let session_tool_invoke fields =
     |Some _ when protocol=1->raise(Session_error("PEP_TOOL_PROTOCOL_MISMATCH","semanticTarget requires tool protocol version 2"))
     |Some target->session_semantic_target checked target
   in
+  let () = session_refuse_crossed_provenance fields args in
   let encoded_result = match entry.tool_function_id,entry.tool_result with
     | Some function_id,Some result_type ->
         let value = execute ~entry:(Some (function_id,values)) ~allow_say:false ~step_limit:tool_step_budget ~max_depth:tool_call_depth_budget ~semantic_snapshot_value:snapshot ~source_bytes_value:source_bytes checked in
