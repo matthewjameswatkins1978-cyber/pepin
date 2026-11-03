@@ -82,6 +82,17 @@ git hash-object verification/acceptance/v1/probes/index_cache_adversarial.py    
 powershell -NoProfile -File verification\tools\run_acceptance_gates.ps1 -Mode Preflight        # baseline gate must pass
 ```
 
+**Fresh-checkout verification (measured, not assumed):** a clean `git worktree add --detach` of the
+re-freeze commit yields `manifest drift 0/13` and exactly the recorded blobs — v2 runner
+`b464e00e61e710023f506b11d6071347823e0270`, v2 probe `688042d7d394144aafb208ff641fb0a26dafd5e2`,
+archived v1 runner `e5cad4df7884168055bafd9acea08045c0d64d90`, archived v1 probe
+`e819607c2f844fd6c213f9df52fd7218b95f9804` — so the manifest check is stable across checkouts on this
+repository's line-ending configuration (`core.autocrlf=true`), with no `.gitattributes` change needed.
+
+**Runtime note:** run the runner under PowerShell 7 (`pwsh -NoProfile -File …`). Windows PowerShell
+5.1 turns a child process's stderr into a terminating error under `$ErrorActionPreference='Stop'`, which
+aborts the run at the first assertion suite — that is a host-shell mismatch, not a gate failure.
+
 ## Next baseline change (if any)
 
 A further re-freeze requires the same three properties Matthew set for this one: **(1)** the test's
