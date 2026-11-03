@@ -282,6 +282,25 @@ class BoundedEmissionTests(unittest.TestCase):
                 ids.append(int(fields["id"]["value"]))
         return ids
 
+    def test_first_refusal_text_matches_emission_for_a_union_of_an_empty_record(self):
+        """CR3: the check must relay the rule emission would actually report first.
+
+        Emission lowers every record before any union, so a source with both an empty record and a
+        union over it fails at the record. A closure-order walk reached the union first and reported
+        its layout rule instead -- verdict right, explanation wrong, which is exactly what a caller
+        would relay to a user.
+        """
+        parsed, checked, semantic = self._prepare(UNION_EMPTY, "union-empty")
+        whole_status, whole_diagnostic, whole_parts = self._section(parsed, checked, semantic, "all")
+        self.assertEqual(whole_status, "unsupported")
+        self.assertIn("empty records", whole_diagnostic)
+        self.assertEqual(whole_parts, [])
+
+        check = self._declarations_check(parsed, semantic, 0)
+        self.assertEqual(check["status"], "unsupported")
+        self.assertEqual(check["diagnostic"], whole_diagnostic,
+                         "the check must report the same first refusal as emission")
+
     def test_header_and_main_do_not_run_the_body_loop(self):
         """Deterministic form of the boundedness claim, without depending on the step budget.
 
@@ -658,6 +677,13 @@ UNION_AND_RECORD = ("type Point { x: Int y: Int }\n"
                     "type Flag = On(Int) | Off(Int)\n"
                     "fn use_point(p: Point) -> Int { return 0 }\n"
                     "fn main() -> Int { return 0 }\n")
+
+# CR3: an empty record reached through a union. Emission refuses at the record (records are lowered
+# before unions) while a closure-order walk blamed the union's layout instead.
+UNION_EMPTY = ("type E2 { }\n"
+               "type U = W(E2)\n"
+               "fn use_u(value: U) -> Int { return 0 }\n"
+               "fn main() -> Int { return 0 }\n")
 
 # An empty record passes the checker but has no C23 lowering, so it is a prerequisite that cannot
 # be emitted. A unit that merely names it in a signature still emits text referencing its typedef.

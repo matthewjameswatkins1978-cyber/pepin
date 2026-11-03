@@ -3540,9 +3540,24 @@ fn pep_c23_unit_declarations_check(nodes: List[FlatAstNode], functionId: Int) ->
   if prerequisites.status != "ok" {
     return PepC23DeclarationCheck { status: prerequisites.status, diagnostic: prerequisites.diagnostic }
   } else {}
-  for id in prerequisites.nodeIds {
-    let check = pep_c23_declaration_check(nodes, id)
-    if check.status != "ok" { return check } else {}
+  // Traversal order has to match emission, not closure discovery (CR3). Emission lowers every
+  // record declaration before any union declaration, each in source order, so the first refusal a
+  // caller actually sees is the lowest-id failing record and only then the lowest-id failing union.
+  // Walking the closure in discovery order reported the union's layout rule for a source whose real
+  // first failure was an empty record: a caller relaying that text would name the wrong rule.
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "record_declaration" &&
+       contains(prerequisites.nodeIds, node.id) {
+      let recordCheck = pep_c23_declaration_check(nodes, node.id)
+      if recordCheck.status != "ok" { return recordCheck } else {}
+    } else {}
+  }
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "union_declaration" &&
+       contains(prerequisites.nodeIds, node.id) {
+      let unionCheck = pep_c23_declaration_check(nodes, node.id)
+      if unionCheck.status != "ok" { return unionCheck } else {}
+    } else {}
   }
   return PepC23DeclarationCheck { status: "ok", diagnostic: "" }
 }
