@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## Findings — A1 line (2026-11-03)
+
+| receipt | one-line |
+|---|---|
+| `REGRESSION-ROW-NOT-FLIPPED-ba4b057.md` | **The frozen `discriminating rows` gate is still red at A1's current head.** New `regression_row_recheck.py` runs the frozen probe's `REGRESSION_FIXTURE` verbatim (`bytes=440 nodes=66`) through the two deciding stages: `8396b63` `PEP_RUNTIME_STEP_LIMIT at 2444:3`; `abd372c` / `611616b` (S2 slice 1) / `94373fb` (S2 slice 2) / **`ba4b057`** all `PEP_RUNTIME_STEP_LIMIT at 2454:8`. So `e36e67d`'s "flip 66n regression" title does not reproduce at any measured pin on its own branch (A1's later #16 comment already says 66n still fails), and the S2 slices move this row **zero steps** — the 10-step offset vs `8396b63` is branch-base, not progress. Integrating `ba4b057` unchanged will still stop the frozen Full at `first_fail: discriminating rows`. |
+
 ## FINDING — acceptance-blocking (2026-11-03)
 
 | receipt | one-line |
