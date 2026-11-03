@@ -3,6 +3,14 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## Host defects + A2 scanner differential (2026-11-03 — pins A1 `8396b63` / A2 `9d4ab42`)
+
+| receipt | one-line |
+|---|---|
+| `HOST-DEFECT-REPROS-8396b63.md` | **The three open defects reduced to one standalone command for A1** (LUCY-20261103-012): `verification/repros/repro_host_defects.py <pinned-worktree>` → IDX3 duplicate child edge **ACCEPTED**, STALE1 crossed provenance answered `ok` with a rev2-labelled **0-node** report, CD3 same `(code, span)` with different wording; exit 1 on each, exit 2 for harness failure. Expected codes handed over explicitly (`CHUNK_DUPLICATE_NODE`/`CHUNK_DUPLICATE_EDGE`, `PEP_SEMANTIC_TARGET_STALE` family, align-or-declare for CD3) with the owner's choice preserved, not imposed. Handoff: `verification/repros/A1-HOST-DEFECT-HANDOFF.md`. No bat/runner/expectation change; acceptance still = repro exit 0 **and** both pack children `PROVEN` → `NOT OBSERVED` on A1's pushed tree. |
+| `A2-SCANNER-DIFFERENTIAL-9d4ab42.md` | **A2 scanner independently differential-tested against the OCaml seed at `9d4ab42`**: Int64 max **accepted** / max+1 **refused** exactly as the seed (which itself refuses `-9223372036854775808` — so the unsigned scanner is the right shape and Lucy's signed-max concern is closed by measurement), negative offsets refuse without raising, 6+2 escape-set parity **HELD**; escaped-NUL **position** is indistinguishable (`"\0ab"` vs `"ab\0"` → identical output) = A2's own disclosure confirmed, not a new defect. Probe: `verification/probes/a2_scanner_differential.py`; 3 own probe bugs found and Threadmoth-repaired pre-recording. |
+| `INDEX-CACHE-adversarial-05add76.md` | *(superseded as a repair artifact by `HOST-DEFECT-REPROS-8396b63.md`; unchanged as the frozen gate)* |
+
 ## Checked-chunk contract (2026-11-02 — A1 `pep-checked-chunk-v1`)
 
 | receipt | one-line |
