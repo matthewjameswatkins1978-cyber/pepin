@@ -42,6 +42,14 @@ fn scan_probe_ident_count() -> ScanCount {
 fn scan_probe_string(offset: Int) -> ScanString {
   return scan_string_at(source_bytes(), offset)
 }
+
+fn scan_probe_sym(offset: Int) -> ScanSym {
+  return scan_sym_at(source_bytes(), offset)
+}
+
+fn scan_probe_sym_count() -> ScanSymCount {
+  return scan_sym_count(source_bytes())
+}
 """
 
 
@@ -116,6 +124,22 @@ class ScanTests(unittest.TestCase):
                           ("byteLength", typed("Int", "0")),
                           ("nextOffset", typed("Int", "0")),
                           ("nulCount", typed("Int", "0")),
+                      ]))
+        cls._register("pep-scan-sym", "scan_probe_sym", [typed("Int", 0)],
+                      typed_record_value("ScanSym", [
+                          ("status", typed("Str", "unsupported")),
+                          ("diagnostic", typed("Str",
+                                               "Pep scan found no symbol at the end of the source")),
+                          ("text", typed("Str", "")),
+                          ("byteLength", typed("Int", "0")),
+                          ("nextOffset", typed("Int", "0")),
+                      ]))
+        cls._register("pep-scan-sym-count", "scan_probe_sym_count", [],
+                      typed_record_value("ScanSymCount", [
+                          ("status", typed("Str", "ok")),
+                          ("diagnostic", typed("Str", "")),
+                          ("count", typed("Int", "0")),
+                          ("offset", typed("Int", "0")),
                       ]))
 
     @classmethod
@@ -312,6 +336,105 @@ class ScanTests(unittest.TestCase):
         string_fields = self._string_fields('"abc"', -1)
         self.assertEqual(string_fields["status"], "unsupported")
         self.assertIn("negative", string_fields["diagnostic"])
+
+
+    def _sym_at(self, payload, offset=0):
+        fields = self._invoke("pep-scan-sym", payload, [typed("Int", offset)])
+        return (fields["status"]["value"], fields["text"]["value"],
+                int(fields["byteLength"]["value"]), int(fields["nextOffset"]["value"]),
+                fields["diagnostic"]["value"])
+
+    def _sym_tokens(self, payload):
+        """Consume symbols the way a driver would: skip ASCII space and scan until a refusal.
+
+        Returns the token texts and the offset of the first refusing byte, or (tokens, None) when
+        the payload was fully consumed."""
+        offset = 0
+        tokens = []
+        while True:
+            while offset < len(payload) and payload[offset] in " \t\r\n":
+                offset += 1
+            if offset >= len(payload):
+                return tokens, None
+            status, text, byte_length, next_offset, _ = self._sym_at(payload, offset)
+            if status != "ok":
+                return tokens, offset
+            tokens.append(text)
+            offset = next_offset
+
+    def test_two_byte_forms_take_exactly_two_bytes(self):
+        for text in ("<=", "==", "!=", "&&", "||", "->", "=>"):
+            status, scanned, byte_length, next_offset, _ = self._sym_at(text)
+            self.assertEqual((status, scanned, byte_length, next_offset), ("ok", text, 2, 2), text)
+
+    def test_lone_angle_brackets_refuse_like_the_seed(self):
+        """Measured against the OCaml seed: `let a = 1 < 2;` fails PEP_UNEXPECTED_CHARACTER at the
+        `<`, because `<` and `>` are not in the seed's single-byte symbol list."""
+        for char in ("<", ">"):
+            status, text, byte_length, next_offset, diagnostic = self._sym_at(char)
+            self.assertEqual(status, "unsupported", char)
+            self.assertEqual((text, byte_length, next_offset), (char, 0, 0), char)
+            self.assertIn("unexpected character", diagnostic, char)
+
+    def test_every_single_byte_symbol_is_accepted(self):
+        for char in "(){}[],:;+-*/=.|&!":
+            status, scanned, byte_length, next_offset, _ = self._sym_at(char)
+            self.assertEqual((status, scanned, byte_length, next_offset), ("ok", char, 1, 1), char)
+
+    def test_maximal_munch_follows_the_seed_precedence(self):
+        tokens, refused_at = self._sym_tokens("<==")
+        self.assertEqual((tokens, refused_at), (["<=", "="], None),
+                         "the pair wins, then the lone = is a single symbol")
+
+        tokens, refused_at = self._sym_tokens("!==")
+        self.assertEqual((tokens, refused_at), (["!=", "="], None),
+                         "the !+= pair wins first, then the trailing = has no partner and is a single symbol")
+
+        tokens, refused_at = self._sym_tokens("==> ")
+        self.assertEqual((tokens, refused_at), (["=="], 2),
+                         "the pair consumes two bytes and the lone > refuses exactly at offset 2")
+
+        tokens, refused_at = self._sym_tokens("->> ")
+        self.assertEqual((tokens, refused_at), (["->"], 2))
+
+        tokens, refused_at = self._sym_tokens("!= >")
+        self.assertEqual((tokens, refused_at), (["!="], 3))
+
+    def test_unexpected_characters_refuse_at_their_own_offset(self):
+        # `?` refusing here is the boundary with the hole scanner (the seed turns it into a Hole
+        # token), not a claim that `?` is invalid Pep.
+        for char in ("`", "@", "%", "^", "~", "?"):
+            status, text, byte_length, next_offset, diagnostic = self._sym_at(" " + char, 1)
+            self.assertEqual(status, "unsupported", char)
+            self.assertEqual((text, byte_length, next_offset), (char, 0, 1), char)
+            self.assertIn("unexpected character", diagnostic, char)
+
+    def test_multibyte_unexpected_character_is_named_without_splitting(self):
+        """A one-byte slice of `é` would raise PEP_RUNTIME_BYTE_BOUNDARY, so the refusal names the
+        whole character instead of splitting it across a UTF-8 sequence."""
+        status, text, byte_length, next_offset, diagnostic = self._sym_at("é")
+        self.assertEqual(status, "unsupported")
+        self.assertEqual((text, byte_length, next_offset), ("é", 0, 0))
+        self.assertIn("unexpected character", diagnostic)
+
+    def test_symbol_scan_bounds_refuse_before_reading(self):
+        status, _, _, _, diagnostic = self._sym_at("()", -1)
+        self.assertEqual(status, "unsupported")
+        self.assertIn("negative", diagnostic)
+        status, _, _, _, diagnostic = self._sym_at("()", 5)
+        self.assertIn("past the end", diagnostic)
+        status, _, _, _, diagnostic = self._sym_at("()", 2)
+        self.assertIn("no symbol at the end", diagnostic)
+
+    def test_symbol_count_consumer_stops_at_the_first_non_symbol(self):
+        fields = self._invoke("pep-scan-sym-count", "( , [ ] )", [])
+        self.assertEqual(fields["status"]["value"], "ok")
+        self.assertEqual(int(fields["count"]["value"]), 5)
+
+        fields = self._invoke("pep-scan-sym-count", "( x )", [])
+        self.assertEqual(fields["status"]["value"], "unsupported")
+        self.assertEqual(int(fields["count"]["value"]), 1, "one symbol before the refusal")
+        self.assertEqual(int(fields["offset"]["value"]), 2, "and it names the refusing offset")
 
 
 if __name__ == "__main__":

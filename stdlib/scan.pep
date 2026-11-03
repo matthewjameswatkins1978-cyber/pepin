@@ -308,3 +308,119 @@ fn scan_ident_count(source: SourceBytes) -> ScanCount {
   }
   return ScanCount { status: "ok", diagnostic: "", count: count, offset: offset }
 }
+
+// Symbol (punctuation and operator) scanning: the lexer input class the seed tracks as `Sym`,
+// beside whitespace, comments, identifiers, integers, quoted literals and holes.
+//
+// Grammar authority is the seed lexer in `pep_ocaml.ml`, and its precedence is unusual enough to
+// state exactly: the seven two-byte forms `<= == != && || -> =>` are tried first, then exactly
+// these single bytes `( ) { } [ ] , : ; + - * / = . | & !`. A lone `<` or `>` is NOT a symbol --
+// measured live against the OCaml seed, where `let a = 1 < 2;` fails PEP_UNEXPECTED_CHARACTER at
+// the `<` -- which is also why every comparison in this file is written `!(b <= a)`. This scanner
+// refuses a lone angle bracket instead of inventing a token the parser does not accept, and `?`
+// belongs to the hole scanner, so refusing it here is a boundary statement, not a grammar claim.
+//
+// "Maximal munch" means the seed's exact precedence, not a general operator table: a pair is
+// consumed only when both bytes match one of the seven forms, otherwise exactly one byte is
+// consumed or the scan refuses at that byte with `byteLength` 0, so a caller can never mistake a
+// refusal for a consumed byte.
+
+type ScanSym {
+  status: Str,
+  diagnostic: Str,
+  text: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_sym_refused(diagnostic: Str, offset: Int) -> ScanSym {
+  return ScanSym { status: "unsupported", diagnostic: diagnostic, text: "", byteLength: 0, nextOffset: offset }
+}
+
+// Name the unexpected character WITHOUT splitting it: ASCII is one byte, a UTF-8 lead byte covers
+// the widths below, and anything else (a continuation byte or a truncated final sequence) gets no
+// text rather than a one-byte slice that would raise PEP_RUNTIME_BYTE_BOUNDARY.
+fn scan_sym_unexpected(source: SourceBytes, offset: Int, head: Int) -> ScanSym {
+  var width = 0
+  if !(128 <= head) { width = 1 } else {}
+  if 192 <= head && head <= 223 { width = 2 } else {}
+  if 224 <= head && head <= 239 { width = 3 } else {}
+  if 240 <= head && head <= 252 { width = 4 } else {}
+  var text = ""
+  if !(width <= 0) && width <= byte_length(source) - offset {
+    text = utf8_slice(source, offset, offset + width)
+  } else {}
+  return ScanSym {
+    status: "unsupported",
+    diagnostic: "Pep scan found an unexpected character",
+    text: text,
+    byteLength: 0,
+    nextOffset: offset
+  }
+}
+
+fn scan_sym_at(source: SourceBytes, offset: Int) -> ScanSym {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_sym_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_sym_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_sym_refused("Pep scan found no symbol at the end of the source", offset) } else {}
+  let head = byte_at(source, offset)
+  var width = 0
+  // The seven two-byte forms, each decided by the pair alone; they cannot overlap on the same
+  // bytes, so the seed's relative check order between them is irrelevant.
+  if !(length <= offset + 1) {
+    let next = byte_at(source, offset + 1)
+    if head == 60 && next == 61 { width = 2 } else {}
+    if head == 61 && next == 61 { width = 2 } else {}
+    if head == 33 && next == 61 { width = 2 } else {}
+    if head == 38 && next == 38 { width = 2 } else {}
+    if head == 124 && next == 124 { width = 2 } else {}
+    if head == 45 && next == 62 { width = 2 } else {}
+    if head == 61 && next == 62 { width = 2 } else {}
+  } else {}
+  if width == 0 {
+    // The seed's single-byte list, byte-for-byte: ( ) { } [ ] , : ; + - * / = . | & !
+    if head == 40 || head == 41 || head == 123 || head == 125 || head == 91 || head == 93 { width = 1 } else {}
+    if head == 44 || head == 58 || head == 59 || head == 43 || head == 45 || head == 42 { width = 1 } else {}
+    if head == 47 || head == 61 || head == 46 || head == 124 || head == 38 || head == 33 { width = 1 } else {}
+  } else {}
+  if width == 0 { return scan_sym_unexpected(source, offset, head) } else {}
+  return ScanSym {
+    status: "ok",
+    diagnostic: "",
+    text: utf8_slice(source, offset, offset + width),
+    byteLength: width,
+    nextOffset: offset + width
+  }
+}
+
+// Consumer-shaped entry: count whitespace-separated symbols, refusing on the first byte that is
+// not one -- the same shape as `scan_ident_count`. A driver built on this reports the precise
+// offset where its input stopped being punctuation instead of skipping silently.
+type ScanSymCount {
+  status: Str,
+  diagnostic: Str,
+  count: Int,
+  offset: Int
+}
+
+fn scan_sym_count(source: SourceBytes) -> ScanSymCount {
+  let length = byte_length(source)
+  var offset = 0
+  var count = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      offset = length
+    } else {
+      let scanned = scan_sym_at(source, offset)
+      if scanned.status == "ok" {
+        count = count + 1
+        offset = scanned.nextOffset
+      } else {
+        return ScanSymCount { status: "unsupported", diagnostic: scanned.diagnostic, count: count, offset: offset }
+      }
+    }
+  }
+  return ScanSymCount { status: "ok", diagnostic: "", count: count, offset: offset }
+}
