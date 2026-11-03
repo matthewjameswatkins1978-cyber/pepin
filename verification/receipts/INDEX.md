@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## FINDING — acceptance-blocking (2026-11-03)
+
+| receipt | one-line |
+|---|---|
+| `FINDING-frozen-probe-false-negative-ba4b057.md` | **The frozen acceptance instrument scores a CORRECT repair as falsified.** Frozen probe `index_cache_adversarial.py` (manifest blob `e819607c`) builds `outcome = "REFUSED" if expect == "any refusal" else …` and then compares it to `expect` — always unequal — so IDX3 reads `FALSIFIED … -> REFUSED (CHUNK_DUPLICATE_EDGE)` at the repaired candidate `ba4b057`, and the unchanged frozen bat reports **`verdict=PROVEN`** (`receipt:sha256:efaa538b…`). Gate 15 requires `PROVEN=0`, so **that child is unachievable at any candidate that repairs IDX3** — the exact candidate the mission waits for. The two acceptance conditions (`runner blob = e5cad4df` and `PROVEN=0/NOT OBSERVED=3`) are jointly unsatisfiable without an owner-authorised re-freeze or exemption, because the manifest literal lives inside the frozen runner and the bat is frozen too. I restored the probe to its pinned bytes (**manifest 13/13, 0 drift**; runner blob still `e5cad4df`) and left the one-line fix unapplied as non-frozen `index_cache_adversarial_v2.py` (blob `688042d7`, exits 0 at `ba4b057` / 1 at `8396b63`). No other frozen probe misfires (prose-expectation pairing is unique to this call site). **Decision needed from Matthew via Lucy**: re-freeze (adopt v2 + update manifest line 49 + new runner blob) or exempt the child for the acceptance run. |
+
 ## A2 NUL repair verified (2026-11-03 — A2 `68e72bf` → `1164a01`)
 
 | receipt | one-line |
