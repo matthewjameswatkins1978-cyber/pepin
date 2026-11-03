@@ -1,4 +1,5 @@
 type PepTypeShape { kind: Str, name: Str, listDepth: Int }
+type ExpressionTypeAndShape { typeName: Str, shape: PepTypeShape }
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
@@ -809,7 +810,170 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   } else {}
   return empty_type_shape()
 }
+fn infer_expression_type_and_shape(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> ExpressionTypeAndShape {
+  if node.kind == "integer" { return ExpressionTypeAndShape { typeName: "Int", shape: PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } } } else {}
+  if node.kind == "boolean" { return ExpressionTypeAndShape { typeName: "Bool", shape: PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } } } else {}
+  if node.kind == "string" { return ExpressionTypeAndShape { typeName: "Str", shape: PepTypeShape { kind: "builtin", name: "Str", listDepth: 0 } } } else {}
+  if node.kind == "name" {
+    let reference = find_reference(references, node.id)
+    if !reference.found { return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    let binding = find_binding(bindings, reference.reference.bindingId)
+    if !binding.found { return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    if binding.binding.typeShape.kind != "" { return ExpressionTypeAndShape { typeName: binding.binding.typeName, shape: binding.binding.typeShape } } else {}
+    let legacyNameShape = legacy_type_shape(nodes, binding.binding.typeName)
+    return ExpressionTypeAndShape { typeName: binding.binding.typeName, shape: legacyNameShape }
+  } else {}
+  if node.kind == "call" {
+    let target = find_function(functions, node.text)
+    if target.found {
+      let targetReturn = target.function.returnType
+      let targetReturnShape = target.function.returnShape
+      if targetReturnShape.kind != "" { return ExpressionTypeAndShape { typeName: targetReturn, shape: targetReturnShape } } else {}
+      let legacyReturn = legacy_type_shape(nodes, targetReturn)
+      return ExpressionTypeAndShape { typeName: targetReturn, shape: legacyReturn }
+    } else {}
+    if node.text == "source_bytes" {
+      let sourceBytesShape = legacy_type_shape(nodes, "SourceBytes")
+      return ExpressionTypeAndShape { typeName: "SourceBytes", shape: sourceBytesShape }
+    } else {}
+    if node.text == "int_text" || node.text == "utf8_slice" {
+      let strShape = legacy_type_shape(nodes, "Str")
+      return ExpressionTypeAndShape { typeName: "Str", shape: strShape }
+    } else {}
+    if node.text == "say" {
+      let unitShape = legacy_type_shape(nodes, "Unit")
+      return ExpressionTypeAndShape { typeName: "Unit", shape: unitShape }
+    } else {}
+    if node.text == "length" || node.text == "byte_length" || node.text == "byte_at" {
+      return ExpressionTypeAndShape { typeName: "Int", shape: PepTypeShape { kind: "builtin", name: "Int", listDepth: 0 } }
+    } else {}
+    if node.text == "byte_slice" {
+      let sliceShape = legacy_type_shape(nodes, "SourceBytes")
+      return ExpressionTypeAndShape { typeName: "SourceBytes", shape: sliceShape }
+    } else {}
+    if node.text == "contains" {
+      return ExpressionTypeAndShape { typeName: "Bool", shape: PepTypeShape { kind: "builtin", name: "Bool", listDepth: 0 } }
+    } else {}
+    if node.text == "append" || node.text == "prepend" || node.text == "reverse" {
+      let collection = child_at(nodes, node.id, "argument", 0)
+      if collection.found {
+        let collectionResult = infer_expression_type_and_shape(nodes, collection.node, functions, bindings, references)
+        if is_constructor(nodes, node.text) {
+          let unionName = constructor_union_type(nodes, node.text)
+          return ExpressionTypeAndShape { typeName: collectionResult.typeName, shape: PepTypeShape { kind: "nominal", name: unionName, listDepth: 0 } }
+        } else {
+          return ExpressionTypeAndShape { typeName: collectionResult.typeName, shape: collectionResult.shape }
+        }
+      } else {
+        return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+      }
+    } else {}
+    if is_constructor(nodes, node.text) {
+      let unionName = constructor_union_type(nodes, node.text)
+      return ExpressionTypeAndShape { typeName: unionName, shape: PepTypeShape { kind: "nominal", name: unionName, listDepth: 0 } }
+    } else {}
+    let fallbackShape = legacy_type_shape(nodes, "")
+    return ExpressionTypeAndShape { typeName: "", shape: fallbackShape }
+  } else {}
+  if node.kind == "binary" {
+    if node.text == "&&" || node.text == "||" || node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" { return ExpressionTypeAndShape { typeName: "Bool", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    return ExpressionTypeAndShape { typeName: "Int", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+  } else {}
+  if node.kind == "unary" {
+    if node.text == "!" { return ExpressionTypeAndShape { typeName: "Bool", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    return ExpressionTypeAndShape { typeName: "Int", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+  } else {}
+  if node.kind == "list" {
+    let expected = contextual_expected_type(nodes, node, functions, bindings, references)
+    let expectedElement = list_element_type(expected)
+    let parent = lookup_node(nodes, node.parentId)
+    let nestedListContext = list_element_type(expectedElement) != "" || (parent.found && parent.node.kind == "list" && node.role == "element") || (parent.found && parent.node.kind == "call" && (parent.node.text == "append" || parent.node.text == "prepend") && node.role == "argument" && node.childIndex == 1)
+    var listName = ""
+    var listNameIsFull = false
+    if expectedElement != "" && (nestedListContext || count_children(nodes, node.id, "element") == 0) {
+      listName = expected
+      listNameIsFull = true
+    } else {}
+    var listElementShape = PepTypeShape { kind: "", name: "", listDepth: 0 }
+    for element in nodes {
+      if element.parentId == node.id && element.role == "element" && element.kind != "hole" && ((!listNameIsFull && listName == "") || listElementShape.kind == "") {
+        let elementResult = infer_expression_type_and_shape(nodes, element, functions, bindings, references)
+        if !listNameIsFull && listName == "" && elementResult.typeName != "" { listName = elementResult.typeName } else {}
+        if listElementShape.kind == "" && elementResult.shape.kind != "" { listElementShape = elementResult.shape } else {}
+      } else {}
+    }
+    if listNameIsFull {
+      let fullShape = with_one_more_list(listElementShape)
+      return ExpressionTypeAndShape { typeName: listName, shape: fullShape }
+    } else {}
+    if listName != "" {
+      let assembledName = list_type_name(listName)
+      let assembledShape = with_one_more_list(listElementShape)
+      return ExpressionTypeAndShape { typeName: assembledName, shape: assembledShape }
+    } else {}
+    let fallthroughShape = with_one_more_list(listElementShape)
+    return ExpressionTypeAndShape { typeName: "", shape: fallthroughShape }
+  } else {}
+  if node.kind == "if_expression" {
+    let expectedIf = contextual_expected_type(nodes, node, functions, bindings, references)
+    let thenBranch = child_at(nodes, node.id, "then", 1)
+    let elseBranch = child_at(nodes, node.id, "else", 2)
+    var thenChecked = ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+    var elseChecked = ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+    if thenBranch.found && (expectedIf == "" || elseBranch.found) { thenChecked = infer_expression_type_and_shape(nodes, thenBranch.node, functions, bindings, references) } else {}
+    if elseBranch.found && (expectedIf == "" || thenBranch.found) { elseChecked = infer_expression_type_and_shape(nodes, elseBranch.node, functions, bindings, references) } else {}
+    var ifName = ""
+    if expectedIf != "" { ifName = expectedIf } else {}
+    if ifName == "" && thenBranch.found && thenChecked.typeName != "" { ifName = thenChecked.typeName } else {}
+    if ifName == "" && elseBranch.found { ifName = elseChecked.typeName } else {}
+    var ifShape = PepTypeShape { kind: "", name: "", listDepth: 0 }
+    if thenBranch.found && elseBranch.found && thenChecked.shape.kind != "" && same_type_shape(thenChecked.shape, elseChecked.shape) { ifShape = thenChecked.shape } else {}
+    return ExpressionTypeAndShape { typeName: ifName, shape: ifShape }
+  } else {}
+  if node.kind == "record" {
+    if record_declaration(nodes, node.text).found { return ExpressionTypeAndShape { typeName: node.text, shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 } } } else {}
+    return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "nominal", name: node.text, listDepth: 0 } }
+  } else {}
+  if node.kind == "field_access" {
+    let value = child_at(nodes, node.id, "value", 0)
+    if !value.found { return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    let valueResult = infer_expression_type_and_shape(nodes, value.node, functions, bindings, references)
+    let fieldName = record_field_type(nodes, valueResult.typeName, node.text)
+    let record = record_declaration(nodes, valueResult.typeName)
+    if !record.found { return ExpressionTypeAndShape { typeName: fieldName, shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    for field in nodes {
+      if field.parentId == record.node.id && field.kind == "field_declaration" && field.text == node.text {
+        let fieldType = child_at(nodes, field.id, "type", 0)
+        if fieldType.found {
+          let fieldShape = type_shape_at(nodes, fieldType.node.id)
+          return ExpressionTypeAndShape { typeName: fieldName, shape: fieldShape }
+        } else {
+          return ExpressionTypeAndShape { typeName: fieldName, shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+        }
+      } else {}
+    }
+    return ExpressionTypeAndShape { typeName: fieldName, shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+  } else {}
+  if node.kind == "match" {
+    let expectedMatch = contextual_expected_type(nodes, node, functions, bindings, references)
+    if expectedMatch != "" { return ExpressionTypeAndShape { typeName: expectedMatch, shape: PepTypeShape { kind: "", name: "", listDepth: 0 } } } else {}
+    var matchResult = ""
+    for arm in nodes {
+      if arm.parentId == node.id && arm.kind == "match_arm" {
+        let result = child_at(nodes, arm.id, "result", 1)
+        if matchResult == "" && result.found {
+          let armResult = infer_expression_type_and_shape(nodes, result.node, functions, bindings, references)
+          if armResult.typeName != "" { matchResult = armResult.typeName } else {}
+        } else {}
+      } else {}
+    }
+    return ExpressionTypeAndShape { typeName: matchResult, shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+  } else {}
+  return ExpressionTypeAndShape { typeName: "", shape: PepTypeShape { kind: "", name: "", listDepth: 0 } }
+}
+
 fn without_one_list(shape: PepTypeShape) -> PepTypeShape {
+
   if shape.listDepth == 0 { return empty_type_shape() } else {}
   return PepTypeShape { kind: shape.kind, name: shape.name, listDepth: shape.listDepth - 1 }
 }
@@ -2105,8 +2269,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else { owner_function(nodes, node, functions) }
       let returned = child_at(nodes, node.id, "value", 0)
       if owner.found && returned.found {
-        let actualReturn = infer_expression_type(nodes, returned.node.id, functions, bindings, references)
-        let actualShape = expression_type_shape(nodes, returned.node.id, functions, bindings, references)
+        let actualReturnChecked = infer_expression_type_and_shape(nodes, returned.node, functions, bindings, references)
+        let actualReturn = actualReturnChecked.typeName
+        let actualShape = actualReturnChecked.shape
         let expectedShape = if owner.function.returnShape.kind != "" { owner.function.returnShape } else { legacy_type_shape(nodes, owner.function.returnType) }
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
         let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, returned.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
@@ -2124,8 +2289,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       if annotation.found && value.found {
         let expected = type_name_at(nodes, annotation.node.id)
         let expectedShape = type_shape_at(nodes, annotation.node.id)
-        let actualInitializer = infer_expression_type(nodes, value.node.id, functions, bindings, references)
-        let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+        let actualChecked = infer_expression_type_and_shape(nodes, value.node, functions, bindings, references)
+        let actualInitializer = actualChecked.typeName
+        let actualShape = actualChecked.shape
         let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
         let listMismatch = if expectedShape.listDepth != 0 { list_mismatch_node(nodes, value.node.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
         if expected == "" || actualInitializer == "" || listMismatch.found {
