@@ -21,6 +21,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 STDLIB = ROOT / "stdlib" / "text_builder.pep"
+C_TEXT = ROOT / "stdlib" / "c_text.pep"
 CONSUMER = ROOT / "tests" / "text_builder_consumer.pep"
 
 
@@ -67,6 +68,29 @@ class TextBuilderTests(unittest.TestCase):
         self.assertEqual(printed[0], str(len(payload.encode("utf-8"))))
         self.assertNotEqual(str(len(payload)), printed[0], "characters and bytes differ for this input")
         self.assertEqual(printed[1], "1")
+
+    def test_c_declaration_consumer_composes_a_named_field_record(self):
+        """stdlib/c_text.pep is a real consumer: exact bytes, exact fragments, no width slipping.
+
+        The expected string is a single-line record declaration in the emitter's shape but with named
+        fields instead of `pep_field_<index>` members. A wrong fragment width shows up as a byte-total
+        or fragment mismatch rather than as plausible C that is quietly one byte off.
+        """
+        module = (STDLIB.read_text(encoding="utf-8") + "\n"
+                  + C_TEXT.read_text(encoding="utf-8") + "\n"
+                  + "let declaration = c_two_int_record(\"ab\", 2, \"x\", 1, \"y\", 1)\n"
+                  + "say(int_text(text_builder_bytes(declaration)))\n"
+                  + "for part in text_builder_parts(declaration) { say(part) }\n")
+        expected = "typedef struct pep_record_ab { int64_t x; int64_t y; } pep_record_ab;"
+        fragments = ["typedef struct pep_record_", "ab", " { ", "int64_t", " ", "x", "; ",
+                     "int64_t", " ", "y", "; ", "} pep_record_", "ab", ";"]
+
+        ran = run_pep(module.encode("utf-8"), "c_text_consumer")
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        printed = lines_of(ran)
+        self.assertEqual(printed[0], str(len(expected)), "byte total must equal the real width")
+        self.assertEqual(printed[1:], fragments)
+        self.assertEqual("".join(fragments), expected)
 
     def test_negative_width_leaves_the_builder_unchanged(self):
         """A caller mistake must not move the byte count backwards silently."""
