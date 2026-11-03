@@ -3,6 +3,12 @@
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
+## A2 lexer differential (2026-11-03 — A2 pins `9d4ab42` → `68e72bf`)
+
+| receipt | one-line |
+|---|---|
+| `A2-SYMBOL-DIFFERENTIAL-68e72bf.md` | **A2's symbol/punctuation scanner at `68e72bf` matches the seed lexer — 5/5 claims HELD**: per-byte parity over all 32 printable non-alphanumeric bytes (accepts exactly the seed's token bytes, refuses `$ % ' < > @ \ ^ ` ~`), all seven two-byte forms (`<= == != && || -> =>`) single tokens on both sides in real program positions, no over-munch across a separator (`- >` → `-`, width 1), refused multi-byte characters named whole (`é`/`€`/`😀`, truncated → empty text, no raise), EOF refusal and CRLF separators (`count=4`). Confirms `?`/`_`/`"`/`#` refusal is correct routing to hole/string/comment scanners, not an omission. Unchanged `a2_scanner_differential.py` re-run at this pin: 4 held, **escaped-NUL position gap unchanged** (`"\0ab"` vs `"ab\0"` identical output) — the one open A2 item. Own-instrument corrections disclosed (valid-status mislabel, `"` initial misclassification), fixed by measuring the seed before claiming. |
+
 ## A1 host repairs verified (2026-11-03 — A1 fix pin `ba4b057`, baseline `8396b63`)
 
 | receipt | one-line |
