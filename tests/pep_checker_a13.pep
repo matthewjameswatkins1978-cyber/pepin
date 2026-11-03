@@ -1886,8 +1886,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 let expected = resolvedFacts.name
                 let expectedShape = resolvedFacts.shape
                 let value = record_field_value(taFieldValues, field.id)
-                let actual = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
-                let actualShape = if value.found { expression_type_shape(nodes, value.node.id, functions, bindings, references) } else { empty_type_shape() }
+                let valueChecked = if value.found { infer_expression_type_and_shape(nodes, value.node, functions, bindings, references) } else { ExpressionTypeAndShape { typeName: "", shape: empty_type_shape() } }
+                let actual = valueChecked.typeName
+                let actualShape = valueChecked.shape
                 let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
                 if expected == "" && expectedShape.kind == "" {
                   fieldDiagnosticFound = true
