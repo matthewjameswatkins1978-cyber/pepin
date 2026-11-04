@@ -61,6 +61,8 @@ def sigs_from_tool(result):
                     "rshape": (rk, rn, int(rd or 0)),
                     "semid": 9000 + i, "synid": 1000000000 + i, "ptypes": params,
                     "id": f.get("functionId", {}).get("value", "0"),
+                    "document": f.get("document", {}).get("value", ""),
+                    "revision": f.get("revision", {}).get("value", ""),
                     "start": "0", "end": "0"})
     return out
 
@@ -181,18 +183,14 @@ def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-check
         # remapped ids of a body chunk and silently loses cross-chunk type
         # checking (measured).
         chunk_sigs[0]["node"] = original_id
-        # Batch-unique synthetic identities (F1, A2 BOOT-A2-20261104-021):
-        # every header chunk numbers its single signature from zero, so
-        # per-header ids collide once headers are aggregated. Renumber
-        # across the whole authorised batch in deterministic source order
-        # and stamp the authorised revision for host-side tracking. The
-        # wire-schema document/revision fields on CheckedFunction and
-        # ResolvedSignature await F2 agreement with A2; these dict keys
-        # never reach the tool wire protocol.
+        # Batch-unique synthetic identities (F1): every header chunk
+        # numbers its single signature from zero, so per-header ids
+        # collide once headers get aggregated. Renumber across the
+        # whole authorised batch in deterministic source order.
+        # document/revision ride the wire schema itself (checker-
+        # stamped at production, F2); no host stamping here.
         chunk_sigs[0]["semid"] = 9000 + batch_index
         chunk_sigs[0]["synid"] = 1000000000 + batch_index
-        chunk_sigs[0]["document"] = sem["document"]
-        chunk_sigs[0]["revision"] = sem["revision"]
         allsigs.extend(chunk_sigs)
     return allsigs
 
@@ -222,7 +220,9 @@ def resolved_sig_value(sig):
         {"name": "returnShape", "value": {"type": "PepTypeShape", "fields": [
             {"name": "kind", "value": T("Str", rsk)},
             {"name": "name", "value": T("Str", rsn)},
-            {"name": "listDepth", "value": T("Int", rsd)}]}}]}
+            {"name": "listDepth", "value": T("Int", rsd)}]}},
+        {"name": "document", "value": T("Str", sig["document"])},
+        {"name": "revision", "value": T("Str", sig["revision"])}]}
 
 def checked_fn_value(sig):
     sk, sn, sd = sig["rshape"]
@@ -237,7 +237,9 @@ def checked_fn_value(sig):
             {"name": "name", "value": T("Str", sn)},
             {"name": "listDepth", "value": T("Int", sd)}]}},
         {"name": "startByte", "value": T("Int", sig["start"])},
-        {"name": "endByte", "value": T("Int", sig["end"])}]}
+        {"name": "endByte", "value": T("Int", sig["end"])},
+        {"name": "document", "value": T("Str", sig["document"])},
+        {"name": "revision", "value": T("Str", sig["revision"])}]}
 
 def slice_subtree(nodes, root_id):
     keep = {str(root_id)}

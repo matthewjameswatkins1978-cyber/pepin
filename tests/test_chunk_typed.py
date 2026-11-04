@@ -72,13 +72,17 @@ def host_builtins(document, revision):
         {"name": "returnType", "value": typed("Str", "ProgramInfo")},
         {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)},
         {"name": "startByte", "value": typed("Int", 0)},
-        {"name": "endByte", "value": typed("Int", 0)}]}
+        {"name": "endByte", "value": typed("Int", 0)},
+        {"name": "document", "value": typed("Str", document)},
+        {"name": "revision", "value": typed("Str", revision)}]}
     sig = {"type": "ResolvedSignature", "fields": [
         {"name": "functionId", "value": typed("Int", 2000000000)},
         {"name": "functionName", "value": typed("Str", "semantic_snapshot")},
         {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": []}},
         {"name": "returnType", "value": typed("Str", "ProgramInfo")},
-        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)}]}
+        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)},
+        {"name": "document", "value": typed("Str", document)},
+        {"name": "revision", "value": typed("Str", revision)}]}
     prog_info = {"type": "ResolvedTypeDecl", "fields": [
         {"name": "typeName", "value": typed("Str", "ProgramInfo")},
         {"name": "typeKind", "value": typed("Str", "record")},
@@ -1010,13 +1014,19 @@ class TypedChunkTests(unittest.TestCase):
     DUP_CALLEE_SOURCE = (b"fn dup(x: Int) -> Int { return x }\n"
                          b"fn main() -> Int { return dup(41) }\n")
 
-    def run_main_with_sigs(self, source, name, sigs):
+    def run_main_with_sigs(self, source, name, transform=None):
+        # Single-target flow: sigs are always fetched from the same
+        # open target as the body chunk (ingress requires identical
+        # document/revision stamps, so mixed-target batches refuse).
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": name, "bytes": list(source)})
         self.assertEqual(target.get("outcome"), "ok", target)
         sem = {"document": target["document"],
                "revision": target["revision"], "entryFunctions": []}
         parsed = parse_target(self.session, source, target, self.tool_revision)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        if transform is not None:
+            sigs = transform(sigs)
         nodes = fields_map(parsed)["nodes"]["value"]
         index = contract.DocumentIndex.from_parsed(parsed)
         bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
@@ -1049,20 +1059,24 @@ class TypedChunkTests(unittest.TestCase):
         _, _, _, whole_status, _ = self.check_whole(
             self.DUP_CALLEE_SOURCE, "e2b-whole")
         self.assertEqual(whole_status, "valid")
-        _, _, sigs = self.fetch_sigs_for(self.DUP_CALLEE_SOURCE, "e2b-sigs")
-        honest = [s for s in sigs if s["name"] == "dup"][0]
-        forged = copy.deepcopy(honest)
-        forged["arity"] = 2
-        forged["rtype"] = "Bool"
-        forged["rshape"] = ("builtin", "Bool", 0)
-        forged["ptypes"] = [("Int", ("builtin", "Int", 0), 0),
-                            ("Int", ("builtin", "Int", 0), 1)]
-        forged["semid"] = 9001
-        forged["synid"] = 1000000001
-        for order, tag in (([honest, forged], "hf"),
-                           ([forged, honest], "fh")):
+        def with_forged(order):
+            def tx(sigs):
+                honest = [s for s in sigs if s["name"] == "dup"]
+                forged = copy.deepcopy(honest[0])
+                forged["arity"] = 2
+                forged["rtype"] = "Bool"
+                forged["rshape"] = ("builtin", "Bool", 0)
+                forged["ptypes"] = [("Int", ("builtin", "Int", 0), 0),
+                                    ("Int", ("builtin", "Int", 0), 1)]
+                forged["semid"] = 9000 + len(sigs)
+                forged["synid"] = 1000000000 + len(sigs)
+                batch = honest + [forged]
+                return batch if order == "hf" else batch[::-1]
+            return tx
+        for tag in ("hf", "fh"):
             status, diags = self.run_main_with_sigs(
-                self.DUP_CALLEE_SOURCE, f"e2b-chunk-{tag}", order)
+                self.DUP_CALLEE_SOURCE, f"e2b-chunk-{tag}",
+                with_forged(tag))
             self.assertEqual(status, "invalid", (tag, diags))
             self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
                                 for code, _, _ in diags), (tag, diags))
@@ -1070,10 +1084,11 @@ class TypedChunkTests(unittest.TestCase):
     def test_identical_duplicate_external_batch_is_refused(self):
         # A3 E2a pinned: identical repeats refuse like contradictions,
         # uniform with the external-type repeat rule.
-        _, _, sigs = self.fetch_sigs_for(self.DUP_CALLEE_SOURCE, "e2a-sigs")
-        dup = [s for s in sigs if s["name"] == "dup"][0]
+        def dup_twice(sigs):
+            dup = [s for s in sigs if s["name"] == "dup"]
+            return dup + [copy.deepcopy(dup[0])]
         status, diags = self.run_main_with_sigs(
-            self.DUP_CALLEE_SOURCE, "e2a-chunk", [dup, copy.deepcopy(dup)])
+            self.DUP_CALLEE_SOURCE, "e2a-chunk", dup_twice)
         self.assertEqual(status, "invalid", diags)
         self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
                             for code, _, _ in diags), diags)
@@ -1084,19 +1099,139 @@ class TypedChunkTests(unittest.TestCase):
         _, _, _, whole_status, _ = self.check_whole(
             self.TWO_CALLEE_SOURCE, "e1-whole")
         self.assertEqual(whole_status, "valid")
-        _, _, sigs = self.fetch_sigs_for(self.TWO_CALLEE_SOURCE, "e1-sigs")
-        ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
-        self.assertEqual(len(ext), 2)
-        for s in ext:
-            s["semid"] = 9000
-            s["synid"] = 1000000000
-        for reverse in (False, True):
-            batch = ext if not reverse else ext[::-1]
+        def collide(sigs):
+            ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["semid"] = 9000
+                s["synid"] = 1000000000
+            return ext
+        def collide_rev(sigs):
+            return collide(sigs)[::-1]
+        for tag, tx in (("fwd", collide), ("rev", collide_rev)):
             status, diags = self.run_main_with_sigs(
-                self.TWO_CALLEE_SOURCE, f"e1-chunk-{reverse}", batch)
-            self.assertEqual(status, "invalid", (reverse, diags))
+                self.TWO_CALLEE_SOURCE, f"e1-chunk-{tag}", tx)
+            self.assertEqual(status, "invalid", (tag, diags))
             self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
-                                for code, _, _ in diags), (reverse, diags))
+                                for code, _, _ in diags), (tag, diags))
+
+    # --- Source-stamped callee facts (G-A1-2, A2-ACKed schema).
+    #
+    # CheckedFunction/ResolvedSignature carry the target document and
+    # revision, stamped at production by the checker. Anything else
+    # refuses fail-closed with PEP_STALE_REVISION.
+
+    def test_external_callee_facts_carry_source_identity(self):
+        sem, _, sigs = self.fetch_sigs_for(self.TWO_CALLEE_SOURCE, "id-stamp")
+        self.assertTrue(len(sigs) >= 2)
+        for s in sigs:
+            self.assertEqual(s["document"], sem["document"])
+            self.assertEqual(s["revision"], sem["revision"])
+            fnv = fields_map(checked_fn_value(s))
+            self.assertEqual(fnv["document"]["value"], sem["document"])
+            self.assertEqual(fnv["revision"]["value"], sem["revision"])
+            sigv = fields_map(resolved_sig_value(s))
+            self.assertEqual(sigv["document"]["value"], sem["document"])
+            self.assertEqual(sigv["revision"]["value"], sem["revision"])
+
+    def test_foreign_stamped_callee_facts_are_refused(self):
+        def foreign_doc(sigs):
+            ext = [copy.deepcopy(s) for s in sigs
+                   if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["document"] = "foreign-doc"
+            return ext
+        status, diags = self.run_main_with_sigs(
+            self.TWO_CALLEE_SOURCE, "id-foreign-doc", foreign_doc)
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_STALE_REVISION"
+                            for code, _, _ in diags), diags)
+        def foreign_rev(sigs):
+            ext = [copy.deepcopy(s) for s in sigs
+                   if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["revision"] = "sha256:deadbeef"
+            return ext
+        status, diags = self.run_main_with_sigs(
+            self.TWO_CALLEE_SOURCE, "id-foreign-rev", foreign_rev)
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_STALE_REVISION"
+                            for code, _, _ in diags), diags)
+
+    def test_stale_revision_callee_facts_are_refused(self):
+        # Facts certified for source A must not validate a chunk of
+        # source B, even when the programs are textually almost identical.
+        src_a = self.TWO_CALLEE_SOURCE
+        src_b = src_a + b"\n"
+        sem_a, _, sigs_a = self.fetch_sigs_for(src_a, "id-stale-a")
+        target_b = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                       "name": "id-stale-b",
+                                       "bytes": list(src_b)})
+        self.assertEqual(target_b.get("outcome"), "ok", target_b)
+        sem_b = {"document": target_b["document"],
+                 "revision": target_b["revision"], "entryFunctions": []}
+        self.assertNotEqual(sem_a["revision"], sem_b["revision"])
+        parsed_b = parse_target(self.session, src_b, target_b, self.tool_revision)
+        nodes = fields_map(parsed_b)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed_b)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        self.assertIn("main", bodies)
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed_b, bodies["main"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_a
+                       if s["name"] in ("add_one", "make_token")]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_a
+                       if s["name"] in ("add_one", "make_token")]},
+            {"type": "List[ResolvedTypeDecl]", "value": []}, sem_b))
+        self.assertEqual(report["status"]["value"], "invalid", report)
+        codes = [code for code, _, _ in diag_tuples(report)]
+        self.assertIn("PEP_STALE_REVISION", codes, codes)
+
+    def test_omitted_stamp_callee_facts_fail_closed(self):
+        # Facts without stamps never reach the checker: the tool boundary
+        # must fail closed instead of checking them as unattested.
+        _, sem, sigs = self.fetch_sigs_for(
+            self.TWO_CALLEE_SOURCE, "id-omitted")
+        ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
+        fns = [checked_fn_value(s) for s in ext]
+        sgs = [resolved_sig_value(s) for s in ext]
+        for v in fns + sgs:
+            fields = fields_map(v)
+            for gone in ("document", "revision"):
+                fields.pop(gone, None)
+            v["fields"] = [{"name": k, "value": w} for k, w in fields.items()]
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "id-omitted-chunk",
+                                     "bytes": list(self.TWO_CALLEE_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem2 = {"document": target["document"],
+                "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.TWO_CALLEE_SOURCE,
+                              target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-chunk-typed",
+             "arguments": [self.sliced(parsed, bodies["main"]),
+                           {"type": "List[CheckedFunction]", "value": fns},
+                           {"type": "List[ResolvedSignature]", "value": sgs},
+                           {"type": "List[ResolvedTypeDecl]", "value": []},
+                           {"type": "Bool", "value": True}],
+             "semanticTarget": sem2})
+        # Observed boundary behavior: tool-arg validation refuses the
+        # shape-mismatched value before the checker runs (fail-closed).
+        self.assertEqual(response.get("outcome"), "error", response)
+        self.assertEqual((response.get("error") or {}).get("code"),
+                         "PEP_TOOL_ARGUMENT_FIELDS", response)
 
     # --- Supply-time collision gate (R-ID-1, A3 T-CALL-6 class).
     #
