@@ -258,7 +258,7 @@ class TypedChunkTests(unittest.TestCase):
 
     def check_statement_group(self, source_bytes, name, entry, stmt_range,
                               host_builtin_names=(), expect_returns=False,
-                              carry_stmt_indexes=()):
+                              carry_stmt_indexes=(), scope_facts=False):
         """Check a header + statement-subset chunk (non-terminal by default).
 
         Carried bindings are re-included as source subtrees (deterministic
@@ -304,6 +304,9 @@ class TypedChunkTests(unittest.TestCase):
         for ci in carry_stmt_indexes:
             keep.update(index.subtree(int(nval(statements[ci], "id"))))
         ext = [s for s in sigs if s["name"] != entry]
+        if scope_facts:
+            allowed = index.fact_closure(keep, {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
         host_fns, host_sigs, host_types = [], [], []
         if host_builtin_names:
             assert set(host_builtin_names) <= {"semantic_snapshot"}
