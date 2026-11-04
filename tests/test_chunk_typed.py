@@ -420,6 +420,20 @@ class TypedChunkTests(unittest.TestCase):
             source, "coll-staged", "list_int_min_between")
         self.assertEqual(staged, "valid", diags)
         self.assertEqual(diags, [])
+        # The whole program is then covered by independently bounded units:
+        # every top-level function checks valid as its own chunk, so the
+        # staged path accepts a real program the whole-program checker
+        # rejects. Coverage is asserted, not assumed.
+        functions = [str(nval(node, "text")) for node in fields_map(parsed)["nodes"]["value"]
+                     if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"]
+        self.assertEqual(sorted(functions), ["list_int_min_between", "main"])
+        for entry in functions:
+            with self.subTest(entry=entry):
+                status, diags = self.check_body_with_facts(
+                    source, f"coll-unit-{entry}", entry)
+                self.assertEqual(status, "valid", diags)
+                self.assertEqual(diags, [])
 
     def test_stdlib_collection_loop_staged_is_genuinely_checked(self):
         # The staged flip above must not be a weakened check: three separate
