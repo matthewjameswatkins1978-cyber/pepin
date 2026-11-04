@@ -421,6 +421,110 @@ try:
                   " (entry-point difference: seed runs top-level statements, native runs fn main)")
             if oracle_out != native_out:
                 failures.append("oracle-mismatch")
+    # ---- A2-3 NEGATIVE CONTROLS (Rolling Queue C): every cross-chunk refusal must fail
+    # closed with its exact registered diagnostic and emit NOTHING, driven against the exact
+    # chunk + report the positive proof used above -- no fabricated fixtures, no hand-written C.
+    def report_entry(record, name):
+        for entry in record["fields"]:
+            if entry["name"] == name:
+                return entry
+        raise KeyError(name)
+
+    def unit_negative(what, mutate, needle, index=0, expect_error_code=None):
+        mutated = json.loads(json.dumps(reports[main_label]))
+        if mutate is not None:
+            mutate(mutated)
+        response = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                 "op": "tool_invoke", "tool": "pep-c23-unit",
+                                 "arguments": [sliced_by_label[main_label], mutated, typed("Int", index)],
+                                 "semanticTarget": sem})
+        if response.get("outcome") != "ok":
+            error_code = (response.get("error") or {}).get("code")
+            if expect_error_code is not None and error_code == expect_error_code:
+                # MEASURED: the host session gate rejects arguments from another source
+                # revision BEFORE the emitter tool runs, so a stale report never reaches the
+                # emitter's own document/revision check (which stays as defence-in-depth for
+                # the direct one-shot path). Both layers refuse; neither emits C.
+                stage(what, True, f"refused at transport gate code={error_code} (emitter gate not reached)")
+                return
+            stage(what, False, f"outcome={response.get('outcome')} {str(response.get('error'))[:160]}")
+            failures.append(what)
+            return
+        fields = {f["name"]: f["value"] for f in response["result"]["fields"]}
+        status = fields["status"]["value"]
+        diagnostic = fields["diagnostic"]["value"]
+        empty = not fields["sourceParts"]["value"]
+        ok = status == "unsupported" and needle in diagnostic and empty
+        stage(what, ok, f"status={status} empty={empty} diag={diagnostic[:110]}")
+        if not ok:
+            failures.append(what)
+
+    def call_target_entry(mutated):
+        calls = report_entry(mutated, "calls")["value"]["value"]
+        callee_id = report_entry(calls[0], "calleeId")["value"]["value"]
+        for function in report_entry(mutated, "functions")["value"]["value"]:
+            if report_entry(function, "semanticId")["value"]["value"] == callee_id:
+                return function
+        raise KeyError("call target")
+
+    def drop_call_fact(mutated):
+        report_entry(mutated, "calls")["value"]["value"] = []
+
+    def duplicate_call_fact(mutated):
+        calls = report_entry(mutated, "calls")["value"]["value"]
+        calls.append(json.loads(json.dumps(calls[0])))
+
+    def retarget_call(mutated):
+        # MEASURED: this protocol encodes Int values as JSON strings -- a raw int -1 was
+        # rejected with PEP_TOOL_ARGUMENT_VALUE before the emitter ever ran. Every mutation
+        # below therefore PRESERVES the original value's type.
+        calls = report_entry(mutated, "calls")["value"]["value"]
+        entry = report_entry(calls[0], "calleeId")
+        entry["value"]["value"] = "987654" if isinstance(entry["value"]["value"], str) else 987654
+
+    def duplicate_call_target(mutated):
+        functions = report_entry(mutated, "functions")["value"]["value"]
+        functions.append(json.loads(json.dumps(call_target_entry(mutated))))
+
+    def disagree_arity(mutated):
+        entry = report_entry(call_target_entry(mutated), "arity")
+        current = entry["value"]["value"]
+        bumped = int(current) + 1
+        entry["value"]["value"] = str(bumped) if isinstance(current, str) else bumped
+
+    def foreign_result_type(mutated):
+        report_entry(call_target_entry(mutated), "returnType")["value"]["value"] = "Str"
+
+    def stale_revision(mutated):
+        entry = report_entry(mutated, "revision")
+        entry["value"]["value"] = "stale-" + str(entry["value"]["value"])
+
+    unit_negative("neg-no-call-fact", drop_call_fact, "no resolved call fact")
+    unit_negative("neg-ambiguous-call", duplicate_call_fact, "ambiguous resolved call facts")
+    unit_negative("neg-missing-target", retarget_call, "missing from the checked functions")
+    unit_negative("neg-ambiguous-target", duplicate_call_target, "ambiguous in the checked functions")
+    unit_negative("neg-arity-mismatch", disagree_arity, "argument count disagrees with the checked arity")
+    unit_negative("neg-foreign-result", foreign_result_type,
+                  "support Int, Bool, and locally declared record results")
+    unit_negative("neg-stale-revision", stale_revision,
+                  "do not match the authorised source revision",
+                  expect_error_code="PEP_STALE_REVISION")
+    unit_negative("neg-unit-index", None, "function unit index is out of range", index=99)
+
+    # Assembly-order negative (the measured contract): main's unit BEFORE its callee's unit has
+    # no prototype in the declaration-chunk header, so BOTH strict compilers must REFUSE it.
+    bad_c = BUILD / "seam_chunked_bad_order.c"
+    bad_c.write_text(header + unit_main + unit_add, encoding="utf-8", newline="\n")
+    for compiler_name, extra in (("clang", ["-std=c23"]), ("gcc", ["-std=c2x"])):
+        built = subprocess.run(
+            [str(pep_c23.compiler_path(compiler_name)), *extra, "-Wall", "-Wextra",
+             "-Wpedantic", "-Werror", str(bad_c), "-o", str(BUILD / f"seam_bad_{compiler_name}.exe")],
+            capture_output=True, text=True, check=False)
+        refused = built.returncode != 0 and "pep_fn_add_one" in built.stderr
+        stage(f"neg-unit-order-{compiler_name}", refused,
+              f"exit={built.returncode} undeclared_callee={'pep_fn_add_one' in built.stderr}")
+        if not refused:
+            failures.append(f"neg-unit-order-{compiler_name}")
     sys.exit(1 if failures else 0)
 finally:
     session.close()
