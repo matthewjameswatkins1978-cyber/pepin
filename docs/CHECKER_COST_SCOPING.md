@@ -171,7 +171,57 @@ roughly 1,500 ticks per node. Optimising any single predicate, lookup or helper
 does not move the ceiling. The lever has to be the number of interpreted
 operations per node — fewer passes, or fewer per-node constructions — and that is
 an analysis-architecture change, not a micro-optimisation.
-### Measured pass profile (instrumented interpreter)
+### Correction: full-coverage attribution, and two negative prototypes
+
+The first profile dump listed only the 60 hottest lines (74.3% of ticks). Widening
+the dump to all 505 lines gives a complete picture, and the shares shift:
+
+| function | ticks | share |
+|---|---|---|
+| `type_analysis` | 14,470 | 14.5% |
+| `child_at` | 14,028 | 14.0% |
+| `type_shape_at` | 13,538 | 13.5% |
+| `tree_is_valid` | 7,062 | 7.1% |
+| `record_declaration` | 5,752 | 5.8% |
+| `lookup_node` | 5,256 | 5.3% |
+
+The top three are about 42% of the budget. Full-coverage totals: **849 full
+node-list scans, 12.9 per node** (the earlier 752/11.4 figure came from the
+partial dump and is superseded).
+
+### Where the cost is *not*
+
+Ticks at the **call sites** of the scanning helpers total only **1.2%** of the
+budget (child_at 0.3%, record_declaration 0.3%, type_shape_at 0.2%). Calling a
+helper is cheap; the scan inside it is what is billed. So the lever is the number
+of calls, never the cost of a call.
+
+### Prototype 1: `if_expression` child lookups — no effect
+
+Replacing the two `child_at` calls for an `if_expression` (then, else) with a
+single `children_of` pass left the profile untouched, because **recpad-6 contains
+no `if_expression` nodes**. A local optimisation on a path the fixture never
+executes cannot move the ceiling. Recorded so the same dead end is not repeated.
+
+### Prototype 2: guarding `declared_binding_type` — no effect
+
+`declared_binding_type` scans for an `annotation` child on any non-parameter node,
+although only `let` and `var` can carry that role. Adding a kind guard is
+semantically safe (the role only exists for those kinds) — and produced a
+**byte-identical profile** (849 scans, child_at 14,028 ticks). So that path is
+not dynamically hot either; the wasted scans are real but rare.
+
+Both prototypes were measurement-only in the scratch worktree and are reverted.
+
+### What is still unknown
+
+Which callers produce `child_at`'s ~200 scans is **not** attributable from
+line-ticks, because the call itself costs one tick. Attribution needs per-call
+counts keyed by function, not per-line ticks. Until that exists, further
+reductions would be guesses — and two guesses have now been measured as
+worthless.
+
+## Recommendation
 
 The inference so far is replaced by a direct measurement. A scratch worktree at
 `377ce9b` (`D:/Projects/wt-a1-profile`, deliberately not committed) instruments
