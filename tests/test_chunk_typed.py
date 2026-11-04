@@ -395,6 +395,61 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
+    def test_stdlib_collection_loop_checks_staged(self):
+        # A real stdlib helper with a for-in loop and conditional updates.
+        # Whole-program checking (55 nodes) exceeds the step budget, but the
+        # function body checks valid on its own once the other declarations
+        # are supplied as certified external facts. This is the concrete
+        # route through real Pep modules: the cost lives in re-deriving
+        # program-wide facts, not in the loop body itself.
+        source = self.collection_probe_source()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "coll-whole", "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        whole = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker", "arguments": [parsed],
+             "semanticTarget": sem})
+        self.assertEqual(whole.get("outcome"), "error", whole)
+        self.assertEqual((whole.get("error") or {}).get("code"),
+                         "PEP_RUNTIME_STEP_LIMIT", whole)
+        staged, diags = self.check_body_with_facts(
+            source, "coll-staged", "list_int_min_between")
+        self.assertEqual(staged, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_stdlib_collection_loop_staged_is_genuinely_checked(self):
+        # The staged flip above must not be a weakened check: three separate
+        # type errors inside the loop body are still reported with spans.
+        text = self.collection_probe_source().decode("utf-8")
+        for old, new, offset in [
+                ("var minimum = fallback", "var minimum = found", 226),
+                ("found = found || (lower <= item && item <= upper)",
+                 "found = minimum", 276),
+                ("minimum = if lower <= item", "minimum = if lower", 176)]:
+            with self.subTest(mutation=new):
+                self.assertEqual(text.count(old), 1, old)
+                mutated = text.replace(old, new, 1).encode("utf-8")
+                status, diags = self.check_body_with_facts(
+                    mutated, "coll-neg", "list_int_min_between")
+                self.assertEqual(status, "invalid", diags)
+                self.assertEqual([(code, start) for code, start, _ in diags],
+                                 [("PEP_TYPE_MISMATCH", offset)], diags)
+
+    def collection_probe_source(self):
+        # Exact fixture used by tests/test_c23_collections.py for
+        # list_int_min_between, so the staged path is measured on the same
+        # real program the whole-program checker currently rejects.
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_min_between(")
+        end = library.index("\n}\n", start) + 3
+        return (library[start:end]
+                + "\nfn main() -> Int {\n"
+                + "  return list_int_min_between([], 0, 3, 9)\n}\n").encode("utf-8")
+
     def test_utf8_check_prefix_group_checks_valid(self):
         # First statement group of utf8_check (params + first 4 statements,
         # 28 header/body nodes + external type facts): no missing-return
