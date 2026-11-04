@@ -199,7 +199,8 @@ class TypedChunkTests(unittest.TestCase):
         return target, sem, parsed, report["status"]["value"], diag_tuples(report)
 
     def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=(),
-                              scope_facts=False, allow_error=False):
+                              scope_facts=False, allow_error=False,
+                              loop_body_range=None):
         # allow_error=True returns the tool error code as the status instead
         # of failing the assertion, so a test can pin a budget refusal.
         # scope_facts=True supplies only the external declarations the chunk
@@ -227,6 +228,9 @@ class TypedChunkTests(unittest.TestCase):
         bodies = {str(nval(fn, "text")): index.subtree(int(nval(fn, "id")))
                   for fn in functions}
         self.assertIn(entry, bodies)
+        if loop_body_range is not None:
+            bodies[entry] = self.trim_loop_body(
+                index, nodes, entry, loop_body_range)
         ext = [s for s in sigs if s["name"] != entry]
         if scope_facts:
             allowed = index.fact_closure(
@@ -255,6 +259,32 @@ class TypedChunkTests(unittest.TestCase):
         report = fields_map(self.invoke_typed(
             args[0], args[1], args[2], args[3], sem))
         return report["status"]["value"], diag_tuples(report)
+
+    def trim_loop_body(self, index, nodes, entry, rng):
+        # Bounded unit below statement granularity: keep the function, keep a
+        # single range of the for-loop's body statements, and drop the rest.
+        # Byte spans are untouched, so the unit still reports diagnostics at
+        # original source offsets.
+        fn = [n for n in nodes if nval(n, "kind") == "function"
+              and str(nval(n, "parentId")) == "-1"
+              and str(nval(n, "text")) == entry]
+        self.assertEqual(len(fn), 1, entry)
+        fn_id = str(nval(fn[0], "id"))
+        for_node = [n for n in nodes if str(nval(n, "parentId")) == fn_id
+                    and nval(n, "kind") == "for_in"]
+        self.assertEqual(len(for_node), 1, f"{entry} needs exactly one for-in")
+        for_id = str(nval(for_node[0], "id"))
+        inner = sorted([n for n in nodes
+                        if str(nval(n, "parentId")) == for_id
+                        and nval(n, "role") == "body"],
+                       key=lambda n: int(nval(n, "childIndex")))
+        lo, hi = rng
+        self.assertLessEqual(hi, len(inner))
+        drop = set()
+        for position, statement in enumerate(inner):
+            if not lo <= position < hi:
+                drop.update(index.subtree(int(nval(statement, "id"))))
+        return tuple(i for i in index.subtree(int(fn_id)) if i not in drop)
 
     def check_statement_group(self, source_bytes, name, entry, stmt_range,
                               host_builtin_names=(), expect_returns=False,
@@ -527,6 +557,76 @@ class TypedChunkTests(unittest.TestCase):
                       "list_bool_longest_run", "no_such_declaration"}
         kept = index.fact_closure(body, candidates)
         self.assertEqual(sorted(kept), ["list_int_min_between"])
+
+    def test_residual_module_functions_split_inside_the_loop(self):
+        # The last 2 of 107 collection functions have 75-node bodies whose
+        # single for statement is over budget on its own, so neither whole
+        # body nor statement groups suffice. Splitting inside the loop body
+        # brings each unit to ~42 nodes and all of them check valid.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        for entry in ["list_int_min_index_between",
+                      "list_int_max_index_between"]:
+            with self.subTest(entry=entry, unit="whole-body"):
+                status, _ = self.check_body_with_facts(
+                    source, f"res-{entry}", entry,
+                    scope_facts=True, allow_error=True)
+                self.assertEqual(status, "PEP_RUNTIME_STEP_LIMIT")
+            for lo, hi in [(0, 1), (1, 2), (2, 4)]:
+                with self.subTest(entry=entry, unit=f"loop-body[{lo}:{hi}]"):
+                    status, diags = self.check_body_with_facts(
+                        source, f"res-{entry}-{lo}-{hi}", entry,
+                        scope_facts=True, loop_body_range=(lo, hi))
+                    self.assertEqual(status, "valid", diags)
+                    self.assertEqual(diags, [])
+
+    def test_loop_body_unit_keeps_source_offsets(self):
+        # A trimmed unit must still report an error at the original byte
+        # offset, so staged units are not detached from source identity.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        text = source.decode("utf-8")
+        old = "found = found || (lower <= item && item <= upper)"
+        start = text.index("fn list_int_min_index_between(")
+        tail = "\n}\n" if "\n}\n" in text[start:] else "\r\n}\r\n"
+        end = text.index(tail, start) + len(tail)
+        self.assertIn(old, text[start:end])
+        mutated = (text[:start]
+                   + text[start:end].replace(old, "found = index", 1)
+                   + text[end:]).encode("utf-8")
+        status, diags = self.check_body_with_facts(
+            mutated, "loop-offsets", "list_int_min_index_between",
+            scope_facts=True, loop_body_range=(2, 4))
+        self.assertEqual(status, "invalid", diags)
+        self.assertEqual([code for code, _, _ in diags], ["PEP_TYPE_MISMATCH"])
+        start = diags[0][1]
+        self.assertEqual(mutated[start:start + 5], b"index")
+
+    def test_residual_functions_have_a_complete_valid_partition(self):
+        # Both residual functions partition into gapless bounded units that
+        # each check valid: statements 0-3 (declarations), the three loop-body
+        # units, and the terminal return with its binding carried. Together
+        # this covers every statement, so the 107th of 107 real module
+        # functions is verifiable under the unchanged budget.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        for entry in ["list_int_min_index_between",
+                      "list_int_max_index_between"]:
+            with self.subTest(entry=entry, unit="statements[0:4]"):
+                status, diags = self.check_statement_group(
+                    source, f"part-{entry}-vars", entry, (0, 4),
+                    scope_facts=True)
+                self.assertEqual(status, "valid", diags)
+            for lo, hi in [(0, 1), (1, 2), (2, 4)]:
+                with self.subTest(entry=entry, unit=f"loop[{lo}:{hi}]"):
+                    status, diags = self.check_body_with_facts(
+                        source, f"part-{entry}-{lo}", entry,
+                        scope_facts=True, loop_body_range=(lo, hi))
+                    self.assertEqual(status, "valid", diags)
+                    self.assertEqual(diags, [])
+            with self.subTest(entry=entry, unit="return[5:6]"):
+                status, diags = self.check_statement_group(
+                    source, f"part-{entry}-ret", entry, (5, 6),
+                    expect_returns=True, scope_facts=True,
+                    carry_stmt_indexes=(1,))
+                self.assertEqual(status, "valid", diags)
 
     def test_utf8_check_prefix_group_checks_valid(self):
         # First statement group of utf8_check (params + first 4 statements,
