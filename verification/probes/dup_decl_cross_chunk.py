@@ -46,6 +46,10 @@ KINDS_REVERSED = ("type D = Left() | Right()\ntype D {\n    a: Int\n}\n"
                   "fn f(d: D) -> Int {\n    return d.a\n}\n")
 UNION_ONLY = ("type F = Left() | Right()\n"
               "fn f(x: F) -> Int {\n    return 0\n}\n")
+SHADOW_PRIMITIVE = ("type Int {\n    a: Int\n}\n"
+                    "fn f(x: Int) -> Int {\n    return x.a\n}\n")
+SHADOW_TWICE = ("type Str {\n    a: Int\n}\ntype Str {\n    b: Int\n}\n"
+                "fn f(x: Str) -> Int {\n    return x.a\n}\n")
 DISTINCT = ("type A {\n    x: Int\n}\ntype B {\n    x: Int\n}\n"
             "fn f(a: A) -> Int {\n    return a.x\n}\n")
 DUP_SAME_CHUNK = ("type D {\n    a: Int\n}\ntype D {\n    b: Int\n}\n"
@@ -261,6 +265,23 @@ def main():
         except BaseException as error:  # noqa: BLE001
             record("X6 union-then-record namesake must also be refused", False, "refused",
                    f"harness: {type(error).__name__}: {error}")
+
+        # P1/P2 the deliberate primitive-shadow exception: the seed refuses these outright
+        for label, source, case in (
+                ("P1 record shadowing a primitive name (type Int)", SHADOW_PRIMITIVE,
+                 "P1 primitive shadow refused like the seed"),
+                ("P2 two records shadowing the same primitive (type Str)", SHADOW_TWICE,
+                 "P2 repeated primitive shadow refused like the seed")):
+            try:
+                result = run(source, case.split()[0])
+                seed = seed_verdict(source)
+                record(case, True, "refused",
+                       "refused" if result["verdict"] != "valid" else "valid",
+                       f"seed={seed} facts={result['facts']} "
+                       f"duplicateFlags={result['duplicateFlags']} codes={result['codes']}")
+                output["cases"][case.split()[0]] = {"result": result, "seed": seed}
+            except BaseException as error:  # noqa: BLE001
+                record(case, False, "refused", f"harness: {type(error).__name__}: {error}")
 
         # X7 is a union declaration chunk emittable at all (coverage, not duplication)
         try:

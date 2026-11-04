@@ -94,3 +94,23 @@ python -X utf8 verification\probes\binding_pool_attacks.py D:\Projects\wt-a3-int
 - `O1c` `seed=invalid with_stale=valid without=invalid` — a stale binding fact still flips a verdict;
 - `O1b` cross-revision binding facts still **accepted** (`BindingFact` has no document/revision);
 - `A1b` `add()` still cannot distinguish a conflict from an identical duplicate (`first=1 identical=0 conflict=0`).
+
+## Row-level bounded negative at `cdbd742` (the red gate, unattributed drift check)
+
+`exact_node_ladder.py` at this pin: **62 nodes `ok`, 64 nodes `PEP_RUNTIME_STEP_LIMIT`** — the same
+measurement band recorded before the duplicate repair (62 pass / 64 refuse). The repair therefore costs the
+row nothing and moves it nothing; the 66-node target needs 4 more effective nodes, ≈6 % of the per-node
+budget.
+
+`checker_pass_attribution.py` at this pin — `chunk_signatures` and the **new whole-source duplicate scan in
+`chunk_type_declarations`** stay `ok` at every rung measured (including 484-node boolean chains);
+`analyze_parsed` is the only pass that refuses (from 84 nodes on the boolean-chain axis). So the new
+declaration-closure scan is not the cost driver, and the bound is unchanged where it was.
+
+## Primitive shadowing: refused on both sides (diagnostic divergence only)
+
+`dup_primitive_shadow.py` (seed oracle, no harness): the seed refuses **even a single** `type Int { a: Int }`
+or `type Bool { a: Int }` with `PEP_DUPLICATE_TYPE`. The staged path also refuses, but through
+`PEP_A13_TYPE_UNSUPPORTED` + `PEP_UNKNOWN_FIELD` — because primitive-named declarations are deliberately
+excluded from external facts. Same verdict, different cause: **fail-closed, not a hole**, but the diagnostic
+codes do not match the seed's, and the reason (no fact emitted) is the union gap's sibling.
