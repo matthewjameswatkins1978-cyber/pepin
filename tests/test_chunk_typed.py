@@ -1014,6 +1014,72 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
+    # --- T-REC-3 / T-REC-5 (A3 row 1-2 follow-ups): union-involved
+    # namesake shapes the X-series did not pin in this suite.
+
+    DUP_UNION_SOURCE = (b"type D = Left() | Right()\n"
+                        b"type D = Left() | Right()\n"
+                        b"fn f(d: D) -> Int {\n"
+                        b"    return d.a\n"
+                        b"}\n")
+
+    def test_union_union_namesake_split_across_chunks_is_refused(self):
+        # A3 T-REC-5: two same-name unions in separate declaration
+        # chunks must be refused (seed: PEP_DUPLICATE_TYPE).
+        _, _, _, whole_status, whole_diags = self.check_whole(
+            self.DUP_UNION_SOURCE, "uu-whole")
+        self.assertEqual(whole_status, "invalid")
+        self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                            for code, _, _ in whole_diags), whole_diags)
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.DUP_UNION_SOURCE, f"uu-chunk-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "invalid", (reverse, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in diags),
+                            (reverse, diags))
+
+    def test_same_chunk_namesake_carried_flag_is_refused(self):
+        # A3 T-REC-3: whole-input producer facts for a same-chunk
+        # namesake (record+union and union+union) carry the flag, so a
+        # body chunk built from those facts alone must refuse.
+        for source, tag in ((self.CROSS_KIND_DUP, "kk-same"),
+                            (self.DUP_UNION_SOURCE, "uu-same")):
+            target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                         "name": f"same-{tag}",
+                                         "bytes": list(source)})
+            self.assertEqual(target.get("outcome"), "ok", target)
+            sem = {"document": target["document"],
+                   "revision": target["revision"], "entryFunctions": []}
+            parsed = parse_target(self.session, source, target,
+                                  self.tool_revision)
+            nodes = fields_map(parsed)["nodes"]["value"]
+            index = contract.DocumentIndex.from_parsed(parsed)
+            all_ids = [int(nval(node, "id")) for node in nodes]
+            facts = self.type_facts(parsed, sem, all_ids)
+            dup_flags = [fields_map(fact)["duplicateType"]["value"]
+                         for fact in facts]
+            self.assertIn(True, dup_flags, (tag, dup_flags))
+            sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+            ext = [s for s in sigs if s["name"] != "f"]
+            bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                      for node in nodes
+                      if nval(node, "kind") == "function"
+                      and str(nval(node, "parentId")) == "-1"}
+            report = fields_map(self.invoke_typed(
+                self.sliced(parsed, bodies["f"]),
+                {"type": "List[CheckedFunction]",
+                 "value": [checked_fn_value(s) for s in ext]},
+                {"type": "List[ResolvedSignature]",
+                 "value": [resolved_sig_value(s) for s in ext]},
+                {"type": "List[ResolvedTypeDecl]", "value": facts}, sem))
+            self.assertEqual(report["status"]["value"], "invalid",
+                             (tag, report))
+            codes = [fields_map(item)["code"]["value"]
+                     for item in report.get("diagnostics", {}).get("value", [])]
+            self.assertIn("PEP_DUPLICATE_TYPE", codes, (tag, codes))
+
     # Caller-precondition note (not a runtime test): the closure gate covers
     # carried flags and repeated external names, but not a chunk that itself
     # declares a type also supplied externally (split-root shape). No harness

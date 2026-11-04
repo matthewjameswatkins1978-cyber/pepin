@@ -255,6 +255,17 @@ class ChunkTypeDeclarationTests(unittest.TestCase):
         self.assertEqual(sorted(d["typeName"] for d in decls), ["E", "F"])
         self.assertTrue(all(not d["duplicateType"] for d in decls), decls)
 
+    def test_union_union_duplicate_marks_single_fact(self):
+        # A3 T-REC-5 producer leg: two same-name unions in one input.
+        # First-in-source-order wins, so one flagged union fact is emitted.
+        source = (b"type D = Left() | Right()\n"
+                  b"type D = Left() | Right()\n"
+                  b"fn f(d: D) -> Int {\n    return d.a\n}\n")
+        _, decls = self.whole_input_decls(source, "union-dup-typedecls")
+        self.assertEqual([d["typeName"] for d in decls], ["D"])
+        self.assertEqual(decls[0]["typeKind"], "union")
+        self.assertTrue(decls[0]["duplicateType"], decls)
+
 
 if __name__ == "__main__":
     unittest.main()
