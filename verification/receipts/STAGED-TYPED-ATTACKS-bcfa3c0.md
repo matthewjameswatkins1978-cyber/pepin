@@ -49,6 +49,17 @@ reversed and far outside the source changes no verdict; the consumer reads field
 spans. Harmless for soundness today, but it means a receipt cannot use these spans as identity/provenance
 evidence.
 
+## Statement-group attacks (slice 4c)
+
+| attack | result |
+|---|---|
+| **S12** a statement group whose statement reads a binding declared in an **uncarried** earlier statement | **refuses** (`v` not visible in the group) |
+| **S13a** group verdict agrees with the whole path on a body with unannotated `let`s | **agrees** (both valid) |
+| **S13b** facts bind where a type **is** declared: forged `P.x := Str` makes `let v: Int = p.x` invalid while honest facts keep it valid | **binds both ways** |
+| **O13** (observation) unannotated `let v = p.x` carries **no inferred binding type**, so neither honest nor forged field facts affect `v + 1`. Measured against the baseline: the **seed also accepts** that body, so this is a checker inference-coverage limit, not a staging authority gap |
+
+`SUMMARY cases=16 claim_falsified=2` — both falsifications are the duplicate-declaration defect above.
+
 ## My own corrections (disclosed before recording)
 
 Three harness bugs and two mis-shaped claims, all fixed/reframed before anything was reported:
@@ -66,6 +77,12 @@ to observation O5 rather than reported as a defect).
   covered by the builder's own tests and my S0/S1/S2/S7/S9, not exhaustively re-proven here.
 - S3's hand-built facts are forged input; S3b is the honest-output variant and is the one that matters.
 - `expectReturns` was attacked in the missing-return direction only.
+- **S13 was originally written as "forged facts govern statement-group checking" and it failed** — but
+  the failure was my conflation: the body uses an unannotated `let v = p.x`, and neither the seed nor the
+  Pep-written whole checker infers a binding type there, so forged facts *cannot* change that verdict.
+  I measured the baseline (seed `valid`, whole path `valid`) before reporting, then split the claim into
+  S13a (group/whole agreement) and S13b (facts bind where a type is declared), and recorded the
+  unannotated-let behaviour as observation O13 rather than as a defect.
 - Not acceptance evidence: the Full verdict for this candidate is FAIL on gate 5 (`ACCEPT-bcfa3c0-FAIL.md`).
 
 ## Reproduce

@@ -540,6 +540,104 @@ def main():
                "parity" if list(whole_multi) == list(chunk_multi["diagnostics"])
                else f"whole={whole_multi} chunk={chunk_multi['diagnostics']}",
                f"counts whole={len(whole_multi)} chunk={len(chunk_multi['diagnostics'])}")
+        # ---------- S12/S13 statement-group soundness (slice 4c) ----------
+        group_source = ("type P {\n    x: Int\n}\n\n"
+                        "fn f(p: P) -> Int {\n    let v = p.x\n    let w = v + 1\n"
+                        "    return w\n}\n\n"
+                        "fn main() -> Int { return 0 }\n")
+        sem_g, parsed_g = harness.prepare(group_source, "staged-group")
+        facts_g = harness.real_facts(parsed_g, sem_g, decl_roots(parsed_g))
+        sigs_g = harness.signatures(parsed_g, sem_g)
+        nodes_g = fields_map(parsed_g)["nodes"]["value"]
+        index_g = contract.DocumentIndex.from_parsed(parsed_g)
+        root_id = None
+        for node in nodes_g:
+            if nval(node, "kind") == "function" and str(nval(node, "parentId")) == "-1" \
+                    and nval(node, "text") == "f":
+                root_id = str(nval(node, "id"))
+        statements = [node for node in nodes_g
+                      if str(nval(node, "parentId")) == root_id
+                      and nval(node, "role") == "statement"]
+
+        def group_ids(indexes):
+            keep = {int(root_id)}
+            for node in nodes_g:
+                if str(nval(node, "parentId")) == root_id and \
+                        nval(node, "role") in ("parameter", "return_type"):
+                    keep.update(index_g.subtree(int(nval(node, "id"))))
+            for i in indexes:
+                keep.update(index_g.subtree(int(nval(statements[i], "id"))))
+            return sorted(keep)
+
+        group_args = (
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_g if s["name"] != "f"]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_g if s["name"] != "f"]},
+        )
+        # S12: a group whose statement reads a binding declared in an uncarried
+        # earlier statement must not check valid.
+        s12 = harness.analyze_typed(
+            harness.sliced(parsed_g, group_ids([1])), *group_args,
+            {"type": "List[ResolvedTypeDecl]", "value": facts_g}, sem_g,
+            expect_returns=False)
+        record("S12 statement group with an uncarried binding refuses", True,
+               "not-valid", "not-valid" if s12["status"] != "valid" else
+               f"VALID although `v` is not in the group ({s12['diagnostics']})")
+
+        # S13: forged facts must also govern statement-group checking; with p.x
+        # declared Str, `let w = v + 1` must be refused.
+        point_g = [f for f in facts_g
+                   if fields_map(f)["typeName"]["value"] == "P"][0]
+        forged_g = [tamper_field_type(point_g, "x", "Str")]
+        s13_control = harness.analyze_typed(
+            harness.sliced(parsed_g, group_ids([0, 1])), *group_args,
+            {"type": "List[ResolvedTypeDecl]", "value": facts_g}, sem_g,
+            expect_returns=False)
+        s13 = harness.analyze_typed(
+            harness.sliced(parsed_g, group_ids([0, 1])), *group_args,
+            {"type": "List[ResolvedTypeDecl]", "value": forged_g}, sem_g,
+            expect_returns=False)
+        # The group's verdict must AGREE WITH THE WHOLE PATH on this shape. Measured
+        # separately: the seed and the Pep-written whole checker both call the
+        # unannotated `let v = p.x; let w = v + 1` body valid (no binding type is
+        # inferred from a field access), so a forged x:Str legitimately changes
+        # nothing there. What must hold is (a) group/whole agreement and (b) facts DO
+        # bind where a type is declared.
+        record("S13a statement group agrees with the whole path on unannotated lets",
+               True, "agrees", "agrees" if s13_control["status"] == s13["status"] == "valid"
+               else f"control={s13_control['status']} forged={s13['status']}")
+
+        annotated = ("type P {\n    x: Int\n}\n\n"
+                     "fn f(p: P) -> Int {\n    let v: Int = p.x\n    let w = v + 1\n"
+                     "    return w\n}\n\n"
+                     "fn main() -> Int { return 0 }\n")
+        sem_an, parsed_an = harness.prepare(annotated, "staged-annotated")
+        facts_an = harness.real_facts(parsed_an, sem_an, decl_roots(parsed_an))
+        sigs_an = harness.signatures(parsed_an, sem_an)
+        point_an = [f for f in facts_an if fields_map(f)["typeName"]["value"] == "P"][0]
+        forged_an = [tamper_field_type(point_an, "x", "Str")]
+        an_args = (
+            harness.sliced(parsed_an, body_ids(parsed_an, "f")),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_an if s["name"] != "f"]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_an if s["name"] != "f"]},
+        )
+        honest_an = harness.analyze_typed(
+            *an_args, {"type": "List[ResolvedTypeDecl]", "value": facts_an}, sem_an)
+        forged_an_res = harness.analyze_typed(
+            *an_args, {"type": "List[ResolvedTypeDecl]", "value": forged_an}, sem_an)
+        ok13b = honest_an["status"] == "valid" and forged_an_res["status"] != "valid"
+        record("S13b facts bind where a type is declared", True,
+               "honest-valid+forged-invalid",
+               "honest-valid+forged-invalid" if ok13b else
+               f"honest={honest_an['status']} forged={forged_an_res['status']}")
+        RESULTS.append({"case": "O13 unannotated lets carry no inferred binding type",
+                        "claimed": False, "expect": "observed",
+                        "outcome": "field-access type not propagated into `let v = p.x`; "
+                                   "whole path and seed also accept the body",
+                        "falsified": False})
     finally:
         harness.close()
 
