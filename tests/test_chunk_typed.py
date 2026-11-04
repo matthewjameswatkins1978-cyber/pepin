@@ -628,6 +628,79 @@ class TypedChunkTests(unittest.TestCase):
                     carry_stmt_indexes=(1,))
                 self.assertEqual(status, "valid", diags)
 
+    def test_lexer_step_split_floor_is_the_step_budget(self):
+        # lexer_step (1427 nodes) cannot be covered by splitting. Its while
+        # body holds one if_statement (1021 nodes) whose else spine nests to
+        # a single 12-node branch. The smallest structurally valid unit is the
+        # function with the outermost else pruned: 518 nodes, which still
+        # exceeds the step budget. Deeper units grow, not shrink, so no split
+        # reaches a passing unit - the residual is per-node checker cost.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "lexer-step-floor",
+                                     "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(n, "id")) for n in nodes
+                      if str(nval(n, "parentId")) == "-1"
+                      and nval(n, "kind") in ("record_declaration",
+                                              "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        table = {str(nval(fn, "text")): int(nval(fn, "id")) for fn in nodes
+                 if nval(fn, "kind") == "function"
+                 and str(nval(fn, "parentId")) == "-1"}
+        full = index.subtree(table["lexer_step"])
+        self.assertEqual(len(full), 1427)
+
+        def invoke(keep):
+            ext = [s for s in sigs if s["name"] != "lexer_step"]
+            allowed = index.fact_closure(keep, {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
+            try:
+                response = self.session.send(
+                    {"schemaVersion": 3, "toolProtocolVersion": 2,
+                     "op": "tool_invoke",
+                     "tool": "pep-c23-checker-chunk-typed",
+                     "arguments": [
+                         self.sliced(parsed, keep),
+                         {"type": "List[CheckedFunction]",
+                          "value": [checked_fn_value(s) for s in ext]},
+                         {"type": "List[ResolvedSignature]",
+                          "value": [resolved_sig_value(s) for s in ext]},
+                         {"type": "List[ResolvedTypeDecl]", "value": facts},
+                         {"type": "Bool", "value": True}],
+                     "semanticTarget": sem})
+            except RuntimeError as error:
+                self.assertIn("1 MiB", str(error))
+                return "TRANSPORT"
+            if response.get("outcome") != "ok":
+                return (response.get("error") or {}).get("code")
+            return fields_map(response["result"])["status"]["value"]
+
+        self.assertEqual(invoke(full), "TRANSPORT")
+        # Prune the outermost if's else: the smallest valid unit.
+        while_body = [n for n in nodes
+                      if str(nval(n, "parentId")) == str(table["lexer_step"])
+                      and nval(n, "role") == "statement"
+                      and nval(n, "kind") == "while"][0]
+        inner_if = [n for n in nodes
+                    if str(nval(n, "parentId")) == str(nval(while_body, "id"))
+                    and nval(n, "role") == "body"][0]
+        outer_else = [n for n in nodes
+                      if str(nval(n, "parentId")) == str(nval(inner_if, "id"))
+                      and nval(n, "role") == "else"][0]
+        drop = set(index.subtree(int(nval(outer_else, "id"))))
+        keep = tuple(i for i in full if i not in drop)
+        self.assertEqual(len(keep), 518)
+        self.assertEqual(invoke(keep), "PEP_RUNTIME_STEP_LIMIT")
+
     def test_utf8_check_prefix_group_checks_valid(self):
         # First statement group of utf8_check (params + first 4 statements,
         # 28 header/body nodes + external type facts): no missing-return
