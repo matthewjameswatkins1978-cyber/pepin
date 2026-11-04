@@ -2724,6 +2724,13 @@ fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFu
   var noExternalBindings: List[BindingFact] = []
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, externalRecords, noExternalBindings, expectReturns)
 }
+fn colliding_local_function(nodes: List[FlatAstNode], localNames: List[Str], name: Str) -> NodeLookup {
+  if !contains(localNames, name) { return NodeLookup { found: false, node: empty_node() } } else {}
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "function" && node.text == name { return NodeLookup { found: true, node: node } } else {}
+  }
+  return NodeLookup { found: false, node: empty_node() }
+}
 fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], externalBindings: List[BindingFact], expectReturns: Bool) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
@@ -2737,6 +2744,38 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
   let sourceLength = byte_length(source_bytes())
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
+  // Staged supply-time collision gate (R-ID-1, seed parity
+  // PEP_DUPLICATE_FUNCTION): an external function or signature fact naming a
+  // function the chunk itself declares must be refused here. Whole-source
+  // resolution is local-first and the external declaration span is absent
+  // from this chunk, so without this gate a cross-chunk duplicate name
+  // checks valid while the seed refuses it. Builtins and constructors keep
+  // the whole-path exclusions. Names only: no semantic engine, no new
+  // machinery. Skipped entirely when no external callee facts are supplied.
+  if length(externalFunctions) != 0 || length(externalSignatures) != 0 {
+    var localFunctionNames: List[Str] = []
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        if !known_builtin(node.text) && !is_constructor(nodes, node.text) {
+          if !contains(localFunctionNames, node.text) {
+            localFunctionNames = prepend(localFunctionNames, node.text)
+          } else {}
+        } else {}
+      } else {}
+    }
+    for extFunction in externalFunctions {
+      let uhitFn = colliding_local_function(nodes, localFunctionNames, extFunction.name)
+      if uhitFn.found {
+        return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitFn.node)
+      } else {}
+    }
+    for extSignature in externalSignatures {
+      let uhitSig = colliding_local_function(nodes, localFunctionNames, extSignature.functionName)
+      if uhitSig.found {
+        return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitSig.node)
+      } else {}
+    }
+  } else {}
   let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
   let collected = collect_bindings(nodes, functions, authority.document, authority.revision)
   var mergedBindings: List[BindingFact] = collected.bindings
