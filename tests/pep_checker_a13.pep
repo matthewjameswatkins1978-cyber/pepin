@@ -3,7 +3,7 @@ type ExpressionTypeAndShape { typeName: Str, shape: PepTypeShape }
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
-type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape }
+type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape, document: Str, revision: Str }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape, startByte: Int, endByte: Int }
 type HoleFact { semanticId: Int, syntaxId: Int, name: Str, expectedType: Str, scopeId: Int, visibleBindingIds: List[Int], candidateBindingIds: List[Int], startByte: Int, endByte: Int }
@@ -284,7 +284,7 @@ fn find_function(functions: List[CheckedFunction], name: Str) -> FunctionLookup 
 }
 fn find_binding(bindings: List[BindingFact], semanticId: Int) -> BindingLookup {
   for binding in bindings { if binding.semanticId == semanticId { return BindingLookup { found: true, binding: binding } } else {} }
-  return BindingLookup { found: false, binding: BindingFact { semanticId: -1, syntaxId: -1, name: "", ownerFunctionId: -1, scopeId: -1, visibleFrom: 0, mutable: false, typeName: "", typeShape: empty_type_shape() } }
+  return BindingLookup { found: false, binding: BindingFact { semanticId: -1, syntaxId: -1, name: "", ownerFunctionId: -1, scopeId: -1, visibleFrom: 0, mutable: false, typeName: "", typeShape: empty_type_shape(), document: "", revision: "" } }
 }
 fn find_reference(references: List[ResolvedName], syntaxId: Int) -> ReferenceLookup {
   for reference in references { if reference.syntaxId == syntaxId { return ReferenceLookup { found: true, reference: reference } } else {} }
@@ -469,7 +469,7 @@ fn pattern_binding_visible_from(nodes: List[FlatAstNode], pattern: FlatAstNode) 
   } else {}
   return pattern.endByte
 }
-fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) -> BindingCollection {
+fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction], document: Str, revision: Str) -> BindingCollection {
   var reversed: List[BindingFact] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var ordinal = 0
@@ -495,7 +495,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) }, document: document, revision: revision }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
@@ -513,7 +513,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction]) 
         let visible = if parameter { node.startByte } else { if node.kind == "for_in" { node.startByte } else { if node.kind == "binding_pattern" { pattern_binding_visible_from(nodes, node) } else { node.endByte } } }
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == function.semanticId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
-        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) } }
+        let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) }, document: document, revision: revision }
         if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
@@ -1308,7 +1308,7 @@ fn infer_binding_types(nodes: List[FlatAstNode], functions: List[CheckedFunction
       let value = child_at(nodes, declaration.node.id, "value", 0)
       if value.found { typeShape = expression_type_shape(nodes, value.node.id, functions, typed, references) } else {}
     } else {}
-    typed = prepend(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape })
+    typed = prepend(typed, BindingFact { semanticId: binding.semanticId, syntaxId: binding.syntaxId, name: binding.name, ownerFunctionId: binding.ownerFunctionId, scopeId: binding.scopeId, visibleFrom: binding.visibleFrom, mutable: binding.mutable, typeName: typeName, typeShape: typeShape, document: binding.document, revision: binding.revision })
   }
   return reverse(typed)
 }
@@ -2654,6 +2654,17 @@ fn analyze_chunk_typed_bound(parsed: ParserProgress, externalFunctions: List[Che
     } else {}
     seenExternalTypeNames = prepend(seenExternalTypeNames, decl.typeName)
   }
+  // Binding-fact provenance: external bindings must be attested to this
+  // source revision like external types. Same-revision stamps are a
+  // consistency check, not authenticity (A4 authority-vs-labels
+  // distinction): a same-revision forgery that contradicts the source is
+  // refused downstream where the checker can observe it, but the tool never
+  // accepts facts from another document or revision.
+  for fact in externalBindings {
+    if fact.document != parsed.document || fact.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External binding facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
+  }
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), externalBindings, expectReturns)
 }
 fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
@@ -2679,7 +2690,7 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
   let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
-  let collected = collect_bindings(nodes, functions)
+  let collected = collect_bindings(nodes, functions, authority.document, authority.revision)
   var mergedBindings: List[BindingFact] = collected.bindings
   for fact in externalBindings { mergedBindings = append(mergedBindings, fact) }
   let bindingResult = BindingCollection { bindings: mergedBindings, diagnostics: collected.diagnostics }
