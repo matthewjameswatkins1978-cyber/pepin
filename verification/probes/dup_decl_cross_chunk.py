@@ -11,6 +11,13 @@ Cases:
       Seed oracle: invalid/PEP_DUPLICATE_TYPE for the whole source.
   X3  cross-chunk duplicate across kinds: record D in one chunk, union D in another
   X4  positive control: both declarations in ONE chunk must be refused or flagged duplicate
+  T-REC-1/2 (A4 B4-C4, B4-C5): X3/X6 retests strengthened with the PEP_DUPLICATE_TYPE
+      code assertion (same runs, stronger claim; original X3/X6 kept untouched).
+  T-REC-3 same-chunk record+union namesake must be refused (producer side).
+  T-REC-4 X7 flip: union-typed parameter across chunks on a seed-valid program
+      must be valid after the union-fact repair (was PEP_UNKNOWN_TYPE).
+  T-REC-5 union/union duplicate across chunks must be refused (the repeat-name
+      count generalizes beyond the record/union mix).
 
 Exit codes: 0 = all claims held, 1 = a claim falsified (a hole), 2 = harness error / typed entry point absent.
 Usage: python dup_decl_cross_chunk.py <candidate-worktree> [--json PATH]
@@ -56,6 +63,8 @@ DUP_SAME_CHUNK = ("type D {\n    a: Int\n}\ntype D {\n    b: Int\n}\n"
                   "fn f(d: D) -> Int {\n    return d.a\n}\n")
 DUP_SPLIT = ("type D {\n    a: Int\n}\ntype D {\n    b: Int\n}\n"
              "fn f(d: D) -> Int {\n    return d.a\n}\n")
+DUP_UNION_SPLIT = ("type D = Left() | Right()\ntype D = Up() | Down()\n"
+                   "fn f(d: D) -> Int {\n    return 0\n}\n")
 
 
 def record(case, claim, expect, outcome, detail=""):
@@ -295,6 +304,68 @@ def main():
         except BaseException as error:  # noqa: BLE001
             record("X7 observation: a union declaration chunk yields a fact", False,
                    "fact-emitted", f"harness: {type(error).__name__}: {error}")
+
+        # T-REC-1/2 (A4 B4-C4): X3/X6 retests strengthened with the diagnostic
+        # code. Reuses the X3/X6 runs above: same behavior, stronger assertion.
+        for rec_key, rec_case in (
+                ("X3", "T-REC-1 record-then-union namesake refused with "
+                       "PEP_DUPLICATE_TYPE"),
+                ("X6", "T-REC-2 union-then-record namesake refused with "
+                       "PEP_DUPLICATE_TYPE")):
+            prior = output["cases"].get(rec_key, {})
+            result = prior.get("result")
+            if result is None:
+                record(rec_case, False, "refused+PEP_DUPLICATE_TYPE",
+                       f"harness: no {rec_key} result to strengthen")
+                continue
+            hit = result["verdict"] != "valid" and \
+                "PEP_DUPLICATE_TYPE" in (result["codes"] or [])
+            record(rec_case, True, "refused+PEP_DUPLICATE_TYPE",
+                   "refused+PEP_DUPLICATE_TYPE" if hit
+                   else f"verdict={result['verdict']} codes={result['codes']}",
+                   f"seed={prior.get('seed')} "
+                   f"duplicateFlags={result['duplicateFlags']}")
+            output["cases"][rec_case.split()[0]] = prior
+
+        # T-REC-3 (A4 B4-C4): record+union namesake in ONE chunk (producer side).
+        try:
+            r3 = run(TWO_KINDS, "mixedsame", per_chunk=False)
+            seedr3 = seed_verdict(TWO_KINDS)
+            record("T-REC-3 record+union namesake in one chunk is refused", True,
+                   "refused", "refused" if r3["verdict"] != "valid" else "valid",
+                   f"seed={seedr3} duplicateFlags={r3['duplicateFlags']} "
+                   f"codes={r3['codes']}")
+            output["cases"]["T-REC-3"] = {"result": r3, "seed": seedr3}
+        except BaseException as error:  # noqa: BLE001
+            record("T-REC-3 record+union namesake in one chunk is refused", False,
+                   "refused", f"harness: {type(error).__name__}: {error}")
+
+        # T-REC-4 (A4 B4-C4): X7 flip — union-typed parameter across chunks on a
+        # seed-valid program must be valid after the fix (was PEP_UNKNOWN_TYPE).
+        prior7 = output["cases"].get("X7", {})
+        result7 = prior7.get("result")
+        if result7 is None:
+            record("T-REC-4 union-typed parameter across chunks is valid", False,
+                   "valid", "harness: no X7 result to assert")
+        else:
+            record("T-REC-4 union-typed parameter across chunks is valid", True,
+                   "valid", result7["verdict"],
+                   f"seed={prior7.get('seed')} facts={result7['facts']}")
+
+        # T-REC-5 (A4 B4-C4): union/union duplicate across chunks (the repeat-name
+        # count generalizes beyond the record/union mix).
+        try:
+            r5 = run(DUP_UNION_SPLIT, "dupunion")
+            seedr5 = seed_verdict(DUP_UNION_SPLIT)
+            record("T-REC-5 union/union namesake split across chunks is refused",
+                   True, "refused",
+                   "refused" if r5["verdict"] != "valid" else "valid",
+                   f"seed={seedr5} duplicateFlags={r5['duplicateFlags']} "
+                   f"codes={r5['codes']}")
+            output["cases"]["T-REC-5"] = {"result": r5, "seed": seedr5}
+        except BaseException as error:  # noqa: BLE001
+            record("T-REC-5 union/union namesake split across chunks is refused",
+                   False, "refused", f"harness: {type(error).__name__}: {error}")
     finally:
         session.close()
 

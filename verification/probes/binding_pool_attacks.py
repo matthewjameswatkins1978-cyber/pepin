@@ -34,6 +34,10 @@ Claims (new interface):
       like type facts.
   O1c a stale binding fact cannot change a verdict: facts from the Int-x revision
       reused against the Str-x revision are refused, never silently believed.
+  T-ADM-4 (A4 B4-C5) S4/O4-shape same-revision forgery the producer never made is
+      ADMITTED: expected-accept documenting the standing residual (labels are
+      consistency-checked, not authenticity-proven). Any future change of this
+      behavior falsifies the case and flags the row-3 callee-identity review.
 Residual by design: a same-revision forgery that contradicts the source passes the
 attestation check (labels are consistency-checked, not authenticity-proven); the
 checker's own downstream observation (B2) is what refuses it.
@@ -302,6 +306,20 @@ def main():
         record("A6 a fact attested to another document/revision raises", True,
                "raised", "raised" if kind6 == "raised" else f"added={err6}",
                f"outcome={kind6} {err6}")
+
+        # T-ADM-4 (A4 B4-C5 section 4): S4/O4-shape same-revision forgery the
+        # producer never made is STILL ADMITTED — expected-accept documenting
+        # the standing residual, not a fix failure. Verdict-level pinning belongs
+        # to the R-ID-1/callee-identity row; this locks admission behavior so any
+        # change falsifies and flags that review.
+        pool_r = make_pool()
+        kindr, countr = try_add(pool_r, [attested("ghost", "Int")])
+        namesr = [field(fact, "name") for fact in pool_r.facts()]
+        admitted = kindr == "added" and countr == 1 and namesr == ["ghost"]
+        record("T-ADM-4 same-revision forgery is admitted (expected-accept residual)",
+               True, "admitted",
+               "admitted" if admitted else f"outcome={kindr}:{countr} names={namesr}",
+               "producer never made 'ghost'; same-revision stamps pass admission")
 
     # ---------------- Part B: transport-level attacks -------------------------
     harness = Bound()
