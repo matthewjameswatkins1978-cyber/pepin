@@ -137,6 +137,70 @@ class StrResultNativeTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(normalize(stdout), seed_bytes + b"0\n")
 
+    def test_str_lifetime_chains_match_seed_on_both_compilers(self):
+        """G-A2-5: four lifetime/ownership chains actually used in Pep sources -- NO DEFECT
+        found, byte parity pinned (card: prove parity or clean refusal; fix only what breaks).
+
+        Chains: (1) embedded NUL in a RETURNED Str; (2) embedded NUL in a Str record FIELD;
+        (3) field initialised from a CALLEE's returned literal (static storage must outlive
+        the callee frame); (4) caller-owned Str stored into a record the callee RETURNS, then
+        re-wrapped through the same pointer (alias past frame + reuse). ASan was attempted
+        without install: clang built but the runtime DLL is absent on this host
+        (process exit 0xC000013A, no ASan report) -- recorded NOT-APPLICABLE in the receipt,
+        deliberately not pinned here so the test never depends on an uninstalled runtime.
+        """
+        cases = {
+            "returned-nul": (
+                'fn mark() -> Str {\n  return "a\\0b"\n}\n'
+                'fn main() -> Int {\n  let s = mark()\n  say(s)\n  return 0\n}\n',
+                'let s = mark();\n  say(s);\n',
+                b'a\x00b\n'),
+            "field-nul": (
+                'type Info { kind: Str }\n'
+                'fn main() -> Int {\n'
+                '  let i = Info { kind: "x\\0y" }\n'
+                '  say(i.kind)\n'
+                '  return 0\n'
+                '}\n',
+                'let i = Info { kind: "x\\0y" };\n  say(i.kind);\n',
+                b'x\x00y\n'),
+            "field-from-callee": (
+                'type Info { kind: Str }\n'
+                'fn tag() -> Str {\n  return "from-callee\\0end"\n}\n'
+                'fn main() -> Int {\n'
+                '  let i = Info { kind: tag() }\n'
+                '  say(i.kind)\n'
+                '  return 0\n'
+                '}\n',
+                'let i = Info { kind: tag() };\n  say(i.kind);\n',
+                b'from-callee\x00end\n'),
+            "param-str-into-returned-record": (
+                'type Info { kind: Str }\n'
+                'fn wrap(v: Str) -> Info {\n  return Info { kind: v }\n}\n'
+                'fn main() -> Int {\n'
+                '  let i = wrap("caller-owned")\n'
+                '  say(i.kind)\n'
+                '  let again = wrap(i.kind)\n'
+                '  say(again.kind)\n'
+                '  return 0\n'
+                '}\n',
+                'let i = wrap("caller-owned");\n  say(i.kind);\n'
+                '  let again = wrap(i.kind);\n  say(again.kind);\n',
+                b'caller-owned\ncaller-owned\n'),
+        }
+        for name, (native_source, seed_body, expected_seed) in cases.items():
+            with self.subTest(chain=name):
+                c_source = emit_c(native_source)
+                seed_source = native_source.split("fn main()")[0] + seed_body
+                seed_bytes = normalize(seed_run(seed_source, f"ga25_{name}_seed"))
+                self.assertEqual(seed_bytes, expected_seed)
+                for compiler in ("clang", "gcc"):
+                    with self.subTest(compiler=compiler):
+                        stdout, exit_code = build_and_run(compiler, c_source,
+                                                          f"ga25_{name}_{compiler}")
+                        self.assertEqual(exit_code, 0)
+                        self.assertEqual(normalize(stdout), seed_bytes + b"0\n")
+
 
 class StrResultBoundaries(unittest.TestCase):
     """Each refusal below was MEASURED during this slice; none is assumed."""
