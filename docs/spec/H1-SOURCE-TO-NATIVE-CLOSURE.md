@@ -115,6 +115,9 @@ reachable fractions. No static claim will be called a run.
 - **P3** `insert_sorted`+`quick_sort_nodes` verbatim (real staged-checker
   bodies, FlatAstNode literals) → `1,2,3` / `1,2,3,4,5`, exit 0. PASS —
   including the checker's own RECURSION under the interpreter.
+- **P4** `known_builtin` verbatim (A1 2ad750b:148–150, 13-way `||`) + 3 calls
+  (`"length"` → 1, `"nope"` → 0, `"Say"` → 0), exit 0. PASS. (Fills the
+  numbering gap — 8 probes P1–P8 with no skip.)
 - **P5** `same_type_shape` verbatim + PepTypeShape literals → `1/0/0`,
   exit 0. PASS.
 - **P6** A2-58fc9bf `pep_c23_c_scalar_type` verbatim + node literals →
@@ -124,14 +127,28 @@ reachable fractions. No static claim will be called a run.
   Native via seed `pep.ps1 build-c23` → **BLOCKED**: `PEP_RUNTIME_STEP_LIMIT
   at 251:10` in session `tool_invoke` (parse_count 3 — the seed driver's
   bundled-emit path, not the program). Independent native evidence: A3
-  adopted the bands 7x2 (REPORTED). No static native claim made here.
+  ACCEPT-GRADEBAND @ `1de76b6` — 7 inputs × Clang/GCC + N1/N2 green on the
+  ADAPTED form (nested-if native; lets+arithmetic return refused with a
+  misattributed diagnostic, filed to A2). No static native claim made here.
 - **P8** existing `tests/test_a13.py` staged-checker test
   (`test_primitive_synth_check_and_type_facts` via unittest, no pytest on
   host) → **OK in 0.9s**. PASS: staged chunk path works on this host for
   small inputs — P7's block is emit-path/bundle specific, not general.
-- Score: 8 probes, 6 PASS + 1 informative-authority-block (P2, covered by
-  A3-set-13) + 1 path-specific block (P7-native, covered by A3-7x2).
-  Probe files + raw outputs retained under ignored `_build/h1/`.
+- Score: 8 probe executions — 6 full PASS (P1, P3, P4, P5, P6, P8) + 1
+  partial (P7: seed PASS, native BLOCKED) + 1 authority-block (P2, covered
+  by A3-set-13). INTERPRETER vs NATIVE, explicit (correction 2026-11-04):
+  every PASS above is seed-`run` (OCaml interpreter) or staged-checker-via-
+  session (P8) — NONE is a native execution. The only natively-demonstrated
+  evidence cited in this census is A3's (grade bands 7×2, isolated Str `==`
+  4×4, both REPORTED). Treat every "reachable" below as
+  interpreter-reachable unless A3 evidence says otherwise.
+  Probe files + raw outputs retained under ignored `_build/h1/`; sha256-16
+  digests: p1.out 6FAF9B9D / p2.out 4348503C / p3.out 44383DCA /
+  p4 (this pass; file `p4.out`) / p5.out 2A6A767B / p6.out 6541F3F0 /
+  p7_check 6C592B39 / p7_run 9CB3CF96 / p7_build 19D7DA25 / p8.out E231209D /
+  bun_check 2B9FFA40 / bun2_check (12.5 MB VALID bundle) 49B88DD0 /
+  lex_check 9219FE81 / describe_2ad750b 9A679A0D. Reproduce: commands in
+  this section against the pinned SHAs.
 
 ## H1b — blocker clustering (by ROOT DEPENDENCY, with denominators)
 
@@ -154,8 +171,11 @@ Sample: 32/316 fns (10%), 4/4 components, easy/medium/hard + control/data.
    `pep_c23_loop_statement`/`while_body` may narrow the loop half —
    probe-worthy, not claimed.
 
-Reachable fraction (sampled, honest ranges): firmly lowerable today
-(seed-subset shapes: L1, C1, E1, E2 + maybe L3) ≈ **3–5/32**; A2-new-surface
+Reachable fraction (sampled, honest ranges — INTERPRETER-reachable unless
+A3 evidence cited): firmly runnable today
+(seed-subset shapes: L1, C1, E1, E2 + maybe L3) ≈ **3–5/32**; natively
+DEMONSTRATED today (A3 only: grade-band program family, isolated Str ==)
+≈ **2 shapes**; A2-new-surface
 candidates (records/lists/unions/Str/while, guard-reads pending) ≈
 **12–15/32**; firmly blocked (SourceBytes, recursion, whole-program depth)
 ≈ **12/32**. If A2's new lowering covers the used shapes, reachable jumps

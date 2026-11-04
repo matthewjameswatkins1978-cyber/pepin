@@ -10,9 +10,9 @@ Recommendation is consequential but narrow. Labels as used throughout.
   unions, Str, while — ALL route-(a) territory, and A2 is ALREADY building
   it: emitter 13→113 fns). Firmly blocked ≈ 12/32 (SourceBytes, recursion,
   whole-program depth).
-- H2: one specified vertical (`known_builtin`), zero new capabilities
-  required IN PRINCIPLE, awaiting execution. Its refusal code (if any) prices
-  exactly one gate.
+- H2: one specified vertical (`known_builtin`) — EXECUTED by A3 (H-V5c @
+  `08e1e8b`): full form REFUSED at the checker budget (pre-lowering);
+  isolated Str-`==` 4/4 green. The experiment is CONSUMED, not pending.
 - Missing: F-B seam share (A1 Q1 open), F-C demotion costs (unmeasured),
   per-phase step attribution (A1 Q1 open). Any claim about (b)/(c) TOTAL cost
   is therefore CONDITIONAL — stated, not hidden.
@@ -43,17 +43,19 @@ runs. Demoting builtins to Pep would move PROVEN-working native code into
 unmeasured interpreted loops. Revisit trigger: F-C measured on `int_text`
 (softest target) showing <3× step cost with byte-identical outputs.
 
-## The one cheapest experiment
+## The one cheapest experiment — SUPERSEDED by A3's execution (H-V5c)
 
-Run H2-Candidate-A through A2's harness (affected: A2 executes, A3 oracles).
-Success metrics: (1) identical outputs seed/Clang/GCC on the two probes;
-(2) refusal-or-green lands within ONE existing gate (no new diagnostic
-family). Failure criteria: (1) refusal requires a NEW trusted primitive
-outside the named fn set (scope creep — stop, re-price); (2) outputs diverge
-across toolchains (correctness block — stop, file to A2/A3, no retry-as-green).
-Evidence to capture: exact refusal code or triple-output equality + A2 SHA +
-toolchain versions. Cost if green: near-zero (extends H1 reachability count).
-Cost if red: exactly one named gate (feeds the next H2).
+The experiment RAN (A3, not A4): full vertical refused at checker budget,
+isolated form green 4/4. Its result re-prices everything below. The NEXT
+cheapest experiment is therefore NOT another native probe — it is BUDGET
+ATTRIBUTION on the 13-way chain: which pass burns the steps (A1 per-phase
+accounting = G-A4-2, still blocked on A1 Q1), or failing that, A3's ladder
+method on shrinking chain lengths (already their V4 pattern). Success
+metric: one named pass or construct accounting for >50% of the refusal
+cost. Failure criterion: attribution stays flat across phases (then the
+budget is genuinely diffuse and F-B-style seam thinking is wrong too).
+Affected: A1 (only they can instrument); A3 can ladder around them.
+Evidence: per-phase or per-length step counts at a pinned SHA.
 
 ## What cannot be measured until A1 Q1
 
@@ -64,9 +66,28 @@ explicitly conditional on these — if Q1 shows seam-dominated cost, REOPEN
 (b) immediately per the E3 trigger; this brief's caution would then have
 been the expensive error (opposing evidence, recorded).
 
+## Addendum 2026-11-04 — priority reorder from A3 V3 + V4 (independent review)
+
+Two newer A3 findings outrank native-feature growth in urgency, and H3
+incorporates them (all REPORTED, pins in-repo): (1) V3 LAUNDERING
+(ACCEPT-H-V3-LAUNDERING @ `1de76b62`): a forged callee fact makes an INVALID
+whole program's isolated chunk appear VALID — type-authority laundering, a
+NEW property distinct from E2b/T-ADM-4/R-ID-1 (which gate duplicates,
+ghosts, and names — none checks fact TYPE-CONTENT against the claimed
+declaration). (2) V4 CEILINGS (ACCEPT-H-V4-CEILINGS @ `1de76b62`): ONE extra
+3-line filler function flips a valid 408 B program to checker-STEP-LIMIT
+refusal; filler ladder shows Str-result shapes cost the most. Consequence:
+fact-authority (who vouches a fact's TYPE content, not just its name) and
+measured step costs now precede native subset growth. The (a)-metering
+continues (A2's trajectory is sound) but the NEXT decision-relevant
+measurement is budget/fact-authority, not another lowering probe. G-A4-7's
+narrow trial and H7's stamped-schema review are the matching A4 follow-ons.
+
 ## Status labels
 
-DECISION: continue (a) metered by Candidate-A; keep present design for
-(b)/(c) with named triggers; Q1-dependence explicit. No rewrite permission,
-no new framework, no builder mandate beyond the already-specified H2
-handoff. Next: 3-slice review (H1/H2/H3), then H4–H8 by value and capacity.
+DECISION (revised 2026-11-04): continue (a) metered — meter now reads
+budget/fact-authority, not just gates; keep present design for (b)/(c)
+with named triggers; Q1-dependence explicit and now joined by V3/V4
+evidence. H2 experiment consumed by A3's run. No rewrite permission, no new
+framework, no builder mandate. Correction pass applied (H-V5c outcome,
+V3/V4 reorder, experiment consumed).

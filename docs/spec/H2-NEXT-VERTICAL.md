@@ -30,16 +30,23 @@ oracle if desired: `say(int_text(...))` ×2 → `1/0`); native `main` returns 1
 (`a=1, b=0`); Clang == GCC == seed.
 
 **Dependency graph (complete, tiny):** Str literal (`pep_c23_string_literal`)
-→ Str param (`pep_c23_str_parameter`) → `==` on Str (needs lowering —
-CHECK: emitter `==` path is specified for scalars; Str equality lowering is
-the plan's single riskiest assumption, flagged) → call (≤1 arg, known
+→ Str param (`pep_c23_str_parameter`) → `==` on Str → call (≤1 arg, known
 target) → if-expression → Int arith → main. Zero records, zero lists, zero
 loops, zero recursion, zero SourceBytes. Transitive closure: 1 fn + 1 main.
 
-**First blocker if it fails:** Str `==` lowering (most likely) or Str-param
-passing — EITHER WAY the refusal names the true next block, which is the
-point. **Cheapest falsifier:** run it through A2's harness; a single refusal
-code locates the gap more precisely than any paper analysis.
+**OUTCOME 2026-11-04 — prediction FALSIFIED by A3 H-V5c (ACCEPT-H-V5C-KNOWN-BUILTIN @ `08e1e8b`, TESTED):** the full vertical does NOT reach
+lowering — the checker tool invocation REFUSES first (`PEP_RUNTIME_STEP_LIMIT`
+at seed-`run` scale; budget precedes lowering). The predicted "Str `==`"
+first blocker is WRONG. And the isolated form PASSES: A3's reduced
+`is_named` probe (`name == "say"`) goes 4/4 across seed/Clang/GCC, with C
+emitting a correct length-then-byte comparison (`pep_str_equal`). So:
+(1) Str equality needs NO A2 fix — recorded as a positive result, and the
+falsifier worked exactly as designed (it named the true next block, just not
+the predicted one); (2) the gate that matters is the CHECKER BUDGET on the
+full 13-way function, not the emitter. H2's experiment is therefore CONSUMED:
+do not re-run the full vertical as specified — the reduced isolated form is
+already green, and the remaining question (why the 13-way chain trips the
+budget) belongs to G-A4-2/A1-per-phase-accounting, not to lowering.
 
 ## Candidate B — NEGATIVE: `insert_sorted`/`quick_sort_nodes` native
 
@@ -72,8 +79,10 @@ decision first is a bad vertical. REVISIT after H5.
 
 ## Status labels
 
-DECISION (narrow, reversible): ONE specified vertical + named executor +
-falsifier-first design; two negatives with revisit triggers. No builder
-rewrite, no new framework. If Candidate A greens first try, H3's cheapest
-experiment writes itself (extend to `find_binding`). If it refuses, H3
-prices the refused gate. Next: H3.
+DECISION SUPERSEDED 2026-11-04 by A3 H-V5c: the vertical ran, the predicted
+blocker was falsified (budget precedes lowering), the reduced form is green
+4/4. No builder rewrite, no new framework. H3's "cheapest experiment" line
+is rewritten accordingly (see H3 addendum) — the next measurement is budget
+attribution, not gate location. Candidates B/C negatives STAND (unaffected
+by H-V5c). Correction pass applied; falsifier credit to the design: the
+probe found the TRUE first blocker (budget), which is what falsifiers are for.
