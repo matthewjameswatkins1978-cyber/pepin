@@ -2533,6 +2533,36 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
       } else {}
     }
   }
+  // Union declarations share the seed's single source-wide type namespace
+  // with records (staged X3/X6/X7): a record D and a union D are the same
+  // duplicate, and a union-typed parameter needs an external fact to stay
+  // supported. Phase 1 collects distinct union names (reverse source order,
+  // deterministic) and completes duplicateNames across both kinds and
+  // repeated unions, before any fact is emitted below. Primitive-shadowing
+  // unions stay unemitted (fail-closed, like records).
+  var unionNamesRev: List[Str] = []
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "union_declaration" {
+      var ualready = false
+      for uknown in unionNamesRev { if uknown == node.text { ualready = true } else {} }
+      if !ualready {
+        unionNamesRev = prepend(unionNamesRev, node.text)
+      } else {
+        if !supported_primitive_type(node.text) {
+          if !contains(duplicateNames, node.text) {
+            duplicateNames = prepend(duplicateNames, node.text)
+          } else {}
+        } else {}
+      }
+      if !supported_primitive_type(node.text) {
+        if contains(scanSeen, node.text) {
+          if !contains(duplicateNames, node.text) {
+            duplicateNames = prepend(duplicateNames, node.text)
+          } else {}
+        } else {}
+      } else {}
+    } else {}
+  }
   var finished: List[ResolvedTypeDecl] = []
   var seenTypeNames: List[Str] = []
   for resolved in allResolved {
@@ -2550,6 +2580,24 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
         finished = prepend(finished, ResolvedTypeDecl { typeName: resolved.recordName, typeKind: "record", declStartByte: declNode.node.startByte, declEndByte: declNode.node.endByte, declLine: declNode.node.line, declColumn: declNode.node.column, duplicateType: contains(duplicateNames, resolved.recordName), document: parsed.document, revision: parsed.revision, fields: reverse(typeFields) })
       } else {}
     } else {}
+    } else {}
+  }
+  // Phase 2 emits one union fact per distinct non-primitive name. Union
+  // facts carry no record fields; external_records builds a fieldless entry
+  // that keeps the name supported without inventing field types.
+  for uname in unionNamesRev {
+    if !supported_primitive_type(uname) {
+      var ufirstId = -1
+      for unode in nodes {
+        if ufirstId == -1 {
+          if unode.parentId == -1 && unode.kind == "union_declaration" && unode.text == uname { ufirstId = unode.id } else {}
+        } else {}
+      }
+      let udeclNode = lookup_node(nodes, ufirstId)
+      if udeclNode.found {
+        var unoFields: List[ResolvedTypeField] = []
+        finished = prepend(finished, ResolvedTypeDecl { typeName: uname, typeKind: "union", declStartByte: udeclNode.node.startByte, declEndByte: udeclNode.node.endByte, declLine: udeclNode.node.line, declColumn: udeclNode.node.column, duplicateType: contains(duplicateNames, uname), document: parsed.document, revision: parsed.revision, fields: unoFields })
+      } else {}
     } else {}
   }
   return reverse(finished)

@@ -26,6 +26,7 @@ def type_decl_value(decl):
     return {
         "typeName": fields["typeName"]["value"],
         "typeKind": fields["typeKind"]["value"],
+        "duplicateType": fields["duplicateType"]["value"],
         "document": fields["document"]["value"],
         "revision": fields["revision"]["value"],
         "declSpan": (int(fields["declStartByte"]["value"]),
@@ -189,6 +190,70 @@ class ChunkTypeDeclarationTests(unittest.TestCase):
         self.assertEqual(decls[0]["fields"][0][2]["kind"], "nominal")
         self.assertEqual(decls[0]["fields"][0][2]["name"], "Nope")
         self.assertEqual(decls[0]["fields"][0][3], "PEP_UNKNOWN_TYPE")
+
+    def whole_input_decls(self, source, name):
+        # Invoke the producer on the whole parsed input at once (the
+        # whole-document producer leg), not per declaration root.
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-typedecls", "arguments": [parsed],
+             "semanticTarget": sem})
+        self.assertEqual(response.get("outcome"), "ok", response)
+        return target, [type_decl_value(d)
+                        for d in response["result"]["value"]]
+
+    def test_union_declaration_yields_typed_fact(self):
+        # A3 X7: a union declaration chunk must yield one union fact so a
+        # union-typed parameter stays supported in staged chunks.
+        source = (b"type F = Left() | Right()\n"
+                  b"fn f(x: F) -> Int { return 0 }\n")
+        target, decls = self.whole_input_decls(source, "union-typedecls")
+        self.assertEqual(len(decls), 1)
+        self.assertEqual(decls[0]["typeName"], "F")
+        self.assertEqual(decls[0]["typeKind"], "union")
+        self.assertFalse(decls[0]["duplicateType"])
+        self.assertEqual(decls[0]["document"], target["document"])
+        self.assertEqual(decls[0]["revision"], target["revision"])
+        self.assertEqual(decls[0]["fields"], [])
+        self.assertGreater(decls[0]["declSpan"][1], decls[0]["declSpan"][0])
+
+    def test_cross_kind_duplicate_marks_facts_record_first(self):
+        # A3 X3 producer leg: record D before union D shares the seed's
+        # single type namespace, so both whole-input facts carry the flag.
+        source = (b"type D {\n    a: Int\n}\n"
+                  b"type D = Left() | Right()\n"
+                  b"fn f(d: D) -> Int {\n    return d.a\n}\n")
+        _, decls = self.whole_input_decls(source, "kind-dup-rf")
+        self.assertEqual(sorted(d["typeName"] for d in decls), ["D", "D"])
+        self.assertEqual({d["typeKind"] for d in decls}, {"record", "union"})
+        self.assertTrue(all(d["duplicateType"] for d in decls), decls)
+
+    def test_cross_kind_duplicate_marks_facts_union_first(self):
+        # A3 X6 producer leg: union D before record D. First-in-source
+        # order wins, so only the union fact is emitted, flagged.
+        source = (b"type D = Left() | Right()\n"
+                  b"type D {\n    a: Int\n}\n"
+                  b"fn f(d: D) -> Int {\n    return d.a\n}\n")
+        _, decls = self.whole_input_decls(source, "kind-dup-uf")
+        self.assertEqual([d["typeName"] for d in decls], ["D"])
+        self.assertEqual(decls[0]["typeKind"], "union")
+        self.assertTrue(decls[0]["duplicateType"], decls)
+
+    def test_cross_kind_distinct_names_yield_clean_facts(self):
+        # Guard against over-refusal: a record and a union with different
+        # names must both be emitted without duplicate flags.
+        source = (b"type E {\n    a: Int\n}\n"
+                  b"type F = Left() | Right()\n"
+                  b"fn f(e: E) -> Int {\n    return e.a\n}\n")
+        _, decls = self.whole_input_decls(source, "kind-ok-typedecls")
+        self.assertEqual(sorted(d["typeName"] for d in decls), ["E", "F"])
+        self.assertTrue(all(not d["duplicateType"] for d in decls), decls)
 
 
 if __name__ == "__main__":

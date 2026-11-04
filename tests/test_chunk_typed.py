@@ -886,6 +886,76 @@ class TypedChunkTests(unittest.TestCase):
                  for item in report.get("diagnostics", {}).get("value", [])]
         self.assertIn("PEP_DUPLICATE_TYPE", codes, codes)
 
+    # --- Cross-kind (record/union) duplicate closure (A3 X3/X6/X7).
+    #
+    # The seed keeps one source-wide type namespace across record and
+    # union declarations. The staged producer now emits union facts, so
+    # per-root gathered facts refuse by repeated name and whole-input
+    # facts refuse by carried flag, both with PEP_DUPLICATE_TYPE.
+
+    CROSS_KIND_DUP = (b"type D {\n"
+                      b"    a: Int\n"
+                      b"}\n"
+                      b"type D = Left() | Right()\n"
+                      b"fn f(d: D) -> Int {\n"
+                      b"    return d.a\n"
+                      b"}\n")
+    CROSS_KIND_DUP_REV = (b"type D = Left() | Right()\n"
+                          b"type D {\n"
+                          b"    a: Int\n"
+                          b"}\n"
+                          b"fn f(d: D) -> Int {\n"
+                          b"    return d.a\n"
+                          b"}\n")
+    CROSS_KIND_OK = (b"type E {\n"
+                     b"    a: Int\n"
+                     b"}\n"
+                     b"type F = Left() | Right()\n"
+                     b"fn f(e: E) -> Int {\n"
+                     b"    return e.a\n"
+                     b"}\n")
+    UNION_PARAM = (b"type F = Left() | Right()\n"
+                   b"fn f(x: F) -> Int {\n"
+                   b"    return 0\n"
+                   b"}\n")
+
+    def test_cross_kind_duplicate_matches_whole_path(self):
+        for source, tag in ((self.CROSS_KIND_DUP, "kk"),
+                            (self.CROSS_KIND_DUP_REV, "kkrev")):
+            _, _, _, whole_status, whole_diags = self.check_whole(
+                source, f"kk-whole-{tag}")
+            self.assertEqual(whole_status, "invalid")
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in whole_diags), whole_diags)
+            for reverse in (False, True):
+                status, diags = self.check_body_with_facts(
+                    source, f"kk-chunk-{tag}-{reverse}", "f",
+                    reverse_facts=reverse)
+                self.assertEqual(status, "invalid", (tag, reverse, diags))
+                self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                    for code, _, _ in diags),
+                                (tag, reverse, diags))
+
+    def test_cross_kind_distinct_names_stay_valid(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.CROSS_KIND_OK, "kk-ok-whole")
+        self.assertEqual(whole_status, "valid")
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.CROSS_KIND_OK, f"kk-ok-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "valid", (reverse, diags))
+            self.assertEqual(diags, [])
+
+    def test_union_typed_parameter_stays_valid_staged(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.UNION_PARAM, "union-param-whole")
+        self.assertEqual(whole_status, "valid")
+        status, diags = self.check_body_with_facts(
+            self.UNION_PARAM, "union-param-chunk", "f")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
     # Caller-precondition note (not a runtime test): the closure gate covers
     # carried flags and repeated external names, but not a chunk that itself
     # declares a type also supplied externally (split-root shape). No harness
