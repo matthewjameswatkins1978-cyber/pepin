@@ -999,6 +999,105 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
+    # --- External-vs-external batch contradictions (G-A1-1, A3 E2b/E2a/E1).
+    #
+    # A batch that names one function twice (identically or
+    # contradictorily), or aliases one synthetic identity across two
+    # names, must fail closed with PEP_DUPLICATE_FUNCTION even though
+    # each fact alone looks well-formed. Uniform with the external-type
+    # repeat rule; seed parity for duplicate declarations.
+
+    DUP_CALLEE_SOURCE = (b"fn dup(x: Int) -> Int { return x }\n"
+                         b"fn main() -> Int { return dup(41) }\n")
+
+    def run_main_with_sigs(self, source, name, sigs):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        self.assertIn("main", bodies)
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, bodies["main"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs]},
+            {"type": "List[ResolvedTypeDecl]", "value": []}, sem))
+        return report["status"]["value"], diag_tuples(report)
+
+    def fetch_sigs_for(self, source, name):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        return sem, parsed, fetch_all_sigs(
+            self.session, parsed, self.tool_revision, sem)
+
+    def test_contradictory_external_batch_is_refused(self):
+        # A3 E2b: same name, honest Int/arity1 + forged Bool/arity2.
+        # The source alone is seed-valid; the poisoned batch must refuse.
+        _, _, _, whole_status, _ = self.check_whole(
+            self.DUP_CALLEE_SOURCE, "e2b-whole")
+        self.assertEqual(whole_status, "valid")
+        _, _, sigs = self.fetch_sigs_for(self.DUP_CALLEE_SOURCE, "e2b-sigs")
+        honest = [s for s in sigs if s["name"] == "dup"][0]
+        forged = copy.deepcopy(honest)
+        forged["arity"] = 2
+        forged["rtype"] = "Bool"
+        forged["rshape"] = ("builtin", "Bool", 0)
+        forged["ptypes"] = [("Int", ("builtin", "Int", 0), 0),
+                            ("Int", ("builtin", "Int", 0), 1)]
+        forged["semid"] = 9001
+        forged["synid"] = 1000000001
+        for order, tag in (([honest, forged], "hf"),
+                           ([forged, honest], "fh")):
+            status, diags = self.run_main_with_sigs(
+                self.DUP_CALLEE_SOURCE, f"e2b-chunk-{tag}", order)
+            self.assertEqual(status, "invalid", (tag, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                                for code, _, _ in diags), (tag, diags))
+
+    def test_identical_duplicate_external_batch_is_refused(self):
+        # A3 E2a pinned: identical repeats refuse like contradictions,
+        # uniform with the external-type repeat rule.
+        _, _, sigs = self.fetch_sigs_for(self.DUP_CALLEE_SOURCE, "e2a-sigs")
+        dup = [s for s in sigs if s["name"] == "dup"][0]
+        status, diags = self.run_main_with_sigs(
+            self.DUP_CALLEE_SOURCE, "e2a-chunk", [dup, copy.deepcopy(dup)])
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                            for code, _, _ in diags), diags)
+
+    def test_colliding_external_ids_are_refused(self):
+        # A3 E1: two distinct callees sharing one synthetic identity must
+        # not validate, regardless of fact order.
+        _, _, _, whole_status, _ = self.check_whole(
+            self.TWO_CALLEE_SOURCE, "e1-whole")
+        self.assertEqual(whole_status, "valid")
+        _, _, sigs = self.fetch_sigs_for(self.TWO_CALLEE_SOURCE, "e1-sigs")
+        ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
+        self.assertEqual(len(ext), 2)
+        for s in ext:
+            s["semid"] = 9000
+            s["synid"] = 1000000000
+        for reverse in (False, True):
+            batch = ext if not reverse else ext[::-1]
+            status, diags = self.run_main_with_sigs(
+                self.TWO_CALLEE_SOURCE, f"e1-chunk-{reverse}", batch)
+            self.assertEqual(status, "invalid", (reverse, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                                for code, _, _ in diags), (reverse, diags))
+
     # --- Supply-time collision gate (R-ID-1, A3 T-CALL-6 class).
     #
     # A chunk declaring f plus an external function/signature fact for f

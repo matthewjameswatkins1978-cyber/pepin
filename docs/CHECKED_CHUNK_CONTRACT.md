@@ -170,6 +170,9 @@ change that alters any rule below must keep that pin green and notify A2.
    (`find_function`) and copies the supplied ids through, so
    `ResolvedCall.calleeId` for a cross-chunk call is the placeholder
    (`9000`). The emitter must never use it as a target address.
+   Within one aggregated batch, external names must also be unique:
+   a repeated name or an aliased synthetic id is refused fail-closed
+   with `PEP_DUPLICATE_FUNCTION` (A3 E2a/E2b/E1 shapes).
 2. **The cross-chunk link is the call-site node, keyed by name.**
    `ResolvedCall.syntaxId` is the call node's id in **chunk (remapped)
    space**. The emitter resolves it against the chunk's own node list (the
@@ -203,13 +206,15 @@ change that alters any rule below must keep that pin green and notify A2.
    have unique function names (`PEP_DUPLICATE_FUNCTION` whole-path), so
    name-keyed resolution is unambiguous exactly when the source is valid.
 
-Known residual (disclosed, not covered): duplicate *function* names
-across a chunk and its external facts have the same shape as the
-repaired duplicate-*type* hole (local-first resolution, no diagnosis —
-the duplicate diagnostic's `lookup_node` guard swallows the synthetic
-id). No harness path produces it (gathering excludes the entry
-function), and no probe has demonstrated it. A3 welcome to attack it;
-a demonstration gets the same fail-closed treatment as the type hole.
+Closed residuals (were disclosed, now enforced): duplicate *function*
+names across a chunk and its external facts (R-ID-1, local span), and
+repeated names or aliased synthetic ids across aggregated externals
+(batch gate, empty span) are refused fail-closed with
+`PEP_DUPLICATE_FUNCTION`. Gathering still excludes the entry function
+by construction. Remaining open: forged same-revision facts that are
+internally consistent (valid names, unique ids) — labels, not
+authenticity; tracked for the F2 document/revision schema, which still
+needs A2 agreement.
 
 ## Measured on the real lexer
 

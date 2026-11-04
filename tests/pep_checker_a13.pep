@@ -2775,6 +2775,41 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
         return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitSig.node)
       } else {}
     }
+    // Batch-internal uniqueness (G-A1-1, A3 E2a/E2b/E1): repeated names
+    // or aliased synthetic ids across aggregated externals must fail
+    // closed. Seed parity for duplicate declarations; uniform with the
+    // external-type repeat rule. Builtins and constructors keep the
+    // whole-path exclusions. No local span exists for a purely external
+    // collision (a chunk-local one already returned above with it).
+    var seenExtFnNames: List[Str] = []
+    var seenExtFnIds: List[Int] = []
+    for extFn in externalFunctions {
+      if !known_builtin(extFn.name) && !is_constructor(nodes, extFn.name) {
+        if contains(seenExtFnNames, extFn.name) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", empty_node())
+        } else {}
+        if contains(seenExtFnIds, extFn.semanticId) || contains(seenExtFnIds, extFn.syntaxId) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "External function identity is declared more than once", empty_node())
+        } else {}
+      } else {}
+      seenExtFnNames = prepend(seenExtFnNames, extFn.name)
+      seenExtFnIds = prepend(seenExtFnIds, extFn.semanticId)
+      seenExtFnIds = prepend(seenExtFnIds, extFn.syntaxId)
+    }
+    var seenExtSigNames: List[Str] = []
+    var seenExtSigIds: List[Int] = []
+    for extSig in externalSignatures {
+      if !known_builtin(extSig.functionName) && !is_constructor(nodes, extSig.functionName) {
+        if contains(seenExtSigNames, extSig.functionName) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", empty_node())
+        } else {}
+        if contains(seenExtSigIds, extSig.functionId) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "External function identity is declared more than once", empty_node())
+        } else {}
+      } else {}
+      seenExtSigNames = prepend(seenExtSigNames, extSig.functionName)
+      seenExtSigIds = prepend(seenExtSigIds, extSig.functionId)
+    }
   } else {}
   let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
   let collected = collect_bindings(nodes, functions, authority.document, authority.revision)
