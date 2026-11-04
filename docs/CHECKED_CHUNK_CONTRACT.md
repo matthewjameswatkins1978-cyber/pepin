@@ -161,8 +161,12 @@ change that alters any rule below must keep that pin green and notify A2.
 
 1. **External functions carry placeholder ids, never addresses.**
    Whoever supplies external `CheckedFunction` values must use synthetic,
-   non-real ids (the harness uses semanticId `9000`, syntaxId
-   `1000000000`). The checker matches calls to functions **by name only**
+   non-real ids that are **unique across the whole aggregated batch**
+   (the harness assigns semanticId `9000+k`, syntaxId `1000000000+k` in
+   deterministic source order; per-header zero-based numbering collides
+   once headers are aggregated — measured A2 BOOT-A2-20261104-021,
+   where `add_one(41)` resolved against the unrelated `make_token(Str)`).
+   The checker matches calls to functions **by name only**
    (`find_function`) and copies the supplied ids through, so
    `ResolvedCall.calleeId` for a cross-chunk call is the placeholder
    (`9000`). The emitter must never use it as a target address.

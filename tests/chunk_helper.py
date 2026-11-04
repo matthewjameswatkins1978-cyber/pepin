@@ -157,7 +157,7 @@ def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-check
     by_id = {str(nval(n, "id")): n for n in nodes}
     fns = [n for n in nodes if nval(n, "kind") == "function" and str(nval(n, "parentId")) == "-1"]
     allsigs = []
-    for fn in fns:
+    for batch_index, fn in enumerate(fns):
         original_id = str(nval(fn, "id"))
         sub = header_subtree(nodes, by_id, nval(fn, "id"))
         chunk = remap_chunk(sub)
@@ -181,6 +181,18 @@ def fetch_all_sigs(session, parsed, tool_revision, sem, tool_name="pep-c23-check
         # remapped ids of a body chunk and silently loses cross-chunk type
         # checking (measured).
         chunk_sigs[0]["node"] = original_id
+        # Batch-unique synthetic identities (F1, A2 BOOT-A2-20261104-021):
+        # every header chunk numbers its single signature from zero, so
+        # per-header ids collide once headers are aggregated. Renumber
+        # across the whole authorised batch in deterministic source order
+        # and stamp the authorised revision for host-side tracking. The
+        # wire-schema document/revision fields on CheckedFunction and
+        # ResolvedSignature await F2 agreement with A2; these dict keys
+        # never reach the tool wire protocol.
+        chunk_sigs[0]["semid"] = 9000 + batch_index
+        chunk_sigs[0]["synid"] = 1000000000 + batch_index
+        chunk_sigs[0]["document"] = sem["document"]
+        chunk_sigs[0]["revision"] = sem["revision"]
         allsigs.extend(chunk_sigs)
     return allsigs
 
