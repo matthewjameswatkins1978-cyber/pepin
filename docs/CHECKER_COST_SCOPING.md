@@ -171,6 +171,67 @@ roughly 1,500 ticks per node. Optimising any single predicate, lookup or helper
 does not move the ceiling. The lever has to be the number of interpreted
 operations per node — fewer passes, or fewer per-node constructions — and that is
 an analysis-architecture change, not a micro-optimisation.
+### Measured pass profile (instrumented interpreter)
+
+The inference so far is replaced by a direct measurement. A scratch worktree at
+`377ce9b` (`D:/Projects/wt-a1-profile`, deliberately not committed) instruments
+`tick` to record ticks per source line and dumps the histogram when the budget
+expires. Nothing in the mission worktree is instrumented.
+
+One 66-node check consumes the full 100,001 steps across 505 distinct checker
+lines. Ticks by enclosing function (top entries; the dump covers the 60 hottest
+lines, 74.3% of all ticks, so these are lower bounds):
+
+| function | ticks | share |
+|---|---|---|
+| `child_at` | 13,836 | 13.8% |
+| `type_shape_at` | 12,732 | 12.7% |
+| `type_analysis` | 8,462 | 8.5% |
+| `record_declaration` | 5,752 | 5.8% |
+| `lookup_node` | 5,256 | 5.3% |
+| `tree_is_valid` | 5,178 | 5.2% |
+| `collect_bindings` | 3,093 | 3.1% |
+| `count_children` | 2,880 | 2.9% |
+| `is_expression_kind` | 2,560 | 2.6% |
+| `is_constructor` | 2,320 | 2.3% |
+
+`is_expression_kind` at 2.6% independently confirms the earlier sensitivity
+result that it is not worth changing.
+
+### The number that defines the architecture decision
+
+Each scan-loop condition costs roughly one tick per node, so dividing by the
+66 nodes gives the number of full node-list scans:
+
+| line | function | ticks | ≈ full scans |
+|---|---|---|---|
+| 2454 | `child_at` | 12,086 | 183 |
+| 2430 | `type_shape_at` | 8,378 | 127 |
+| 2527 | `record_declaration` | 5,752 | 87 |
+| 2444 | `lookup_node` | 5,256 | 80 |
+| 2431 | `type_shape_at` | 3,249 | 49 |
+| 2449 | `count_children` | 2,880 | 44 |
+| 2523 | `is_constructor` | 2,320 | 35 |
+
+**Total: roughly 752 full scans of the node list — 11.4 scans per node** for a
+66-node program.
+
+Caveat, stated honestly: pass counts assume one tick per loop iteration, so they
+are approximations; the ordering and order of magnitude are solid, the exact
+figures are not.
+
+### What this settles
+
+The cost is not one slow helper but **~11 full passes per node**, each answering
+a single question (find the k-th child, find a node by id, find a declaration by
+name, count children). Lifting the ceiling therefore requires answering those
+questions in far fewer passes — precomputing per-node facts once — which needs
+indexed access the language does not have.
+
+That is the architecture decision, and it now has a number attached: reduce ~11
+passes per node toward 1, or accept the current whole-program ceiling while
+continuing to use staged checking for real modules.
+
 ## Recommendation
 
 Do not add lookup primitives. The staged path remains the supported route for
