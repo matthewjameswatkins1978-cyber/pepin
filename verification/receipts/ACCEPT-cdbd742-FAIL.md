@@ -107,6 +107,20 @@ budget.
 `analyze_parsed` is the only pass that refuses (from 84 nodes on the boolean-chain axis). So the new
 declaration-closure scan is not the cost driver, and the bound is unchanged where it was.
 
+## Composition check: does the repair hold when A2's lane is merged in?
+
+Scratch both-lane tree `D:\Projects\wt-a3-seam2` = `git merge-tree --write-tree cdbd742 ea0bc9a` →
+`4915a76c…`, wrapped in local commit `8356373a05252217ed40d3b0621b0369ae611408` (never pushed, a measurement
+fixture only; integration remains A1's).
+
+- `seam_cross_chunk_attacks.py`: **7 cases, 0 falsified** — S0 honest facts `valid`, S1 missing callee
+  `not-valid`, S2 forged arity `not-valid`, S3 forged callee name `not-valid`, S4 self-consistent forgery still
+  indistinguishable (structural, unchanged), S5 emitter emits for the matching document and **`REFUSED:PEP_STALE_REVISION`** for a foreign report. A1's call contract did not weaken any seam guard.
+- `dup_decl_cross_chunk.py`: **9 claims, 2 falsified** — X2 (duplicate records across chunks) refused and X1
+  control valid exactly as at `cdbd742`, and X3/X6 (record/union namesake) still **accepted**. So the repair
+  composes with A2's lane, and the residual hole is present in the merged tree too. Validate any union-fact fix
+  against this merged shape, not only against `cdbd742`.
+
 ## Primitive shadowing: refused on both sides (diagnostic divergence only)
 
 `dup_primitive_shadow.py` (seed oracle, no harness): the seed refuses **even a single** `type Int { a: Int }`
