@@ -39,6 +39,8 @@ declaration code), declared rather than invented in the checker.
 | **S7** omitted field (`Point{x}` absent) refuses, no silent unknown-field acceptance | **not valid** |
 | **S8** `expectReturns` gates a missing return: `true` → refused, `false` → accepted | **gated both ways** |
 | **S9** diagnostic parity: whole path and typed chunk report the same `(code, span)` | **parity** |
+| **S10** primitive/malformed declaration names are inert: a bogus record fact named `Int` leaves Int arithmetic valid; a non-identifier name (`"a b"`) is harmless beside the honest fact and cannot on its own supply `Point` | **inert** |
+| **S11** multi-diagnostic parity: the typed chunk reproduces the whole path's diagnostics in the same order | **parity** (one diagnostic — the seed reports only the first error, so this is single-diagnostic parity; ordering across several errors is untested by design of the front end) |
 
 ## Observation (not a claim)
 
@@ -60,7 +62,7 @@ to observation O5 rather than reported as a defect).
 
 ## Honest scope
 
-- One candidate, one pin; ten cases. The chunked path's correctness for the seed-*valid* majority is
+- One candidate, one pin; twelve cases. The chunked path's correctness for the seed-*valid* majority is
   covered by the builder's own tests and my S0/S1/S2/S7/S9, not exhaustively re-proven here.
 - S3's hand-built facts are forged input; S3b is the honest-output variant and is the one that matters.
 - `expectReturns` was attacked in the missing-return direction only.

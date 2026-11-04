@@ -479,6 +479,67 @@ def main():
         record("S9 diagnostic parity whole vs typed chunk", True, "parity",
                "parity" if match and match[0] in chunk["diagnostics"]
                else f"whole={whole_diags} chunk={chunk['diagnostics']}")
+        # ---------- S10 malformed / primitive declaration identifiers ----------
+        # (a) a bogus record fact named `Int` must not disturb Int arithmetic;
+        arith_source = ("fn arith() -> Int {\n    let k: Int = 1 + 2\n    return k\n}\n\n"
+                        "fn main() -> Int { return 0 }\n")
+        sem_a, parsed_a = harness.prepare(arith_source, "staged-arith")
+        sigs_a = harness.signatures(parsed_a, sem_a)
+        primitive_shadow = build_decl("Int", "record", sem_a["document"], sem_a["revision"],
+                                      [("x", "Str", "builtin", "Str")])
+        s10a = harness.analyze_typed(
+            harness.sliced(parsed_a, body_ids(parsed_a, "arith")),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_a if s["name"] != "arith"]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_a if s["name"] != "arith"]},
+            {"type": "List[ResolvedTypeDecl]", "value": [primitive_shadow]}, sem_a)
+        # (b) a non-identifier fact name must be inert next to the honest fact, and must
+        #     not on its own supply `Point`'s field type.
+        malformed = build_decl("a b", "record", sem["document"], sem["revision"],
+                               [("x", "Int", "builtin", "Int")])
+        s10b_with = harness.analyze_typed(
+            harness.sliced(parsed, body_ids(parsed, "use_point")), other_fns,
+            other_sigs, {"type": "List[ResolvedTypeDecl]",
+                         "value": facts + [malformed]}, sem)
+        s10b_alone = harness.analyze_typed(
+            harness.sliced(parsed, body_ids(parsed, "use_point")), other_fns,
+            other_sigs, {"type": "List[ResolvedTypeDecl]", "value": [malformed]}, sem)
+        ok10 = (s10a["status"] == "valid" and s10b_with["status"] == "valid"
+                and s10b_alone["status"] != "valid")
+        record("S10 primitive/malformed declaration names are inert", True, "inert",
+               "inert" if ok10 else f"arith_with_Int_shadow={s10a['status']} "
+               f"point_with_malformed={s10b_with['status']} "
+               f"malformed_alone={s10b_alone['status']}")
+
+        # ---------- S11 multi-diagnostic parity AND ordering ----------
+        multi = ("type Q {\n    n: Int\n}\n\n"
+                 "fn h(q: Q) -> Int {\n    let a: Nope = 1\n    let b: Zzz = 2\n"
+                 "    return q.n\n}\n\n"
+                 "fn main() -> Int { return 0 }\n")
+        sem_m2, parsed_m2 = harness.prepare(multi, "staged-multi")
+        facts_m2 = harness.real_facts(parsed_m2, sem_m2, decl_roots(parsed_m2))
+        sigs_m2 = harness.signatures(parsed_m2, sem_m2)
+        whole_resp = harness.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker", "arguments": [parsed_m2],
+             "semanticTarget": sem_m2})
+        whole_rep = fields_map(whole_resp["result"])
+        whole_multi = [(fields_map(i)["code"]["value"],
+                        int(fields_map(i)["startByte"]["value"]),
+                        int(fields_map(i)["endByte"]["value"]))
+                       for i in whole_rep["diagnostics"]["value"]]
+        chunk_multi = harness.analyze_typed(
+            harness.sliced(parsed_m2, body_ids(parsed_m2, "h")),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_m2 if s["name"] != "h"]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_m2 if s["name"] != "h"]},
+            {"type": "List[ResolvedTypeDecl]", "value": facts_m2}, sem_m2)
+        record("S11 multi-diagnostic parity and ordering", True, "parity",
+               "parity" if list(whole_multi) == list(chunk_multi["diagnostics"])
+               else f"whole={whole_multi} chunk={chunk_multi['diagnostics']}",
+               f"counts whole={len(whole_multi)} chunk={len(chunk_multi['diagnostics'])}")
     finally:
         harness.close()
 
