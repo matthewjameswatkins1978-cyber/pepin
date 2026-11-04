@@ -249,6 +249,134 @@ class DocumentIndex:
         names = self.referenced_names(chunk_ids)
         return frozenset(name for name in candidate_names if name in names)
 
+    def statement_children(self, function_id):
+        """Top-level statement node ids of a function, in source order."""
+        ids = []
+        for node in self.nodes:
+            fields = _fields(node, "FlatAstNode")
+            if (_int_scalar(fields["parentId"], "node parentId") == function_id
+                    and _str_scalar(fields["role"], "node role") == "statement"):
+                ids.append((_int_scalar(fields["childIndex"], "node childIndex"),
+                            _int_scalar(fields["id"], "node id")))
+        return tuple(node_id for _, node_id in sorted(ids))
+
+    def block_children(self, owner_id, role="body"):
+        """Node ids with ``role`` directly under ``owner_id``, in order."""
+        ids = []
+        for node in self.nodes:
+            fields = _fields(node, "FlatAstNode")
+            if (_int_scalar(fields["parentId"], "node parentId") == owner_id
+                    and _str_scalar(fields["role"], "node role") == role):
+                ids.append((_int_scalar(fields["childIndex"], "node childIndex"),
+                            _int_scalar(fields["id"], "node id")))
+        return tuple(node_id for _, node_id in sorted(ids))
+
+    def bounded_units(self, function_id, groups=None):
+        """Bounded checking units covering one function, smallest first.
+
+        Yields ``(label, chunk_ids, expect_returns)``. The whole body comes
+        first because most functions fit. Statement units are non-terminal, so
+        they must be checked with ``expect_returns=False`` or every one of them
+        draws a spurious missing-return diagnostic; only the whole body is
+        checked as terminal.
+
+        ``groups`` lets the caller supply its own covering set instead of the
+        default single-statement units: each entry is
+        ``(label, lo, hi, carriers, expect_returns)`` naming a half-open range
+        of top-level statements plus the earlier statement indexes to re-include
+        for binding context. That expresses the two-group scheme already proven
+        for `utf8_check`, where a later group reads bindings introduced earlier.
+
+        Every unit keeps original span identity, so diagnostics still land on
+        real source offsets.
+        """
+        body = self.subtree(function_id)
+        yield ("body", body, True)
+        statements = self.statement_children(function_id)
+        statement_ids = {node_id for root in statements
+                         for node_id in self.subtree(root)}
+        keep_header = tuple(node_id for node_id in body
+                            if node_id not in statement_ids)
+        if groups is not None:
+            for label, lo, hi, carriers, expect_returns in groups:
+                keep = set(keep_header)
+                for root in statements[lo:hi]:
+                    keep.update(self.subtree(root))
+                for index in carriers:
+                    keep.update(self.subtree(statements[index]))
+                yield (label, tuple(sorted(keep)), expect_returns)
+            return
+        for position, statement in enumerate(statements):
+            yield (f"statement[{position}]",
+                   keep_header + self.subtree(statement), False)
+        for position, statement in enumerate(statements):
+            inner = self.block_children(statement)
+            if not inner:
+                continue
+            for index, part in enumerate(inner):
+                drop = {
+                    node_id for other in inner if other != part
+                    for node_id in self.subtree(other)
+                }
+                yield (f"statement[{position}].body[{index}]",
+                       tuple(node_id for node_id in body if node_id not in drop),
+                       False)
+class BindingPool:
+    """Stable binding facts for chained chunk checking.
+
+    Every chunk numbers its own bindings from 2000000, so pooling raw facts
+    from several chunk reports silently aliases different bindings to the same
+    id: a lookup for ``width`` can resolve to ``first`` and the checker then
+    rejects a legal assignment as immutable. The pool renumbers on admission
+    and dedupes by source identity, which is stable across chunks because scope
+    keys and visibleFrom are source-anchored.
+
+    Measured on ``examples/pep_lexer.pep`` ``utf8_check`` (21 statements):
+    5/21 valid without pooled facts, 14/21 with naively pooled facts, 21/21
+    with this pool.
+    """
+
+    BASE = 3_000_000
+
+    def __init__(self):
+        self._facts = []
+        self._seen = set()
+
+    @staticmethod
+    def _scalar(fields, name):
+        return fields[name]["value"]
+
+    def add(self, bindings):
+        """Admit binding facts from one chunk report; returns how many landed."""
+        added = 0
+        for binding in bindings:
+            fields = {field["name"]: field["value"] for field in binding["fields"]}
+            key = (self._scalar(fields, "name"),
+                   self._scalar(fields, "ownerFunctionId"),
+                   self._scalar(fields, "scopeId"),
+                   self._scalar(fields, "visibleFrom"))
+            if key in self._seen:
+                continue
+            self._seen.add(key)
+            replaced = []
+            for field in binding["fields"]:
+                if field["name"] == "semanticId":
+                    replaced.append({"name": "semanticId",
+                                     "value": {"type": "Int",
+                                               "value": str(self.BASE + len(self._facts))}})
+                else:
+                    replaced.append(field)
+            self._facts.append({"type": "BindingFact", "fields": replaced})
+            added += 1
+        return added
+
+    def facts(self):
+        """The pooled facts, safe to send as ``List[BindingFact]``."""
+        return list(self._facts)
+
+    def __len__(self):
+        return len(self._facts)
+
 
 class ChunkPlan:
     """Covering chunk plan for one revision, with declared shared roots."""
