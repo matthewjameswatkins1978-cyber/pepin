@@ -592,6 +592,41 @@ fn pep_c23_call_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: 
 fn pep_c23_unsupported(message: Str) -> PepC23Emission {
   return PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: message }
 }
+// Lower one direct-function-body `say(...)` statement to the inlined runtime print helper. The
+// argument must classify as a Str value position through pep_c23_str_expression -- string literal,
+// Str parameter, immutable Str local, or Str field -- and is then lowered through the ordinary
+// expression path; those classified shapes have no side effects, so emitting the value twice for
+// `.data` and `.length` cannot observe an evaluation difference. Anything else refuses with its
+// shape named: wrong arity, a non-Str position such as int_text(...), or a non-say expression
+// statement. Say inside loop/conditional bodies stays with those bodies' own statement whitelists.
+fn pep_c23_say_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode) -> PepC23Emission {
+  let value = pep_c23_child(nodes, statement.id, "value", 0)
+  if !value.found || value.node.kind != "call" || value.node.text != "say" {
+    return pep_c23_unsupported("Pep C23 expression statements currently support only say(...)")
+  } else {}
+  var argumentCount = 0
+  var argumentNode = pep_c23_empty_ast_node()
+  for candidate in nodes {
+    if candidate.parentId == value.node.id && candidate.role == "argument" {
+      argumentCount = argumentCount + 1
+      if candidate.childIndex == 0 { argumentNode = candidate } else {}
+    } else {}
+  }
+  if argumentCount != 1 {
+    return pep_c23_unsupported("Pep C23 say requires exactly one argument")
+  } else {}
+  if !pep_c23_str_expression(nodes, function, argumentNode).found {
+    return pep_c23_unsupported("Pep C23 say lowers only string literals, Str parameters, Str locals and Str fields")
+  } else {}
+  let lowered = pep_c23_expression(nodes, function, argumentNode)
+  if lowered.status != "emitted" { return lowered } else {}
+  var parts: List[Str] = ["  pep_say("]
+  for part in lowered.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ".data, ")
+  for part in lowered.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ".length);\n")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
 fn pep_c23_close_generated_call(nodes: List[FlatAstNode], parts: List[Str], argumentCount: Int) -> List[Str] {
   var closedParts = parts
   if pep_c23_requires_arena(nodes) {
@@ -3343,7 +3378,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
               returned = true
               returnStatement = PepC23NodeLookup { found: true, node: statement }
             } else {
-              return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+              if statement.kind == "expression_statement" {
+                // Validation gate: accept exactly the say(...) shape the assembly path lowers, so
+                // an unsupported expression statement still fails closed before any emission.
+                let sayCheck = pep_c23_say_statement(nodes, function, statement)
+                if sayCheck.status != "emitted" { return sayCheck } else {}
+              } else {
+                return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+              }
             }
           }
         }
@@ -3897,7 +3939,14 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
             } else { pep_c23_loop_statement(parsed.nodes, node, statement, 0, localBindings, result) }
             if loweredControl.status != "emitted" { return loweredControl } else {}
             for part in loweredControl.sourceParts { bodyParts = append(bodyParts, part) }
-          } else {}
+          } else {
+            if statement.parentId == node.id && statement.role == "statement" &&
+               statement.kind == "expression_statement" {
+              let loweredSay = pep_c23_say_statement(parsed.nodes, node, statement)
+              if loweredSay.status != "emitted" { return loweredSay } else {}
+              for part in loweredSay.sourceParts { bodyParts = append(bodyParts, part) }
+            } else {}
+          }
         }
       }
     }
@@ -4200,6 +4249,12 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const pep_str *data; size_t length; } pep_list_str;\n")
+  // The print helper is placed unconditionally: detecting `say` with a node scan costs more
+  // than the one-shot emit_c23 budget leaves on a near-ceiling fixture (the depth-510 recursion
+  // regression tipped by ~hundreds of ticks with any conditional form; measured 2026-11-04).
+  // [[maybe_unused]] keeps -Wunused clean when nothing calls it, and programs without say produce
+  // byte-identical RUNTIME output -- only this fixed helper block is added to their generated C.
+  reversed = prepend(reversed, "[[maybe_unused]] static void pep_say(const unsigned char *value, unsigned long long length) {\n  if (length != 0 && value == NULL) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  for (unsigned long long pep_i = 0; pep_i < length; ++pep_i) { fputc((int)value[pep_i], stdout); }\n  fputc(10, stdout);\n}\n")
   if requiresArena {
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_int pep_list_int_prepend(pep_arena_t *pep_a, pep_list_int pep_values, int64_t pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_count * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_int pep_list_int_reverse(pep_arena_t *pep_a, pep_list_int pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_int){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_values.length * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_values.length };\n}\n")
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_bool pep_list_bool_prepend(pep_arena_t *pep_a, pep_list_bool pep_values, _Bool pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_count * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_bool pep_list_bool_reverse(pep_arena_t *pep_a, pep_list_bool pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_bool){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_values.length * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_values.length };\n}\n")
