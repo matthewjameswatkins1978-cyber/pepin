@@ -1,37 +1,21 @@
-# Checker per-node cost: structural-index scoping
+# Checker per-node cost: measurement and scoping
 
-Status: measurement and scoping only. No checker or host change is proposed as
-already-approved work here; this note records what a per-node cost fix would
-actually require before any of it is written.
+Status: measurement and scoping. No checker or host change is proposed here as
+already-approved work. This note records what a per-node cost fix actually
+requires, and which candidate fixes have been measured and rejected.
 
-Revision measured: `0437a75` on `codex/p1-checker-cost-fix`.
-Limits under measurement: 100,000 steps, 1 MiB JSONL message, 65,536-byte
-source open.
+Revision measured: `0437a75` … `fd5380b` on `codex/p1-checker-cost-fix`.
+Limits under measurement, unchanged throughout: 100,000 steps, 1 MiB JSONL
+message, 65,536-byte source open.
 
 ## Why this exists
 
 Staged checking already covers whole real modules under unchanged limits
 (`stdlib/collections.pep`: 107 of 107 top-level functions; `examples/pep_lexer.pep`
-partly). The remaining failure class is per-node cost: the whole-program check
+mostly). The remaining failure class is per-node cost: the whole-program check
 still expires at 62–66 nodes, and `lexer_step` has no split that passes.
 
-## What the profile says
-
-- The 66-node budget expires inside `record_declaration()` (bundle `2527:43`).
-- Ablating that function does **not** raise the ceiling. The site migrates:
-  `union_declaration` (66) → `child_at` (88) → `lookup_node` (110) →
-  `type_shape_at` (132) → `collect_bindings` (176) → `collect_functions` (220) →
-  `count_children` (264).
-- Wall-clock stays flat while steps explode (log-log slope 0.79; 4–30 ms across
-  44–726 nodes). The budget is consumed by step-counted list traversal, not by
-  compute time.
-
-So there is no single hot lookup. Cost is spread across the whole scan family,
-and the scanners are called from inside per-node inference loops
-(`infer_expression_type_at`, `expression_type_shape`,
-`infer_expression_type_and_shape`, `type_analysis`).
-
-## Census (measured)
+## Census
 
 | quantity | value |
 |---|---|
@@ -42,7 +26,7 @@ and the scanners are called from inside per-node inference loops
 | functions that would need an index parameter | 54 |
 | call sites that would have to pass it | 221 |
 
-Grouped by key:
+Grouped by key shape:
 
 | key shape | scanners | call sites |
 |---|---|---|
@@ -52,50 +36,35 @@ Grouped by key:
 Largest name-keyed sites: `child_at` 71, `count_children` 21, `type_shape_at` 18,
 `is_constructor` 13, `record_declaration` 12.
 
-## Options, with the diff each implies
+## Options, and the diff each implies
 
-### A. Thread a precomputed index through the analysis
+**A. Thread a precomputed index through the analysis.** 54 signature changes and
+221 call-site edits across a 773-line `type_analysis`. Largest diff, highest risk
+to diagnostic parity, which is itself an acceptance item. Not started.
 
-54 signature changes plus 221 call-site edits across a 773-line `type_analysis`.
-This is the largest diff and the one most likely to perturb diagnostic output —
-and diagnostic parity is an acceptance item. Not started.
+**B. Host capability for indexed or associative node access.** `lookup_node` is
+the only id-keyed scanner and flat AST ids are dense `0..n-1` and ascending
+(verified 2030/2030 on `pep_lexer.pep`), so it would be O(1) with a one-line body
+change. But that covers **31 of 203** call sites (15%); the other 172 are keyed
+on `(parentId, role, childIndex)` or `(kind, text)`.
 
-### B. Host capability for indexed / associative node access
+**C. Accept the current ceiling.** Staged verification covers real modules;
+whole-program checking beyond ~62 nodes stays unavailable.
 
-`lookup_node` alone is id-keyed, and flat AST ids are dense `0..n-1` and
-ascending (verified 2030/2030 on `pep_lexer.pep`). A host primitive returning the
-node at a given id would make those 31 call sites O(1) with a one-line body
-change and no signature churn.
+## The constraint that rules out an in-Pep index
 
-That covers **31 of 203** scan call sites (15%). The remaining 172 are keyed on
-`(parentId, role, childIndex)` or `(kind, text)`, which needs an associative
-structure, not positional access.
-
-### C. Accept the current ceiling
-
-Staged verification continues to cover real modules; whole-program checking of
-programs beyond ~62 nodes stays unavailable.
-
-## The constraint that decides between B and A
-
-Pep has no list indexing and no map/dictionary. A hand-rolled index in Pep is a
+Pep has no list indexing and no map/dictionary. A hand-rolled index is a
 `List[...]` searched by the same linear scan it was meant to replace, and binary
-search is impossible without positional access. **So no in-Pep structural index
-can beat O(n).** Per-node cost work therefore depends on a host data-structure
-capability, not on a checker refactor.
+search is impossible without positional access. **No in-Pep structural index can
+beat O(n).** Any real fix therefore depends on a host or language-surface
+capability, and should be taken deliberately.
 
-That makes this a language/host surface decision, not a local optimisation, and
-it should be taken deliberately rather than slipped in while chasing a fixture.
-
-## Upper-bound measurement: no lookup primitive can lift this ceiling
-
-If per-node cost were lookup-bound, replacing every whole-list name/id lookup
-would raise the ceiling. It does not.
+## Upper bound: no lookup primitive can lift the ceiling
 
 Stubbing `lookup_node`, `record_declaration`, `union_declaration`,
-`variant_declaration` and `is_constructor` to constant returns (diagnostic only,
-never shipped) still leaves the 66-node program over budget, and the failure site
-moves well away from the lookup family:
+`variant_declaration` and `is_constructor` to constants (diagnostic only, never
+shipped) still leaves the 66-node program over budget, and the failure leaves the
+lookup family entirely:
 
 | program | nodes | expires in (all lookups stubbed) |
 |---|---|---|
@@ -107,74 +76,40 @@ moves well away from the lookup family:
 | recpad-20 | 220 | `collect_functions` |
 | recpad-24 | 264 | `count_children` |
 
-Caveat, stated honestly: each stub still constructs a `NodeLookup` record and
-calls `empty_node()`, so this is not a perfect "free" model. It is nonetheless
-decisive in direction: removing the five most expensive scanners neither lifts
-the ceiling nor keeps the failure in that family.
+Caveat: each stub still builds a `NodeLookup` and calls `empty_node()`, so this
+is not a perfect "free" model. It is decisive in direction.
 
-### What the new site shows
+Two further reasons no host primitive was added: builtins are deliberately
+charged per element of work (`reverse` ticks per head, `byte_slice` per byte), so
+a positional lookup over a list would either tick per element with no gain or
+break the accounting model; and even granting a free lookup family the ceiling
+holds.
 
-`is_expression_kind` is a disjunction chain of ~20 string comparisons
-(`kind == "integer" || kind == "boolean" || ...`). The interpreter ticks per
-evaluated expression, so every `||` alternative costs a tick, and this runs for
-every expression node. That is representative of the real shape of the cost:
-many small per-node predicate chains, not one expensive scan.
+## Sensitivity test: the predicate chain is not the cost
 
-### Conclusion, and the decision this forces
-
-Host primitives are **not** the fix, and none were added. Two further reasons:
-
-- host builtins are deliberately charged per element of work (`reverse` ticks per
-  head, `byte_slice` ticks per byte), so a positional lookup over a list would
-  either tick per element (no gain) or break the accounting model (gaming the
-  budget);
-- even granting a genuinely free lookup family, the ceiling holds.
-
-So whole-program checking beyond ~62 nodes is an **analysis-architecture**
-question: reduce the number of interpreted expressions per node (predicate
-chains, repeated passes, per-node record construction) rather than add
-capabilities. That is a design decision to be taken explicitly, not something to
-be discovered by attrition against fixtures.
-
-### Sensitivity test: the predicate chain is not the cost
-
-`is_expression_kind` was the next candidate: 13 string comparisons, and the
-interpreter ticks per evaluated expression, so roughly 26 ticks per call.
-
-Two measurements, both on the 55/66-node boundary (k=5 is 55 nodes and valid,
-k=6 is 66 nodes and over budget):
+`is_expression_kind` has 13 string comparisons and one call site. Duplicating the
+disjunction is logically identical, so only ticks change. Boundary is k=5 (55
+nodes, valid) / k=6 (66 nodes, over budget):
 
 | variant | k=4 | k=5 | k=6 | k=7 |
 |---|---|---|---|---|
-| baseline (1x chain) | valid | valid | STEP_LIMIT | STEP_LIMIT |
-| doubled chain (2x) | valid | valid | STEP_LIMIT | STEP_LIMIT |
-| quadrupled chain (4x) | valid | valid | STEP_LIMIT | STEP_LIMIT |
+| baseline 1x | valid | valid | STEP_LIMIT | STEP_LIMIT |
+| doubled 2x | valid | valid | STEP_LIMIT | STEP_LIMIT |
+| quadrupled 4x | valid | valid | STEP_LIMIT | STEP_LIMIT |
 
-The doubled and quadrupled disjunctions are logically identical to the original,
-so the only change is ~78 extra interpreted ticks per call. **Nothing moves.**
+Nothing moves with ~78 extra ticks per call, so collapsing the chain is not the
+lever and was not done. A stubbed `return true` variant was tried and **discarded
+as evidence**: it changes semantics and makes the ceiling worse. Semantics-changing
+ablations distort cost in both directions.
 
-A stubbed `return true` variant was also tried and is not usable as evidence: it
-changes semantics, causes every node to be treated as an expression, and makes
-the ceiling *worse* (55 nodes then fails). Semantics-changing ablations distort
-cost in both directions and cannot bound a contribution.
+## Instrumented profile (ticks per source line)
 
-### What that tells us
+A scratch worktree (`D:/Projects/wt-a1-profile`, detached, deliberately not
+committed) instruments `tick` to record ticks per source line and dumps a
+histogram when the budget expires. The mission worktree is never instrumented.
 
-At one call site and ~26 ticks per call, the predicate is on the order of 1,700
-ticks for a 66-node program — about 2% of a 100,000-step budget. Quadrupling it
-adds 5% and still does not cross a boundary. So collapsing this chain is not
-worth a checker change, and is not the lever.
-
-The measured picture is consistent across every experiment so far: cost is
-**diffuse**, spread over many small per-node operations and repeated passes at
-roughly 1,500 ticks per node. Optimising any single predicate, lookup or helper
-does not move the ceiling. The lever has to be the number of interpreted
-operations per node — fewer passes, or fewer per-node constructions — and that is
-an analysis-architecture change, not a micro-optimisation.
-### Correction: full-coverage attribution, and two negative prototypes
-
-The first profile dump listed only the 60 hottest lines (74.3% of ticks). Widening
-the dump to all 505 lines gives a complete picture, and the shares shift:
+One 66-node check consumes all 100,001 steps across 505 checker lines, with
+complete attribution:
 
 | function | ticks | share |
 |---|---|---|
@@ -184,114 +119,93 @@ the dump to all 505 lines gives a complete picture, and the shares shift:
 | `tree_is_valid` | 7,062 | 7.1% |
 | `record_declaration` | 5,752 | 5.8% |
 | `lookup_node` | 5,256 | 5.3% |
+| `collect_bindings` | 3,798 | 3.8% |
+| `scope_chain` | 3,684 | 3.7% |
 
-The top three are about 42% of the budget. Full-coverage totals: **849 full
-node-list scans, 12.9 per node** (the earlier 752/11.4 figure came from the
-partial dump and is superseded).
+Top three are about 42% of the budget. `is_expression_kind` measures 2.6%,
+independently confirming the sensitivity result above.
 
-### Where the cost is *not*
+*(An earlier 60-line dump produced a partial table — `child_at` 13.8%,
+`type_shape_at` 12.7%, `type_analysis` 8.5% — and a "752 scans / 11.4 per node"
+figure. Both are superseded by the full-coverage numbers below.)*
 
-Ticks at the **call sites** of the scanning helpers total only **1.2%** of the
-budget (child_at 0.3%, record_declaration 0.3%, type_shape_at 0.2%). Calling a
-helper is cheap; the scan inside it is what is billed. So the lever is the number
-of calls, never the cost of a call.
+## Per-call call graph
 
-### Prototype 1: `if_expression` child lookups — no effect
+Line ticks cannot attribute call counts (a call costs one tick), so the
+interpreter was instrumented a second time to count caller→callee edges;
+`callstack` already carries function names. One 66-node run produced 75 edges and
+800 user-function calls before the budget expired.
 
-Replacing the two `child_at` calls for an `if_expression` (then, else) with a
-single `children_of` pass left the profile untouched, because **recpad-6 contains
-no `if_expression` nodes**. A local optimisation on a path the fixture never
-executes cannot move the ceiling. Recorded so the same dead end is not repeated.
+Callers of `child_at` (48 calls):
 
-### Prototype 2: guarding `declared_binding_type` — no effect
+| caller | calls | share |
+|---|---|---|
+| `declared_binding_type` | 17 | 35.4% |
+| `type_analysis` | 15 | 31.2% |
+| `declared_return_type` | 10 | 20.8% |
+| `collect_functions` | 6 | 12.5% |
 
-`declared_binding_type` scans for an `annotation` child on any non-parameter node,
-although only `let` and `var` can carry that role. Adding a kind guard is
-semantically safe (the role only exists for those kinds) — and produced a
-**byte-identical profile** (849 scans, child_at 14,028 ticks). So that path is
-not dynamically hot either; the wasted scans are real but rare.
+Callers of `type_shape_at` (33 calls):
+
+| caller | calls | share |
+|---|---|---|
+| `type_name_at` | 27 | 81.8% |
+| `collect_functions` | 6 | 18.2% |
+
+Most-called functions overall: `empty_node` 82, `validation_parent` 54,
+`fixed_child_index` 54, `is_expression_kind` 52, `child_at` 48,
+`legacy_type_name` 45, `type_shape_at` 33, `list_element_type` 28,
+`type_name_at` 27, `record_declaration` 26.
+
+## Correction: pass counts were overstated
+
+Dividing ticks by node count assumed one tick per loop iteration. The call graph
+shows that is wrong: `child_at` costs 14,028 ticks for 48 calls, about **292 ticks
+per call**, and each call inspects up to 66 nodes — roughly **4.4 ticks per node
+inspected**.
+
+So 849 is a count of *node inspections*, not full traversals; full traversals are
+closer to **~200**. The ordering of hot functions is unaffected, but the earlier
+"11–13 passes per node" was an overstatement.
+
+## Prototypes measured and rejected
+
+**`if_expression` child lookups.** Replacing the two `child_at` calls with one
+`children_of` pass left the profile untouched: recpad-6 contains no
+`if_expression` nodes, so the optimised path never executes.
+
+**Guarding `declared_binding_type` to `let`/`var`.** That function scans for an
+`annotation` child on any non-parameter node, though only `let`/`var` carry that
+role. The guard is semantically safe and produced a **byte-identical profile**
+(849 inspections, `child_at` 14,028 ticks). The waste is real but rare — the call
+graph explains why: `declared_binding_type` is called only 17 times.
 
 Both prototypes were measurement-only in the scratch worktree and are reverted.
 
-### What is still unknown
+## What is established
 
-Which callers produce `child_at`'s ~200 scans is **not** attributable from
-line-ticks, because the call itself costs one tick. Attribution needs per-call
-counts keyed by function, not per-line ticks. Until that exists, further
-reductions would be guesses — and two guesses have now been measured as
-worthless.
-
-## Recommendation
-
-The inference so far is replaced by a direct measurement. A scratch worktree at
-`377ce9b` (`D:/Projects/wt-a1-profile`, deliberately not committed) instruments
-`tick` to record ticks per source line and dumps the histogram when the budget
-expires. Nothing in the mission worktree is instrumented.
-
-One 66-node check consumes the full 100,001 steps across 505 distinct checker
-lines. Ticks by enclosing function (top entries; the dump covers the 60 hottest
-lines, 74.3% of all ticks, so these are lower bounds):
-
-| function | ticks | share |
-|---|---|---|
-| `child_at` | 13,836 | 13.8% |
-| `type_shape_at` | 12,732 | 12.7% |
-| `type_analysis` | 8,462 | 8.5% |
-| `record_declaration` | 5,752 | 5.8% |
-| `lookup_node` | 5,256 | 5.3% |
-| `tree_is_valid` | 5,178 | 5.2% |
-| `collect_bindings` | 3,093 | 3.1% |
-| `count_children` | 2,880 | 2.9% |
-| `is_expression_kind` | 2,560 | 2.6% |
-| `is_constructor` | 2,320 | 2.3% |
-
-`is_expression_kind` at 2.6% independently confirms the earlier sensitivity
-result that it is not worth changing.
-
-### The number that defines the architecture decision
-
-Each scan-loop condition costs roughly one tick per node, so dividing by the
-66 nodes gives the number of full node-list scans:
-
-| line | function | ticks | ≈ full scans |
-|---|---|---|---|
-| 2454 | `child_at` | 12,086 | 183 |
-| 2430 | `type_shape_at` | 8,378 | 127 |
-| 2527 | `record_declaration` | 5,752 | 87 |
-| 2444 | `lookup_node` | 5,256 | 80 |
-| 2431 | `type_shape_at` | 3,249 | 49 |
-| 2449 | `count_children` | 2,880 | 44 |
-| 2523 | `is_constructor` | 2,320 | 35 |
-
-**Total: roughly 752 full scans of the node list — 11.4 scans per node** for a
-66-node program.
-
-Caveat, stated honestly: pass counts assume one tick per loop iteration, so they
-are approximations; the ordering and order of magnitude are solid, the exact
-figures are not.
-
-### What this settles
-
-The cost is not one slow helper but **~11 full passes per node**, each answering
-a single question (find the k-th child, find a node by id, find a declaration by
-name, count children). Lifting the ceiling therefore requires answering those
-questions in far fewer passes — precomputing per-node facts once — which needs
-indexed access the language does not have.
-
-That is the architecture decision, and it now has a number attached: reduce ~11
-passes per node toward 1, or accept the current whole-program ceiling while
-continuing to use staged checking for real modules.
+- Cost is **diffuse**: no single predicate, lookup or helper moves the ceiling,
+  and two candidate reductions measured as worthless.
+- **Call count**, not call cost, is the lever (call sites are 1.2% of ticks).
+- The top structural targets are `type_name_at` driving 81.8% of `type_shape_at`
+  walks, and `empty_node` as the most-called function (82 calls, 13-field record
+  each, also the miss path of every failed lookup).
+- Every one of those fixes needs a cached or indexed result, which the language
+  cannot express.
 
 ## Recommendation
 
-Do not add lookup primitives. The staged path remains the supported route for
-real modules (107 of 107 functions in `stdlib/collections.pep`), and lifting the
-whole-program ceiling needs a deliberate decision on analysis architecture:
+Do not continue micro-optimising against fixtures. Either:
 
-1. collapse the per-node predicate chains (`is_expression_kind` and peers) into
-   a single comparison or a precomputed classification;
-2. reduce the number of full passes over `nodes` per analysis;
-3. only then re-measure the ceiling and decide whether further work is warranted.
+1. take the language/host decision — indexed or associative node access — and
+   measure the ceiling afterwards; or
+2. accept the current whole-program ceiling and keep staged checking as the
+   supported route for real modules.
 
-Each step must show a before/after ceiling measurement on recpad-6, so progress
-is evidence rather than assertion.
+Option 2 is what already works today and is what the mission's "credible route
+through larger real Pep modules" acceptance item rests on. Option 1 is a design
+decision with language-surface consequences and should be taken explicitly.
+
+Either way, any future attempt must show a before/after ceiling measurement on
+recpad-6, and must first check the call graph to confirm the target is actually
+on the executed path.
