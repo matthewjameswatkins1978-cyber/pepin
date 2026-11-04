@@ -67,6 +67,16 @@ python verification\probes\dup_decl_minimiser.py D:\Projects\wt-a3-int-bcfa3c0
 python verification\probes\dup_decl_minimiser.py D:\Projects\wt-a3-a1-0c5f12b
 ```
 
+## Fixture reproducibility (measured, and corrected once)
+
+The fixture's numbers above are byte-exact only if the file is checked out with LF. This repository runs
+`core.autocrlf=true`, so the first version of the fixture (committed at `7adba55`, before any `.pep`
+attribute existed) checked out as **90 bytes** with a different sha256 — a real reproducibility hazard
+for a fixture whose size is part of the claim. Fixed in `0267c9b` by adding `*.pep text eol=lf` to
+`verification/.gitattributes`; a fresh checkout of `0267c9b` now yields **81 bytes / sha256 7848eea5…**.
+Stored blob for the fixture: `8466adf6ecb2d1baf328dad23169db87ad090fdf`. Cite the blob or a checkout at
+`0267c9b` or later, never `7adba55`.
+
 ## Honest scope
 
 - One declaration pair, one field used; the minimiser tried three sizes (81 / 111 / 114 bytes) and the
