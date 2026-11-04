@@ -136,6 +136,41 @@ chains, repeated passes, per-node record construction) rather than add
 capabilities. That is a design decision to be taken explicitly, not something to
 be discovered by attrition against fixtures.
 
+### Sensitivity test: the predicate chain is not the cost
+
+`is_expression_kind` was the next candidate: 13 string comparisons, and the
+interpreter ticks per evaluated expression, so roughly 26 ticks per call.
+
+Two measurements, both on the 55/66-node boundary (k=5 is 55 nodes and valid,
+k=6 is 66 nodes and over budget):
+
+| variant | k=4 | k=5 | k=6 | k=7 |
+|---|---|---|---|---|
+| baseline (1x chain) | valid | valid | STEP_LIMIT | STEP_LIMIT |
+| doubled chain (2x) | valid | valid | STEP_LIMIT | STEP_LIMIT |
+| quadrupled chain (4x) | valid | valid | STEP_LIMIT | STEP_LIMIT |
+
+The doubled and quadrupled disjunctions are logically identical to the original,
+so the only change is ~78 extra interpreted ticks per call. **Nothing moves.**
+
+A stubbed `return true` variant was also tried and is not usable as evidence: it
+changes semantics, causes every node to be treated as an expression, and makes
+the ceiling *worse* (55 nodes then fails). Semantics-changing ablations distort
+cost in both directions and cannot bound a contribution.
+
+### What that tells us
+
+At one call site and ~26 ticks per call, the predicate is on the order of 1,700
+ticks for a 66-node program — about 2% of a 100,000-step budget. Quadrupling it
+adds 5% and still does not cross a boundary. So collapsing this chain is not
+worth a checker change, and is not the lever.
+
+The measured picture is consistent across every experiment so far: cost is
+**diffuse**, spread over many small per-node operations and repeated passes at
+roughly 1,500 ticks per node. Optimising any single predicate, lookup or helper
+does not move the ceiling. The lever has to be the number of interpreted
+operations per node — fewer passes, or fewer per-node constructions — and that is
+an analysis-architecture change, not a micro-optimisation.
 ## Recommendation
 
 Do not add lookup primitives. The staged path remains the supported route for

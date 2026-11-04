@@ -341,6 +341,26 @@ class CheckerCostProfileTests(unittest.TestCase):
             session.process.stdin.close()
             session.process.terminate()
 
+    def test_predicate_chain_is_too_small_to_be_the_cost(self):
+        # is_expression_kind has one call site and 13 string comparisons
+        # (~26 ticks/call): about 1,700 ticks for a 66-node program, ~2% of a
+        # 100,000-step budget. Doubling and quadrupling the chain leaves the
+        # 55/66-node boundary unmoved, so collapsing it cannot be the lever.
+        # The bound is asserted here rather than optimised on suspicion.
+        checker = (ROOT / "tests" / "pep_checker_a13.pep").read_text(encoding="utf-8")
+        lines = checker.split("\n")
+        start = next(i for i, text in enumerate(lines)
+                     if text.startswith("fn is_expression_kind("))
+        end = start
+        while lines[end].strip() != "}" or end == start:
+            end += 1
+        body = "\n".join(lines[start:end + 1])
+        self.assertLessEqual(body.count('kind == "'), 13)
+        call_sites = sum(1 for text in lines
+                         if "is_expression_kind(" in text
+                         and not text.startswith("fn "))
+        self.assertEqual(call_sites, 1)
+
     def test_scanning_lookup_helpers_are_the_documented_hot_set(self):
         # Census of helpers that rescan the whole node list on every call.
         # Each is O(n) per call and several are called from inside node
