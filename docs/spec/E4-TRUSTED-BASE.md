@@ -28,12 +28,18 @@ host-trusted behavior. (INFERRED: no second semantic engine observed.)
 semantic compilation." **PROVED (legitimate):** `pep_c23.py` lines 186–260 —
 the staged emitter produces full C text, Clang receives `-std=c23 ... -O2`
 with no Pep-aware plugins, and refusal happens pre-emission in Pep
-(`pep_c23_unsupported`). Clang cannot accept a program the emitter refused;
-it can only miscompile an emitted one (compiler-correctness risk, not a
-semantic-hiding risk). **FALSIFIED (as a *verified* boundary):** compiler
-identity is PATH-dependent and unrecorded — two runs with different Clangs
-produce differently-trusted artifacts with identical receipts. The honest
-statement is "legitimate external toolchain, UNVERIFIED instance."
+(`pep_c23_unsupported`). Clang cannot accept a program the emitter refused.
+**QUALIFIED 2026-11-04 (independent review + A3 cold-start receipt
+ACCEPT-H-V1 @ `1de76b62`):** "can only miscompile" UNDERSTATES the trusted
+surface — the runtime, linker, ABI, execution environment, and the C
+standard library the prelude assumes are all trusted alongside the compiler
+proper, and none appear in any receipt. Further, a verifier-side version
+string (e.g. A3's "Clang 23.1.4") attests the VERIFIER's run, not the
+producer's artifact: A3's cold start exposed a missing module dependency
+(`pep_chunk_contract.py` absent from A2's tree) AND a rebuilt-from-pinned-seed
+executable whose identity no marker authenticated. A version line in the
+producer's own receipt is therefore necessary but NOT sufficient — input,
+tool, and output identities must be bound together (see revised §4).
 
 ## 3. Three runnable negative test obligations (for a future lane, not A4)
 
@@ -47,17 +53,23 @@ statement is "legitimate external toolchain, UNVERIFIED instance."
   assert the harness distinguishes trap-stderr from harness-failure by TEXT,
   not by exit code alone (locks the stderr-as-oracle contract).
 
-## 4. Narrow recommendation (later, not now)
+## 4. Narrow recommendation (REVISED 2026-11-04 — the "no added assurance"
+conclusion is withdrawn)
 
-When lanes are between gates: record `compiler --version` + sha256 of the
-resolved executable into the C23 receipt (N-T4-1's fix), and bind the bundle's
-four file hashes into the session `open` receipt (N-T3-1's fix). Both are
-receipt-only changes — no compiler, schema, or budget impact. Do NOT attempt
-hermetic-toolchain pinning (cost exceeds the risk: T4 cannot smuggle
-semantics past the emitter's pre-emission refusal).
+The G-A4-7 verdict is revised: verifier-side recording does NOT cover the
+producer gap (cold-start evidence). The revised trial: bind
+{input sha256, tool path+version+sha256, output sha256} in the PRODUCER's
+own receipt (one line per identity, no new infrastructure), and measure for
+one campaign whether any receipt EVER diverges across reruns. Cost: one
+receipt line per build; benefit: the cold-start class (missing dep,
+unauthenticated rebuild) becomes receipt-visible instead of
+investigation-visible. If after one campaign no divergence is ever recorded,
+downgrade to verifier-only recording with the evidence cited. Do NOT attempt
+hermetic-toolchain pinning (unchanged: cost exceeds the risk).
 
 ## 5. Status labels
 
-MAP (not a build plan): 6-layer table, 1 boundary adjudicated, 3 obligations
-specified for a future lane. No new work imposed on A1/A2/A3. feeds E5 (which
-checked facts are query-safe depends on T1/T2 honesty recorded here).
+MAP (not a build plan): 6-layer table, 1 boundary adjudicated (qualified —
+runtime/linker/ABI/env trusted too), 3 obligations specified for a future
+lane. Correction pass 2026-11-04 applied (verifier≠producer provenance;
+cold-start evidence; revised trial with measure-and-downgrade rule).

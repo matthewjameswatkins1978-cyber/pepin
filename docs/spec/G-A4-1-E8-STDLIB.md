@@ -17,12 +17,19 @@ byte_length / byte_at / byte_slice / utf8_slice / contains
 | emitter (495) | 0/**17**/1/**47**/38/1/0/0/0/0/0/0 |
 | **TOTAL (~387)** | 0/17/34/53/**197**/47/5/4/20/**0**/6/4 |
 
+**Revision note (2026-11-04 correction):** counts above are seed `57fe424`.
+At A1 `2ad750b` the set is 13 (+`str_concat`, seed +65 lines): the staged
+checker CALLS it twice (diagnostic paths) and lists it in `known_builtin`;
+E8-R1 below is therefore LANDED (causation unclaimed). `byte_slice`/`say`
+are unrecounted at later pins — do not cite 0-use beyond seed.
+
 ## 2. Classification per area (G-A4-1 asked)
 
 - **List[T] ops (`length/append/prepend/reverse/contains`, 335/387 calls):**
   the compiler's bloodstream — accumulator/quick-sort/scope idioms. NEEDED BY
-  A: yes, heavily. Library-vs-runtime: `prepend`/`reverse` are O(1)-ish
-  structural ops; a Pep-level list library over a smaller core is conceivable
+  A: yes, heavily. Library-vs-runtime: `reverse` is O(n) per the seed registry
+  (correction 2026-11-04 — not O(1)-ish); `prepend` is O(1). A Pep-level
+  list library over a smaller core is conceivable
   but the interpreter itself needs lists to run anything — IRREDUCIBLE
   runtime. Seed+staged support: full. Native: emitter has no lists at all
   (B3) — any native stdlib List is greenfield. Missing dependency: none for
@@ -33,10 +40,13 @@ byte_length / byte_at / byte_slice / utf8_slice / contains
   are the minimal byte interface; keep native. Seed/native: full seed; native
   emitter never touches bytes (subset excludes Str). Missing: BOUNDED BUFFER
   (see R3).
-- **UTF-8 (`utf8_slice` 6, all lexer):** NEEDED: yes, exactly once (utf8_check
-  path). Library-vs-runtime: demotable to a `byte_at` loop ONLY at >10× step
+- **UTF-8 (`utf8_slice` 6, all lexer):** NEEDED: yes — but NOT only utf8_check
+  (correction 2026-11-04, seed line refs): word extraction (:257), hole
+  names (:308), string fragments (:333, :359), symbols (:459, :464).
+  Library-vs-runtime: demotable to a `byte_at` loop ONLY at >10× step
   cost (E2 F-C, unmeasured) — keep native, no action.
-- **`byte_slice` (0 calls) + `say` (0 calls):** NOT needed by compiler A.
+- **`byte_slice` (0 calls) + `say` (0 calls), seed `57fe424`:** NOT needed by
+  compiler A at that pin (uncounted at later pins).
   `byte_slice` is dead weight for A (byte_at+length cover every use);
   candidate for E2-(c) demotion or removal from the bootstrap subset — flag,
   do not prescribe. `say` is debug/host surface, keep for humans.
@@ -45,8 +55,11 @@ byte_length / byte_at / byte_slice / utf8_slice / contains
   unmeasured). Keep native for now.
 - **Errors/Result:** NO Result/Option/error-value type exists — `describe`
   registry has no error types; failures are host-collected `CheckDiagnostic`
-  records, never values. Classification: not a missing stdlib API but a
-  missing LANGUAGE capability (user generics beyond `List[T]` do not exist).
+  records, never values. CORRECTION (2026-11-04): the missing piece is
+  generic/parameterized types — user-DEFINED tagged unions ARE expressible
+  (`type X = A() | B()`; cf. AstValue's 36 constructors). Classification: not
+  a missing stdlib API but a missing LANGUAGE capability (user generics
+  beyond `List[T]` do not exist).
   Any Result/Map proposal depends on a generics decision — flag as
   language-gap, out of stdlib scope.
 - **Paths/file I/O:** ABSENT entirely — no path type, no read primitive.
@@ -64,9 +77,11 @@ byte_length / byte_at / byte_slice / utf8_slice / contains
 - **R1. `str_concat(a: Str, b: Str) -> Str`.** Strongest evidence: seed
   REJECTS string `+` (`PEP_TYPE_MISMATCH`, A3 S6 TESTED) and the emitter works
   around it with 47 `append`s into `List[Str]` fragments assembled host-side.
-  Concatenation is currently UNEXPRESSIBLE in Pep. Test: `concat("ab","cd")
-  == "abcd"` + seed oracle + Clang/GCC run + overlong-input behavior. Native:
-  trivial C. Unblocks emitter fragment assembly as first-party Pep.
+  Concatenation was unexpressible at seed `57fe424`. STATUS 2026-11-04:
+  LANDED at A1 `2ad750b` (seed runtime + `known_builtin` entry + 2 staged
+  call sites; causation unclaimed). Remaining test: `concat("ab","cd")
+  == "abcd"` + seed oracle + Clang/GCC run (native run outstanding) +
+  overlong-input behavior. Native: trivial C.
 - **R2. `str_join(parts: List[Str]) -> Str`.** Same evidence family; joins the
   emitter's `sourceParts` pattern natively instead of host-side. Test: join of
   `["if (", cond, ")"]` fragments. Dependency: R1 or independent C loop.
@@ -79,7 +94,11 @@ byte_length / byte_at / byte_slice / utf8_slice / contains
   today (mechanism unread this slice — UNKNOWN whether hand-rolled over
   `byte_at`); standardizing it removes a hand-rolled copy and tests the
   E2-(c) demotion path on the softest arithmetic target. Test: `"42" -> 42`,
-  `"-7" -> -7`, `"4x"` refused with exact code.
+  `"-7" -> -7`, `"4x"` refused with exact code. Prior work (correction
+  2026-11-04): A2 `stdlib/scan.pep @ 58fc9bf` implements
+  `scan_int_at(SourceBytes,…)→ScanInt` with overflow guard (last-digit
+  bounding) and explicit refusals — use it as the reference implementation;
+  any `text_to_int` should wrap or match its refusal codes.
 - **R5. `read_source` (path → SourceBytes), DECISION-GATED.** Road-1 needs it;
   cannot be specified until the sandbox question is answered (host is
   `trustedLocal` today; a path primitive without a capability story is a
@@ -93,3 +112,5 @@ unused by A), 1 language-gap (`Result`/generics), 1 decision-gate (file I/O),
 5 ranked APIs with tests A2 could implement. Nothing prescribed, no lane
 blocked. Next: G-A4-2 (E7) — needs A1 Q1; Q4 already answered (A3-058:
 forgery-first failure ranking, per-phase accounting as the only fast settler).
+Correction pass 2026-11-04 applied (R1 LANDED; O(n) fix; utf8_slice uses;
+Result/unions distinction; scan.pep prior work).

@@ -24,6 +24,14 @@ ESTABLISHED field). `good: Box` visible+compatible; `n: Int` visible but
 wrong-typed. Oracle in all cases: session `query --holes` + `check` (seed),
 ESTABLISHED ops (A3 set 9 TESTED the hole lifecycle).
 
+ADAPTATIONS 2026-11-04 (A3 ACCEPT-QHOLE @ `1de76b6`, 5/5 HELD with changes —
+this contract is the PROPOSAL, that receipt is the live record):
+wire fields are `actions[].candidates[]` (+`scope`+`span`), not
+`candidateBindingIds`; provenance echo is `document`+`revision` on the
+response; the 4 KiB cap is PER-HOLE-PROJECTION (hundreds of bytes, holds) —
+the full session envelope measured 5,493 B, so the cap as written would fail
+any non-trivial program; scope the cap to the projection or drop it.
+
 ## T-QH-1 — single-candidate projection (ESTABLISHED, runnable today)
 
 Setup: fixture above with exactly one `Box`-typed visible binding.
@@ -31,28 +39,33 @@ Action: `query --holes --offset <hole>`.
 Expect: EXACTLY one hole; `expectedType == "Box"`;
 `candidateBindingIds ⊆ visibleBindingIds`; `|candidates| == 1` and it names
 `good`; response echoes `document, revision, scopeId, syntaxId` equal to the
-`check` report's. Fill via `fill_hole` → `check` valid, holes empty (A3 set 9
-already locks this path — this case pins the PROJECTION shape, not the
-lifecycle).
+`check` report's. CORRECTION: the anonymous `?` is UNFILLABLE — `fill_hole`
+requires a named hole (`PEP_HOLE_NOT_FOUND` on empty name, measured by A3).
+The fill leg runs on the `?target` named variant (A3 T-QH-1 fill leg HELD);
+either the contract fixture must name the hole, or the op must address
+anonymous holes by span — open gap, filed here, not silently patched.
 
 ## T-QH-2 — ambiguous hole, no auto-apply (ESTABLISHED, runnable today)
 
 Setup: add `let other = Box { v: 9 }` beside `good`.
 Action: `query --holes --offset <hole>`; then inspect holes (no fill call).
-Expect: `|candidates| == 2`, both visible+`Box`-typed; response ≤4 KiB and
-holes STILL PRESENT (query is read-only — the E6 loop rule: ambiguity routes
-to human, never auto-fills). A second `query` returns identical bytes
-(stability; cf. A3 cache finding — same-revision reuse expected).
+Expect: `|candidates| == 2`, both visible+`Box`-typed; per-hole projection
+≤4 KiB (see scope note above) and holes STILL PRESENT (query is read-only —
+the E6 loop rule: ambiguity routes to human, never auto-fills). A second
+`query` returns identical bytes (stability; cf. A3 cache finding —
+same-revision reuse expected).
 
 ## T-QH-3 — stale revision refused (ESTABLISHED, runnable today)
 
 Setup: T-QH-1 fixture; `open`, `query` (record revision R1), apply an edit
 elsewhere (revision R2).
 Action: `fill_hole` citing R1 identity.
-Expect: refusal with `PEP_STALE_REVISION` (A3 set 9 TESTED this code for
-fills; this case binds it to the Q-HOLE contract); current revision
-queryable and unaffected. This is the revision-invalidation guard of E5 made
-executable.
+Expect: refusal with `PEP_STALE_REVISION` (A3 HELD; this case binds it to
+the Q-HOLE contract). TIGHTENING OWED (correction 2026-11-04): the probe as
+specified does not re-query after the stale-fill refusal, so "current
+revision queryable" is asserted, not demonstrated; likewise the fill leg
+does not query to establish that no holes remain. Both assertions must gain
+their follow-up queries before this contract is cited as fully locked.
 
 ## T-QH-4 — forged transported fact contained (PROPOSED, no path exists)
 
@@ -68,8 +81,10 @@ transport (that would test the fake, not the guard).
 
 ## Handoff note to A3
 
-T-QH-1..3 run on today's seed with existing ops — adopt, adapt, or decline
-by name. T-QH-4 is a standing specified negative for the day HoleFacts
-travel. No new engine, no new authority, no builder work. Covers G-A3-8's
-ask ("explicit valid/invalid rule") for the hole half; the fill-loop half
-(E6 auto-fill cap) is covered by T-QH-2's no-state-change expectation.
+T-QH-1..3 ADOPTED with the adaptations above (A3 5/5, receipt cited);
+T-QH-4 DECLINED as spec-only per the contract's own rule (A3 agreed — no
+fake transport). No new engine, no new authority, no builder work. Covers
+G-A3-8's ask ("explicit valid/invalid rule") for the hole half; the fill-loop
+half (E6 auto-fill cap) is covered by T-QH-2's no-state-change expectation.
+Correction pass 2026-11-04 applied (wire fields, named-hole gap, 4 KiB
+scope, assertion tightening owed).

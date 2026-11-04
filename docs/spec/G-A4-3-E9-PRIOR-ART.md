@@ -8,19 +8,28 @@ mandate; one transferable technique each, one falsifiable trial each.
 ## 1. chibicc (rui314/chibicc, MIT) — phase discipline in C
 
 **Source shape (ESTABLISHED):** `tokenize.c / parse.c / codegen.c / main.c` +
-`tests/`, single-header `chibicc.h`. ~C11 subset, self-hosting-capable.
+`tests/`, single-header `chibicc.h`
+([raw `chibicc.h`](https://raw.githubusercontent.com/rui314/chibicc/main/chibicc.h),
+verified this slice). ~C11 subset, self-hosting-capable.
 **Minimum trusted semantic logic:** tokenizer → recursive-descent parser →
 x64 codegen, one process, no IR beyond the C AST; type checking is thin
 (C's weak types demand little). **Native/runtime deps:** a C library +
 assembler + linker (outsourced, like Pep's Clang reliance — E4-T4).
 **AST:** heap C structs, single ownership, freed per compilation — no
-revision identity, no spans-as-contract (diagnostics point at lines, not
-byte-exact spans). **Validation:** `tests/` shell-driven; reproducibility =
+revision identity. CORRECTION (2026-11-04, read `chibicc.h` this slice):
+tokens DO carry source location (`Token.loc` pointer + `len`, plus
+`file`/`filename`/`line_no`), `Node.tok`/`Obj.tok`/`Member.tok` retain
+representative tokens, and `error_at`/`error_tok` report them — so "no spans"
+overstated the difference. What Pep has that chibicc does not: byte-exact
+span CONTRACTS tied to machine-checked diagnostic codes (A3 CD1: code+span
+required), revision identity, and cross-chunk span preservation.
+**Validation:** `tests/` shell-driven; reproducibility =
 deterministic single-pass output.
 **What does NOT transfer to Pep:** untyped memory model (Pep's value
 semantics + typed holes forbid the casual casts chibicc leans on); no
-source-revision concept anywhere; diagnostics without byte spans would fail
-Pep's oracle standard (compare A3 CD1: code+span required).
+source-revision concept anywhere; chibicc's line-oriented diagnostics are
+not a substitute for Pep's byte-span oracle contract (compare A3 CD1:
+code+span required).
 **Transferable technique → `tests/pep_c23_emitter.pep`:** chibicc's
 *refuse-early-per-phase* discipline — each phase rejects what it cannot
 represent before the next phase runs (no half-lowered state crosses a
@@ -32,10 +41,16 @@ list its accepted pattern shapes in one comment table, add one negative per
 row; if any row cannot be stated precisely, the pass is under-specified —
 file as A1 finding, not a refactor.
 
-## 2. JonesForth (jonesforth.S, public domain, ~2000 lines literate x86 asm)
+## 2. JonesForth (public domain, asm + Forth sources)
 
-**Source shape (ESTABLISHED):** ONE assembly file = tutorial + editor +
-compiler + runtime; threaded-code (address-list) execution, no AST at all.
+**Source shape (ESTABLISHED — repo listing verified this slice via
+[GitHub API](https://api.github.com/repos/nornagon/jonesforth/contents/),
+mirror `nornagon/jonesforth`):** NOT one file (correction 2026-11-04):
+`jonesforth.S` (82,783 B literate x86 asm — tutorial + editor + compiler +
+runtime) PLUS `jonesforth.f` (59,363 B Forth sources) plus Forth-level tests.
+Threaded-code (address-list) execution, no AST at all. The correction
+strengthens the negative-pole point: even a typeless stack system needs
+~140 KB across two languages to boot and self-extend.
 **Minimum trusted semantic logic:** dictionary + two stacks + inner
 interpreter (~dozens of primitives); everything else is Forth-defined.
 **Native/runtime deps:** Linux i386 syscalls only (`-nostdlib -static`) —
@@ -72,8 +87,13 @@ mechanical; soundness arguments cite typing, not the backend. **Native/runtime
 deps:** C runtime + (for bootstrap) a previous OCaml binary — the same shape
 as Pep's opam `pepin-5.5.2` + `ocamlopt` rebuild (E1 §2).
 **AST:** `Parsetree` (syntax) vs `Typedtree` (checked) — TWO trees, the
-checked one authoritative. This is the industry-scale precedent for E2-(b):
-one authoritative semantic representation consumed downstream, with the
+checked one authoritative (see
+[driver/](https://github.com/ocaml/ocaml/tree/trunk/driver) entry points
+and [HACKING.adoc](https://github.com/ocaml/ocaml/blob/trunk/HACKING.adoc)
+pipeline description, both verified this slice). This is an industry-scale
+precedent RELEVANT to E2-(b) — not proof Pep should adopt the same boundary
+(correction 2026-11-04: a precedent informs; only a measured seam justifies).
+One authoritative semantic representation consumed downstream, with the
 syntax tree demoted to ingress. **Validation:** `testsuite/` (thousands of
 expect-tests with recorded outputs); reproducibility via Makefile staging.
 **What does NOT transfer directly:** OCaml has no source-revision dimension
@@ -97,7 +117,7 @@ sized A1/A2 finding with line refs, not a redesign.
 | property | chibicc | JonesForth | OCaml | Pep compiler A |
 |---|---|---|---|---|
 | trusted semantic core | thin (C types) | dictionary+stacks | `typing/` | staged checker (2258 lines) |
-| AST | C structs, no spans | none | Parsetree vs Typedtree | FlatAstNode vs CheckerReport |
+| AST | C structs, Token loc/len | none | Parsetree vs Typedtree | FlatAstNode vs CheckerReport |
 | diagnostics | line-text | stack dump | human text | byte-span codes (strongest) |
 | revisions | none | none | none | session document/revision (unique) |
 | bootstrap | self-compile | self-extend | BOOT_OCAMLC staging | opam ocamlopt rebuild |
@@ -111,6 +131,9 @@ can be borrowed (no technique may weaken spans or revisions — hard filter).
 
 COMPARISON (not adoption): 3 systems, 3 transferable techniques each tied to
 one Pep file + one falsifiable trial, 1 hard filter (spans+revisions).
-INFERRED where line-reads were not done; source existence ESTABLISHED.
+INFERRED where line-reads were not done; `chibicc.h` struct fields and the
+JonesForth repo listing were read verbatim this slice (ESTABLISHED);
+OCaml internals remain documented-structure (INFERRED). Correction pass
+2026-11-04 applied (spans wording, JonesForth files, precedent-vs-proof).
 Cheapest next step: the §3 emitter-redundancy count (one read, no code).
 Next: G-A4-4 (E10) — smallest real useful app.
