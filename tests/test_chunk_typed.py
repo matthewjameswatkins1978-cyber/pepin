@@ -956,6 +956,49 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
+    # --- External signature/fact ID batch-uniqueness (F1, A2 report).
+    #
+    # fetch_all_sigs gathers one header per function. Every header
+    # numbered from zero, so aggregated externals shared one synthetic
+    # identity and the checker resolved add_one(41) against the
+    # unrelated make_token(Str). Batch-unique deterministic IDs restore
+    # correct id-keyed lookup.
+
+    TWO_CALLEE_SOURCE = (b"fn add_one(x: Int) -> Int { return x }\n"
+                         b"fn make_token(s: Str) -> Str { return s }\n"
+                         b"fn main() -> Int { return add_one(41) }\n")
+
+    def open_two_callee(self, name):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name,
+                                     "bytes": list(self.TWO_CALLEE_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.TWO_CALLEE_SOURCE, target,
+                              self.tool_revision)
+        return target, sem, parsed
+
+    def test_external_signature_ids_are_unique_across_headers(self):
+        _, sem, parsed = self.open_two_callee("ids-unique")
+        first = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        second = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        self.assertEqual(len(first), 3)
+        semids = [s["semid"] for s in first]
+        synids = [s["synid"] for s in first]
+        self.assertEqual(len(set(semids)), len(first), semids)
+        self.assertEqual(len(set(synids)), len(first), synids)
+        self.assertEqual(first, second)
+
+    def test_two_external_callees_resolve_distinctly(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.TWO_CALLEE_SOURCE, "two-cal-whole")
+        self.assertEqual(whole_status, "valid")
+        status, diags = self.check_body_with_facts(
+            self.TWO_CALLEE_SOURCE, "two-cal-chunk", "main")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
     # --- Supply-time collision gate (R-ID-1, A3 T-CALL-6 class).
     #
     # A chunk declaring f plus an external function/signature fact for f
