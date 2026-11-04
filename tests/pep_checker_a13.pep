@@ -2582,13 +2582,27 @@ fn analyze_chunk_typed(parsed: ParserProgress, externalFunctions: List[CheckedFu
       return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External type facts belong to a different source revision; re-derive them for the target revision", empty_node())
     } else {}
   }
-  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, external_records(externalTypes), expectReturns)
+  var noExternalBindings: List[BindingFact] = []
+  return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), noExternalBindings, expectReturns)
+}
+fn analyze_chunk_typed_bound(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalTypes: List[ResolvedTypeDecl], externalBindings: List[BindingFact], expectReturns: Bool) -> CheckerReport {
+  for decl in externalTypes {
+    if decl.document != parsed.document || decl.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External type facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
+  }
+  return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), externalBindings, expectReturns)
 }
 fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
   var noExternalRecords: List[ResolvedRecord] = []
-  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, noExternalRecords, true)
+  var noExternalBindings: List[BindingFact] = []
+  return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, noExternalRecords, noExternalBindings, true)
 }
 fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], expectReturns: Bool) -> CheckerReport {
+  var noExternalBindings: List[BindingFact] = []
+  return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, externalRecords, noExternalBindings, expectReturns)
+}
+fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], externalBindings: List[BindingFact], expectReturns: Bool) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
     return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
@@ -2602,7 +2616,10 @@ fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFu
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
   let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
-  let bindingResult = collect_bindings(nodes, functions)
+  let collected = collect_bindings(nodes, functions)
+  var mergedBindings: List[BindingFact] = collected.bindings
+  for fact in externalBindings { mergedBindings = append(mergedBindings, fact) }
+  let bindingResult = BindingCollection { bindings: mergedBindings, diagnostics: collected.diagnostics }
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
   let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures, externalRecords, expectReturns)
