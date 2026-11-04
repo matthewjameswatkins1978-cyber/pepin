@@ -193,19 +193,91 @@ Both prototypes were measurement-only in the scratch worktree and are reverted.
 - Every one of those fixes needs a cached or indexed result, which the language
   cannot express.
 
+## Decision evidence: how far can helper-level work possibly move the ceiling?
+
+The planned prototype (an O(1) `child_at` behind a host builtin) was abandoned
+mid-build. It needs either a new builtin registered across five checker sites
+(`known_builtin`, return-type resolution, arity, two parameter-type rules) or
+correct runtime record field ids for a hand-built `NodeLookup`; the first is too
+much checker surgery for a measurement, and the second failed at
+`PEP_RUNTIME_MISSING_FIELD` because field ids are not the positional 0/1 assumed.
+Rather than keep fighting the plumbing, the same question is answerable from
+measurements already taken.
+
+### The arithmetic
+
+- Budget: 100,000 steps.
+- k=5 is 55 nodes and **valid**, so average per-node cost is at most
+  100,000 / 55 ≈ **1,818 steps per node**.
+- k=6 is 66 nodes and **fails**, consistent with cost growing superlinearly.
+
+Measured shares of the 66-node budget:
+
+| group | share |
+|---|---|
+| `child_at` | 14.0% |
+| `type_shape_at` | 13.5% |
+| `tree_is_valid` | 7.1% |
+| `record_declaration` | 5.8% |
+| `lookup_node` | 5.3% |
+| `collect_bindings` | 3.8% |
+| `count_children` | 2.9% |
+| **all scanning helpers** | **≈ 52%** |
+
+### What each option could buy
+
+| intervention | steps freed at 66 nodes | ceiling equivalent |
+|---|---|---|
+| free `child_at` alone | ~14,000 | ~62 → ~70 nodes |
+| free every scanning helper | ~52,000 | ~62 → ~90 nodes |
+| free 90% of all cost | ~90,000 | ~62 → ~600 nodes |
+
+Real modules are **2,030 nodes** (`pep_lexer.pep`) and **2,901 nodes**
+(`collections.pep`), and the checker itself is larger still.
+
+### Conclusion
+
+Even removing **every** whole-list scanner — which is the most generous possible
+outcome of indexed access — moves the ceiling from ~62 to ~90 nodes. That is a
+45× shortfall against a real module. So **indexed node access is not the fix**,
+and the language/host capability question does not need to be decided on this
+evidence.
+
+The per-node constant itself (≈1,800 steps per node) has to fall by roughly 50×
+to make whole-program checking of real modules possible. That is a change in
+asymptotic behaviour — fewer interpreted operations per node — not a faster
+lookup. Cross-checking: staged checking already achieves the goal by bounding the
+*number of nodes per unit* instead, which is why it covers 107/107 functions of a
+2,901-node module today.
 ## Recommendation
 
-Do not continue micro-optimising against fixtures. Either:
+The arithmetic above settles the open question: indexed or associative node
+access is **not** the fix. Even freeing every whole-list scanner — the most
+generous possible outcome — moves the ceiling from ~62 to ~90 nodes against real
+modules of 2,030–2,901 nodes. The language/host capability question therefore
+does not need to be decided on this evidence, and no primitive is proposed.
 
-1. take the language/host decision — indexed or associative node access — and
-   measure the ceiling afterwards; or
-2. accept the current whole-program ceiling and keep staged checking as the
-   supported route for real modules.
+What remains is one of two honest positions:
 
-Option 2 is what already works today and is what the mission's "credible route
-through larger real Pep modules" acceptance item rests on. Option 1 is a design
-decision with language-surface consequences and should be taken explicitly.
+1. **Accept the current whole-program ceiling** and keep staged checking as the
+   supported route for real Pep modules. This is what already works: 107/107
+   top-level functions of a 2,901-node module, with byte-identical ingress for
+   modules above the per-open cap. Staging bounds *nodes per unit* instead of
+   lowering per-node cost.
+2. **Treat whole-program checking at this scale as an architecture change** worth
+   doing deliberately: the per-node constant (≈1,800 steps per node) must fall by
+   roughly 50×, which means far fewer interpreted operations per node — a
+   restructured analysis, not a faster lookup, and not a local optimisation.
 
-Either way, any future attempt must show a before/after ceiling measurement on
-recpad-6, and must first check the call graph to confirm the target is actually
-on the executed path.
+Accepting (1) is not a failure state: the mission's "credible route through
+larger real Pep modules" is satisfied by staging plus ingress. The whole-program
+66-node gate remains genuinely unmet, and that should be stated as such rather
+than papered over.
+
+Any future attempt must:
+
+- show a before/after ceiling measurement on recpad-6;
+- check the call graph first, to confirm the target is on the executed path (one
+  prototype failed purely because recpad-6 never enters `if_expression` code);
+- be semantics-preserving — stubbed ablations distort cost in both directions and
+  have twice produced misleading results.
