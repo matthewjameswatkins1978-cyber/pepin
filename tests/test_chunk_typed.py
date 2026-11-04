@@ -297,6 +297,90 @@ class TypedChunkTests(unittest.TestCase):
             sem, expect_returns=expect_returns))
         return report["status"]["value"], diag_tuples(report)
 
+    def test_staged_lexer_landscape_matches_pins(self):
+        # Full per-function staged ledger: body-only chunk + external type
+        # facts (+ host builtins where the body needs semantic_snapshot).
+        # Pins are deliberate: a flip in either direction forces re-measure.
+        # make_progress (49n) flips to valid once external type facts are
+        # supplied; make_cursor (69n) remains a single-return body over
+        # budget; utf8_check (268n) needs statement groups (see
+        # the G1/G2 tests); lexer_step body alone exceeds the 1 MiB message.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        pinned = {
+            "ascii_letter": "valid",
+            "ascii_digit": "valid",
+            "ascii_continue": "valid",
+            "advance_position": "valid",
+            "make_token": "valid",
+            "lexer_start": "valid",
+            "make_progress": "valid",
+            "make_cursor": "STEP_LIMIT",
+            "utf8_check": "STEP_LIMIT",
+        }
+        host_needed = {"lexer_start"}
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "ledger-landscape",
+                                     "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        by_id = {str(nval(node, "id")): node for node in nodes}
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(node, "id")) for node in nodes
+                      if str(nval(node, "parentId")) == "-1"
+                      and nval(node, "kind") in ("record_declaration", "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        functions = {str(nval(node, "text")): int(nval(node, "id"))
+                     for node in nodes
+                     if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"}
+        for name, want in pinned.items():
+            with self.subTest(function=name):
+                self.assertIn(name, functions)
+                sub = [copy.deepcopy(by_id[str(i)])
+                       for i in index.subtree(functions[name])]
+                chunk = remap_chunk(sub)
+                sliced = {"type": "ParserProgress", "fields": [
+                    {"name": key,
+                     "value": ({"type": "List[FlatAstNode]", "value": chunk}
+                               if key == "nodes" else fields_map(parsed)[key])}
+                    for key in [field["name"] for field in parsed["fields"]]]}
+                ext = [s for s in sigs if s["name"] != name]
+                host_fns, host_sigs, host_types = [], [], []
+                if name in host_needed:
+                    host_fns, host_sigs, host_types = host_builtins(
+                        target["document"], target["revision"])
+                args = [sliced,
+                        {"type": "List[CheckedFunction]",
+                         "value": [checked_fn_value(s) for s in ext] + host_fns},
+                        {"type": "List[ResolvedSignature]",
+                         "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+                        {"type": "List[ResolvedTypeDecl]",
+                         "value": facts + host_types},
+                        {"type": "Bool", "value": True}]
+                try:
+                    response = self.session.send(
+                        {"schemaVersion": 3, "toolProtocolVersion": 2,
+                         "op": "tool_invoke", "tool": "pep-c23-checker-chunk-typed",
+                         "arguments": args, "semanticTarget": sem})
+                except RuntimeError as error:
+                    self.assertEqual(want, "TRANSPORT", name)
+                    self.assertIn("1 MiB", str(error), name)
+                    continue
+                if response.get("outcome") != "ok":
+                    code = (response.get("error") or {}).get("code")
+                    self.assertEqual(code, "PEP_RUNTIME_STEP_LIMIT", response)
+                    self.assertEqual(want, "STEP_LIMIT", name)
+                    continue
+                report = fields_map(response["result"])
+                self.assertEqual(report["status"]["value"], want, report)
+                self.assertEqual(diag_tuples(report), [])
+
     def test_lexer_start_body_only_flips_with_facts(self):
         source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
         status, diags = self.check_body_with_facts(
