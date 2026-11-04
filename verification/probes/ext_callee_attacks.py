@@ -270,6 +270,30 @@ def main():
             record("E2b contradictory batch must not validate", False, "not-valid",
                    f"harness: {type(error).__name__}: {error}")
 
+        # E2b-reversed (order-insensitivity): forged entry first. The repeat
+        # rule must fire regardless of batch order.
+        try:
+            sigs = fetch(DUP1, "e2br")
+            dup = by_name(sigs, "dup")
+            forged = copy.deepcopy(dup[0])
+            forged["arity"] = 2
+            forged["rtype"] = "Bool"
+            forged["rshape"] = ("builtin", "Bool", 0)
+            forged["ptypes"] = [("Int", ("builtin", "Int", 0), 0),
+                                ("Int", ("builtin", "Int", 0), 1)]
+            forged["semid"] = 9001
+            forged["synid"] = 1000000001
+            r2br, _ = run(DUP1, "e2br", "main", [forged] + dup)
+            record("E2bR contradictory batch reversed must not validate", True,
+                   "not-valid",
+                   "not-valid" if r2br["verdict"] != "valid"
+                   else f"VALID order-insensitive-gap codes={r2br['codes']}",
+                   f"seed={seedd} codes={r2br['codes']}")
+            output["cases"]["E2bR"] = {"result": r2br, "seed": seedd}
+        except BaseException as error:  # noqa: BLE001
+            record("E2bR contradictory batch reversed must not validate", False,
+                   "not-valid", f"harness: {type(error).__name__}: {error}")
+
         # E3p schema-gap proof: wire values carry no document/revision fields.
         try:
             sigs = fetch(DUP1, "e3p")
