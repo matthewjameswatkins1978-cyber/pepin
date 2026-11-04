@@ -228,17 +228,31 @@ try:
           f"nodes={len(pfields['nodes']['value'])} bytes={len(payload)}")
 
     sigs = helper.fetch_all_sigs(session, parsed, revision, sem)
-    # MEASURED TRANSPORT DEFECT (A1 tests/chunk_helper.py @2f939a0 and @9ad7d95): sigs_from_tool
-    # numbers semid = 9000 + i / synid = 1000000000 + i, but fetch_all_sigs parses ONE header
-    # chunk per call, so i is 0 every time and every external signature collides at
-    # 9000/1000000000. The checker keys CheckedFunction/ResolvedSignature facts by those ids, so
-    # with two or more external functions it resolved add_one(41) against make_token's first
-    # parameter (Str) and reported PEP_TYPE_MISMATCH on the integer literal (measured here).
-    # Renumber in this A2-owned probe; A1's file stays untouched and the ids stay synthetic
-    # (never document ids), exactly as the helper's own contract comment requires.
-    for signatureIndex, signature in enumerate(sigs):
-        signature["semid"] = 9000 + signatureIndex
-        signature["synid"] = 1000000000 + signatureIndex
+    # MEASURED A1-side transport defect (tests/chunk_helper.py, byte-unchanged 2f939a0 ->
+    # 4c4064e): sigs_from_tool numbers semid = 9000 + i / synid = 1000000000 + i, but
+    # fetch_all_sigs parses ONE header chunk per call, so i is 0 every time and every external
+    # signature collides at 9000/1000000000. Consequences measured across pins: at 2f939a0 the
+    # checker resolved add_one(41) against make_token's first parameter (Str) and reported
+    # PEP_TYPE_MISMATCH on the integer literal; A1's own pin test
+    # test_external_signature_ids_are_unique_across_headers FAILS at A1's remote head 4c4064e
+    # with exactly [9000, 9000, 9000] (reproduced read-only in a disposable worktree on
+    # 2026-11-04), and A1's cited repair SHA 9e32999 is absent from origin after a full fetch.
+    # Until A1 lands the repair at the owner boundary (their Campaign F F1), this probe
+    # renumbers AFTER fetch -- A1's file stays untouched and ids stay synthetic (never document
+    # ids), exactly as the helper's own contract comment requires. Set A2_PROBE_SIG_RAW=1 to
+    # SUPPRESS the workaround and observe raw collision behaviour end-to-end (A3 F2's required
+    # raw-vs-workaround reproduction lever).
+    rawSemids = [signature["semid"] for signature in sigs]
+    collisionDetected = len(set(rawSemids)) != len(sigs)
+    suppressWorkaround = os.environ.get("A2_PROBE_SIG_RAW") == "1"
+    if collisionDetected and not suppressWorkaround:
+        for signatureIndex, signature in enumerate(sigs):
+            signature["semid"] = 9000 + signatureIndex
+            signature["synid"] = 1000000000 + signatureIndex
+    sigMode = ("suppressed" if suppressWorkaround else
+               ("applied" if collisionDetected else "not-needed"))
+    stage("sig-id-state", True,
+          f"raw_semids={rawSemids} collision={collisionDetected} workaround={sigMode}")
     for s in sigs:
         print("SIG", s["name"], "arity", s["arity"], "rtype", s["rtype"], "id", s.get("id"), "semid", s["semid"], "synid", s["synid"])
     # Raw compiler-produced functionId for each function's header chunk (the helper discards it):
