@@ -22,7 +22,7 @@ remains mandatory.
 """
 import subprocess
 
-A1_SHA = "d64518ffe4b15575bf05d090223095fd8e3ef0c9"
+A1_SHA = "2ad750b51c58489aca6ca07e199116d0cb44e794"
 import os
 import pathlib
 
@@ -46,21 +46,29 @@ def prepare():
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
     exe = BUILD / "a1_seed" / "pep.exe"
-    if not exe.exists():
+    pin_marker = BUILD / "a1_seed" / "seed_source_pin.txt"
+    # Fresh-checkout honesty (G-A2-6): the seed exe is a BUILD ARTIFACT of the pinned
+    # pep_ocaml.ml, so rebuild whenever A1_SHA changes instead of silently trusting a cached
+    # exe from an earlier pin (provenance of a bare pre-existing exe is unknowable). A fresh
+    # checkout has no exe and takes the same path; a marker-less legacy exe rebuilds once.
+    pin_matches = pin_marker.exists() and pin_marker.read_text(encoding="utf-8").strip() == A1_SHA
+    if not exe.exists() or not pin_matches:
+        exe.unlink(missing_ok=True)
         opam_root = os.environ.get("PEPIN_OPAM_ROOT") or str(pathlib.Path.home() / "AppData/Local/opam")
         subprocess.run(["opam", "exec", "--root", opam_root, "--switch", "pepin-5.5.2", "--",
                         "ocamlopt", "-o", str(exe), str(BUILD / "a1_seed" / "pep_ocaml.ml")],
                        cwd=ROOT, check=True)
+    pin_marker.write_text(A1_SHA, encoding="utf-8")
 
 
 prepare()
 """Seam demonstration: A1's checked-chunk contract driving MY bounded emitter.
 
-Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (d64518f:
-A1's real F1 collector fix -- batch-unique external signature ids INSIDE fetch_all_sigs,
-owner-boundary repair responding to this probe's finding; ancestry includes the R-ID-1 gate,
-union facts, T-REC pins and the f4eb231 CHECKED_CHUNK_CONTRACT) seed + checker with MY
-emitter in this worktree:
+Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (2ad750b:
+A1's G-A1-1 refusal of repeated/aliased external callee facts in one batch, on top of the
+d64518f batch-unique signature-id fix that answered this probe's finding; ancestry includes the
+R-ID-1 gate, union facts, T-REC pins and the f4eb231 CHECKED_CHUNK_CONTRACT) seed + checker
+with MY emitter in this worktree:
 
   parse whole fixture -> plan chunks (decl closure + per-function subtree + referenced decls)
   -> analyze_chunk per slice with external signatures -> emit MY header/units/epilogue FROM THE
@@ -519,6 +527,41 @@ try:
                   "do not match the authorised source revision",
                   expect_error_code="PEP_STALE_REVISION")
     unit_negative("neg-unit-index", None, "function unit index is out of range", index=99)
+
+    # G-A2-6 / A1 G-A1-1, exercised from THIS side of the seam: an external fact NAMED like
+    # the chunk's own top-level function must be refused by the CHECKER (A1 2ad750b) before any
+    # emitter code runs. CONTROL: the ordinary check:add_one stage above already passes with
+    # distinct external names on this very chunk, so the refusal discriminates on the name
+    # collision alone. One new genuinely discriminating negative, per Campaign G economy.
+    duplicate_fact = {"name": "add_one", "arity": 1, "rtype": "Int",
+                      "rshape": ("scalar", "", 0),
+                      "ptypes": [("Int", ("scalar", "", 0), 0)],
+                      "semid": 9700, "synid": 100009700,
+                      "node": "0", "start": "0", "end": "0"}
+    dup_response = session.send(
+        {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+         "tool": "pep-c23-checker-chunk",
+         "arguments": [sliced_by_label["add_one"],
+                       {"type": "List[CheckedFunction]",
+                        "value": [helper.checked_fn_value(duplicate_fact)]},
+                       {"type": "List[ResolvedSignature]",
+                        "value": [helper.resolved_sig_value(duplicate_fact)]},
+                       {"type": "List[ResolvedTypeDecl]", "value": []},
+                       {"type": "Bool", "value": True}],
+         "semanticTarget": sem})
+    if dup_response.get("outcome") != "ok":
+        stage("neg-dup-external-name", False, str(dup_response.get("error"))[:160])
+        failures.append("neg-dup-external-name")
+    else:
+        dup_report = dup_response["result"]
+        dup_status = fields_map(dup_report)["status"]["value"]
+        dup_codes = [fields_map(entry).get("code", {}).get("value")
+                     for entry in (fields_map(dup_report).get("diagnostics", {}).get("value") or [])]
+        dup_ok = dup_status == "invalid" and "PEP_DUPLICATE_FUNCTION" in dup_codes
+        stage("neg-dup-external-name", dup_ok,
+              f"status={dup_status} codes={dup_codes[:3]} (distinct-name control = check:add_one OK)")
+        if not dup_ok:
+            failures.append("neg-dup-external-name")
 
     # Assembly-order negative (the measured contract): main's unit BEFORE its callee's unit has
     # no prototype in the declaration-chunk header, so BOTH strict compilers must REFUSE it.
