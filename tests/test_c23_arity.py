@@ -175,10 +175,16 @@ class PepC23ArityTests(unittest.TestCase):
             "requires a valid Pep checker report")
 
     def test_unsupported_result_type_fails_closed(self):
+        """Str results became supported (Campaign F F3); a nested list is still no result type.
+
+        Measured at this revision: the nested-list fixture is CHECKER-valid and refused by the
+        emitter's function gate; the old Str fixture now emits (kept as a positive in
+        tests/test_c23_str_result.py instead).
+        """
         self.assert_refused(
-            "fn render(a: Int, b: Int, c: Int, d: Int) -> Str { return \"x\" }\n"
+            "fn render(a: Int, b: Int, c: Int, d: Int) -> List[List[Int]] { return [[1]] }\n"
             "fn main() -> Int { return 0 }\n",
-            "functions require supported parameters and scalar or record results")
+            "functions require supported parameters and Str, scalar or record results")
 
     # --- boundary ------------------------------------------------------------
 

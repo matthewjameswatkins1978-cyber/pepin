@@ -486,7 +486,10 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
 
             generated = emit(source.read_bytes())
             self.assertEqual(generated.count("pep_str pep_local_"), 1, generated)
-            self.assertIn(".data = (const unsigned char[]){ 195, 169, 9, 34, 92 }", generated)
+            # Static-storage string literal with fixed-width octal escapes (Campaign F F3):
+            # 195=\303 169=\251 9=\011 34=\042 92=\134 -- byte-identical to the old
+            # compound-array form, but the bytes now outlive the creating function frame.
+            self.assertIn(".data = (const unsigned char *)\"\\303\\251\\011\\042\\134\"", generated)
             self.assertIn(".length = 0", generated)
             ids = re.findall(r"_Bool pep_fn_([A-Za-z_0-9]+)\(void\);", generated)
             self.assertEqual(len(ids), 3, generated)

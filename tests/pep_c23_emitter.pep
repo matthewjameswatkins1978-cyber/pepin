@@ -1099,6 +1099,44 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
   }
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
+// A call to a zero-argument function whose DECLARED result is Str is a Str value position.
+// Only the declaration is consulted here (the call path separately validates target, arity and
+// body), and only `let` initialisers and name classifications use this -- say still refuses a
+// direct say(<call>) so its documented double-lowering of the argument can never re-emit a
+// callee body (a callee containing say would otherwise print twice).
+fn pep_c23_str_result_call(nodes: List[FlatAstNode], value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind != "call" {
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  let callee = pep_c23_function(nodes, value.text)
+  if !callee.found {
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  let calleeResult = pep_c23_child(nodes, callee.node.id, "return_type", 0)
+  if calleeResult.found && calleeResult.node.kind == "type_scalar" &&
+     calleeResult.node.text == "Str" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+// Local-declaration hot-path variant: the CHECKER already recorded this call expression's
+// type in `expressionTypes`, so the declaration lookup is unnecessary here. Measured during
+// Campaign F F3: the per-call-initialiser `pep_c23_function` node scan tipped a near-ceiling
+// recursive-union fixture over the fixed 100,000-step emitter budget (ablated back to passing,
+// then this fact lookup restored it green). Early-exits on the syntaxId match. A missing fact
+// classifies as not-Str and falls to the int64_t default, which the C compiler then refuses --
+// fail-closed at the native build rather than silently wrong.
+fn pep_c23_str_typed_call(checked: CheckerReport, callNode: FlatAstNode) -> PepC23NodeLookup {
+  for fact in checked.expressionTypes {
+    if fact.syntaxId == callNode.id {
+      if fact.typeName == "Str" {
+        return PepC23NodeLookup { found: true, node: callNode }
+      } else {}
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
 fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "string" { return PepC23NodeLookup { found: true, node: value } } else {}
   if value.kind == "name" {
@@ -1119,7 +1157,14 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
             if initial.found && initial.node.kind == "name" &&
                pep_c23_str_parameter(nodes, function, initial.node.text).found {
               matches = matches + 1
-            } else {}
+            } else {
+              // Str local initialised by a Str-returning call (Campaign F F3): the call was
+              // emitted once at the let; say only re-emits the local NAME, so the side-effect
+              // argument for double-lowering still holds.
+              if initial.found && pep_c23_str_result_call(nodes, initial.node).found {
+                matches = matches + 1
+              } else {}
+            }
           }
         }
       } else {}
@@ -1165,9 +1210,14 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
   }
   if verbatim {
     let content = utf8_slice(source, contentStart, contentEnd)
+    // Pointer cast to the STRING LITERAL itself: a string literal has static storage duration,
+    // so a pep_str carrying it stays valid after the creating function returns. The previous
+    // block-scope compound-literal array died at the closing brace -- measured during Campaign
+    // F F3: a Str-result function returning one printed garbage under clang and GCC refused
+    // -Wdangling-pointer under -Werror. Same bytes, same explicit .length.
     return PepC23Emission { status: "emitted",
-      sourceParts: ["(pep_str){ .data = (const unsigned char[]){ \"", content,
-                    "\" }, .length = ", int_text(contentEnd - contentStart), " }"],
+      sourceParts: ["(pep_str){ .data = (const unsigned char *)\"", content,
+                    "\", .length = ", int_text(contentEnd - contentStart), " }"],
       diagnostic: "" }
   } else {}
   var offset = node.startByte + 1
@@ -1198,20 +1248,32 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
         }
       }
     } else {}
-    if byteCount != 0 { reversedValues = prepend(reversedValues, ", ") } else {}
-    reversedValues = prepend(reversedValues, int_text(value))
+    // Three-digit octal instead of decimal: fixed width makes each escape unambiguous and
+    // covers every byte value including NUL and quote. The group is prepended backslash, high,
+    // mid, low so the tail's single reversal emits `\ H M L` forward. The result is a STRING
+    // LITERAL (static storage), required so a pep_str returned from a function outlives the
+    // callee frame -- the measured dangling-pointer failure of the compound-array form.
+    // Only / * - are used; the emitter never relies on an operator this file has not used.
+    let highDigit = value / 64
+    let midDigit = (value - (highDigit * 64)) / 8
+    let lowDigit = value - ((value / 8) * 8)
+    reversedValues = prepend(reversedValues, "\\")
+    reversedValues = prepend(reversedValues, int_text(highDigit))
+    reversedValues = prepend(reversedValues, int_text(midDigit))
+    reversedValues = prepend(reversedValues, int_text(lowDigit))
     byteCount = byteCount + 1
     offset = offset + 1
   }
   var reversed: List[Str] = [" }"]
   reversed = prepend(reversed, int_text(byteCount))
-  reversed = prepend(reversed, " }, .length = ")
+  reversed = prepend(reversed, "\", .length = ")
   if byteCount == 0 {
-    reversed = prepend(reversed, "0")
+    // The header already emitted the opening quote; one closing quote makes an empty literal.
+    reversed = prepend(reversed, "\"")
   } else {
     for part in reversedValues { reversed = prepend(reversed, part) }
   }
-  reversed = prepend(reversed, "(pep_str){ .data = (const unsigned char[]){ ")
+  reversed = prepend(reversed, "(pep_str){ .data = (const unsigned char *)\"")
   // The list is already in forward order: prepend builds it back to front from the tail, and each
   // prepend of a stored value restores that value's position. Reversing here would emit the bytes
   // backwards, which compiles but produces wrong string contents.
@@ -2722,10 +2784,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
     let recordResult = result.found && result.node.kind == "type_named" && pep_c23_record_declaration(nodes, result.node.text).found
     let unionResult = result.found && result.node.kind == "type_named" && pep_c23_union_declaration(nodes, result.node.text).found
+    // Str results join this gate with the function gate (Campaign F F3): the callee body
+    // lowers through the same Str value positions say already exercises, and the call value
+    // flows into say-eligible locals/arguments as pep_str.
+    let stringResult = result.found && result.node.kind == "type_scalar" && result.node.text == "Str"
     // Arity itself is not checked here: three or more parameters are routed to the general
     // ordered path below, which enforces one argument per declared parameter.
-    if !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult) {
-      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar, record, or tagged-union result")
+    if !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult && !stringResult) {
+      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar, Str, record, or tagged-union result")
     } else {}
     let targetStatement = pep_c23_last_statement(nodes, target.node)
     let targetValue = if targetStatement.found {
@@ -2849,6 +2915,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
          (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) &&
           !(recordResult && targetValue.found && targetValue.node.kind == "record" &&
             !pep_c23_infallible_value(nodes, targetValue.node)) &&
+          !(stringResult && targetValue.found && targetValue.node.kind == "string") &&
           !safeRecursiveUnionConstruction) {
         return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result, safe record construction, or direct recursive-union constructor result")
       } else {}
@@ -3345,9 +3412,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
   }
   if parameterProblem || length(parameters) != pep_c23_count_children(nodes, function.id, "parameter") ||
      (function.text == "main" && length(parameters) != 0) ||
-     resultCType == "" || resultCType == "pep_str" ||
+     resultCType == "" ||
      (function.text == "main" && result.node.text != "Int") {
-    return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
+    // Str results are the one missing shape the real lexer blocks on: `lex_error_code`
+    // passes the checker and then hit this gate (measured, BOOT-A2-20261104-019 item 5).
+    // The body path already lowers every Str value position (say proves it) and the wrapper
+    // is ctype-generic (`<ctype> pep_result = <expr>`), so admitting Str here is the whole
+    // feature: conditional-return and say-classification boundaries stay exactly as pinned.
+    return pep_c23_unsupported("Pep C23 functions require supported parameters and Str, scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
   var localBindingsCollected = false
@@ -3854,7 +3926,14 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
               } else {
                 if initialValue.node.kind == "field_access" {
                   pep_c23_str_expression(parsed.nodes, node, initialValue.node)
-                } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+                } else {
+                  // Str local from a Str-returning call: without this the ladder fell through
+                  // to int64_t and emitted type-wrong C instead of refusing or getting it
+                  // right (measured during Campaign F F3).
+                  if initialValue.node.kind == "call" {
+                    pep_c23_str_typed_call(checked, initialValue.node)
+                  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+                }
               }
             }
             if initialValue.node.kind == "record" && !localRecord.found {

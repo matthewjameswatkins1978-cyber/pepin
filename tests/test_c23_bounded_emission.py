@@ -36,9 +36,11 @@ SUPPORTED = ("fn helper_first() -> Int { return 1 }\n"
              "fn helper_second() -> Int { return 2 }\n"
              "fn main() -> Int { return helper_first() }\n")
 
-# `bad` is accepted by the checker but has no C23 lowering (Str result).
+# `bad` is accepted by the checker but has no C23 lowering. Straight-line Str RESULTS became
+# supported (Campaign F F3), so the unsupported peer is now a CONDITIONAL-return Str body,
+# which keeps its recorded boundary refusal (same fixture class as test_a14_c23's pin).
 MIXED = ("fn good() -> Int { return 1 }\n"
-         "fn bad() -> Str { return \"a\" }\n"
+         "fn bad() -> Str { if true { return \"yes\" } else { return \"no\" } }\n"
          "fn main() -> Int { return good() }\n")
 
 
@@ -156,7 +158,7 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "mixed")
         whole = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole[0], "unsupported")
-        self.assertIn("scalar or record results", whole[1])
+        self.assertIn("scalar or record result", whole[1])
 
         status, diagnostic, parts = self._unit(parsed, checked, semantic, 0)
         self.assertEqual(status, "emitted", diagnostic)
@@ -166,7 +168,7 @@ class BoundedEmissionTests(unittest.TestCase):
         # The unsupported peer reports its own diagnostic, and nothing else does.
         peer_status, peer_diagnostic, peer_parts = self._unit(parsed, checked, semantic, 1)
         self.assertEqual(peer_status, "unsupported")
-        self.assertIn("scalar or record results", peer_diagnostic)
+        self.assertIn("scalar or record result", peer_diagnostic)
         self.assertEqual(peer_parts, [])
 
     def test_sections_reassemble_to_the_one_shot_output(self):
@@ -311,7 +313,7 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "section-boundedness")
         whole_status, whole_diagnostic, whole_parts = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole_status, "unsupported")
-        self.assertIn("scalar or record results", whole_diagnostic)
+        self.assertIn("scalar or record result", whole_diagnostic)
         self.assertEqual(whole_parts, [])
 
         header_status, header_diagnostic, header_parts = self._section(parsed, checked, semantic, "header")
