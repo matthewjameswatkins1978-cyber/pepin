@@ -22,7 +22,7 @@ remains mandatory.
 """
 import subprocess
 
-A1_SHA = "2e81f354a98a5c92e590ef2bb537b039b7127d36"
+A1_SHA = "d64518ffe4b15575bf05d090223095fd8e3ef0c9"
 import os
 import pathlib
 
@@ -56,9 +56,11 @@ def prepare():
 prepare()
 """Seam demonstration: A1's checked-chunk contract driving MY bounded emitter.
 
-Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (2e81f35:
-R-ID-1 supply-time collision gate + union facts + T-REC pins, ancestry includes the
-f4eb231 CHECKED_CHUNK_CONTRACT) seed + checker with MY emitter in this worktree:
+Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (d64518f:
+A1's real F1 collector fix -- batch-unique external signature ids INSIDE fetch_all_sigs,
+owner-boundary repair responding to this probe's finding; ancestry includes the R-ID-1 gate,
+union facts, T-REC pins and the f4eb231 CHECKED_CHUNK_CONTRACT) seed + checker with MY
+emitter in this worktree:
 
   parse whole fixture -> plan chunks (decl closure + per-function subtree + referenced decls)
   -> analyze_chunk per slice with external signatures -> emit MY header/units/epilogue FROM THE
@@ -228,31 +230,20 @@ try:
           f"nodes={len(pfields['nodes']['value'])} bytes={len(payload)}")
 
     sigs = helper.fetch_all_sigs(session, parsed, revision, sem)
-    # MEASURED A1-side transport defect (tests/chunk_helper.py, byte-unchanged 2f939a0 ->
-    # 4c4064e): sigs_from_tool numbers semid = 9000 + i / synid = 1000000000 + i, but
-    # fetch_all_sigs parses ONE header chunk per call, so i is 0 every time and every external
-    # signature collides at 9000/1000000000. Consequences measured across pins: at 2f939a0 the
-    # checker resolved add_one(41) against make_token's first parameter (Str) and reported
-    # PEP_TYPE_MISMATCH on the integer literal; A1's own pin test
-    # test_external_signature_ids_are_unique_across_headers FAILS at A1's remote head 4c4064e
-    # with exactly [9000, 9000, 9000] (reproduced read-only in a disposable worktree on
-    # 2026-11-04), and A1's cited repair SHA 9e32999 is absent from origin after a full fetch.
-    # Until A1 lands the repair at the owner boundary (their Campaign F F1), this probe
-    # renumbers AFTER fetch -- A1's file stays untouched and ids stay synthetic (never document
-    # ids), exactly as the helper's own contract comment requires. Set A2_PROBE_SIG_RAW=1 to
-    # SUPPRESS the workaround and observe raw collision behaviour end-to-end (A3 F2's required
-    # raw-vs-workaround reproduction lever).
+    # HISTORY (measured, kept for A3): the helper numbered ids per header chunk, so aggregated
+    # externals collided at 9000/1000000000 -- at 2f939a0 the checker resolved add_one(41)
+    # against make_token's Str parameter (PEP_TYPE_MISMATCH on the integer), A1's own pin test
+    # failed at 4c4064e with [9000, 9000, 9000], and the cited repair 9e32999 did not exist
+    # (all reproduced read-only 2026-11-04; A1 corrected the record in BOOT-A1-20261104-028).
+    # RESOLUTION: A1's F1 fix at d64518f renumbers batch-unique ids INSIDE fetch_all_sigs (the
+    # owner boundary), and per A1's -028 instruction this probe's local renumber workaround is
+    # REMOVED: raw ids are the contract now. Detection remains and FAILS LOUDLY on a collision
+    # -- a residual mismatch is an A1-side finding to report, never to paper over. A3 can
+    # reproduce the historical raw failure at the pinned pre-fix probe revision (df190de).
     rawSemids = [signature["semid"] for signature in sigs]
     collisionDetected = len(set(rawSemids)) != len(sigs)
-    suppressWorkaround = os.environ.get("A2_PROBE_SIG_RAW") == "1"
-    if collisionDetected and not suppressWorkaround:
-        for signatureIndex, signature in enumerate(sigs):
-            signature["semid"] = 9000 + signatureIndex
-            signature["synid"] = 1000000000 + signatureIndex
-    sigMode = ("suppressed" if suppressWorkaround else
-               ("applied" if collisionDetected else "not-needed"))
-    stage("sig-id-state", True,
-          f"raw_semids={rawSemids} collision={collisionDetected} workaround={sigMode}")
+    stage("sig-id-state", not collisionDetected,
+          f"raw_semids={rawSemids} collision={collisionDetected} renumber=removed(a1 d64518f owns uniqueness)")
     for s in sigs:
         print("SIG", s["name"], "arity", s["arity"], "rtype", s["rtype"], "id", s.get("id"), "semid", s["semid"], "synid", s["synid"])
     # Raw compiler-produced functionId for each function's header chunk (the helper discards it):
