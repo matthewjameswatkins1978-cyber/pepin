@@ -1855,7 +1855,8 @@ let session_apply_edit document fields =
   let analysis = session_analyse_or_reuse document new_source in
   Hashtbl.replace document.revisions analysis.revision analysis;
   document.current_revision <- analysis.revision;
-  session_response "apply_edit" document.document_id analysis.revision analysis ()
+  session_response "apply_edit" document.document_id analysis.revision analysis
+    ~metadata_only:(session_optional_bool fields "metadataOnly") ()
 
 let session_fill_rejection operation mode document base_revision candidate_revision candidate_status message source_diff diagnostics =
   Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"rejected\",\"operation\":%s,\"mode\":%s,\"document\":%s,\"currentRevision\":%s,\"candidateRevision\":%s,\"candidateStatus\":%s,\"message\":%s,\"sourceDiff\":%s,\"diagnostics\":%s,\"metrics\":%s}"

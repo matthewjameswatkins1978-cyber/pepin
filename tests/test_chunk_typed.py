@@ -198,7 +198,16 @@ class TypedChunkTests(unittest.TestCase):
         report = fields_map(response["result"])
         return target, sem, parsed, report["status"]["value"], diag_tuples(report)
 
-    def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=()):
+    def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=(),
+                              scope_facts=False, allow_error=False,
+                              loop_body_range=None):
+        # allow_error=True returns the tool error code as the status instead
+        # of failing the assertion, so a test can pin a budget refusal.
+        # scope_facts=True supplies only the external declarations the chunk
+        # can name (index.fact_closure) instead of every declaration in the
+        # document. Omitting a declaration the chunk never mentions cannot
+        # change its meaning, but it does stop the chunk paying to re-derive
+        # facts about the rest of the program.
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": name, "bytes": list(source_bytes)})
         self.assertEqual(target.get("outcome"), "ok", target)
@@ -219,24 +228,67 @@ class TypedChunkTests(unittest.TestCase):
         bodies = {str(nval(fn, "text")): index.subtree(int(nval(fn, "id")))
                   for fn in functions}
         self.assertIn(entry, bodies)
+        if loop_body_range is not None:
+            bodies[entry] = self.trim_loop_body(
+                index, nodes, entry, loop_body_range)
         ext = [s for s in sigs if s["name"] != entry]
+        if scope_facts:
+            allowed = index.fact_closure(
+                bodies[entry], {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
         host_fns, host_sigs, host_types = [], [], []
         if host_builtin_names:
             assert set(host_builtin_names) <= {"semantic_snapshot"}
             host_fns, host_sigs, host_types = host_builtins(
                 target["document"], target["revision"])
+        args = [self.sliced(parsed, bodies[entry]),
+                {"type": "List[CheckedFunction]",
+                 "value": [checked_fn_value(s) for s in ext] + host_fns},
+                {"type": "List[ResolvedSignature]",
+                 "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+                {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}]
+        if allow_error:
+            response = self.session.send(
+                {"schemaVersion": 3, "toolProtocolVersion": 2,
+                 "op": "tool_invoke", "tool": "pep-c23-checker-chunk-typed",
+                 "arguments": args + [{"type": "Bool", "value": True}],
+                 "semanticTarget": sem})
+            if response.get("outcome") != "ok":
+                return (response.get("error") or {}).get("code"), []
+            return fields_map(response["result"])["status"]["value"], []
         report = fields_map(self.invoke_typed(
-            self.sliced(parsed, bodies[entry]),
-            {"type": "List[CheckedFunction]",
-             "value": [checked_fn_value(s) for s in ext] + host_fns},
-            {"type": "List[ResolvedSignature]",
-             "value": [resolved_sig_value(s) for s in ext] + host_sigs},
-            {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}, sem))
+            args[0], args[1], args[2], args[3], sem))
         return report["status"]["value"], diag_tuples(report)
+
+    def trim_loop_body(self, index, nodes, entry, rng):
+        # Bounded unit below statement granularity: keep the function, keep a
+        # single range of the for-loop's body statements, and drop the rest.
+        # Byte spans are untouched, so the unit still reports diagnostics at
+        # original source offsets.
+        fn = [n for n in nodes if nval(n, "kind") == "function"
+              and str(nval(n, "parentId")) == "-1"
+              and str(nval(n, "text")) == entry]
+        self.assertEqual(len(fn), 1, entry)
+        fn_id = str(nval(fn[0], "id"))
+        for_node = [n for n in nodes if str(nval(n, "parentId")) == fn_id
+                    and nval(n, "kind") == "for_in"]
+        self.assertEqual(len(for_node), 1, f"{entry} needs exactly one for-in")
+        for_id = str(nval(for_node[0], "id"))
+        inner = sorted([n for n in nodes
+                        if str(nval(n, "parentId")) == for_id
+                        and nval(n, "role") == "body"],
+                       key=lambda n: int(nval(n, "childIndex")))
+        lo, hi = rng
+        self.assertLessEqual(hi, len(inner))
+        drop = set()
+        for position, statement in enumerate(inner):
+            if not lo <= position < hi:
+                drop.update(index.subtree(int(nval(statement, "id"))))
+        return tuple(i for i in index.subtree(int(fn_id)) if i not in drop)
 
     def check_statement_group(self, source_bytes, name, entry, stmt_range,
                               host_builtin_names=(), expect_returns=False,
-                              carry_stmt_indexes=()):
+                              carry_stmt_indexes=(), scope_facts=False):
         """Check a header + statement-subset chunk (non-terminal by default).
 
         Carried bindings are re-included as source subtrees (deterministic
@@ -282,6 +334,9 @@ class TypedChunkTests(unittest.TestCase):
         for ci in carry_stmt_indexes:
             keep.update(index.subtree(int(nval(statements[ci], "id"))))
         ext = [s for s in sigs if s["name"] != entry]
+        if scope_facts:
+            allowed = index.fact_closure(keep, {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
         host_fns, host_sigs, host_types = [], [], []
         if host_builtin_names:
             assert set(host_builtin_names) <= {"semantic_snapshot"}
@@ -297,6 +352,90 @@ class TypedChunkTests(unittest.TestCase):
             sem, expect_returns=expect_returns))
         return report["status"]["value"], diag_tuples(report)
 
+    def test_staged_lexer_landscape_matches_pins(self):
+        # Full per-function staged ledger: body-only chunk + external type
+        # facts (+ host builtins where the body needs semantic_snapshot).
+        # Pins are deliberate: a flip in either direction forces re-measure.
+        # make_progress (49n) flips to valid once external type facts are
+        # supplied; make_cursor (69n) remains a single-return body over
+        # budget; utf8_check (268n) needs statement groups (see
+        # the G1/G2 tests); lexer_step body alone exceeds the 1 MiB message.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        pinned = {
+            "ascii_letter": "valid",
+            "ascii_digit": "valid",
+            "ascii_continue": "valid",
+            "advance_position": "valid",
+            "make_token": "valid",
+            "lexer_start": "valid",
+            "make_progress": "valid",
+            "make_cursor": "STEP_LIMIT",
+            "utf8_check": "STEP_LIMIT",
+        }
+        host_needed = {"lexer_start"}
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "ledger-landscape",
+                                     "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        by_id = {str(nval(node, "id")): node for node in nodes}
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(node, "id")) for node in nodes
+                      if str(nval(node, "parentId")) == "-1"
+                      and nval(node, "kind") in ("record_declaration", "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        functions = {str(nval(node, "text")): int(nval(node, "id"))
+                     for node in nodes
+                     if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"}
+        for name, want in pinned.items():
+            with self.subTest(function=name):
+                self.assertIn(name, functions)
+                sub = [copy.deepcopy(by_id[str(i)])
+                       for i in index.subtree(functions[name])]
+                chunk = remap_chunk(sub)
+                sliced = {"type": "ParserProgress", "fields": [
+                    {"name": key,
+                     "value": ({"type": "List[FlatAstNode]", "value": chunk}
+                               if key == "nodes" else fields_map(parsed)[key])}
+                    for key in [field["name"] for field in parsed["fields"]]]}
+                ext = [s for s in sigs if s["name"] != name]
+                host_fns, host_sigs, host_types = [], [], []
+                if name in host_needed:
+                    host_fns, host_sigs, host_types = host_builtins(
+                        target["document"], target["revision"])
+                args = [sliced,
+                        {"type": "List[CheckedFunction]",
+                         "value": [checked_fn_value(s) for s in ext] + host_fns},
+                        {"type": "List[ResolvedSignature]",
+                         "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+                        {"type": "List[ResolvedTypeDecl]",
+                         "value": facts + host_types},
+                        {"type": "Bool", "value": True}]
+                try:
+                    response = self.session.send(
+                        {"schemaVersion": 3, "toolProtocolVersion": 2,
+                         "op": "tool_invoke", "tool": "pep-c23-checker-chunk-typed",
+                         "arguments": args, "semanticTarget": sem})
+                except RuntimeError as error:
+                    self.assertEqual(want, "TRANSPORT", name)
+                    self.assertIn("1 MiB", str(error), name)
+                    continue
+                if response.get("outcome") != "ok":
+                    code = (response.get("error") or {}).get("code")
+                    self.assertEqual(code, "PEP_RUNTIME_STEP_LIMIT", response)
+                    self.assertEqual(want, "STEP_LIMIT", name)
+                    continue
+                report = fields_map(response["result"])
+                self.assertEqual(report["status"]["value"], want, report)
+                self.assertEqual(diag_tuples(report), [])
+
     def test_lexer_start_body_only_flips_with_facts(self):
         source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
         status, diags = self.check_body_with_facts(
@@ -310,6 +449,257 @@ class TypedChunkTests(unittest.TestCase):
         status, diags = self.check_body_with_facts(source, "lexer-facts", "make_token")
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
+
+    def test_stdlib_collection_loop_checks_staged(self):
+        # A real stdlib helper with a for-in loop and conditional updates.
+        # Whole-program checking (55 nodes) exceeds the step budget, but the
+        # function body checks valid on its own once the other declarations
+        # are supplied as certified external facts. This is the concrete
+        # route through real Pep modules: the cost lives in re-deriving
+        # program-wide facts, not in the loop body itself.
+        source = self.collection_probe_source()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "coll-whole", "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        whole = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker", "arguments": [parsed],
+             "semanticTarget": sem})
+        self.assertEqual(whole.get("outcome"), "error", whole)
+        self.assertEqual((whole.get("error") or {}).get("code"),
+                         "PEP_RUNTIME_STEP_LIMIT", whole)
+        staged, diags = self.check_body_with_facts(
+            source, "coll-staged", "list_int_min_between")
+        self.assertEqual(staged, "valid", diags)
+        self.assertEqual(diags, [])
+        # The whole program is then covered by independently bounded units:
+        # every top-level function checks valid as its own chunk, so the
+        # staged path accepts a real program the whole-program checker
+        # rejects. Coverage is asserted, not assumed.
+        functions = [str(nval(node, "text")) for node in fields_map(parsed)["nodes"]["value"]
+                     if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"]
+        self.assertEqual(sorted(functions), ["list_int_min_between", "main"])
+        for entry in functions:
+            with self.subTest(entry=entry):
+                status, diags = self.check_body_with_facts(
+                    source, f"coll-unit-{entry}", entry)
+                self.assertEqual(status, "valid", diags)
+                self.assertEqual(diags, [])
+
+    def test_stdlib_collection_loop_staged_is_genuinely_checked(self):
+        # The staged flip above must not be a weakened check: three separate
+        # type errors inside the loop body are still reported with spans.
+        text = self.collection_probe_source().decode("utf-8")
+        for old, new, offset in [
+                ("var minimum = fallback", "var minimum = found", 226),
+                ("found = found || (lower <= item && item <= upper)",
+                 "found = minimum", 276),
+                ("minimum = if lower <= item", "minimum = if lower", 176)]:
+            with self.subTest(mutation=new):
+                self.assertEqual(text.count(old), 1, old)
+                mutated = text.replace(old, new, 1).encode("utf-8")
+                status, diags = self.check_body_with_facts(
+                    mutated, "coll-neg", "list_int_min_between")
+                self.assertEqual(status, "invalid", diags)
+                self.assertEqual([(code, start) for code, start, _ in diags],
+                                 [("PEP_TYPE_MISMATCH", offset)], diags)
+
+    def collection_probe_source(self):
+        # Exact fixture used by tests/test_c23_collections.py for
+        # list_int_min_between, so the staged path is measured on the same
+        # real program the whole-program checker currently rejects.
+        library = (ROOT / "stdlib" / "collections.pep").read_text(encoding="utf-8")
+        start = library.index("fn list_int_min_between(")
+        end = library.index("\n}\n", start) + 3
+        return (library[start:end]
+                + "\nfn main() -> Int {\n"
+                + "  return list_int_min_between([], 0, 3, 9)\n}\n").encode("utf-8")
+
+    def test_module_functions_need_dependency_scoped_facts(self):
+        # stdlib/collections.pep: 2901 nodes, 107 top-level functions. Giving
+        # one chunk every external signature in the module exceeds the step
+        # budget; scoping the facts to the chunk's own name closure (often
+        # empty) makes the same bodies check valid. The choice is sound
+        # because a declaration the chunk never names cannot affect it.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        entries = ["list_int_min_between", "list_int_count_between_runs",
+                   "list_int_count_runs", "list_bool_has_true_majority"]
+        for entry in entries:
+            with self.subTest(entry=entry, facts="all"):
+                status, _ = self.check_body_with_facts(
+                    source, f"mod-{entry}-all", entry, allow_error=True)
+                self.assertEqual(status, "PEP_RUNTIME_STEP_LIMIT")
+            with self.subTest(entry=entry, facts="closure"):
+                status, diags = self.check_body_with_facts(
+                    source, f"mod-{entry}-closure", entry, scope_facts=True)
+                self.assertEqual(status, "valid", diags)
+                self.assertEqual(diags, [])
+
+    def test_fact_closure_keeps_named_declarations_and_drops_the_rest(self):
+        # Sound selection: a candidate survives only if the chunk can name it.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "closure-index", "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        table = {str(nval(fn, "text")): int(nval(fn, "id"))
+                 for fn in nodes
+                 if nval(fn, "kind") == "function"
+                 and str(nval(fn, "parentId")) == "-1"}
+        body = index.subtree(table["list_int_min_between"])
+        candidates = {"list_int_min_between", "list_int_sum_between",
+                      "list_bool_longest_run", "no_such_declaration"}
+        kept = index.fact_closure(body, candidates)
+        self.assertEqual(sorted(kept), ["list_int_min_between"])
+
+    def test_residual_module_functions_split_inside_the_loop(self):
+        # The last 2 of 107 collection functions have 75-node bodies whose
+        # single for statement is over budget on its own, so neither whole
+        # body nor statement groups suffice. Splitting inside the loop body
+        # brings each unit to ~42 nodes and all of them check valid.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        for entry in ["list_int_min_index_between",
+                      "list_int_max_index_between"]:
+            with self.subTest(entry=entry, unit="whole-body"):
+                status, _ = self.check_body_with_facts(
+                    source, f"res-{entry}", entry,
+                    scope_facts=True, allow_error=True)
+                self.assertEqual(status, "PEP_RUNTIME_STEP_LIMIT")
+            for lo, hi in [(0, 1), (1, 2), (2, 4)]:
+                with self.subTest(entry=entry, unit=f"loop-body[{lo}:{hi}]"):
+                    status, diags = self.check_body_with_facts(
+                        source, f"res-{entry}-{lo}-{hi}", entry,
+                        scope_facts=True, loop_body_range=(lo, hi))
+                    self.assertEqual(status, "valid", diags)
+                    self.assertEqual(diags, [])
+
+    def test_loop_body_unit_keeps_source_offsets(self):
+        # A trimmed unit must still report an error at the original byte
+        # offset, so staged units are not detached from source identity.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        text = source.decode("utf-8")
+        old = "found = found || (lower <= item && item <= upper)"
+        start = text.index("fn list_int_min_index_between(")
+        tail = "\n}\n" if "\n}\n" in text[start:] else "\r\n}\r\n"
+        end = text.index(tail, start) + len(tail)
+        self.assertIn(old, text[start:end])
+        mutated = (text[:start]
+                   + text[start:end].replace(old, "found = index", 1)
+                   + text[end:]).encode("utf-8")
+        status, diags = self.check_body_with_facts(
+            mutated, "loop-offsets", "list_int_min_index_between",
+            scope_facts=True, loop_body_range=(2, 4))
+        self.assertEqual(status, "invalid", diags)
+        self.assertEqual([code for code, _, _ in diags], ["PEP_TYPE_MISMATCH"])
+        start = diags[0][1]
+        self.assertEqual(mutated[start:start + 5], b"index")
+
+    def test_residual_functions_have_a_complete_valid_partition(self):
+        # Both residual functions partition into gapless bounded units that
+        # each check valid: statements 0-3 (declarations), the three loop-body
+        # units, and the terminal return with its binding carried. Together
+        # this covers every statement, so the 107th of 107 real module
+        # functions is verifiable under the unchanged budget.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        for entry in ["list_int_min_index_between",
+                      "list_int_max_index_between"]:
+            with self.subTest(entry=entry, unit="statements[0:4]"):
+                status, diags = self.check_statement_group(
+                    source, f"part-{entry}-vars", entry, (0, 4),
+                    scope_facts=True)
+                self.assertEqual(status, "valid", diags)
+            for lo, hi in [(0, 1), (1, 2), (2, 4)]:
+                with self.subTest(entry=entry, unit=f"loop[{lo}:{hi}]"):
+                    status, diags = self.check_body_with_facts(
+                        source, f"part-{entry}-{lo}", entry,
+                        scope_facts=True, loop_body_range=(lo, hi))
+                    self.assertEqual(status, "valid", diags)
+                    self.assertEqual(diags, [])
+            with self.subTest(entry=entry, unit="return[5:6]"):
+                status, diags = self.check_statement_group(
+                    source, f"part-{entry}-ret", entry, (5, 6),
+                    expect_returns=True, scope_facts=True,
+                    carry_stmt_indexes=(1,))
+                self.assertEqual(status, "valid", diags)
+
+    def test_lexer_step_split_floor_is_the_step_budget(self):
+        # lexer_step (1427 nodes) cannot be covered by splitting. Its while
+        # body holds one if_statement (1021 nodes) whose else spine nests to
+        # a single 12-node branch. The smallest structurally valid unit is the
+        # function with the outermost else pruned: 518 nodes, which still
+        # exceeds the step budget. Deeper units grow, not shrink, so no split
+        # reaches a passing unit - the residual is per-node checker cost.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "lexer-step-floor",
+                                     "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(n, "id")) for n in nodes
+                      if str(nval(n, "parentId")) == "-1"
+                      and nval(n, "kind") in ("record_declaration",
+                                              "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        table = {str(nval(fn, "text")): int(nval(fn, "id")) for fn in nodes
+                 if nval(fn, "kind") == "function"
+                 and str(nval(fn, "parentId")) == "-1"}
+        full = index.subtree(table["lexer_step"])
+        self.assertEqual(len(full), 1427)
+
+        def invoke(keep):
+            ext = [s for s in sigs if s["name"] != "lexer_step"]
+            allowed = index.fact_closure(keep, {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
+            try:
+                response = self.session.send(
+                    {"schemaVersion": 3, "toolProtocolVersion": 2,
+                     "op": "tool_invoke",
+                     "tool": "pep-c23-checker-chunk-typed",
+                     "arguments": [
+                         self.sliced(parsed, keep),
+                         {"type": "List[CheckedFunction]",
+                          "value": [checked_fn_value(s) for s in ext]},
+                         {"type": "List[ResolvedSignature]",
+                          "value": [resolved_sig_value(s) for s in ext]},
+                         {"type": "List[ResolvedTypeDecl]", "value": facts},
+                         {"type": "Bool", "value": True}],
+                     "semanticTarget": sem})
+            except RuntimeError as error:
+                self.assertIn("1 MiB", str(error))
+                return "TRANSPORT"
+            if response.get("outcome") != "ok":
+                return (response.get("error") or {}).get("code")
+            return fields_map(response["result"])["status"]["value"]
+
+        self.assertEqual(invoke(full), "TRANSPORT")
+        # Prune the outermost if's else: the smallest valid unit.
+        while_body = [n for n in nodes
+                      if str(nval(n, "parentId")) == str(table["lexer_step"])
+                      and nval(n, "role") == "statement"
+                      and nval(n, "kind") == "while"][0]
+        inner_if = [n for n in nodes
+                    if str(nval(n, "parentId")) == str(nval(while_body, "id"))
+                    and nval(n, "role") == "body"][0]
+        outer_else = [n for n in nodes
+                      if str(nval(n, "parentId")) == str(nval(inner_if, "id"))
+                      and nval(n, "role") == "else"][0]
+        drop = set(index.subtree(int(nval(outer_else, "id"))))
+        keep = tuple(i for i in full if i not in drop)
+        self.assertEqual(len(keep), 518)
+        self.assertEqual(invoke(keep), "PEP_RUNTIME_STEP_LIMIT")
 
     def test_utf8_check_prefix_group_checks_valid(self):
         # First statement group of utf8_check (params + first 4 statements,
