@@ -220,6 +220,35 @@ class DocumentIndex:
         wanted = set(ids)
         return [node for node in self.nodes if _node_fields(node)["id"] in wanted]
 
+    def referenced_names(self, chunk_ids):
+        """Every name text appearing on a node of this chunk.
+
+        Deliberately over-approximate: any node text that coincides with a
+        declaration name is reported, whatever the node's role.
+        """
+        wanted = set(chunk_ids)
+        names = set()
+        for node in self.nodes:
+            fields = _fields(node, "FlatAstNode")
+            if _int_scalar(fields["id"], "node id") not in wanted:
+                continue
+            names.add(_str_scalar(fields["text"], "node text"))
+        return names
+
+    def fact_closure(self, chunk_ids, candidate_names):
+        """External declarations this chunk can actually reference.
+
+        Index-only and conservative. A declaration whose name never appears
+        on a node of the chunk cannot affect the chunk's meaning, so dropping
+        it from the external fact set cannot weaken the check; it only stops
+        the chunk paying to re-derive facts about the rest of the program.
+        Measured on stdlib/collections.pep (107 top-level functions):
+        passing all 106 external signatures exceeds the step budget, while
+        the same bodies check valid with their closure (often none).
+        """
+        names = self.referenced_names(chunk_ids)
+        return frozenset(name for name in candidate_names if name in names)
+
 
 class ChunkPlan:
     """Covering chunk plan for one revision, with declared shared roots."""

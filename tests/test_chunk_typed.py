@@ -198,7 +198,15 @@ class TypedChunkTests(unittest.TestCase):
         report = fields_map(response["result"])
         return target, sem, parsed, report["status"]["value"], diag_tuples(report)
 
-    def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=()):
+    def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=(),
+                              scope_facts=False, allow_error=False):
+        # allow_error=True returns the tool error code as the status instead
+        # of failing the assertion, so a test can pin a budget refusal.
+        # scope_facts=True supplies only the external declarations the chunk
+        # can name (index.fact_closure) instead of every declaration in the
+        # document. Omitting a declaration the chunk never mentions cannot
+        # change its meaning, but it does stop the chunk paying to re-derive
+        # facts about the rest of the program.
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                      "name": name, "bytes": list(source_bytes)})
         self.assertEqual(target.get("outcome"), "ok", target)
@@ -220,18 +228,32 @@ class TypedChunkTests(unittest.TestCase):
                   for fn in functions}
         self.assertIn(entry, bodies)
         ext = [s for s in sigs if s["name"] != entry]
+        if scope_facts:
+            allowed = index.fact_closure(
+                bodies[entry], {s["name"] for s in ext})
+            ext = [s for s in ext if s["name"] in allowed]
         host_fns, host_sigs, host_types = [], [], []
         if host_builtin_names:
             assert set(host_builtin_names) <= {"semantic_snapshot"}
             host_fns, host_sigs, host_types = host_builtins(
                 target["document"], target["revision"])
+        args = [self.sliced(parsed, bodies[entry]),
+                {"type": "List[CheckedFunction]",
+                 "value": [checked_fn_value(s) for s in ext] + host_fns},
+                {"type": "List[ResolvedSignature]",
+                 "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+                {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}]
+        if allow_error:
+            response = self.session.send(
+                {"schemaVersion": 3, "toolProtocolVersion": 2,
+                 "op": "tool_invoke", "tool": "pep-c23-checker-chunk-typed",
+                 "arguments": args + [{"type": "Bool", "value": True}],
+                 "semanticTarget": sem})
+            if response.get("outcome") != "ok":
+                return (response.get("error") or {}).get("code"), []
+            return fields_map(response["result"])["status"]["value"], []
         report = fields_map(self.invoke_typed(
-            self.sliced(parsed, bodies[entry]),
-            {"type": "List[CheckedFunction]",
-             "value": [checked_fn_value(s) for s in ext] + host_fns},
-            {"type": "List[ResolvedSignature]",
-             "value": [resolved_sig_value(s) for s in ext] + host_sigs},
-            {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}, sem))
+            args[0], args[1], args[2], args[3], sem))
         return report["status"]["value"], diag_tuples(report)
 
     def check_statement_group(self, source_bytes, name, entry, stmt_range,
@@ -463,6 +485,45 @@ class TypedChunkTests(unittest.TestCase):
         return (library[start:end]
                 + "\nfn main() -> Int {\n"
                 + "  return list_int_min_between([], 0, 3, 9)\n}\n").encode("utf-8")
+
+    def test_module_functions_need_dependency_scoped_facts(self):
+        # stdlib/collections.pep: 2901 nodes, 107 top-level functions. Giving
+        # one chunk every external signature in the module exceeds the step
+        # budget; scoping the facts to the chunk's own name closure (often
+        # empty) makes the same bodies check valid. The choice is sound
+        # because a declaration the chunk never names cannot affect it.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        entries = ["list_int_min_between", "list_int_count_between_runs",
+                   "list_int_count_runs", "list_bool_has_true_majority"]
+        for entry in entries:
+            with self.subTest(entry=entry, facts="all"):
+                status, _ = self.check_body_with_facts(
+                    source, f"mod-{entry}-all", entry, allow_error=True)
+                self.assertEqual(status, "PEP_RUNTIME_STEP_LIMIT")
+            with self.subTest(entry=entry, facts="closure"):
+                status, diags = self.check_body_with_facts(
+                    source, f"mod-{entry}-closure", entry, scope_facts=True)
+                self.assertEqual(status, "valid", diags)
+                self.assertEqual(diags, [])
+
+    def test_fact_closure_keeps_named_declarations_and_drops_the_rest(self):
+        # Sound selection: a candidate survives only if the chunk can name it.
+        source = (ROOT / "stdlib" / "collections.pep").read_bytes()
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "closure-index", "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        table = {str(nval(fn, "text")): int(nval(fn, "id"))
+                 for fn in nodes
+                 if nval(fn, "kind") == "function"
+                 and str(nval(fn, "parentId")) == "-1"}
+        body = index.subtree(table["list_int_min_between"])
+        candidates = {"list_int_min_between", "list_int_sum_between",
+                      "list_bool_longest_run", "no_such_declaration"}
+        kept = index.fact_closure(body, candidates)
+        self.assertEqual(sorted(kept), ["list_int_min_between"])
 
     def test_utf8_check_prefix_group_checks_valid(self):
         # First statement group of utf8_check (params + first 4 statements,
