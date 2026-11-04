@@ -3,8 +3,7 @@
 **Packet:** PEP-A4-20261104-001, Slice 2. **Branch:** `spec/agent4-spec-lab`
 **Pins:** seed oracle = campaign `57fe424` (`pep_ocaml.ml`); staged subject = A13
 chunked checker at `bcfa3c0` (`codex/checker-emitter-integration`; typed entry
-introduced `49db581`); A3 evidence = `codex/bootstrap-agent3-verification`
-@ `d720570` (slice 1) and @ `5694f568` (slice 2, 13-cell matrix, 12 pass / 1 fail);
+introduced `49db581`); defect re-confirmed CURRENT at A1 head `97e420b` by A3 (`codex/bootstrap-agent3-verification` @ `d7523780`, same 81-byte flip + same 12/1 matrix); A3 evidence also @ `d720570` (slice 1) and @ `5694f568` (slice 2, 13-cell matrix, 12 pass / 1 fail);
 fixture blob `8466adf6…` / sha256 `7848eea5…` (81 bytes, LF-pinned).
 No staged checker was built or modified here; all verdicts below are A3-measured.
 
@@ -37,7 +36,7 @@ at the pinned base, inside the supported subset only.
 
 | ID | Rule | Status + evidence |
 |---|---|---|
-| A4-SI-01 | A staged check MUST agree with the oracle on every program the oracle rejects for duplicate declarations, under every partition and fact order. | VIOLATED (open defect). CE-1, CE-2. Fix owned by A1. |
+| A4-SI-01 | A staged check MUST agree with the oracle on every program the oracle rejects for duplicate declarations, under every partition and fact order. | VIOLATED (open defect). CE-1, CE-2. Re-confirmed CURRENT at A1 head `97e420b` (A3 `d7523780`); the new ledger test there asserts nothing about duplicates (good — hole not crystallised). Fix owned by A1, must land on A1's branch. |
 | A4-SI-02 | For oracle-valid programs, the staged verdict MUST NOT depend on fact order. | HOLDS where tested (A3: valid record use, fact-order stable). Assumption: facts complete + validated. |
 | A4-SI-03 | Chunks with missing facts MUST refuse, never guess. | HOLDS where tested (missing-fact closure refuses). |
 | A4-SI-04 | Facts foreign to the revision/scope MUST be refused. | HOLDS where tested (foreign-fact closure refuses). |
