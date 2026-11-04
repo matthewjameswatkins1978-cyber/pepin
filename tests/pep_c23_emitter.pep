@@ -627,6 +627,117 @@ fn pep_c23_say_statement(nodes: List[FlatAstNode], function: FlatAstNode, statem
   parts = append(parts, ".length);\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
+// ---- Cross-chunk call lowering (PEP-WB-A2-20261104-B slice A2-1).
+// The one- to four-parameter paths above resolve the callee from the SAME parsed nodes and then
+// validate its body shape. When the callee lives in another checked chunk those nodes do not
+// exist here, so this path resolves the target ONLY through the checked facts already in the
+// report: ResolvedCall.syntaxId identifies this call node, ResolvedCall.calleeId names exactly
+// one CheckedFunction (the checker resolved it against the supplied external signatures), and
+// that entry carries the authenticated name -- the name-based C symbol -- plus arity and result
+// type/shape. No textual name lookup happens here: missing, duplicate or disagreeing facts
+// refuse with their own diagnostic instead of guessing a target. Argument TYPE soundness is the
+// checker's (report status valid means types/arity were verified against external signatures);
+// this path re-checks arity against its own node count as fail-closed defence of forged or
+// mismatched reports, and the emit entry's document/revision identity check rejects stale facts
+// before any body is lowered.
+fn pep_c23_cross_chunk_call(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                             checked: CheckerReport) -> PepC23Emission {
+  var callMatches = 0
+  var calleeSemanticId = -1
+  for callFact in checked.calls {
+    if callFact.syntaxId == node.id {
+      callMatches = callMatches + 1
+      calleeSemanticId = callFact.calleeId
+    } else {}
+  }
+  if callMatches == 0 {
+    return pep_c23_unsupported("Pep C23 cross-chunk call has no resolved call fact")
+  } else {}
+  if !(callMatches <= 1) {
+    return pep_c23_unsupported("Pep C23 cross-chunk call has ambiguous resolved call facts")
+  } else {}
+  var targetMatches = 0
+  var calleeName = ""
+  var calleeArity = 0
+  var calleeReturn = ""
+  var calleeShapeKind = ""
+  for fnFact in checked.functions {
+    if fnFact.semanticId == calleeSemanticId {
+      targetMatches = targetMatches + 1
+      calleeName = fnFact.name
+      calleeArity = fnFact.arity
+      calleeReturn = fnFact.returnType
+      calleeShapeKind = fnFact.returnShape.kind
+    } else {}
+  }
+  if targetMatches == 0 {
+    return pep_c23_unsupported("Pep C23 cross-chunk call target is missing from the checked functions")
+  } else {}
+  if !(targetMatches <= 1) {
+    return pep_c23_unsupported("Pep C23 cross-chunk call target is ambiguous in the checked functions")
+  } else {}
+  let argumentCount = pep_c23_count_children(nodes, node.id, "argument")
+  if argumentCount != calleeArity {
+    return pep_c23_unsupported("Pep C23 cross-chunk call argument count disagrees with the checked arity")
+  } else {}
+  // Result support: Int and Bool always; a nominal record only when its declaration is visible
+  // in THIS chunk (the struct type must exist where the value is consumed -- the declaration
+  // chunk's header supplies it). Str, tagged unions and unknown results refuse: the callee-side
+  // unit refuses them too, and a call must not reference a symbol the assembly never emits.
+  if !(calleeReturn == "Int" || calleeReturn == "Bool") {
+    if !(calleeShapeKind == "nominal" && pep_c23_record_declaration(nodes, calleeReturn).found) {
+      return pep_c23_unsupported("Pep C23 cross-chunk calls support Int, Bool, and locally declared record results")
+    } else {}
+  } else {}
+  // Same fallible-argument rule as the ordered path, mirrored exactly: C leaves argument
+  // evaluation order unspecified, so more than one fallible argument refuses.
+  var fallibleArguments = 0
+  var arguments: List[FlatAstNode] = []
+  var wanted = 0
+  while !(argumentCount <= wanted) {
+    let argument = pep_c23_child(nodes, node.id, "argument", wanted)
+    if !argument.found {
+      return pep_c23_unsupported("Pep C23 call argument list has a gap")
+    } else {}
+    if pep_c23_infallible_value(nodes, argument.node) {
+      fallibleArguments = fallibleArguments + 1
+    } else {}
+    arguments = append(arguments, argument.node)
+    wanted = wanted + 1
+  }
+  if !(fallibleArguments <= 1) {
+    return pep_c23_unsupported("Pep C23 rejects multiple fallible call arguments because C argument evaluation order is unspecified")
+  } else {}
+  // Name-based symbol from the authenticated fact: the callee unit emits pep_fn_<name> too, so
+  // chunk-local id remapping can never split a call from its definition.
+  var parts: List[Str] = ["pep_fn_", calleeName, "("]
+  var emitted = 0
+  for argument in arguments {
+    let lowered = pep_c23_call_argument(nodes, function, argument,
+      PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() })
+    if lowered.status != "emitted" { return lowered } else {}
+    if emitted != 0 { parts = append(parts, ", ") } else {}
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    emitted = emitted + 1
+  }
+  parts = pep_c23_close_generated_call(nodes, parts, argumentCount)
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+// Checked-aware expression entry. The plain path runs FIRST, so every success and every refusal
+// except the missing-target one is byte-for-byte identical to today (one-shot and same-chunk
+// behaviour preserved by construction); "calls require a known target" is exactly where a
+// cross-chunk callee appears, and there the checked-fact path takes over. Supported statement
+// forms in this slice: let initialisers and direct return values -- the two sites threaded with
+// the real report. Nested calls inside arguments resolve same-chunk or refuse; conditional-return
+// bodies keep the plain path (documented boundary).
+fn pep_c23_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                              checked: CheckerReport) -> PepC23Emission {
+  let plain = pep_c23_expression(nodes, function, node)
+  if plain.status == "emitted" { return plain } else {}
+  if plain.diagnostic != "Pep C23 calls require a known target" { return plain } else {}
+  if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
+  return plain
+}
 fn pep_c23_close_generated_call(nodes: List[FlatAstNode], parts: List[Str], argumentCount: Int) -> List[Str] {
   var closedParts = parts
   if pep_c23_requires_arena(nodes) {
@@ -2228,7 +2339,11 @@ fn pep_c23_many_argument_call(nodes: List[FlatAstNode], function: FlatAstNode, c
   if !(fallibleArguments <= 1) {
     return pep_c23_unsupported("Pep C23 rejects multiple fallible call arguments because C argument evaluation order is unspecified")
   } else {}
-  var parts: List[Str] = ["pep_fn_", int_text(target.id), "("]
+  // Symbols are name-based: function names are unique per document (the checker refuses
+  // PEP_DUPLICATE_FUNCTION), so `pep_fn_<name>` is stable ACROSS chunk-local id remapping --
+  // chunked assembly would otherwise emit duplicate pep_fn_<id> symbols (measured collision:
+  // two chunks both remapping a function to id 18).
+  var parts: List[Str] = ["pep_fn_", target.text, "("]
   var emitted = 0
   for parameter in parameters {
     let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
@@ -2675,7 +2790,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           if loweredArgument.status != "emitted" { return loweredArgument } else {}
           if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
           if loweredThirdArgument.status != "emitted" { return loweredThirdArgument } else {}
-          var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+          var parts: List[Str] = ["pep_fn_", target.node.text, "("]
           for part in loweredArgument.sourceParts { parts = append(parts, part) }
           parts = append(parts, ", ")
           for part in loweredSecondArgument.sourceParts { parts = append(parts, part) }
@@ -2694,7 +2809,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         let loweredSecondArgument = pep_c23_call_argument(nodes, function, secondArgument.node, secondParameterType)
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
         if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
-        var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+        var parts: List[Str] = ["pep_fn_", target.node.text, "("]
         for part in loweredArgument.sourceParts { parts = append(parts, part) }
         parts = append(parts, ", ")
         for part in loweredSecondArgument.sourceParts { parts = append(parts, part) }
@@ -2706,7 +2821,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
         let loweredArgument = pep_c23_call_argument(nodes, function, argument.node, parameterType)
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
-        var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+        var parts: List[Str] = ["pep_fn_", target.node.text, "("]
         for part in loweredArgument.sourceParts { parts = append(parts, part) }
         parts = pep_c23_close_generated_call(nodes, parts, 1)
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
@@ -2737,7 +2852,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           !safeRecursiveUnionConstruction) {
         return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result, safe record construction, or direct recursive-union constructor result")
       } else {}
-      var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+      var parts: List[Str] = ["pep_fn_", target.node.text, "("]
       parts = pep_c23_close_generated_call(nodes, parts, 0)
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     }
@@ -3217,7 +3332,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   parts = append(parts, "  }\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
-fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
+fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, checked: CheckerReport) -> PepC23Emission {
   let parameters = pep_c23_parameters(nodes, function)
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
   let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
@@ -3282,7 +3397,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           }
           // List descriptors have value semantics, so reassignment copies the descriptor.
         } else {
-          let initial = pep_c23_expression(nodes, function, initialValue.node)
+          let initial = pep_c23_expression_checked(nodes, function, initialValue.node, checked)
           if initial.status != "emitted" { return initial } else {}
         }
       } else {
@@ -3395,7 +3510,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   if statementCount == 0 || !returned { return pep_c23_unsupported("Pep C23 functions require a return statement") } else {}
   let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
   if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
-  return pep_c23_expression(nodes, function, value.node)
+  return pep_c23_expression_checked(nodes, function, value.node, checked)
 }
 fn pep_c23_function_at(functions: List[FlatAstNode], wanted: Int) -> PepC23NodeLookup {
   var index = 0
@@ -3660,12 +3775,12 @@ fn emit_c23_function_unit_bounded(parsed: ParserProgress, checked: CheckerReport
   }
 }
 
-fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool) -> PepC23Emission {
+fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool, checked: CheckerReport) -> PepC23Emission {
   var reversed: List[Str] = []
   if node.parentId == -1 && node.kind == "function" {
     let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
     let hasConditionalBody = conditionalBody.status == "emitted"
-    let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node) }
+    let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node, checked) }
     if lowered.status != "emitted" { return lowered } else {}
     let functionParameters = pep_c23_parameters(parsed.nodes, node)
     let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
@@ -3718,7 +3833,7 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
             for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
             bodyParts = append(bodyParts, ";\n")
           } else {
-            let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+            let initial = pep_c23_expression_checked(parsed.nodes, node, initialValue.node, checked)
             // A record or union value type can only be carried by these initialiser shapes, so do
             // not pay two full node-list scans for a scalar literal. This runs for every local
             // binding, and the per-statement step cost is what bounds real compiler bodies.
@@ -3962,7 +4077,7 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
     }
     for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
     reversed = prepend(reversed, " pep_fn_")
-    reversed = prepend(reversed, int_text(node.id))
+    reversed = prepend(reversed, node.text)
     if length(functionParameters) == 0 {
       if requiresArena { reversed = prepend(reversed, " (pep_arena_t *pep_arena) {\n") } else {
         reversed = prepend(reversed, " (void) {\n")
@@ -4240,7 +4355,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
         return pep_c23_unsupported("Pep C23 main function must return Int")
       } else {}
     } else {}
-    return pep_c23_function_definition(parsed, selected.node, requiresArena)
+    return pep_c23_function_definition(parsed, selected.node, requiresArena, checked)
   } else {}
   var reversed: List[Str] = []
   reversed = prepend(reversed, "#include <stddef.h>\n")
@@ -4275,7 +4390,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
-      reversed = prepend(reversed, int_text(node.id))
+      reversed = prepend(reversed, node.text)
       if length(functionParameters) == 0 {
         if requiresArena { reversed = prepend(reversed, "(pep_arena_t *pep_arena);\n") } else {
           reversed = prepend(reversed, "(void);\n")
@@ -4311,7 +4426,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   if part == "main" { functionsToEmit = [] } else {}
   var sectionFunctionEnds: List[Int] = []
   for node in functionsToEmit {
-    let definition = pep_c23_function_definition(parsed, node, requiresArena)
+    let definition = pep_c23_function_definition(parsed, node, requiresArena, checked)
     if definition.status != "emitted" { return definition } else {}
     for part in definition.sourceParts { reversed = prepend(reversed, part) }
     sectionFunctionEnds = append(sectionFunctionEnds, length(reversed))
@@ -4322,7 +4437,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
     reversed = prepend(reversed, "  if (pep_arena_init(&pep_arena, 0) != PEP_ARENA_OK) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
     reversed = prepend(reversed, "  int64_t pep_main_result = pep_fn_")
-    reversed = prepend(reversed, int_text(mainId))
+    reversed = prepend(reversed, "main")
     reversed = prepend(reversed, "(pep_arena);\n")
     reversed = prepend(reversed, "  if (pep_arena_status(pep_arena) != PEP_ARENA_OK) { pep_arena_free(&pep_arena); fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
     reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)pep_main_result);\n")
@@ -4332,7 +4447,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   } else {
     reversed = prepend(reversed, "int main(void) {\n")
     reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
-    reversed = prepend(reversed, int_text(mainId))
+    reversed = prepend(reversed, "main")
     reversed = prepend(reversed, "()));\n")
     reversed = prepend(reversed, "  return 0;\n")
     reversed = prepend(reversed, "}\n")

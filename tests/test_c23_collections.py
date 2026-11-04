@@ -1314,7 +1314,7 @@ class PepC23CollectionLoopTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         self.assertEqual(result.stdout, reference.stdout)
                         c_source = generated_c.read_text(encoding="utf-8")
-                        self.assertRegex(c_source, r"pep_fn_\d+\(pep_local_\d+\)")
+                        self.assertRegex(c_source, r"pep_fn_[A-Za-z_0-9]+\(pep_local_\d+\)")
 
     def test_mutable_list_reassignment_matches_interpreter_on_clang_and_gcc(self):
         if not CLANG.is_file() or not GCC.is_file():

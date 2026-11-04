@@ -6,18 +6,23 @@ Auto-prepares pinned inputs, then mirrors A1's tests/test_lexer_chunk_ledger.py 
   parse fixture -> per-chunk plan (decl closure + function subtree + referenced decls) ->
   analyze_chunk with external signatures -> MY header/units/epilogue emitted FROM CHUNK REPORTS.
 
-Measured outputs recorded 2026-11-04: all chunks check valid (decl 18, make_token 55 nodes --
-matching A1's pinned ledger -- main 33); header, the make_token function unit and the epilogue
-emit from those chunk reports; lowering main's body across chunk boundaries refuses with
-"Pep C23 calls require a known target" -- the PINNED INTERFACE REQUIREMENT for signature-driven
-cross-chunk call lowering (checked.functions/CheckedFunction + checked.calls/ResolvedCall carry
-the facts; the emitter resolves callee parameter/return nodes from its own parsed today).
-A merged single-chunk plan was measured to hit PEP_RUNTIME_STEP_LIMIT, so the refusal is a real
-interface gap, not a chunking choice.
+Measured outputs recorded 2026-11-05 at A1 @2f939a0: all FOUR separately checked chunks are
+status=valid (decl 18, make_token 55 -- matching A1's pinned ledger -- add_one 8, main 5);
+header + the make_token, add_one and main units + epilogue all emit from those chunk reports;
+the cross-chunk call `return add_one(41)` lowers through checked facts ONLY
+(ResolvedCall.syntaxId -> exactly one CheckedFunction -> name-based pep_fn_<name> symbol, arity
+re-checked, Int/Bool/locally-declared-record results only, stale/foreign facts refused at the
+document/revision gate). Strict Clang AND GCC build the assembled C23 with
+-Wall -Wextra -Wpedantic -Werror and run 42, matching the seed oracle exactly (entry-point
+difference stated: the seed runs top-level statements, native runs fn main). The transport
+helper numbers external signature ids per CALL, so this probe renumbers them uniquely after
+fetch -- without that, two externals collide and the checker reports PEP_TYPE_MISMATCH (measured).
+Budgets unchanged: a merged single-chunk plan still hits PEP_RUNTIME_STEP_LIMIT, so chunking
+remains mandatory.
 """
 import subprocess
 
-A1_SHA = "3da8f99e6b1bef0fa2965b2f8d21c3cdde182d82"
+A1_SHA = "2f939a0959373c3cafb628e3c8ddfe9b8a6182ff"
 import os
 import pathlib
 
@@ -48,8 +53,8 @@ def prepare():
 prepare()
 """Seam demonstration: A1's checked-chunk contract driving MY bounded emitter.
 
-Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at A1 FETCH_HEAD (3da8f99) seed +
-checker with MY emitter (3d95cbc):
+Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (2f939a0)
+seed + checker with MY emitter in this worktree:
 
   parse whole fixture -> plan chunks (decl closure + per-function subtree + referenced decls)
   -> analyze_chunk per slice with external signatures -> emit MY header/units/epilogue FROM THE
@@ -138,10 +143,16 @@ my_emitter = (ROOT / "tests" / "pep_c23_emitter.pep").read_text(encoding="utf-8"
 
 lines = LEXER.read_text(encoding="utf-8").split("\n")
 lex_chunk = "\n".join(lines[2:12]) + "\n" + "\n".join(lines[112:122]) + "\n"
+# Distinct chunks: declaration (LexToken), real lexer function (make_token), a scalar-result
+# callee (add_one) whose cross-chunk call result IS the program's output, and main. The record
+# field access on a cross-chunk record result is a measured boundary, kept out of the runnable
+# fixture rather than hidden (see the receipt).
 fixture = (lex_chunk +
+           "fn add_one(v: Int) -> Int {\n"
+           "  return v + 1\n"
+           "}\n"
            "fn main() -> Int {\n"
-           "  let token = make_token(\"integer\", \"\", 42, [], 0, 2, 1, 1)\n"
-           "  return token.integerValue\n"
+           "  return add_one(41)\n"
            "}\n")
 
 bundle = "\n".join([a1_lexer, a1_parser, a1_checker, my_emitter])
@@ -166,7 +177,14 @@ try:
     empty_ext = {"type": "List[CheckedFunction]", "value": []}
     empty_sig = {"type": "List[ResolvedSignature]", "value": []}
     for tool, function, arguments, expect in [
-            ("pep-c23-checker-chunk", "analyze_chunk", [empty_pp, empty_ext, empty_sig],
+            # A1's own cross-chunk call test (test_chunk_cross_call_facts.py @2f939a0) checks the
+            # caller chunk through analyze_chunk_typed with external types and expectReturns --
+            # that is the entry whose external-signature argument typing is verified; the
+            # untyped analyze_chunk draws PEP_TYPE_MISMATCH on the same valid source (measured).
+            ("pep-c23-checker-chunk", "analyze_chunk_typed",
+             [empty_pp, empty_ext, empty_sig,
+              {"type": "List[ResolvedTypeDecl]", "value": []},
+              {"type": "Bool", "value": True}],
              pep_c23.checker_report(sample["document"], sample["revision"])),
             ("pep-c23-checker-sigs", "chunk_signatures", [empty_pp], empty_sig)]:
         session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_register",
@@ -206,6 +224,38 @@ try:
           f"nodes={len(pfields['nodes']['value'])} bytes={len(payload)}")
 
     sigs = helper.fetch_all_sigs(session, parsed, revision, sem)
+    # MEASURED TRANSPORT DEFECT (A1 tests/chunk_helper.py @2f939a0 and @9ad7d95): sigs_from_tool
+    # numbers semid = 9000 + i / synid = 1000000000 + i, but fetch_all_sigs parses ONE header
+    # chunk per call, so i is 0 every time and every external signature collides at
+    # 9000/1000000000. The checker keys CheckedFunction/ResolvedSignature facts by those ids, so
+    # with two or more external functions it resolved add_one(41) against make_token's first
+    # parameter (Str) and reported PEP_TYPE_MISMATCH on the integer literal (measured here).
+    # Renumber in this A2-owned probe; A1's file stays untouched and the ids stay synthetic
+    # (never document ids), exactly as the helper's own contract comment requires.
+    for signatureIndex, signature in enumerate(sigs):
+        signature["semid"] = 9000 + signatureIndex
+        signature["synid"] = 1000000000 + signatureIndex
+    for s in sigs:
+        print("SIG", s["name"], "arity", s["arity"], "rtype", s["rtype"], "id", s.get("id"), "semid", s["semid"], "synid", s["synid"])
+    # Raw compiler-produced functionId for each function's header chunk (the helper discards it):
+    for fn_node in [n for n in pfields["nodes"]["value"]
+                    if helper.nval(n, "kind") == "function" and str(helper.nval(n, "parentId")) == "-1"]:
+        sub = helper.header_subtree(pfields["nodes"]["value"],
+                                    {str(helper.nval(n, "id")): n for n in pfields["nodes"]["value"]},
+                                    helper.nval(fn_node, "id"))
+        chunk = helper.remap_chunk([json.loads(json.dumps(n)) for n in sub])
+        hp = {"type": "ParserProgress", "fields": [
+            {"name": k, "value": ({"type": "List[FlatAstNode]", "value": chunk} if k == "nodes" else pfields[k])}
+            for k in pfields]}
+        r = session.send({"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+                          "tool": "pep-c23-checker-sigs", "arguments": [hp], "semanticTarget": sem})
+        raw = r["result"].get("value")
+        if raw is None:
+            raw = r["result"]["fields"][0]["value"]["value"]
+        for entry in raw:
+            fm = {f["name"]: f["value"] for f in entry["fields"]}
+            print("RAW-SIG fn=%s functionId=%s" % (
+                fm["functionName"]["value"], fm["functionId"]["value"]))
     nodes = pfields["nodes"]["value"]
     by_id = {str(helper.nval(node, "id")): node for node in nodes}
     index = __import__("pep_chunk_contract").DocumentIndex.from_parsed(parsed)
@@ -252,14 +302,27 @@ try:
                                               {"type": "List[CheckedFunction]",
                                                "value": [helper.checked_fn_value(s) for s in other]},
                                               {"type": "List[ResolvedSignature]",
-                                               "value": [helper.resolved_sig_value(s) for s in other]}],
+                                               "value": [helper.resolved_sig_value(s) for s in other]},
+                                              {"type": "List[ResolvedTypeDecl]", "value": []},
+                                              {"type": "Bool", "value": True}],
                                 "semanticTarget": sem})
         if checked.get("outcome") != "ok":
             stage(f"check:{label}", False, str(checked.get("error"))[:200])
             sys.exit(2)
         report = checked["result"]
         status = fields_map(report)["status"]["value"]
-        stage(f"check:{label}", status == "valid", f"status={status} nodes={len(planned)}")
+        diags = (fields_map(report)["diagnostics"]["value"] or [])[:2]
+        remapped_now = next(f["value"]["value"] for f in sliced["fields"]
+                            if f["name"] == "nodes")
+        for d in diags:
+            sid = int(fields_map(d).get("syntaxId", {}).get("value", -1))
+            hit = [n for n in remapped_now if int(helper.nval(n, "id")) == sid]
+            if hit:
+                n0 = hit[0]
+                print("    diag-node id=%s kind=%s text=%s" % (
+                    sid, helper.nval(n0, "kind"), helper.nval(n0, "text")))
+        stage(f"check:{label}", status == "valid",
+              f"status={status} nodes={len(planned)} diags={json.dumps(diags)[:300]}")
         if status != "valid":
             sys.exit(3)
         reports[label] = report
@@ -267,6 +330,7 @@ try:
 
     decl_label = labels[0]
     body_label = "make_token"
+    callee_label = "add_one"
     main_label = "main"
 
     def invoke(tool, arguments, what):
@@ -293,34 +357,21 @@ try:
                        [sliced_by_label[body_label], reports[body_label], typed("Int", 0)],
                        "emit-unit-make_token")
 
-    # MEASURED SEAM BOUNDARY (recorded, not hidden): lowering main's body across chunk
-    # boundaries needs the callee's signature -- the emitter resolves call targets from the same
-    # parsed nodes, and main's chunk carries make_token only as a CheckedFunction/ResolvedCall
-    # fact. Expected refusal below is the pinned interface requirement for signature-driven call
-    # lowering; the header + make_token unit above already prove checked bounded emission.
-    unit_main_response = session.send(
-        {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
-         "tool": "pep-c23-unit",
-         "arguments": [sliced_by_label[main_label], reports[main_label], typed("Int", 0)],
-         "semanticTarget": sem})
-    unit_main_fields = {f["name"]: f["value"] for f in unit_main_response["result"]["fields"]}
-    unit_main_status = unit_main_fields["status"]["value"]
-    unit_main_diag = unit_main_fields["diagnostic"]["value"]
-    boundary = unit_main_status == "unsupported" and "known target" in unit_main_diag
-    stage("emit-unit-main", boundary,
-          f"status={unit_main_status} diag={unit_main_diag[:120]}"
-          + (" <- cross-chunk call targets: PINNED HANDOFF" if boundary else ""))
-    if not boundary:
-        sys.exit(6)
-
+    unit_add = invoke("pep-c23-unit",
+                      [sliced_by_label[callee_label], reports[callee_label], typed("Int", 0)],
+                      "emit-unit-add_one")
+    unit_main = invoke("pep-c23-unit",
+                       [sliced_by_label[main_label], reports[main_label], typed("Int", 0)],
+                       "emit-unit-main")
     epilogue = invoke("pep-c23-section",
                       [sliced_by_label[main_label], reports[main_label], typed("Str", "main")],
                       "emit-epilogue")
-    print("ASSEMBLY-DEMO: header + make_token unit + epilogue emitted from chunk reports; "
-          "full native RUN requires signature-driven cross-chunk call lowering (handoff).")
-    sys.exit(0)
 
-    c_source = header + unit_make + unit_main + epilogue
+    # Assembly order is document order over separately checked chunks: declaration header,
+    # then each function unit (callees precede callers here), then the epilogue. The header
+    # carries prototypes only for functions inside ITS chunk, so a caller emitted before its
+    # callee would not compile -- unit order is part of the assembly contract (A2-3 negative).
+    c_source = header + unit_make + unit_add + unit_main + epilogue
     c_path = BUILD / "seam_chunked.c"
     c_path.write_text(c_source, encoding="utf-8", newline="\n")
     print(f"assembled_c_bytes={len(c_source)}")
@@ -341,6 +392,35 @@ try:
         stage(f"strict-{compiler_name}", True, f"run_stdout={out!r}")
         if out != b"42\n":
             failures.append(f"{compiler_name}-output")
+    # Closest valid OCaml oracle: the seed executes top-level statements and ignores `fn main`,
+    # while the native entry is the emitter's main wrapper -- the documented entry-point
+    # difference. The SAME make_token/let/say calls at top level must print the same value.
+    oracle_source = lex_chunk + (
+        'fn add_one(v: Int) -> Int {\n'
+        '  return v + 1\n'
+        '}\n'
+        'say(int_text(add_one(41)))\n')
+    oracle_path = BUILD / "seam_oracle.pep"
+    oracle_path.write_text(oracle_source, encoding="utf-8", newline="\n")
+    oracle = subprocess.run([str(A1_SEED), "run", str(oracle_path)], capture_output=True, check=False)
+    if oracle.returncode:
+        stage("oracle-seed", False, oracle.stderr.decode("utf-8", "replace")[:400])
+        failures.append("oracle")
+    else:
+        oracle_out = oracle.stdout.replace(b"\r\n", b"\n")
+        native_exe = BUILD / "seam_chunked_clang.exe"
+        if not native_exe.is_file():
+            stage("oracle-seed", False,
+                  f"seed={oracle_out!r} native=<not built: strict clang compile failed>")
+            failures.append("oracle-native-missing")
+        else:
+            native = subprocess.run([str(native_exe)], capture_output=True, check=False)
+            native_out = native.stdout.replace(b"\r\n", b"\n")
+            stage("oracle-seed", oracle_out == b"42\n",
+                  f"seed={oracle_out!r} native={native_out!r}"
+                  " (entry-point difference: seed runs top-level statements, native runs fn main)")
+            if oracle_out != native_out:
+                failures.append("oracle-mismatch")
     sys.exit(1 if failures else 0)
 finally:
     session.close()

@@ -98,7 +98,7 @@ class PepC23ArityTests(unittest.TestCase):
             "fn main() -> Int { return last_of_four(1, 2, 3, 42) }\n",
             42)
         self.assertEqual(generated.count("(void)pep_arg_"), 4)
-        self.assertRegex(generated, r"int64_t pep_fn_\d+\(int64_t pep_arg_\d+, "
+        self.assertRegex(generated, r"int64_t pep_fn_[A-Za-z_0-9]+\(int64_t pep_arg_\d+, "
                                     r"int64_t pep_arg_\d+, int64_t pep_arg_\d+, int64_t pep_arg_\d+\);")
         self.assertIn("return pep_result", generated)
 
@@ -151,7 +151,7 @@ class PepC23ArityTests(unittest.TestCase):
                   "}\n"
                   "fn main() -> Int { return total(10) }\n")
         generated = emit(source.encode("utf-8"))
-        self.assertRegex(generated, r"pep_fn_\d+\(")
+        self.assertRegex(generated, r"pep_fn_[A-Za-z_0-9]+\(")
         self.assertIn("pep_enter()", generated)
 
     def test_multiple_fallible_arguments_still_fail_closed(self):
