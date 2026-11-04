@@ -181,10 +181,15 @@ class Bound:
                            {"type": "Bool", "value": expect_returns}],
              "semanticTarget": sem})
         if response.get("outcome") != "ok":
-            return f"REFUSED:{(response.get('error') or {}).get('code')}", []
+            return f"REFUSED:{(response.get('error') or {}).get('code')}", [], []
         report = fields_map(response["result"])
         bindings = report["bindings"]["value"]
-        return report["status"]["value"], bindings
+        diags = []
+        for item in report["diagnostics"]["value"]:
+            fields = fields_map(item)
+            diags.append((fields["code"]["value"], int(fields["startByte"]["value"]),
+                          int(fields["endByte"]["value"])))
+        return report["status"]["value"], bindings, sorted(diags)
 
     def close(self):
         self.base.close()
@@ -309,13 +314,13 @@ def main():
         later_ids = sorted(set(index.subtree(function_id)) - {
             node for earlier in statements[:1] for node in index.subtree(earlier)})
 
-        status_prefix, produced = harness.invoke(parsed, prefix_ids, [], [], sem,
+        status_prefix, produced, _ = harness.invoke(parsed, prefix_ids, [], [], sem,
                                                  expect_returns=False)
         record("B0 prefix chunk with no external facts is valid", False, "observed",
                status_prefix, f"bindings produced={len(produced)}")
 
         honest = produced
-        status_valid, _ = harness.invoke(parsed, later_ids, honest, [], sem)
+        status_valid, _, _ = harness.invoke(parsed, later_ids, honest, [], sem)
         record("B1 honest pooled bindings let the later statement check valid", True,
                "valid", status_valid, f"bindings={len(honest)}")
 
@@ -324,12 +329,12 @@ def main():
             for entry in fact["fields"]:
                 if entry["name"] == "typeName":
                     entry["value"]["value"] = "Str"
-        status_forged, _ = harness.invoke(parsed, later_ids, forged, [], sem)
+        status_forged, _, _ = harness.invoke(parsed, later_ids, forged, [], sem)
         record("B2 forged binding type cannot make the later statement valid", True,
                "not-valid", "not-valid" if status_forged != "valid"
                else f"VALID with x: Str ({status_forged})")
 
-        status_none, _ = harness.invoke(parsed, later_ids, [], [], sem)
+        status_none, _, _ = harness.invoke(parsed, later_ids, [], [], sem)
         record("B3 without facts the later statement is not valid", True, "not-valid",
                "not-valid" if status_none != "valid" else "VALID without facts")
 
@@ -338,7 +343,7 @@ def main():
             for entry in fact["fields"]:
                 if entry["name"] == "ownerFunctionId":
                     entry["value"]["value"] = "999999"
-        status_owner, _ = harness.invoke(parsed, later_ids, foreign_owner, [], sem)
+        status_owner, _, _ = harness.invoke(parsed, later_ids, foreign_owner, [], sem)
         record("B4 a binding owned by another function is not treated as visible",
                True, "not-valid", "not-valid" if status_owner != "valid"
                else f"VALID with foreign ownerFunctionId ({status_owner})")
@@ -367,16 +372,21 @@ def main():
         new_statements = statement_ids(new_index, new_function_id)
         new_later_ids = sorted(set(new_index.subtree(new_function_id)) - {
             node for earlier in new_statements[:1] for node in new_index.subtree(earlier)})
-        status_stale, _ = harness.invoke(parsed_new, new_later_ids, honest, [], new_sem)
+        status_stale, _, diags_stale = harness.invoke(parsed_new, new_later_ids, honest, [], new_sem)
         # O1b — parity expectation: type facts of another revision are refused with
         # PEP_STALE_REVISION, so binding facts of another revision should be refused too.
+        # Envelope (verified against A1 9ad7d95 source): analyze_chunk_typed_bound
+        # returns invalid_report(..., "PEP_STALE_REVISION", ...) — status `invalid`
+        # with the diagnostic code, NOT a tool-level REFUSED. Accept exactly that.
+        stale_codes = [code for code, _, _ in diags_stale]
         if NEW_POOL:
             record("O1b binding facts of another revision are refused like type facts",
-                   True, "refused:PEP_STALE_REVISION",
-                   "refused:PEP_STALE_REVISION"
-                   if str(status_stale) == "REFUSED:PEP_STALE_REVISION"
-                   else f"outcome={status_stale}",
-                   f"rev1 facts against rev2 chunk -> {status_stale}")
+                   True, "invalid+PEP_STALE_REVISION",
+                   "invalid+PEP_STALE_REVISION"
+                   if str(status_stale) == "invalid"
+                   and "PEP_STALE_REVISION" in stale_codes
+                   else f"status={status_stale} codes={stale_codes}",
+                   f"rev1 facts against rev2 chunk -> {status_stale} codes={stale_codes}")
         else:
             record("O1b binding facts of another revision are refused like type facts",
                    True, "refused", "refused" if str(status_stale).startswith("REFUSED")
@@ -400,15 +410,17 @@ def main():
         st3 = statement_ids(index3, fid3)
         later3 = sorted(set(index3.subtree(fid3)) - {
             node for earlier in st3[:1] for node in index3.subtree(earlier)})
-        with_stale, _ = harness.invoke(parsed3, later3, honest, [], sem3)
-        without, _ = harness.invoke(parsed3, later3, [], [], sem3)
+        with_stale, _, diags_with = harness.invoke(parsed3, later3, honest, [], sem3)
+        without, _, _ = harness.invoke(parsed3, later3, [], [], sem3)
         seed_changed = base.seed_verdict(changed_source.encode("utf-8"))
+        with_codes = [code for code, _, _ in diags_with]
         if NEW_POOL:
             record("O1c a stale binding fact cannot change a verdict", True,
-                   "refused:PEP_STALE_REVISION",
-                   "refused:PEP_STALE_REVISION"
-                   if str(with_stale) == "REFUSED:PEP_STALE_REVISION"
-                   else f"with_stale={with_stale} without={without}",
+                   "invalid+PEP_STALE_REVISION",
+                   "invalid+PEP_STALE_REVISION"
+                   if str(with_stale) == "invalid"
+                   and "PEP_STALE_REVISION" in with_codes
+                   else f"with_stale={with_stale} codes={with_codes} without={without}",
                    f"seed={seed_changed} with_stale={with_stale} without={without}")
         else:
             record("O1c a stale binding fact cannot change a verdict", True,
