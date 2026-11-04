@@ -274,26 +274,27 @@ class DocumentIndex:
     def bounded_units(self, function_id):
         """Bounded checking units covering one function, smallest first.
 
-        Yields ``(label, chunk_ids)``. The whole body comes first because most
-        functions fit; then per-statement groups and loop-body statement units
-        for the ones that do not. Every unit keeps original span identity, so
-        diagnostics still land on real source offsets.
+        Yields ``(label, chunk_ids, expect_returns)``. The whole body comes
+        first because most functions fit. Statement units are non-terminal, so
+        they must be checked with ``expect_returns=False`` or every one of them
+        draws a spurious missing-return diagnostic; only the whole body is
+        checked as terminal.
 
-        The caller checks units smallest-first and stops at the first valid
-        one; the full partition is a gapless cover of the function's own
-        statements, so a function is covered even when no single unit fits.
+        Every unit keeps original span identity, so diagnostics still land on
+        real source offsets. The full output is a gapless cover: a statement is
+        covered by its own unit, and a statement whose block is itself over
+        budget is additionally available at block-member granularity.
         """
         body = self.subtree(function_id)
-        yield ("body", body)
+        yield ("body", body, True)
         statements = self.statement_children(function_id)
+        statement_ids = {node_id for root in statements
+                         for node_id in self.subtree(root)}
         keep_header = tuple(node_id for node_id in body
-                            if node_id not in {
-                                i for root in statements
-                                for i in self.subtree(root)
-                            })
+                            if node_id not in statement_ids)
         for position, statement in enumerate(statements):
             yield (f"statement[{position}]",
-                   keep_header + self.subtree(statement))
+                   keep_header + self.subtree(statement), False)
         for position, statement in enumerate(statements):
             inner = self.block_children(statement)
             if not inner:
@@ -304,7 +305,8 @@ class DocumentIndex:
                     for node_id in self.subtree(other)
                 }
                 yield (f"statement[{position}].body[{index}]",
-                       tuple(node_id for node_id in body if node_id not in drop))
+                       tuple(node_id for node_id in body if node_id not in drop),
+                       False)
 
 
 class ChunkPlan:
