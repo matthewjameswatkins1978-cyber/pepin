@@ -29,6 +29,8 @@ meant to move into Pep-written Lucy; until then they must not grow any
 type, scope or signature logic.
 """
 
+import copy
+import json
 import re
 
 CONTRACT_VERSION = "pep-checked-chunk-v1"
@@ -322,42 +324,101 @@ class DocumentIndex:
                        tuple(node_id for node_id in body if node_id not in drop),
                        False)
 class BindingPool:
-    """Stable binding facts for chained chunk checking.
+    """Stable binding facts for chained chunk checking, scoped to one source revision.
 
     Every chunk numbers its own bindings from 2000000, so pooling raw facts
-    from several chunk reports silently aliases different bindings to the same
-    id: a lookup for ``width`` can resolve to ``first`` and the checker then
+    from several chunk reports aliases different bindings to the same id: a
+    lookup for ``width`` can resolve to ``first`` and the checker then
     rejects a legal assignment as immutable. The pool renumbers on admission
     and dedupes by source identity, which is stable across chunks because scope
     keys and visibleFrom are source-anchored.
 
-    Measured on ``examples/pep_lexer.pep`` ``utf8_check`` (21 statements):
-    5/21 valid without pooled facts, 14/21 with naively pooled facts, 21/21
-    with this pool.
+    Attestation contract (stale-binding fail-open repair): every fact must
+    carry the ``document``/``revision`` the checker stamped at creation, and
+    the pool admits only facts attested to its own scoped revision. A fact
+    from another document or revision is refused loudly, never carried
+    silently. A second fact for an already-seen identity with different
+    semantics (type, mutability or shape) is a conflict and is refused
+    loudly; an identical re-admission dedupes silently. ``facts()`` returns
+    deep copies so callers cannot corrupt pool state.
+
+    Labels are checked for consistency against the scoped target, not for
+    authenticity: a same-revision forgery that contradicts the source is the
+    checker's observation to refuse downstream, exactly as with external
+    type facts. Measured on ``examples/pep_lexer.pep`` ``utf8_check``
+    (21 statements): 5/21 valid without pooled facts, 14/21 with naively
+    pooled facts, 21/21 with this pool.
     """
 
     BASE = 3_000_000
 
-    def __init__(self):
+    # Source-anchored identity of one declared binding.
+    _KEY_FIELDS = ("name", "ownerFunctionId", "scopeId", "visibleFrom")
+    # Semantic payload: everything that must agree for two admissions of one
+    # identity to be the same fact. Chunk-local ids are excluded (renumbered
+    # on admission anyway); document/revision are excluded here because they
+    # are checked against the pool scope first.
+    _SEMANTIC_FIELDS = ("name", "ownerFunctionId", "scopeId", "visibleFrom",
+                        "mutable", "typeName", "typeShape")
+
+    def __init__(self, document, revision):
+        self._document = document
+        self._revision = revision
         self._facts = []
-        self._seen = set()
+        self._seen = {}
 
     @staticmethod
     def _scalar(fields, name):
-        return fields[name]["value"]
+        try:
+            return fields[name]["value"]
+        except (KeyError, TypeError) as error:
+            raise ValueError(f"malformed BindingFact: no field {name!r}") from error
+
+    @classmethod
+    def _canonical(cls, fields):
+        """(identity key, semantic payload) or raise ValueError if malformed."""
+        try:
+            values = {name: fields[name] for name in
+                      ("semanticId", "syntaxId") + cls._SEMANTIC_FIELDS +
+                      ("document", "revision")}
+        except (KeyError, TypeError) as error:
+            raise ValueError("malformed BindingFact: missing fields") from error
+        key = tuple(json.dumps(values[name], sort_keys=True)
+                    for name in cls._KEY_FIELDS)
+        payload = tuple(json.dumps(values[name], sort_keys=True)
+                        for name in cls._SEMANTIC_FIELDS)
+        return key, payload
 
     def add(self, bindings):
-        """Admit binding facts from one chunk report; returns how many landed."""
+        """Admit binding facts from one chunk report; returns how many landed.
+
+        Fail-closed: a fact attested to another document/revision, a malformed
+        fact, or a fact conflicting with an already-admitted identity raises
+        ``ValueError``. An identical re-admission dedupes silently.
+        """
         added = 0
         for binding in bindings:
-            fields = {field["name"]: field["value"] for field in binding["fields"]}
-            key = (self._scalar(fields, "name"),
-                   self._scalar(fields, "ownerFunctionId"),
-                   self._scalar(fields, "scopeId"),
-                   self._scalar(fields, "visibleFrom"))
+            try:
+                fields = {field["name"]: field["value"]
+                          for field in binding["fields"]}
+            except (KeyError, TypeError) as error:
+                raise ValueError("malformed BindingFact: no fields") from error
+            for stamp in ("document", "revision"):
+                if stamp not in fields:
+                    raise ValueError(
+                        "malformed BindingFact: missing source attestation")
+            if (fields["document"] != {"type": "Str", "value": self._document}
+                    or fields["revision"] != {"type": "Str", "value": self._revision}):
+                raise ValueError(
+                    "stale or foreign BindingFact: attested to another "
+                    "document/revision")
+            key, payload = self._canonical(fields)
             if key in self._seen:
+                if self._seen[key] != payload:
+                    raise ValueError(
+                        "conflicting BindingFact for an admitted identity")
                 continue
-            self._seen.add(key)
+            self._seen[key] = payload
             replaced = []
             for field in binding["fields"]:
                 if field["name"] == "semanticId":
@@ -371,13 +432,14 @@ class BindingPool:
         return added
 
     def facts(self):
-        """The pooled facts, safe to send as ``List[BindingFact]``."""
-        return list(self._facts)
+        """The pooled facts, safe to send as ``List[BindingFact]``.
+
+        Deep copies: mutating a returned fact never corrupts pool state.
+        """
+        return copy.deepcopy(self._facts)
 
     def __len__(self):
         return len(self._facts)
-
-
 class ChunkPlan:
     """Covering chunk plan for one revision, with declared shared roots."""
 
