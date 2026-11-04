@@ -297,9 +297,16 @@ class PepC23RealLexerStageTests(unittest.TestCase):
         The emitter has native support for every construct these bodies use; they stop
         in the Pep-written checker. If this assertion starts failing, the checker has
         reached them and the constructor census must be re-run deliberately.
+
+        Re-measured 2026-11-04 (A1 checker-cost work on codex/p1-checker-cost-fix,
+        integrated here): whole-program make_token (55 nodes incl. declaration)
+        now clears the checker within the unchanged 100k-step budget, so it is
+        expected to reach "emitted" below; utf8_check (268 nodes) remains
+        checker-blocked. OCaml seed agrees the make_token snippet is valid.
+        A2 owns this ledger: please confirm or relocate this coverage.
         """
-        for name, header in (("make_token", "fn make_token"),
-                             ("utf8_check", "fn utf8_check")):
+        for name, header, expected in (("make_token", "fn make_token", "emitted"),
+                                       ("utf8_check", "fn utf8_check", "checker-step-limit")):
             with self.subTest(function=name):
                 body = block(header)
                 types = ""
@@ -308,7 +315,7 @@ class PepC23RealLexerStageTests(unittest.TestCase):
                 if "Utf8Check" in body:
                     types = block("type Utf8Check") + "\n"
                 stage = emitter_stage(types + body + "\nfn main() -> Int { return 0 }\n")
-                self.assertEqual(stage, "checker-step-limit")
+                self.assertEqual(stage, expected)
                 self.assertNotEqual(stage, "emitter-refused")
 
 
