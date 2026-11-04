@@ -2533,6 +2533,36 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
       } else {}
     }
   }
+  // Union declarations share the seed's single source-wide type namespace
+  // with records (staged X3/X6/X7): a record D and a union D are the same
+  // duplicate, and a union-typed parameter needs an external fact to stay
+  // supported. Phase 1 collects distinct union names (reverse source order,
+  // deterministic) and completes duplicateNames across both kinds and
+  // repeated unions, before any fact is emitted below. Primitive-shadowing
+  // unions stay unemitted (fail-closed, like records).
+  var unionNamesRev: List[Str] = []
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "union_declaration" {
+      var ualready = false
+      for uknown in unionNamesRev { if uknown == node.text { ualready = true } else {} }
+      if !ualready {
+        unionNamesRev = prepend(unionNamesRev, node.text)
+      } else {
+        if !supported_primitive_type(node.text) {
+          if !contains(duplicateNames, node.text) {
+            duplicateNames = prepend(duplicateNames, node.text)
+          } else {}
+        } else {}
+      }
+      if !supported_primitive_type(node.text) {
+        if contains(scanSeen, node.text) {
+          if !contains(duplicateNames, node.text) {
+            duplicateNames = prepend(duplicateNames, node.text)
+          } else {}
+        } else {}
+      } else {}
+    } else {}
+  }
   var finished: List[ResolvedTypeDecl] = []
   var seenTypeNames: List[Str] = []
   for resolved in allResolved {
@@ -2550,6 +2580,24 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
         finished = prepend(finished, ResolvedTypeDecl { typeName: resolved.recordName, typeKind: "record", declStartByte: declNode.node.startByte, declEndByte: declNode.node.endByte, declLine: declNode.node.line, declColumn: declNode.node.column, duplicateType: contains(duplicateNames, resolved.recordName), document: parsed.document, revision: parsed.revision, fields: reverse(typeFields) })
       } else {}
     } else {}
+    } else {}
+  }
+  // Phase 2 emits one union fact per distinct non-primitive name. Union
+  // facts carry no record fields; external_records builds a fieldless entry
+  // that keeps the name supported without inventing field types.
+  for uname in unionNamesRev {
+    if !supported_primitive_type(uname) {
+      var ufirstId = -1
+      for unode in nodes {
+        if ufirstId == -1 {
+          if unode.parentId == -1 && unode.kind == "union_declaration" && unode.text == uname { ufirstId = unode.id } else {}
+        } else {}
+      }
+      let udeclNode = lookup_node(nodes, ufirstId)
+      if udeclNode.found {
+        var unoFields: List[ResolvedTypeField] = []
+        finished = prepend(finished, ResolvedTypeDecl { typeName: uname, typeKind: "union", declStartByte: udeclNode.node.startByte, declEndByte: udeclNode.node.endByte, declLine: udeclNode.node.line, declColumn: udeclNode.node.column, duplicateType: contains(duplicateNames, uname), document: parsed.document, revision: parsed.revision, fields: unoFields })
+      } else {}
     } else {}
   }
   return reverse(finished)
@@ -2676,6 +2724,13 @@ fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFu
   var noExternalBindings: List[BindingFact] = []
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, externalRecords, noExternalBindings, expectReturns)
 }
+fn colliding_local_function(nodes: List[FlatAstNode], localNames: List[Str], name: Str) -> NodeLookup {
+  if !contains(localNames, name) { return NodeLookup { found: false, node: empty_node() } } else {}
+  for node in nodes {
+    if node.parentId == -1 && node.kind == "function" && node.text == name { return NodeLookup { found: true, node: node } } else {}
+  }
+  return NodeLookup { found: false, node: empty_node() }
+}
 fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], externalBindings: List[BindingFact], expectReturns: Bool) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
@@ -2689,6 +2744,38 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
   let sourceLength = byte_length(source_bytes())
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return invalid_report(authority.document, authority.revision, length(nodes), "A13_INVALID_SYNTAX_TREE", "Completed parser output failed node identity, parent, child-order, or source-span validation", empty_node()) } else {}
+  // Staged supply-time collision gate (R-ID-1, seed parity
+  // PEP_DUPLICATE_FUNCTION): an external function or signature fact naming a
+  // function the chunk itself declares must be refused here. Whole-source
+  // resolution is local-first and the external declaration span is absent
+  // from this chunk, so without this gate a cross-chunk duplicate name
+  // checks valid while the seed refuses it. Builtins and constructors keep
+  // the whole-path exclusions. Names only: no semantic engine, no new
+  // machinery. Skipped entirely when no external callee facts are supplied.
+  if length(externalFunctions) != 0 || length(externalSignatures) != 0 {
+    var localFunctionNames: List[Str] = []
+    for node in nodes {
+      if node.parentId == -1 && node.kind == "function" {
+        if !known_builtin(node.text) && !is_constructor(nodes, node.text) {
+          if !contains(localFunctionNames, node.text) {
+            localFunctionNames = prepend(localFunctionNames, node.text)
+          } else {}
+        } else {}
+      } else {}
+    }
+    for extFunction in externalFunctions {
+      let uhitFn = colliding_local_function(nodes, localFunctionNames, extFunction.name)
+      if uhitFn.found {
+        return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitFn.node)
+      } else {}
+    }
+    for extSignature in externalSignatures {
+      let uhitSig = colliding_local_function(nodes, localFunctionNames, extSignature.functionName)
+      if uhitSig.found {
+        return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitSig.node)
+      } else {}
+    }
+  } else {}
   let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
   let collected = collect_bindings(nodes, functions, authority.document, authority.revision)
   var mergedBindings: List[BindingFact] = collected.bindings

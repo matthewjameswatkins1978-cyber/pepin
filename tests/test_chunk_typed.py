@@ -886,6 +886,134 @@ class TypedChunkTests(unittest.TestCase):
                  for item in report.get("diagnostics", {}).get("value", [])]
         self.assertIn("PEP_DUPLICATE_TYPE", codes, codes)
 
+    # --- Cross-kind (record/union) duplicate closure (A3 X3/X6/X7).
+    #
+    # The seed keeps one source-wide type namespace across record and
+    # union declarations. The staged producer now emits union facts, so
+    # per-root gathered facts refuse by repeated name and whole-input
+    # facts refuse by carried flag, both with PEP_DUPLICATE_TYPE.
+
+    CROSS_KIND_DUP = (b"type D {\n"
+                      b"    a: Int\n"
+                      b"}\n"
+                      b"type D = Left() | Right()\n"
+                      b"fn f(d: D) -> Int {\n"
+                      b"    return d.a\n"
+                      b"}\n")
+    CROSS_KIND_DUP_REV = (b"type D = Left() | Right()\n"
+                          b"type D {\n"
+                          b"    a: Int\n"
+                          b"}\n"
+                          b"fn f(d: D) -> Int {\n"
+                          b"    return d.a\n"
+                          b"}\n")
+    CROSS_KIND_OK = (b"type E {\n"
+                     b"    a: Int\n"
+                     b"}\n"
+                     b"type F = Left() | Right()\n"
+                     b"fn f(e: E) -> Int {\n"
+                     b"    return e.a\n"
+                     b"}\n")
+    UNION_PARAM = (b"type F = Left() | Right()\n"
+                   b"fn f(x: F) -> Int {\n"
+                   b"    return 0\n"
+                   b"}\n")
+
+    def test_cross_kind_duplicate_matches_whole_path(self):
+        for source, tag in ((self.CROSS_KIND_DUP, "kk"),
+                            (self.CROSS_KIND_DUP_REV, "kkrev")):
+            _, _, _, whole_status, whole_diags = self.check_whole(
+                source, f"kk-whole-{tag}")
+            self.assertEqual(whole_status, "invalid")
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in whole_diags), whole_diags)
+            for reverse in (False, True):
+                status, diags = self.check_body_with_facts(
+                    source, f"kk-chunk-{tag}-{reverse}", "f",
+                    reverse_facts=reverse)
+                self.assertEqual(status, "invalid", (tag, reverse, diags))
+                self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                    for code, _, _ in diags),
+                                (tag, reverse, diags))
+
+    def test_cross_kind_distinct_names_stay_valid(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.CROSS_KIND_OK, "kk-ok-whole")
+        self.assertEqual(whole_status, "valid")
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.CROSS_KIND_OK, f"kk-ok-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "valid", (reverse, diags))
+            self.assertEqual(diags, [])
+
+    def test_union_typed_parameter_stays_valid_staged(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.UNION_PARAM, "union-param-whole")
+        self.assertEqual(whole_status, "valid")
+        status, diags = self.check_body_with_facts(
+            self.UNION_PARAM, "union-param-chunk", "f")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    # --- Supply-time collision gate (R-ID-1, A3 T-CALL-6 class).
+    #
+    # A chunk declaring f plus an external function/signature fact for f
+    # must be refused with PEP_DUPLICATE_FUNCTION (seed parity), not
+    # resolved local-first with no diagnosis.
+
+    DUP_FN_SOURCE = (b"fn f(x: Int) -> Int { return x }\n"
+                     b"fn f(x: Int) -> Int { return x }\n"
+                     b"fn main() -> Int { return f(1) }\n")
+
+    def test_supply_time_collision_refuses_cross_chunk_duplicate_function(self):
+        _, _, _, whole_status, whole_diags = self.check_whole(
+            self.DUP_FN_SOURCE, "fn-dup-whole")
+        self.assertEqual(whole_status, "invalid")
+        self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                            for code, _, _ in whole_diags), whole_diags)
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "fn-dup-chunk",
+                                     "bytes": list(self.DUP_FN_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.DUP_FN_SOURCE, target,
+                              self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        fn_bodies = [index.subtree(int(nval(node, "id"))) for node in nodes
+                     if nval(node, "kind") == "function"
+                     and str(nval(node, "parentId")) == "-1"
+                     and str(nval(node, "text")) == "f"]
+        self.assertEqual(len(fn_bodies), 2)
+        first = [s for s in sigs if s["name"] == "f"][0]
+        extfns = {"type": "List[CheckedFunction]",
+                  "value": [checked_fn_value(first)]}
+        extsigs = {"type": "List[ResolvedSignature]",
+                   "value": [resolved_sig_value(first)]}
+        empty_types = {"type": "List[ResolvedTypeDecl]", "value": []}
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, fn_bodies[1]), extfns, extsigs,
+            empty_types, sem))
+        self.assertEqual(report["status"]["value"], "invalid", report)
+        diags = diag_tuples(report)
+        self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                            for code, _, _ in diags), diags)
+
+    def test_supply_time_distinct_callee_names_stay_valid(self):
+        # Control: the honest S0 shape (caller chunk, distinct callee
+        # facts) must stay valid with the gate active.
+        source = (b"fn g(x: Int) -> Int { return x }\n"
+                  b"fn f(x: Int) -> Int { return g(x) }\n"
+                  b"fn main() -> Int { return f(1) }\n")
+        _, _, _, whole_status, _ = self.check_whole(source, "fn-ok-whole")
+        self.assertEqual(whole_status, "valid")
+        status, diags = self.check_body_with_facts(source, "fn-ok-chunk", "f")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
     # Caller-precondition note (not a runtime test): the closure gate covers
     # carried flags and repeated external names, but not a chunk that itself
     # declares a type also supplied externally (split-root shape). No harness
