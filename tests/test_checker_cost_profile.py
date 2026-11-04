@@ -143,6 +143,108 @@ class CheckerCostProfileTests(unittest.TestCase):
         ids = [int(nval(n, "id")) for n in nodes]
         self.assertEqual(ids, list(range(len(ids))))
 
+    def test_no_single_scan_helper_dominates_the_budget(self):
+        # Diagnostic ablation: record_declaration is where the unmodified
+        # checker happens to expire first, not the dominant cost. Replacing
+        # its body with a constant does not raise the ceiling - the failure
+        # migrates to union_declaration at 66 nodes and then through
+        # child_at, lookup_node, type_shape_at, collect_bindings,
+        # collect_functions and count_children as the program grows.
+        # So per-node cost is distributed across the whole scan family and a
+        # real fix must index every node lookup, not hoist one function.
+        checker = (ROOT / "tests" / "pep_checker_a13.pep").read_text(encoding="utf-8")
+        original = checker[checker.index("fn record_declaration("):]
+        original = original[:original.index("\n}\n") + 3]
+        stub = ("fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {\n"
+                "  return NodeLookup { found: false, node: empty_node() }\n}\n")
+        self.assertNotEqual(original, stub)
+        parts = []
+        for path in pep_c23.SOURCES:
+            text = path.read_text(encoding="utf-8")
+            if path.name == "pep_checker_a13.pep":
+                text = checker.replace(original, stub, 1)
+            parts.append(text)
+        bundle = "\n".join(parts)
+        lines = bundle.split("\n")
+        spans = function_spans(lines)
+
+        session = Session()
+        try:
+            opened = session.send({"schemaVersion": 3, "op": "open",
+                                   "source": bundle, "name": "stub-bundle",
+                                   "metadataOnly": True})
+            require(opened, "outcome", "ok", "open stub bundle")
+            revision, document = opened["revision"], opened["document"]
+            sample = session.send({"schemaVersion": 3, "op": "open_bytes",
+                                   "name": "validate", "bytes": []})
+            target = {"document": sample["document"],
+                      "revision": sample["revision"], "entryFunctions": []}
+            finished = pep_c23.parser_cursor_value(
+                sample["document"], sample["revision"], done=True,
+                lex_done=True, lex_stage="done")
+            for tool, function, arguments, expected in [
+                    ("pep-c23-parser-start", "parser_start", [],
+                     pep_c23.parser_cursor_value(sample["document"],
+                                                 sample["revision"])),
+                    ("pep-c23-parser-step", "parser_step", [finished],
+                     pep_c23.parser_chunk_value(sample["document"],
+                                                sample["revision"], finished)),
+                    ("pep-c23-checker", "analyze_parsed",
+                     [pep_c23.parser_progress(sample["document"],
+                                              sample["revision"])],
+                     pep_c23.checker_report(sample["document"],
+                                            sample["revision"]))]:
+                for op, payload in [
+                        ("tool_register", {"tool": tool, "function": function}),
+                        ("tool_validate", {"tool": tool,
+                                           "testVectors": [{
+                                               "arguments": arguments,
+                                               "expect": expected,
+                                               "semanticTarget": target}]}),
+                        ("tool_activate", {"tool": tool})]:
+                    session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                  "op": op, "document": document,
+                                  "revision": revision, **payload})
+
+            def site_for(k):
+                raw = "".join(
+                    f"type P{i} {{ x: Int }}\nfn mk{i}(v: Int) -> P{i} {{\n"
+                    f"  return P{i} {{ x: v }}\n}}\n"
+                    for i in range(k)).encode("utf-8")
+                opened_target = session.send(
+                    {"schemaVersion": 3, "op": "open_bytes",
+                     "name": f"stub{k}", "bytes": list(raw)})
+                self.assertEqual(opened_target.get("outcome"), "ok",
+                                 opened_target)
+                sem = {"document": opened_target["document"],
+                       "revision": opened_target["revision"],
+                       "entryFunctions": []}
+                parsed = parse_target(session, raw, opened_target, revision)
+                response = session.send(
+                    {"schemaVersion": 3, "toolProtocolVersion": 2,
+                     "op": "tool_invoke", "tool": "pep-c23-checker",
+                     "arguments": [parsed], "semanticTarget": sem})
+                if response.get("outcome") == "ok":
+                    return "valid"
+                error = response.get("error") or {}
+                match = LOCATION_RE.search(error.get("message", ""))
+                if not match:
+                    return error.get("code")
+                where = enclosing(spans, int(match.group(1)))
+                return where[0] if where else "(top level)"
+
+            first = site_for(6)
+            self.assertNotEqual(first, "record_declaration",
+                                "stubbing record_declaration should move the "
+                                "budget elsewhere")
+            self.assertIn(first, {"union_declaration", "child_at",
+                                  "lookup_node", "type_shape_at",
+                                  "collect_bindings", "collect_functions",
+                                  "count_children"}, first)
+        finally:
+            session.process.stdin.close()
+            session.process.terminate()
+
     def test_scanning_lookup_helpers_are_the_documented_hot_set(self):
         # Census of helpers that rescan the whole node list on every call.
         # Each is O(n) per call and several are called from inside node
