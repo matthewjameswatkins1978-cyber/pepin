@@ -1,15 +1,15 @@
 """Chained binding facts: a later statement checks valid given earlier ones.
 
 The chunk entry point ``analyze_chunk_typed_bound`` accepts externally
-supplied BindingFacts. Because scope keys are source-anchored, a binding
-derived while checking one unit matches the same source construct in another,
-so a long function can be covered statement by statement without re-sending its
+supplied BindingFacts. Scope keys are source-anchored, so a binding derived
+while checking one unit matches the same source construct in another, and a
+long function can be covered statement by statement without re-sending its
 prefix as source.
 
-This pins the measured state rather than an aspiration: 14 of 21 statements of
-`utf8_check` become valid by chaining, and the remainder still fail on
-PEP_ASSIGN_IMMUTABLE because a collected binding for an assignment target
-shadows the external mutable one.
+Binding ids are NOT portable: every chunk numbers its bindings from 2000000,
+so pooling raw facts aliases different bindings to one id and a lookup for
+``width`` can resolve to ``first``. ``BindingPool`` renumbers on admission, and
+that is the difference between 14/21 and 21/21 statements on ``utf8_check``.
 """
 import unittest
 
@@ -58,7 +58,6 @@ class ChainedBindingTests(unittest.TestCase):
         cls.table = {str(nval(n, "text")): int(nval(n, "id")) for n in cls.nodes
                      if nval(n, "kind") == "function"
                      and str(nval(n, "parentId")) == "-1"}
-        # Register the bound entry point, validated against an empty chunk.
         sample = cls.session.send({"schemaVersion": 3, "op": "open_bytes",
                                    "name": "validate", "bytes": []})
         vector = [pep_c23.parser_progress(sample["document"], sample["revision"]),
@@ -124,41 +123,61 @@ class ChainedBindingTests(unittest.TestCase):
                  for d in report["diagnostics"]["value"]]
         return report, codes
 
-    def chain(self, entry):
-        carried, seen, accepted, rejected = [], set(), 0, []
+    def chain(self, entry, pool=None):
+        carried = pool if pool is not None else contract.BindingPool()
         statements = self.index.statement_children(self.table[entry])
+        accepted, rejected = 0, []
         for position in range(len(statements)):
             chunk, terminal = self.statement_chunk(entry, position)
-            report, codes = self.invoke(entry, chunk, terminal, carried)
+            report, codes = self.invoke(entry, chunk, terminal, carried.facts())
             if report is not None and report["status"]["value"] == "valid" and not codes:
                 accepted += 1
-                for binding in report["bindings"]["value"]:
-                    fields = fields_map(binding)
-                    key = (fields["name"]["value"],
-                           str(fields["ownerFunctionId"]["value"]),
-                           str(fields["scopeId"]["value"]),
-                           str(fields["visibleFrom"]["value"]))
-                    if key not in seen:
-                        seen.add(key)
-                        carried.append(binding)
+                carried.add(report["bindings"]["value"])
             else:
-                rejected.append((position, codes))
+                status = report["status"]["value"] if report else codes
+                rejected.append((position, status, sorted(set(codes))[:2]))
         return accepted, len(statements), rejected
 
-    def test_chaining_covers_most_of_a_long_function(self):
-        # Pinned measurement: 14 of 21 statements of utf8_check check valid by
-        # chaining external binding facts, against 5 without them.
+    def test_utf8_check_is_fully_covered_by_chained_units(self):
+        # 21 of 21 statements check valid, against 5 without binding facts.
         accepted, total, rejected = self.chain("utf8_check")
         self.assertEqual(total, 21)
-        self.assertEqual(accepted, 14, rejected)
+        self.assertEqual(accepted, 21, rejected)
 
-    def test_remaining_failures_are_assignment_shadowing(self):
-        # The seven that still fail do so for one reason, not budget: a
-        # collected binding for the assignment target shadows the external
-        # mutable one. That is the next thing to fix.
-        _accepted, _total, rejected = self.chain("utf8_check")
-        codes = {code for _position, codes in rejected for code in codes}
-        self.assertEqual(codes, {"PEP_ASSIGN_IMMUTABLE"}, rejected)
+    def test_raw_pooling_aliases_bindings_and_loses_coverage(self):
+        # Every chunk numbers bindings from 2000000, so concatenating raw
+        # facts without renumbering collapses distinct bindings onto one id.
+        class RawPool:
+            def __init__(self):
+                self.items = []
+
+            def add(self, bindings):
+                self.items.extend(bindings)
+
+            def facts(self):
+                return self.items
+
+        accepted, _total, _rejected = self.chain("utf8_check", RawPool())
+        self.assertLess(accepted, 21)
+        self.assertEqual(accepted, 7)
+
+    def test_pool_renumbers_and_dedupes(self):
+        pool = contract.BindingPool()
+        self.assertEqual(pool.add([]), 0)
+        fact = {"type": "BindingFact", "fields": [
+            {"name": "semanticId", "value": {"type": "Int", "value": "2000003"}},
+            {"name": "syntaxId", "value": {"type": "Int", "value": "7"}},
+            {"name": "name", "value": {"type": "Str", "value": "width"}},
+            {"name": "ownerFunctionId", "value": {"type": "Int", "value": "100000"}},
+            {"name": "scopeId", "value": {"type": "Int", "value": "100000"}},
+            {"name": "visibleFrom", "value": {"type": "Int", "value": "1346"}},
+            {"name": "mutable", "value": {"type": "Bool", "value": True}},
+            {"name": "typeName", "value": {"type": "Str", "value": "Int"}}]}
+        self.assertEqual(pool.add([fact]), 1)
+        self.assertEqual(pool.add([fact]), 0)  # deduped by identity
+        admitted = pool.facts()[0]
+        semantic = [f for f in admitted["fields"] if f["name"] == "semanticId"][0]
+        self.assertEqual(semantic["value"]["value"], str(contract.BindingPool.BASE))
 
 
 if __name__ == "__main__":
