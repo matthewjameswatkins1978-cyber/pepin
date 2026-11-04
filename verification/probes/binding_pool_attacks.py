@@ -1,36 +1,49 @@
-"""BindingPool / external binding-fact attacks (mission PEP-WB-A3-20261104-B, priority 3).
+"""BindingPool / external binding-fact attacks — interface-aware v2.
 
-A1's new staged path (`analyze_chunk_typed_bound`) accepts caller-supplied
-`List[BindingFact]`, and `pep_chunk_contract.BindingPool` renumbers and dedupes them
-so chained chunks can share binding facts. Binding facts are *data over the wire*, so
-they are attacked the way type facts were.
+History: v1 (mission PEP-WB-A3-20261104-B) documented a stale-binding fail-open at
+`cdbd742` and earlier: `BindingFact` carried no document/revision, `BindingPool.add`
+silently kept the first fact for an identity, and `facts()` aliased pool state.
+A1's repair (INTEGRATED-CANDIDATE-5 `81398fa`, repair commit `9ad7d95`) scopes
+`BindingPool(document, revision)`, stamps every `BindingFact` at creation, raises
+`ValueError` on stale/foreign/malformed/conflicting admissions, dedupes identical
+re-admissions silently, and returns deep copies from `facts()`.
 
-Structural observation tested here: `analyze_chunk_typed_bound` guards only
-`externalTypes` for document/revision identity. `BindingFact` has no document or
-revision field at all, so the STALE1-style provenance guard cannot apply to binding
-facts by construction.
+This probe is INTERFACE-AWARE so one instrument both (a) confirms the old broken pin
+still fails and (b) verifies the repair at the repaired pin:
+  - OLD interface detected (BindingPool takes no scope): the v1 claims apply; the
+    three fail-open cases (A1b, O1b, O1c) are expected to be FALSIFIED there.
+  - NEW interface detected (BindingPool(document, revision)): the repair claims
+    apply; every case is expected to HOLD.
 
-Claims:
-  A1  BindingPool dedupe key omits the binding's TYPE: two facts with one source
-      identity but different types collapse to the first — a type change is dropped.
-  A2  the key omits MUTABLE: mutability changes are dropped the same way.
-  A3  renumbering really renumbers: admitted ids are >= BASE and unique, and the
-      original semantic ids are not preserved.
-  A4  `facts()` hands out the pool's own dicts (mutating a returned fact changes the
-      pool), so a caller can corrupt the pool through the getter.
-  B1  control: honest pooled facts let the later statement check valid.
-  B2  a forged binding type must not make a later statement valid.
+Claims (new interface):
+  A1  a same-identity fact with a different TYPE raises ValueError (no silent drop).
+  A1b a conflict is distinguishable from an identical duplicate: an identical re-add
+      returns 0 new admissions while the conflict raises.
+  A2  a same-identity fact with different MUTABILITY raises ValueError.
+  A3  renumbering still renumbers: admitted ids are >= BASE and unique.
+  A4  facts() returns deep copies: mutating a returned fact does not change the pool.
+  A5  a fact missing document/revision attestation raises ValueError (malformed).
+  A6  a fact attested to another document/revision raises ValueError (stale/foreign).
+  B1  control: honest stamped facts let the later statement check valid (non-vacuity).
+  B2  a forged binding type (same-revision stamps, changed typeName) must not make
+      the later statement valid — the checker refuses it downstream by semantics.
   B3  no facts => the later statement is not valid (non-vacuity for B1/B2).
   B4  a binding fact owned by ANOTHER function must not make this function's
       statement valid.
-  O1  stale binding facts cannot be refused: revise the target and reuse the facts,
-      record what happens (type facts would be refused with PEP_STALE_REVISION).
+  O1b binding facts of another revision are refused (PEP_STALE_REVISION), exactly
+      like type facts.
+  O1c a stale binding fact cannot change a verdict: facts from the Int-x revision
+      reused against the Str-x revision are refused, never silently believed.
+Residual by design: a same-revision forgery that contradicts the source passes the
+attestation check (labels are consistency-checked, not authenticity-proven); the
+checker's own downstream observation (B2) is what refuses it.
 
 Exit codes: 0 = every claim held, 1 = a claim falsified, 2 = harness error.
 Usage: python binding_pool_attacks.py <candidate-worktree>
 """
 import copy
 import importlib.util
+import inspect
 import json
 import pathlib
 import sys
@@ -50,6 +63,16 @@ import pep_chunk_contract as contract  # noqa: E402
 from pep_c23 import Session, parse_target, require  # noqa: E402
 from tests.chunk_helper import fields_map, nval  # noqa: E402
 
+# Interface detection: the repaired pool (INTEGRATED-CANDIDATE-5) is scoped to one
+# document/revision and every admitted BindingFact must carry matching attestation;
+# the broken pin's pool is unscoped. One probe serves both: old pins must keep
+# failing the parity claims, new pins must hold them.
+NEW_POOL = len(inspect.signature(contract.BindingPool.__init__).parameters) >= 3
+TEST_DOC = "a3-pool-doc"
+TEST_REV = "a3-pool-rev"
+FOREIGN_DOC = "a3-other-doc"
+FOREIGN_REV = "a3-other-rev"
+
 RESULTS = []
 
 
@@ -61,8 +84,9 @@ def record(case, claim, expect, outcome, detail=""):
           + (f"   ({detail})" if detail else ""))
 
 
-def binding(name, type_name, owner=0, scope=0, visible=0, mutable=False, sid=2_000_000):
-    return {"type": "BindingFact", "fields": [
+def binding(name, type_name, owner=0, scope=0, visible=0, mutable=False, sid=2_000_000,
+            doc=None, rev=None):
+    fields = [
         {"name": "semanticId", "value": base.typed("Int", sid)},
         {"name": "syntaxId", "value": base.typed("Int", 0)},
         {"name": "name", "value": base.typed("Str", name)},
@@ -72,7 +96,32 @@ def binding(name, type_name, owner=0, scope=0, visible=0, mutable=False, sid=2_0
         {"name": "mutable", "value": {"type": "Bool", "value": mutable}},
         {"name": "typeName", "value": base.typed("Str", type_name)},
         {"name": "typeShape", "value": base.shape("builtin", type_name)},
-    ]}
+    ]
+    if doc is not None or rev is not None:
+        fields.append({"name": "document", "value": base.typed("Str", doc)})
+        fields.append({"name": "revision", "value": base.typed("Str", rev)})
+    return {"type": "BindingFact", "fields": fields}
+
+
+def make_pool():
+    """A BindingPool matching the detected interface, scoped for synthetic facts."""
+    return contract.BindingPool(TEST_DOC, TEST_REV) if NEW_POOL else contract.BindingPool()
+
+
+def attested(name, type_name, **kwargs):
+    """A synthetic fact stamped for the pool scope when the new interface requires it."""
+    if NEW_POOL:
+        kwargs.setdefault("doc", TEST_DOC)
+        kwargs.setdefault("rev", TEST_REV)
+    return binding(name, type_name, **kwargs)
+
+
+def try_add(pool, facts):
+    """add() outcome as data: ('added', count) or ('raised', ValueError)."""
+    try:
+        return "added", pool.add(facts)
+    except ValueError as error:
+        return "raised", error
 
 
 def field(fact, name):
@@ -168,52 +217,86 @@ def main():
     print(f"REPO={REPO}")
 
     # ---------------- Part A: pure BindingPool behaviour ----------------------
-    pool = contract.BindingPool()
-    landed = pool.add([binding("x", "Int"), binding("x", "Str")])
+    print("BindingPool interface: "
+          + ("NEW scoped (document, revision)" if NEW_POOL else "OLD unscoped"))
+    pool = make_pool()
+    kind, payload = try_add(pool, [attested("x", "Int"), attested("x", "Str")])
     types = [field(fact, "typeName") for fact in pool.facts()]
-    record("A1 BindingPool dedupe keeps the first type", True,
-           "type-change dropped", "type-change dropped" if landed == 1 and types == ["Int"]
-           else f"DROPPED-WRONG-THING landed={landed} types={types}",
-           f"admitted={landed} types={types} for one source identity")
+    if NEW_POOL:
+        record("A1 a type conflict for one identity raises (no silent first-wins)",
+               True, "raised",
+               "raised" if kind == "raised" else f"added={payload} types={types}",
+               f"outcome={kind} types={types}")
+    else:
+        record("A1 BindingPool dedupe keeps the first type", True,
+               "type-change dropped",
+               "type-change dropped" if payload == 1 and types == ["Int"]
+               else f"DROPPED-WRONG-THING landed={payload} types={types}",
+               f"admitted={payload} types={types} for one source identity")
 
     # A1b — the caller-facing question: can a consumer tell "already have it" from
-    # "already have a DIFFERENT one"? add() returns a count only.
-    pool_dup = contract.BindingPool()
-    first = pool_dup.add([binding("x", "Int")])
-    same = pool_dup.add([binding("x", "Int")])
-    conflict = pool_dup.add([binding("x", "Bool")])
+    # "already have a DIFFERENT one"? Old interface: add() returns a count only.
+    # New interface: identical re-add lands 0, conflict raises.
+    pool_dup = make_pool()
+    _, first = try_add(pool_dup, [attested("x", "Int")])
+    _, same = try_add(pool_dup, [attested("x", "Int")])
+    conflict_kind, conflict = try_add(pool_dup, [attested("x", "Bool")])
+    distinguishable = (first == 1 and same == 0 and conflict_kind == "raised") \
+        if NEW_POOL else ((same, conflict) != (0, 0) or first != 1)
     record("A1b a conflicting fact is distinguishable from an identical duplicate",
            True, "distinguishable",
-           "distinguishable" if (same, conflict) != (0, 0) or first != 1
-           else "indistinguishable",
-           f"add() returned first={first} identical={same} conflict={conflict}")
+           "distinguishable" if distinguishable else "indistinguishable",
+           f"first={first} identical={same} conflict={conflict_kind}:{conflict}")
 
-    pool2 = contract.BindingPool()
-    pool2.add([binding("y", "Int", mutable=True), binding("y", "Int", mutable=False)])
+    pool2 = make_pool()
+    kind2, _ = try_add(pool2, [attested("y", "Int", mutable=True),
+                               attested("y", "Int", mutable=False)])
     mutables = [field(fact, "mutable") for fact in pool2.facts()]
-    record("A2 BindingPool dedupe keeps the first mutability", True,
-           "mutable-change dropped",
-           "mutable-change dropped" if len(mutables) == 1 and mutables == [True]
-           else f"landed={len(mutables)} mutables={mutables}")
+    if NEW_POOL:
+        record("A2 a mutability conflict for one identity raises", True, "raised",
+               "raised" if kind2 == "raised" else f"landed mutables={mutables}",
+               f"outcome={kind2} mutables={mutables}")
+    else:
+        record("A2 BindingPool dedupe keeps the first mutability", True,
+               "mutable-change dropped",
+               "mutable-change dropped" if len(mutables) == 1 and mutables == [True]
+               else f"landed={len(mutables)} mutables={mutables}")
 
-    pool3 = contract.BindingPool()
-    pool3.add([binding("a", "Int", sid=2_000_000), binding("b", "Int", sid=2_000_001)])
+    pool3 = make_pool()
+    pool3.add([attested("a", "Int", sid=2_000_000), attested("b", "Int", sid=2_000_001)])
     pooled = [(field(fact, "name"), int(field(fact, "semanticId")))
               for fact in pool3.facts()]
     ids_ok = all(sid >= contract.BindingPool.BASE for _, sid in pooled) and \
         len({sid for _, sid in pooled}) == len(pooled)
     record("A3 BindingPool renumbers admitted ids", True, "renumbered",
            "renumbered" if ids_ok else f"ids={pooled}",
-           f"{pooled}, original ids 2000000/2000001")
+           f"{pooled}, original ids 2000000/2000001, BASE={contract.BindingPool.BASE}")
 
-    pool4 = contract.BindingPool()
-    pool4.add([binding("z", "Int")])
+    pool4 = make_pool()
+    pool4.add([attested("z", "Int")])
     handed = pool4.facts()
     handed[0]["fields"][7]["value"]["value"] = "Str"
     read_back = field(pool4.facts()[0], "typeName")
-    record("A4 facts() hands out the pool's own dicts", True, "aliased",
-           "aliased" if read_back == "Str" else "isolated",
-           f"mutating a returned fact changed the pool: typeName={read_back}")
+    if NEW_POOL:
+        record("A4 facts() returns deep copies (pool not corruptible via getter)",
+               True, "isolated",
+               "isolated" if read_back == "Int" else f"aliased typeName={read_back}",
+               f"mutating a returned fact left the pool at typeName={read_back}")
+    else:
+        record("A4 facts() hands out the pool's own dicts", True, "aliased",
+               "aliased" if read_back == "Str" else "isolated",
+               f"mutating a returned fact changed the pool: typeName={read_back}")
+
+    if NEW_POOL:
+        kind5, err5 = try_add(make_pool(), [binding("u", "Int")])  # no attestation
+        record("A5 a fact missing document/revision attestation raises", True,
+               "raised", "raised" if kind5 == "raised" else f"added={err5}",
+               f"outcome={kind5} {err5}")
+        kind6, err6 = try_add(make_pool(),
+                              [binding("v", "Int", doc=FOREIGN_DOC, rev=FOREIGN_REV)])
+        record("A6 a fact attested to another document/revision raises", True,
+               "raised", "raised" if kind6 == "raised" else f"added={err6}",
+               f"outcome={kind6} {err6}")
 
     # ---------------- Part B: transport-level attacks -------------------------
     harness = Bound()
@@ -287,10 +370,18 @@ def main():
         status_stale, _ = harness.invoke(parsed_new, new_later_ids, honest, [], new_sem)
         # O1b — parity expectation: type facts of another revision are refused with
         # PEP_STALE_REVISION, so binding facts of another revision should be refused too.
-        record("O1b binding facts of another revision are refused like type facts",
-               True, "refused", "refused" if str(status_stale).startswith("REFUSED")
-               or status_stale != "valid" else
-               f"ACCEPTED stale binding facts against rev2 ({status_stale})")
+        if NEW_POOL:
+            record("O1b binding facts of another revision are refused like type facts",
+                   True, "refused:PEP_STALE_REVISION",
+                   "refused:PEP_STALE_REVISION"
+                   if str(status_stale) == "REFUSED:PEP_STALE_REVISION"
+                   else f"outcome={status_stale}",
+                   f"rev1 facts against rev2 chunk -> {status_stale}")
+        else:
+            record("O1b binding facts of another revision are refused like type facts",
+                   True, "refused", "refused" if str(status_stale).startswith("REFUSED")
+                   or status_stale != "valid" else
+                   f"ACCEPTED stale binding facts against rev2 ({status_stale})")
         # O1c — the decisive version: facts sourced from `let x: Int = 1` are reused to
         # check the later statement of a program whose source now says `let x: Str = "a"`.
         # The seed rejects that program; if the chunked path validates, the stale fact
@@ -312,20 +403,40 @@ def main():
         with_stale, _ = harness.invoke(parsed3, later3, honest, [], sem3)
         without, _ = harness.invoke(parsed3, later3, [], [], sem3)
         seed_changed = base.seed_verdict(changed_source.encode("utf-8"))
-        record("O1c a stale binding fact cannot change a verdict", True,
-               "same-with-and-without",
-               "same-with-and-without" if with_stale == without
-               else f"DIFFERS with_stale={with_stale} without={without}",
-               f"seed={seed_changed} with_stale={with_stale} without={without}")
+        if NEW_POOL:
+            record("O1c a stale binding fact cannot change a verdict", True,
+                   "refused:PEP_STALE_REVISION",
+                   "refused:PEP_STALE_REVISION"
+                   if str(with_stale) == "REFUSED:PEP_STALE_REVISION"
+                   else f"with_stale={with_stale} without={without}",
+                   f"seed={seed_changed} with_stale={with_stale} without={without}")
+        else:
+            record("O1c a stale binding fact cannot change a verdict", True,
+                   "same-with-and-without",
+                   "same-with-and-without" if with_stale == without
+                   else f"DIFFERS with_stale={with_stale} without={without}",
+                   f"seed={seed_changed} with_stale={with_stale} without={without}")
 
-        RESULTS.append({"case": "O1 stale binding facts: no revision field to check",
-                        "claimed": False, "expect": "observed",
-                        "outcome": f"rev1 facts against rev2 chunk -> {status_stale}",
-                        "falsified": False,
-                        "detail": "BindingFact has no document/revision; the host guard in "
-                                  "analyze_chunk_typed_bound covers externalTypes only"})
-        print(f"[O1] rev1 binding facts against a rev2 chunk -> {status_stale} "
-              f"(no revision field exists to guard)")
+        if NEW_POOL:
+            RESULTS.append({"case": "O1 stale binding facts: attestation guard present",
+                            "claimed": False, "expect": "observed",
+                            "outcome": f"rev1 facts against rev2 chunk -> {status_stale}",
+                            "falsified": False,
+                            "detail": "BindingFact carries document/revision and the "
+                                      "entry loop of analyze_chunk_typed_bound refuses "
+                                      "foreign/stale bindings (labels checked for "
+                                      "consistency, not authenticity)"})
+            print(f"[O1] rev1 binding facts against a rev2 chunk -> {status_stale} "
+                  f"(attestation guard active)")
+        else:
+            RESULTS.append({"case": "O1 stale binding facts: no revision field to check",
+                            "claimed": False, "expect": "observed",
+                            "outcome": f"rev1 facts against rev2 chunk -> {status_stale}",
+                            "falsified": False,
+                            "detail": "BindingFact has no document/revision; the host guard in "
+                                      "analyze_chunk_typed_bound covers externalTypes only"})
+            print(f"[O1] rev1 binding facts against a rev2 chunk -> {status_stale} "
+                  f"(no revision field exists to guard)")
     finally:
         harness.close()
 
