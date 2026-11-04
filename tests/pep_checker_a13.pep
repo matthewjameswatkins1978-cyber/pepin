@@ -2508,9 +2508,34 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
   let sourceLength = byte_length(source_bytes())
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return [] } else {}
+  // Declaration-closure scan: a duplicate name is whole-source state, so it
+  // is collected over every resolved record before anything is emitted. A
+  // per-declaration-root invocation still sees no duplicate here; the staged
+  // consumer refuses that shape by counting repeated external names instead.
+  let allResolved = resolve_all_records(nodes)
+  var scanSeen: List[Str] = []
+  var duplicateNames: List[Str] = []
+  for resolved in allResolved {
+    if contains(scanSeen, resolved.recordName) {
+      if !supported_primitive_type(resolved.recordName) {
+        if !contains(duplicateNames, resolved.recordName) {
+          duplicateNames = prepend(duplicateNames, resolved.recordName)
+        } else {}
+      } else {}
+    } else {
+      scanSeen = prepend(scanSeen, resolved.recordName)
+      if resolved.duplicateType {
+        if !supported_primitive_type(resolved.recordName) {
+          if !contains(duplicateNames, resolved.recordName) {
+            duplicateNames = prepend(duplicateNames, resolved.recordName)
+          } else {}
+        } else {}
+      } else {}
+    }
+  }
   var finished: List[ResolvedTypeDecl] = []
   var seenTypeNames: List[Str] = []
-  for resolved in resolve_all_records(nodes) {
+  for resolved in allResolved {
     if !contains(seenTypeNames, resolved.recordName) {
     seenTypeNames = prepend(seenTypeNames, resolved.recordName)
     if !resolved.duplicateType && !supported_primitive_type(resolved.recordName) {
@@ -2522,13 +2547,17 @@ fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
             typeFields = prepend(typeFields, ResolvedTypeField { fieldName: facts.field.text, fieldTypeName: facts.name, fieldShape: facts.shape, fieldCode: facts.code, startByte: facts.field.startByte, endByte: facts.field.endByte, line: facts.field.line, column: facts.field.column })
           } else {}
         }
-        finished = prepend(finished, ResolvedTypeDecl { typeName: resolved.recordName, typeKind: "record", declStartByte: declNode.node.startByte, declEndByte: declNode.node.endByte, declLine: declNode.node.line, declColumn: declNode.node.column, duplicateType: false, document: parsed.document, revision: parsed.revision, fields: reverse(typeFields) })
+        finished = prepend(finished, ResolvedTypeDecl { typeName: resolved.recordName, typeKind: "record", declStartByte: declNode.node.startByte, declEndByte: declNode.node.endByte, declLine: declNode.node.line, declColumn: declNode.node.column, duplicateType: contains(duplicateNames, resolved.recordName), document: parsed.document, revision: parsed.revision, fields: reverse(typeFields) })
       } else {}
     } else {}
     } else {}
   }
   return reverse(finished)
 }
+// Staged declaration-closure enforcement lives inline in analyze_chunk_typed
+// and analyze_chunk_typed_bound (folded into the revision loop so the
+// knife-edge staged budgets pay no extra pass).
+
 fn external_records(externalTypes: List[ResolvedTypeDecl]) -> List[ResolvedRecord] {
   var finished: List[ResolvedRecord] = []
   var index = 0
@@ -2577,19 +2606,53 @@ fn record_field_shape_ext(nodes: List[FlatAstNode], externalRecords: List[Resolv
   return empty_type_shape()
 }
 fn analyze_chunk_typed(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalTypes: List[ResolvedTypeDecl], expectReturns: Bool) -> CheckerReport {
+  // Staged declaration-closure contract (seed parity: PEP_DUPLICATE_TYPE). The
+  // revision loop already visits every external fact, so the whole-source
+  // duplicate refusal rides on it with no extra pass: a carried duplicate
+  // flag (whole-document producer output) or a name already seen in this fact
+  // list (per-declaration gathering, scope filtering, and forged orders all
+  // reduce to a repeated name) refuses here. Caller precondition: the chunk
+  // itself carries no type declaration also supplied externally (all harness
+  // chunk shapes are function or statement subtrees, which cannot declare
+  // types).
+  var seenExternalTypeNames: List[Str] = []
   for decl in externalTypes {
     if decl.document != parsed.document || decl.revision != parsed.revision {
       return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External type facts belong to a different source revision; re-derive them for the target revision", empty_node())
     } else {}
+    if decl.duplicateType {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_DUPLICATE_TYPE", "Type name is declared more than once", empty_node())
+    } else {}
+    if contains(seenExternalTypeNames, decl.typeName) {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_DUPLICATE_TYPE", "Type name is declared more than once", empty_node())
+    } else {}
+    seenExternalTypeNames = prepend(seenExternalTypeNames, decl.typeName)
   }
   var noExternalBindings: List[BindingFact] = []
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), noExternalBindings, expectReturns)
 }
 fn analyze_chunk_typed_bound(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalTypes: List[ResolvedTypeDecl], externalBindings: List[BindingFact], expectReturns: Bool) -> CheckerReport {
+  // Staged declaration-closure contract (seed parity: PEP_DUPLICATE_TYPE). The
+  // revision loop already visits every external fact, so the whole-source
+  // duplicate refusal rides on it with no extra pass: a carried duplicate
+  // flag (whole-document producer output) or a name already seen in this fact
+  // list (per-declaration gathering, scope filtering, and forged orders all
+  // reduce to a repeated name) refuses here. Caller precondition: the chunk
+  // itself carries no type declaration also supplied externally (all harness
+  // chunk shapes are function or statement subtrees, which cannot declare
+  // types).
+  var seenExternalTypeNames: List[Str] = []
   for decl in externalTypes {
     if decl.document != parsed.document || decl.revision != parsed.revision {
       return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External type facts belong to a different source revision; re-derive them for the target revision", empty_node())
     } else {}
+    if decl.duplicateType {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_DUPLICATE_TYPE", "Type name is declared more than once", empty_node())
+    } else {}
+    if contains(seenExternalTypeNames, decl.typeName) {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_DUPLICATE_TYPE", "Type name is declared more than once", empty_node())
+    } else {}
+    seenExternalTypeNames = prepend(seenExternalTypeNames, decl.typeName)
   }
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), externalBindings, expectReturns)
 }

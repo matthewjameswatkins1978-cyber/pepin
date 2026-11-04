@@ -200,7 +200,8 @@ class TypedChunkTests(unittest.TestCase):
 
     def check_body_with_facts(self, source_bytes, name, entry, host_builtin_names=(),
                               scope_facts=False, allow_error=False,
-                              loop_body_range=None):
+                              loop_body_range=None, reverse_facts=False,
+                              expect_returns=True):
         # allow_error=True returns the tool error code as the status instead
         # of failing the assertion, so a test can pin a budget refusal.
         # scope_facts=True supplies only the external declarations the chunk
@@ -223,6 +224,10 @@ class TypedChunkTests(unittest.TestCase):
         facts = []
         for root in decl_roots:
             facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        if reverse_facts:
+            # Order-dependence probe: the staged verdict must not depend on
+            # fact order, and a duplicated source must be refused either way.
+            facts = facts[::-1]
         functions = [node for node in nodes if nval(node, "kind") == "function"
                      and str(nval(node, "parentId")) == "-1"]
         bodies = {str(nval(fn, "text")): index.subtree(int(nval(fn, "id")))
@@ -251,13 +256,14 @@ class TypedChunkTests(unittest.TestCase):
             response = self.session.send(
                 {"schemaVersion": 3, "toolProtocolVersion": 2,
                  "op": "tool_invoke", "tool": "pep-c23-checker-chunk-typed",
-                 "arguments": args + [{"type": "Bool", "value": True}],
+                 "arguments": args + [{"type": "Bool", "value": expect_returns}],
                  "semanticTarget": sem})
             if response.get("outcome") != "ok":
                 return (response.get("error") or {}).get("code"), []
             return fields_map(response["result"])["status"]["value"], []
         report = fields_map(self.invoke_typed(
-            args[0], args[1], args[2], args[3], sem))
+            args[0], args[1], args[2], args[3], sem,
+            expect_returns=expect_returns))
         return report["status"]["value"], diag_tuples(report)
 
     def trim_loop_body(self, index, nodes, entry, rng):
@@ -356,8 +362,11 @@ class TypedChunkTests(unittest.TestCase):
         # Full per-function staged ledger: body-only chunk + external type
         # facts (+ host builtins where the body needs semantic_snapshot).
         # Pins are deliberate: a flip in either direction forces re-measure.
-        # make_progress (49n) flips to valid once external type facts are
-        # supplied; make_cursor (69n) remains a single-return body over
+        # make_progress (49n) was valid unscoped until the duplicate-type
+        # closure gate spent its last headroom (re-measured: the same
+        # function stays valid via scope_facts, the production pattern, so
+        # no capability is lost — unscoped recovery is scaling work);
+        # make_cursor (69n) remains a single-return body over
         # budget; utf8_check (268n) needs statement groups (see
         # the G1/G2 tests); lexer_step body alone exceeds the 1 MiB message.
         source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
@@ -368,7 +377,7 @@ class TypedChunkTests(unittest.TestCase):
             "advance_position": "valid",
             "make_token": "valid",
             "lexer_start": "valid",
-            "make_progress": "valid",
+            "make_progress": "STEP_LIMIT",
             "make_cursor": "STEP_LIMIT",
             "utf8_check": "STEP_LIMIT",
         }
@@ -798,6 +807,162 @@ class TypedChunkTests(unittest.TestCase):
         status, diags = self.check_body_with_facts(source, "mistype-chunk", "build")
         self.assertEqual(status, "invalid")
         self.assertEqual(diags, whole_diags)
+
+    # --- Staged declaration-closure contract (duplicate-type fail-open fix).
+    #
+    # Agent 3's minimised 81-byte counterexample: two `type D` declarations.
+    # The seed rejects it with PEP_DUPLICATE_TYPE; the staged chunk used to
+    # accept it when the per-declaration facts arrived in gathered order.
+
+    DUP_SOURCE = (b"type D {\n"
+                  b"    a: Int\n"
+                  b"}\n"
+                  b"type D {\n"
+                  b"    b: Int\n"
+                  b"}\n"
+                  b"fn f(d: D) -> Int {\n"
+                  b"    return d.a\n"
+                  b"}\n")
+
+    def test_duplicate_type_source_matches_whole_path(self):
+        self.assertEqual(len(self.DUP_SOURCE), 81, len(self.DUP_SOURCE))
+        _, _, _, whole_status, whole_diags = self.check_whole(
+            self.DUP_SOURCE, "dup-whole")
+        self.assertEqual(whole_status, "invalid")
+        self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                            for code, _, _ in whole_diags), whole_diags)
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.DUP_SOURCE, f"dup-chunk-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "invalid", (reverse, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in diags), (reverse, diags))
+
+    def test_duplicate_type_refused_without_expect_returns(self):
+        # A3's R4 cell: with expectReturns=false the pre-fix chunk accepted
+        # the duplicated source in BOTH fact orders. Both must refuse now.
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.DUP_SOURCE, f"dup-noret-{reverse}", "f",
+                reverse_facts=reverse, expect_returns=False)
+            self.assertEqual(status, "invalid", (reverse, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in diags), (reverse, diags))
+
+    def test_carried_duplicate_flag_is_refused(self):
+        # Whole-document producer output marks the repeated name, so a body
+        # chunk built from those facts alone must refuse (producer leg).
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "dup-prod",
+                                     "bytes": list(self.DUP_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.DUP_SOURCE, target,
+                              self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        all_ids = [int(nval(node, "id")) for node in nodes]
+        facts = self.type_facts(parsed, sem, all_ids)
+        dup_flags = [fields_map(fact)["duplicateType"]["value"]
+                     for fact in facts]
+        self.assertIn(True, dup_flags, dup_flags)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        ext = [s for s in sigs if s["name"] != "f"]
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, bodies["f"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in ext]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in ext]},
+            {"type": "List[ResolvedTypeDecl]", "value": facts}, sem))
+        self.assertEqual(report["status"]["value"], "invalid", report)
+        codes = [fields_map(item)["code"]["value"]
+                 for item in report.get("diagnostics", {}).get("value", [])]
+        self.assertIn("PEP_DUPLICATE_TYPE", codes, codes)
+
+    # Caller-precondition note (not a runtime test): the closure gate covers
+    # carried flags and repeated external names, but not a chunk that itself
+    # declares a type also supplied externally (split-root shape). No harness
+    # chunk shape produces that input — chunks are function or statement
+    # subtrees, which cannot declare types — so it is a documented caller
+    # obligation, enforced by construction of the gathering helpers above.
+
+    def test_unique_type_facts_stay_valid_both_orders(self):
+        # Guard against over-refusal: two distinct types must check valid in
+        # either fact order, matching the whole path.
+        source = (b"type Box { f: Int }\n"
+                  b"type Bag { g: Str }\n"
+                  b"fn f(bx: Box, bg: Bag) -> Int { return bx.f }\n")
+        _, _, _, whole_status, _ = self.check_whole(source, "uniq-whole")
+        self.assertEqual(whole_status, "valid")
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                source, f"uniq-chunk-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "valid", (reverse, diags))
+            self.assertEqual(diags, [])
+
+    def test_make_progress_scoped_stays_valid_under_closure_gate(self):
+        # Production-pattern guard: the function the unscoped landscape pin
+        # now records as STEP_LIMIT stays valid with dependency-scoped
+        # facts, proving the closure gate fits the production path and no
+        # capability is lost — unscoped recovery is scaling work.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        status, diags = self.check_body_with_facts(
+            source, "mp-scoped-gate", "make_progress", scope_facts=True)
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_forged_primitive_fact_stays_inert(self):
+        # S10 regression pin: a bogus record fact named `Int` must not
+        # disturb Int arithmetic, and the closure gate must exempt it.
+        source = b"fn f(x: Int) -> Int { return x + 1 }\n"
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "prim-forge",
+                                     "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, source, target,
+                              self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        typed = lambda t, v: {"type": t,
+                              "value": str(v) if t == "Int" else v}
+        int_fact = {"type": "ResolvedTypeDecl", "fields": [
+            {"name": "typeName", "value": typed("Str", "Int")},
+            {"name": "typeKind", "value": typed("Str", "record")},
+            {"name": "declStartByte", "value": typed("Int", 0)},
+            {"name": "declEndByte", "value": typed("Int", 0)},
+            {"name": "declLine", "value": typed("Int", 1)},
+            {"name": "declColumn", "value": typed("Int", 1)},
+            {"name": "duplicateType", "value": typed("Bool", False)},
+            {"name": "document",
+             "value": typed("Str", target["document"])},
+            {"name": "revision",
+             "value": typed("Str", target["revision"])},
+            {"name": "fields",
+             "value": {"type": "List[ResolvedTypeField]", "value": []}}]}
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        ext = [s for s in sigs if s["name"] != "f"]
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, bodies["f"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in ext]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in ext]},
+            {"type": "List[ResolvedTypeDecl]", "value": [int_fact]}, sem))
+        self.assertEqual(report["status"]["value"], "valid", report)
 
 
 if __name__ == "__main__":

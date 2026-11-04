@@ -151,6 +151,62 @@ a document id to the checker collided with a body chunk's remapped ids and
 existing chunked-mismatch regression caught it. Keep the two fields apart, and
 keep that regression running.
 
+## Cross-chunk call lowering contract (A2 seam)
+
+Authoritative checker→emitter rules for a call whose callee lives in a
+different chunk, at `codex/p1-checker-cost-fix@448c689` (checker) against
+`codex/a2-bounded-emission@ea0bc9a` (emitter). Pinned by
+`tests/test_chunk_cross_call_facts.py` (23/23 chunk suites green); a checker
+change that alters any rule below must keep that pin green and notify A2.
+
+1. **External functions carry placeholder ids, never addresses.**
+   Whoever supplies external `CheckedFunction` values must use synthetic,
+   non-real ids (the harness uses semanticId `9000`, syntaxId
+   `1000000000`). The checker matches calls to functions **by name only**
+   (`find_function`) and copies the supplied ids through, so
+   `ResolvedCall.calleeId` for a cross-chunk call is the placeholder
+   (`9000`). The emitter must never use it as a target address.
+2. **The cross-chunk link is the call-site node, keyed by name.**
+   `ResolvedCall.syntaxId` is the call node's id in **chunk (remapped)
+   space**. The emitter resolves it against the chunk's own node list (the
+   same sliced chunk the report was produced for), reads that node's
+   `text`, and that name is the callee key.
+3. **Lowering is signature-first.** `CheckedFunction` carries no parameter
+   facts (only `arity`/`returnType`/`returnShape`). Callee parameter facts
+   come exclusively from the `ResolvedSignature` with the matching
+   `functionName` — the same external-signatures list the checker
+   consumed. If no supplied signature matches the call-site name, the
+   emitter must refuse fail-closed with its pinned message
+   (`Pep C23 calls require a known target`).
+4. **Local first, mirroring the checker.** The checker merges
+   local-before-external and resolves by name, so a chunk-local function
+   shadows a same-named external without diagnosis. Suppliers must not
+   submit external functions that collide with chunk-local names (caller
+   precondition, same class as the staged type-closure precondition).
+5. **Caller linkage is chunk-ordinal.** Chunk-local functions get
+   `semanticId` `100000+n` in top-level-function node order, and
+   `ResolvedCall.callerId` uses the same numbering in both the
+   single-function and multi-function collection paths, so `callerId`
+   identifies the calling function within the chunk either way.
+   Multi-function chunks are not the bounded-unit shape; bounded emission
+   uses one function chunk per unit.
+6. **Seam fields.** The contract covers `functions[]`
+   (`name`/`arity`/`returnType`/`returnShape`/ids), `calls[]`
+   (`callerId`/`calleeId`/`syntaxId`/`startByte`/`endByte`), and
+   `diagnostics[]`. `bindings`, `references` and `expressionTypes` are
+   checker-internal and not seam.
+7. **Unambiguity rests on whole-source uniqueness.** Seed-valid programs
+   have unique function names (`PEP_DUPLICATE_FUNCTION` whole-path), so
+   name-keyed resolution is unambiguous exactly when the source is valid.
+
+Known residual (disclosed, not covered): duplicate *function* names
+across a chunk and its external facts have the same shape as the
+repaired duplicate-*type* hole (local-first resolution, no diagnosis —
+the duplicate diagnostic's `lookup_node` guard swallows the synthetic
+id). No harness path produces it (gathering excludes the entry
+function), and no probe has demonstrated it. A3 welcome to attack it;
+a demonstration gets the same fail-closed treatment as the type hole.
+
 ## Measured on the real lexer
 
 `tests/test_lexer_chunk_ledger.py` drives the whole contract over
