@@ -158,7 +158,10 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "mixed")
         whole = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole[0], "unsupported")
-        self.assertIn("scalar or record result", whole[1])
+        # G-A2-3 moved the two-branch Str diagnostic one layer out (if_return_body still gates
+        # Str; the straight-line fall-through then wants a top-level return) -- still refused,
+        # still empty parts, only the message text changed.
+        self.assertIn("functions require a return statement", whole[1])
 
         status, diagnostic, parts = self._unit(parsed, checked, semantic, 0)
         self.assertEqual(status, "emitted", diagnostic)
@@ -168,7 +171,7 @@ class BoundedEmissionTests(unittest.TestCase):
         # The unsupported peer reports its own diagnostic, and nothing else does.
         peer_status, peer_diagnostic, peer_parts = self._unit(parsed, checked, semantic, 1)
         self.assertEqual(peer_status, "unsupported")
-        self.assertIn("scalar or record result", peer_diagnostic)
+        self.assertIn("functions require a return statement", peer_diagnostic)
         self.assertEqual(peer_parts, [])
 
     def test_sections_reassemble_to_the_one_shot_output(self):
@@ -313,7 +316,7 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "section-boundedness")
         whole_status, whole_diagnostic, whole_parts = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole_status, "unsupported")
-        self.assertIn("scalar or record result", whole_diagnostic)
+        self.assertIn("functions require a return statement", whole_diagnostic)
         self.assertEqual(whole_parts, [])
 
         header_status, header_diagnostic, header_parts = self._section(parsed, checked, semantic, "header")

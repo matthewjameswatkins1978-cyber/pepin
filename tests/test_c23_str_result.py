@@ -95,18 +95,69 @@ class StrResultNativeTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 self.assertEqual(normalize(stdout), seed_bytes + b"0\n")
 
+    def test_guard_chain_str_returns_match_seed_on_both_compilers(self):
+        """G-A2-3: the real lexer's guard-chain Str shape, end to end with seed parity.
+
+        Source evidence: stdlib/scan.pep:730 `lex_error_code` returns string literals from
+        statement-level `if ... { return ... } else {}` guards plus a fallthrough, and its one
+        real call site (scan.pep:845) passes RECORD-FIELD ARGUMENTS (`classified.kind`,
+        `classified.diagnostic`) -- so this fixture uses exactly that pattern: record fields
+        into a two-parameter Str function, guard-chain returns, observed through let + say.
+        MEASURED BOUNDARY (receipt, not pinned here because parser positions shift): the FULL
+        five-guard function plus this record program exceeds the unchanged PARSER step budget
+        (PEP_RUNTIME_STEP_LIMIT at 2451:8, parse stage, the issue #20 class -- A1's lane), so
+        the proven slice uses the three-guard core; the SHAPE is what this test pins.
+        """
+        native_source = (
+            'type Info { kind: Str, diagnostic: Str }\n'
+            'fn lex_error_code(kind: Str, diagnostic: Str) -> Str {\n'
+            '  if kind == "unexpected" { return "PEP_UNEXPECTED_CHARACTER" } else {}\n'
+            '  if kind == "integer" { return "PEP_INT_LITERAL_RANGE" } else {}\n'
+            '  return "PEP_LEXER_INPUT"\n'
+            '}\n'
+            'fn main() -> Int {\n'
+            '  let i = Info { kind: "integer", diagnostic: "" }\n'
+            '  let code = lex_error_code(i.kind, i.diagnostic)\n'
+            '  say(code)\n'
+            '  return 0\n'
+            '}\n')
+        c_source = emit_c(native_source)
+        self.assertIn('(const unsigned char *)', c_source)       # static-storage literals
+        self.assertIn('pep_str pep_fn_lex_error_code', c_source)  # Str result signature
+        seed_source = native_source.split("fn main()")[0] + (
+            'let i = Info { kind: "integer", diagnostic: "" };\n'
+            '  let code = lex_error_code(i.kind, i.diagnostic);\n'
+            '  say(code);\n')
+        seed_bytes = normalize(seed_run(seed_source, "ga23_guard_chain_seed"))
+        self.assertEqual(seed_bytes, b"PEP_INT_LITERAL_RANGE\n")  # the guard actually fired
+        for compiler in ("clang", "gcc"):
+            with self.subTest(compiler=compiler):
+                stdout, exit_code = build_and_run(compiler, c_source,
+                                                  f"ga23_guard_chain_{compiler}")
+                self.assertEqual(exit_code, 0)
+                self.assertEqual(normalize(stdout), seed_bytes + b"0\n")
+
 
 class StrResultBoundaries(unittest.TestCase):
     """Each refusal below was MEASURED during this slice; none is assumed."""
 
     def test_conditional_return_str_body_still_refuses(self):
+        """TWO-BRANCH conditional Str stays refused (the one exact negative, G-A2-3).
+
+        Path measured after the G-A2-3 guard-chain slice: if_return_body still gates Str out,
+        the fall-through straight-line analysis then requires a TOP-LEVEL return (the returns
+        live inside the if/else branches), so the program refuses with the return-statement
+        diagnostic instead of the old conditional one. Still fail-closed, empty sourceParts --
+        only the message moved; GUARD-CHAIN Str returns (empty else + fallthrough, the real
+        lex_error_code shape) are supported and pinned positive in
+        test_guard_chain_str_returns_match_seed_on_both_compilers.
+        """
         with self.assertRaises(ValueError) as caught:
             emit_c('fn pick(flag: Bool) -> Str {\n'
                    '  if flag { return "yes" } else { return "no" }\n'
                    '}\n'
                    'fn main() -> Int { return 0 }\n')
-        self.assertIn("conditional return requires a supported scalar or record result",
-                      str(caught.exception))
+        self.assertIn("functions require a return statement", str(caught.exception))
 
     def test_say_of_a_direct_str_call_still_refuses(self):
         """say re-lowers its argument twice; a call there could re-run a callee body."""

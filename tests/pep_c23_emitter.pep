@@ -3159,7 +3159,18 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       if recordType.found {
         cTypeParts = ["pep_record_", int_text(recordType.node.id)]
       } else {
-        return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+        // Str results join this branch for GUARD-CHAIN returns (Campaign G G-A2-3): the real
+        // lexer's stdlib/scan.pep `lex_error_code` returns string literals from statement-level
+        // `if ... { return ... } else {}` guards plus a fallthrough return -- checker-valid and
+        // the measured blocker since BOOT-A2-20261104-019 item 5. The lowered value is a
+        // static-storage pep_str (F3 lifetime repair) so returning it past the frame is safe,
+        // and Str equality already lowers through pep_str_equal (measured before this change).
+        // Every other unsupported result keeps the exact same refusal.
+        if result.node.kind == "type_scalar" && result.node.text == "Str" {
+          cTypeParts = ["pep_str"]
+        } else {
+          return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+        }
       }
     }
     let lowered = pep_c23_expression(nodes, function, value.node)
