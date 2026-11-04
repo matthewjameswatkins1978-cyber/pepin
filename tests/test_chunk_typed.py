@@ -119,6 +119,7 @@ class TypedChunkTests(unittest.TestCase):
         empty_ext = {"type": "List[CheckedFunction]", "value": []}
         empty_sig = {"type": "List[ResolvedSignature]", "value": []}
         empty_types = {"type": "List[ResolvedTypeDecl]", "value": []}
+        expect_true = {"type": "Bool", "value": True}
         for tool, function, arguments, expected in [
                 ("pep-c23-parser-start", "parser_start", [], start_cursor),
                 ("pep-c23-parser-step", "parser_step", [finished_cursor],
@@ -133,7 +134,7 @@ class TypedChunkTests(unittest.TestCase):
                 ("pep-c23-checker-sigs", "chunk_signatures",
                  [empty_pp], empty_sig),
                 ("pep-c23-checker-chunk-typed", "analyze_chunk_typed",
-                 [empty_pp, empty_ext, empty_sig, empty_types], empty_rep)]:
+                 [empty_pp, empty_ext, empty_sig, empty_types, expect_true], empty_rep)]:
             cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                               "op": "tool_register", "tool": tool,
                               "document": tool_document,
@@ -172,12 +173,13 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(response.get("outcome"), "ok", response)
         return response["result"]["value"]
 
-    def invoke_typed(self, sliced, extfns, extsigs, exttypes, sem):
+    def invoke_typed(self, sliced, extfns, extsigs, exttypes, sem, expect_returns=True):
+        args = [sliced, extfns, extsigs, exttypes,
+                {"type": "Bool", "value": expect_returns}]
         response = self.session.send(
             {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
              "tool": "pep-c23-checker-chunk-typed",
-             "arguments": [sliced, extfns, extsigs, exttypes],
-             "semanticTarget": sem})
+             "arguments": args, "semanticTarget": sem})
         self.assertEqual(response.get("outcome"), "ok", response)
         return response["result"]
 
@@ -232,6 +234,69 @@ class TypedChunkTests(unittest.TestCase):
             {"type": "List[ResolvedTypeDecl]", "value": facts + host_types}, sem))
         return report["status"]["value"], diag_tuples(report)
 
+    def check_statement_group(self, source_bytes, name, entry, stmt_range,
+                              host_builtin_names=(), expect_returns=False,
+                              carry_stmt_indexes=()):
+        """Check a header + statement-subset chunk (non-terminal by default).
+
+        Carried bindings are re-included as source subtrees (deterministic
+        re-check, same diagnostics); only the terminal group needs
+        expect_returns=True. stmt_range is a (lo, hi) slice over the
+        function body's top-level statements in order; carry_stmt_indexes
+        names additional earlier statements (e.g. lets/vars the group reads)
+        to re-include for binding context.
+        """
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source_bytes)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"], "revision": target["revision"],
+               "entryFunctions": []}
+        parsed = parse_target(self.session, source_bytes, target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        decl_roots = [int(nval(node, "id")) for node in nodes
+                      if str(nval(node, "parentId")) == "-1"
+                      and nval(node, "kind") in ("record_declaration", "union_declaration")]
+        facts = []
+        for root in decl_roots:
+            facts.extend(self.type_facts(parsed, sem, index.subtree(root)))
+        by_id = {str(nval(node, "id")): node for node in nodes}
+        table = {str(nval(fn, "text")): int(nval(fn, "id"))
+                 for fn in nodes
+                 if nval(fn, "kind") == "function"
+                 and str(nval(fn, "parentId")) == "-1"}
+        self.assertIn(entry, table)
+        root_id = str(table[entry])
+        keep = {root_id}
+        for node in nodes:
+            if str(nval(node, "parentId")) == root_id and \
+                    nval(node, "role") in ("parameter", "return_type"):
+                keep.update(index.subtree(int(nval(node, "id"))))
+        statements = [node for node in nodes
+                      if str(nval(node, "parentId")) == root_id
+                      and nval(node, "role") == "statement"]
+        lo, hi = stmt_range
+        for st in statements[lo:hi]:
+            keep.update(index.subtree(int(nval(st, "id"))))
+        for ci in carry_stmt_indexes:
+            keep.update(index.subtree(int(nval(statements[ci], "id"))))
+        ext = [s for s in sigs if s["name"] != entry]
+        host_fns, host_sigs, host_types = [], [], []
+        if host_builtin_names:
+            assert set(host_builtin_names) <= {"semantic_snapshot"}
+            host_fns, host_sigs, host_types = host_builtins(
+                target["document"], target["revision"])
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, keep),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in ext] + host_fns},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in ext] + host_sigs},
+            {"type": "List[ResolvedTypeDecl]", "value": facts + host_types},
+            sem, expect_returns=expect_returns))
+        return report["status"]["value"], diag_tuples(report)
+
     def test_lexer_start_body_only_flips_with_facts(self):
         source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
         status, diags = self.check_body_with_facts(
@@ -243,6 +308,28 @@ class TypedChunkTests(unittest.TestCase):
     def test_make_token_body_only_stays_valid_with_facts(self):
         source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
         status, diags = self.check_body_with_facts(source, "lexer-facts", "make_token")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_utf8_check_prefix_group_checks_valid(self):
+        # First statement group of utf8_check (params + first 4 statements,
+        # 28 header/body nodes + external type facts): no missing-return
+        # diagnostic because the group is explicitly non-terminal.
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        status, diags = self.check_statement_group(
+            source, "lexer-g1", "utf8_check", (0, 4))
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    def test_utf8_check_second_group_with_carried_bindings(self):
+        # Statements 4-5 (two range checks, ~24 nodes) plus re-included
+        # binding statements (let first, var width, var minimum): the group
+        # checks valid without re-verifying the whole prefix and without a
+        # missing-return diagnostic (non-terminal).
+        source = (ROOT / "examples" / "pep_lexer.pep").read_bytes()
+        status, diags = self.check_statement_group(
+            source, "lexer-g2", "utf8_check", (4, 6),
+            carry_stmt_indexes=(0, 2, 3))
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
@@ -288,7 +375,8 @@ class TypedChunkTests(unittest.TestCase):
              "arguments": [self.sliced(parsed2, index.subtree(mains[0])),
                            empty("List[CheckedFunction]"),
                            empty("List[ResolvedSignature]"),
-                           {"type": "List[ResolvedTypeDecl]", "value": facts}],
+                           {"type": "List[ResolvedTypeDecl]", "value": facts},
+                           {"type": "Bool", "value": True}],
              "semanticTarget": sem2})
         self.assertEqual(response.get("outcome"), "ok", response)
         report = fields_map(response["result"])

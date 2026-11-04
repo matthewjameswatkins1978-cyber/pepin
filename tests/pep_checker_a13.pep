@@ -1651,7 +1651,7 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   return false
 }
 
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord]) -> TypeAnalysis {
+fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], expectReturns: Bool) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var activeFunctionFound = false
@@ -1745,7 +1745,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           } else {}
         } else {}
       }
-      if declared_return_type(nodes, node.id) != "Unit" {
+      if expectReturns && declared_return_type(nodes, node.id) != "Unit" {
         var returnsOnAllPaths = false
         for statement in taStatements {
           if statement.parentId == node.id && statement_always_returns(nodes, statement) { returnsOnAllPaths = true } else {}
@@ -2576,19 +2576,19 @@ fn record_field_shape_ext(nodes: List[FlatAstNode], externalRecords: List[Resolv
   if facts.typeFound { return facts.shape } else {}
   return empty_type_shape()
 }
-fn analyze_chunk_typed(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalTypes: List[ResolvedTypeDecl]) -> CheckerReport {
+fn analyze_chunk_typed(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalTypes: List[ResolvedTypeDecl], expectReturns: Bool) -> CheckerReport {
   for decl in externalTypes {
     if decl.document != parsed.document || decl.revision != parsed.revision {
       return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External type facts belong to a different source revision; re-derive them for the target revision", empty_node())
     } else {}
   }
-  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, external_records(externalTypes))
+  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, external_records(externalTypes), expectReturns)
 }
 fn analyze_chunk(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature]) -> CheckerReport {
   var noExternalRecords: List[ResolvedRecord] = []
-  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, noExternalRecords)
+  return analyze_chunk_inner(parsed, externalFunctions, externalSignatures, noExternalRecords, true)
 }
-fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord]) -> CheckerReport {
+fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFunction], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], expectReturns: Bool) -> CheckerReport {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision {
     return invalid_report(authority.document, authority.revision, 0, "A13_PARSER_REVISION", "Parser result changed the authorised target identity", empty_node())
@@ -2605,7 +2605,7 @@ fn analyze_chunk_inner(parsed: ParserProgress, externalFunctions: List[CheckedFu
   let bindingResult = collect_bindings(nodes, functions)
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
-  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures, externalRecords)
+  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures, externalRecords, expectReturns)
   let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []
