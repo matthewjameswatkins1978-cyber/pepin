@@ -191,6 +191,30 @@ class BoundedEmissionTests(unittest.TestCase):
         rebuilt.extend(epilogue)
         self.assertEqual(rebuilt, whole)
 
+    def test_prototypes_section_is_prototypes_only(self):
+        """G-A2-4: the `prototypes` part returns exactly the prototype block.
+
+        No preamble/includes, no declaration definitions, no function bodies, no epilogue --
+        and for a declaration-free fixture the bytes are precisely the tail of `header`, which
+        is what lets a chunked assembly place them ahead of ANY unit order (reverse order is
+        proven end-to-end in tests/probe_seam_chunked.py under both compilers).
+        """
+        parsed, checked, semantic = self._prepare(SUPPORTED, "prototypes-part")
+        status, diagnostic, parts = self._section(parsed, checked, semantic, "prototypes")
+        self.assertEqual(status, "emitted", diagnostic)
+        text = "".join(parts)
+        self.assertIn("int64_t pep_fn_helper_first", text)
+        self.assertIn("int64_t pep_fn_helper_second", text)
+        self.assertTrue(text.endswith(";\n"), "prototypes end at the last declaration")
+        self.assertNotIn("#include", text, "no runtime preamble in the prototypes part")
+        self.assertNotIn("pep_enter", text, "no function bodies in the prototypes part")
+        self.assertNotIn("int main", text, "no epilogue in the prototypes part")
+        header_status, header_diagnostic, header_parts = self._section(
+            parsed, checked, semantic, "header")
+        self.assertEqual(header_status, "emitted", header_diagnostic)
+        self.assertTrue("".join(header_parts).endswith(text),
+                        "prototypes are exactly the header's tail on a declaration-free fixture")
+
     def test_out_of_range_unit_fails_closed(self):
         parsed, checked, semantic = self._prepare(SUPPORTED, "supported-range")
         status, diagnostic, parts = self._unit(parsed, checked, semantic, 3)

@@ -388,10 +388,26 @@ try:
     # then each function unit (callees precede callers here), then the epilogue. The header
     # carries prototypes only for functions inside ITS chunk, so a caller emitted before its
     # callee would not compile -- unit order is part of the assembly contract (A2-3 negative).
+    # G-A2-4: prototypes from each FUNCTION chunk's own checked nodes -- parameter types live
+    # in the nodes, and the checked document/revision-gated report that authorises the unit
+    # authorises these bytes too, so no new facts, tool argument or host-generated C involved.
+    prototypes = ""
+    for fn_label in (body_label, callee_label, main_label):
+        prototypes += invoke("pep-c23-section",
+                             [sliced_by_label[fn_label], reports[fn_label], typed("Str", "prototypes")],
+                             f"emit-prototypes-{fn_label}")
+    print(f"prototypes_bytes={len(prototypes)}")
     c_source = header + unit_make + unit_add + unit_main + epilogue
     c_path = BUILD / "seam_chunked.c"
     c_path.write_text(c_source, encoding="utf-8", newline="\n")
     print(f"assembled_c_bytes={len(c_source)}")
+    # Reverse-order assembly (caller unit FIRST, multiple callees present): only legal WITH
+    # the prototypes block. The no-prototypes reverse order stays the pinned neg-unit-order
+    # failure below, so both halves of the contract are live in one run.
+    c_source_reverse = header + prototypes + unit_main + unit_add + unit_make + epilogue
+    c_path_reverse = BUILD / "seam_chunked_reverse.c"
+    c_path_reverse.write_text(c_source_reverse, encoding="utf-8", newline="\n")
+    print(f"reverse_bytes={len(c_source_reverse)}")
 
     failures = []
     for compiler_name, extra in (("clang", ["-std=c23"]), ("gcc", ["-std=c2x"])):
@@ -438,6 +454,26 @@ try:
                   " (entry-point difference: seed runs top-level statements, native runs fn main)")
             if oracle_out != native_out:
                 failures.append("oracle-mismatch")
+    # G-A2-4 reverse-order proof: caller-first assembly must build clean under BOTH strict
+    # compilers and print 42, byte-identical to the document-order run above.
+    for compiler_name, extra in (("clang", ["-std=c23"]), ("gcc", ["-std=c2x"])):
+        compiler = pep_c23.compiler_path(compiler_name)
+        exe = BUILD / f"seam_reverse_{compiler_name}.exe"
+        built = subprocess.run(
+            [str(compiler), *extra, "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-O2",
+             str(c_path_reverse), "-o", str(exe)],
+            capture_output=True, text=True, check=False)
+        if built.returncode:
+            stage(f"strict-rev-{compiler_name}", False, built.stderr[:600])
+            failures.append(f"reverse-{compiler_name}")
+        else:
+            ran = subprocess.run([str(exe)], capture_output=True, check=False)
+            out = ran.stdout.replace(b"\r\n", b"\n")
+            stage(f"strict-rev-{compiler_name}", out == b"42\n",
+                  f"reverse-order run_stdout={out!r}")
+            if out != b"42\n":
+                failures.append(f"reverse-{compiler_name}-output")
+
     # ---- A2-3 NEGATIVE CONTROLS (Rolling Queue C): every cross-chunk refusal must fail
     # closed with its exact registered diagnostic and emit NOTHING, driven against the exact
     # chunk + report the positive proof used above -- no fabricated fixtures, no hand-written C.

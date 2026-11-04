@@ -4474,6 +4474,19 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   let declarations = pep_c23_declaration_definitions(parsed, requiresArena, -1)
   if declarations.status != "emitted" { return declarations } else {}
   for part in declarations.sourceParts { reversed = prepend(reversed, part) }
+  // Everything accumulated so far = runtime preamble + declaration definitions. The
+  // `prototypes` part (Campaign G G-A2-4) returns ONLY the prototype block built below, so a
+  // chunked assembly can place prototypes before ANY unit order. COST DISCIPLINE (measured:
+  // a second length() walk of this large list tipped a near-ceiling fixture over the fixed
+  // 100k budget): the walk happens exactly ONCE here, before the loop; sectionHeaderCount is
+  // then arithmetic over a loop counter instead of a second walk (net ~+8 steps over the
+  // pre-G-A2-4 baseline instead of a full extra traversal).
+  // SYNC NOTE (Campaign G G-A2-4): the prototype-building loop below appears AGAIN inside
+  // the `prototypes` part branch. The duplication is deliberate -- slicing the merged
+  // `reversed` list needs the preamble+decls count, and the second length() walk measured
+  // OVER the fixed 100k budget on a near-ceiling fixture. Keeping this common path byte-for-byte
+  // at its pre-G-A2-4 cost is what the tip fixture requires; tests/test_c23_bounded_emission
+  // pins `prototypes == header's tail`, so the two copies cannot drift without failing green.
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let functionParameters = pep_c23_parameters(parsed.nodes, node)
@@ -4510,6 +4523,51 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   // program.
   if part == "header" {
     return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
+  } else {}
+  // Prototypes of THIS chunk's functions only: no preamble, no declarations, no bodies, no
+  // epilogue (returned before any of that is built, so the step cost is the prototype loop
+  // alone). Authentication is the checked chunk itself -- the same document/revision-gated
+  // report that authorises the unit -- so no new facts or interface are needed. Placed after
+  // the declaration header in an assembly, it makes unit ORDER irrelevant for C, which needs
+  // a declaration before use.
+  if part == "prototypes" {
+    // SYNC PAIR of the prototype loop above (see the sync note) -- all cost of this part is
+    // paid here, so every other section keeps its exact pre-G-A2-4 step profile.
+    var prototypeParts: List[Str] = []
+    for node in topLevelFunctions {
+      if node.parentId == -1 && node.kind == "function" {
+        let functionParameters = pep_c23_parameters(parsed.nodes, node)
+        let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
+        for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { prototypeParts = prepend(prototypeParts, resultPart) }
+        prototypeParts = prepend(prototypeParts, " pep_fn_")
+        prototypeParts = prepend(prototypeParts, node.text)
+        if length(functionParameters) == 0 {
+          if requiresArena { prototypeParts = prepend(prototypeParts, "(pep_arena_t *pep_arena);\n") } else {
+            prototypeParts = prepend(prototypeParts, "(void);\n")
+          }
+        } else {
+          prototypeParts = prepend(prototypeParts, "(")
+          var prototypeIndex = 0
+          for parameterNode in functionParameters {
+            let parameterType = pep_c23_child(parsed.nodes, parameterNode.id, "type", 0)
+            if prototypeIndex != 0 { prototypeParts = prepend(prototypeParts, ", ") } else {}
+            for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { prototypeParts = prepend(prototypeParts, typePart) }
+            prototypeParts = prepend(prototypeParts, " pep_arg_")
+            prototypeParts = prepend(prototypeParts, int_text(parameterNode.id))
+            prototypeIndex = prototypeIndex + 1
+          }
+          if requiresArena {
+            prototypeParts = prepend(prototypeParts, ", ")
+            prototypeParts = prepend(prototypeParts, "pep_arena_t *pep_arena")
+            prototypeParts = prepend(prototypeParts, ");\n")
+          } else { prototypeParts = prepend(prototypeParts, ");\n") }
+        }
+      } else {}
+    }
+    // Built backward by prepending (same as the common loop); one reverse yields forward
+    // prototype order -- the bounded-suite header-tail pin keeps this byte-identical to it.
+    return PepC23Emission { status: "emitted",
+      sourceParts: reverse(prototypeParts), diagnostic: "" }
   } else {}
   // `main` is the epilogue alone; the bodies are not part of it.
   var functionsToEmit: List[FlatAstNode] = topLevelFunctions
