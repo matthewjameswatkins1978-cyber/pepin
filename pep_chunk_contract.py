@@ -249,6 +249,63 @@ class DocumentIndex:
         names = self.referenced_names(chunk_ids)
         return frozenset(name for name in candidate_names if name in names)
 
+    def statement_children(self, function_id):
+        """Top-level statement node ids of a function, in source order."""
+        ids = []
+        for node in self.nodes:
+            fields = _fields(node, "FlatAstNode")
+            if (_int_scalar(fields["parentId"], "node parentId") == function_id
+                    and _str_scalar(fields["role"], "node role") == "statement"):
+                ids.append((_int_scalar(fields["childIndex"], "node childIndex"),
+                            _int_scalar(fields["id"], "node id")))
+        return tuple(node_id for _, node_id in sorted(ids))
+
+    def block_children(self, owner_id, role="body"):
+        """Node ids with ``role`` directly under ``owner_id``, in order."""
+        ids = []
+        for node in self.nodes:
+            fields = _fields(node, "FlatAstNode")
+            if (_int_scalar(fields["parentId"], "node parentId") == owner_id
+                    and _str_scalar(fields["role"], "node role") == role):
+                ids.append((_int_scalar(fields["childIndex"], "node childIndex"),
+                            _int_scalar(fields["id"], "node id")))
+        return tuple(node_id for _, node_id in sorted(ids))
+
+    def bounded_units(self, function_id):
+        """Bounded checking units covering one function, smallest first.
+
+        Yields ``(label, chunk_ids)``. The whole body comes first because most
+        functions fit; then per-statement groups and loop-body statement units
+        for the ones that do not. Every unit keeps original span identity, so
+        diagnostics still land on real source offsets.
+
+        The caller checks units smallest-first and stops at the first valid
+        one; the full partition is a gapless cover of the function's own
+        statements, so a function is covered even when no single unit fits.
+        """
+        body = self.subtree(function_id)
+        yield ("body", body)
+        statements = self.statement_children(function_id)
+        keep_header = tuple(node_id for node_id in body
+                            if node_id not in {
+                                i for root in statements
+                                for i in self.subtree(root)
+                            })
+        for position, statement in enumerate(statements):
+            yield (f"statement[{position}]",
+                   keep_header + self.subtree(statement))
+        for position, statement in enumerate(statements):
+            inner = self.block_children(statement)
+            if not inner:
+                continue
+            for index, part in enumerate(inner):
+                drop = {
+                    node_id for other in inner if other != part
+                    for node_id in self.subtree(other)
+                }
+                yield (f"statement[{position}].body[{index}]",
+                       tuple(node_id for node_id in body if node_id not in drop))
+
 
 class ChunkPlan:
     """Covering chunk plan for one revision, with declared shared roots."""
