@@ -1,5 +1,7 @@
 # Verification receipts index (Agent 3)
 
+**Mission report:** [`MISSION-REPORT-PEP-WB-A3-20261104-B.md`](MISSION-REPORT-PEP-WB-A3-20261104-B.md) — priorities 1–5, PASS/FAIL/SKIP, five genuine defects with owners, what would change the verdict, next target.
+
 One-line status per receipt, grouped by thread. Newest first within
 groups. **Current blocker map at the bottom.**
 
