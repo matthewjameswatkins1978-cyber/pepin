@@ -102,3 +102,69 @@ hard (L2,L6,P3–P8,C3–C5,C7,C10,E3,E5). UNKNOWNs cluster at A2's NEW surface
 Next: H1b dynamic probes P1–P8 (disposable `_build/h1/` scratch, existing
 `pep.ps1`/`pep-2ad750b.exe`/Clang/GCC only), then blocker clustering with
 reachable fractions. No static claim will be called a run.
+
+## H1b — executed probes P1–P8 (run this slice; seed exe unless noted)
+
+- **P1** `ascii_digit` verbatim + top-level driver → output `1/0`, exit 0.
+  PASS. (Also proves scratch files parse — no BOM issue.)
+- **P2** `byte_at(source_bytes(),0)` → **BLOCKED-authority**:
+  `PEP_RUNTIME_SOURCE_CONTEXT` (needs v2 host-granted semanticTarget;
+  plain `run` does not grant). Informative, not a failure: maps E4-T2.
+  Covering evidence: A3 set 13 exercises byte builtins through v2 grants
+  (REPORTED). No seed-run byte path exists without a grant.
+- **P3** `insert_sorted`+`quick_sort_nodes` verbatim (real staged-checker
+  bodies, FlatAstNode literals) → `1,2,3` / `1,2,3,4,5`, exit 0. PASS —
+  including the checker's own RECURSION under the interpreter.
+- **P5** `same_type_shape` verbatim + PepTypeShape literals → `1/0/0`,
+  exit 0. PASS.
+- **P6** A2-58fc9bf `pep_c23_c_scalar_type` verbatim + node literals →
+  `int64_t` / `_Bool` / empty / empty, exit 0. PASS (real emitter fn).
+- **P7** grade bands (G-A4-4 sketch, `>=` rewritten to seed's `<=` set):
+  `check` VALID; `run` → `6/10/1` exactly as predicted (seed oracle).
+  Native via seed `pep.ps1 build-c23` → **BLOCKED**: `PEP_RUNTIME_STEP_LIMIT
+  at 251:10` in session `tool_invoke` (parse_count 3 — the seed driver's
+  bundled-emit path, not the program). Independent native evidence: A3
+  adopted the bands 7x2 (REPORTED). No static native claim made here.
+- **P8** existing `tests/test_a13.py` staged-checker test
+  (`test_primitive_synth_check_and_type_facts` via unittest, no pytest on
+  host) → **OK in 0.9s**. PASS: staged chunk path works on this host for
+  small inputs — P7's block is emit-path/bundle specific, not general.
+- Score: 8 probes, 6 PASS + 1 informative-authority-block (P2, covered by
+  A3-set-13) + 1 path-specific block (P7-native, covered by A3-7x2).
+  Probe files + raw outputs retained under ignored `_build/h1/`.
+
+## H1b — blocker clustering (by ROOT DEPENDENCY, with denominators)
+
+Sample: 32/316 fns (10%), 4/4 components, easy/medium/hard + control/data.
+
+1. **Record/union value construction + match (largest share).** Affected:
+   L3–L5, P1, P3–P4, P6, C2, C6, C8 (~10/32 statically; A2-58fc9bf ADDS
+   record/union/list/Str lowering — reachable set EXPANDED vs E2-B3).
+   Counterfactual: if A2's constructor/field/match shapes cover what these
+   fns use, ~40% of the medium sample moves to reachable; next block below.
+   Needs guard-reads per shape, not assumed.
+2. **SourceBytes/host-grant ingress.** Affected: L2, L6 (loop state aside),
+   P2-probe (BLOCKED). Gates ALL byte programs incl. the lexer core — small
+   count, totalizing effect. Counterfactual: a granted-handle model unlocks
+   seed-side byte programs first; native still needs while+records.
+3. **Recursion + loop-state + whole-program depth.** Staged-OK vs
+   native-refuse asymmetry PROVED: P3's recursive quicksort PASSES under the
+   interpreter; the emitter historically refuses recursion (verify at
+   58fc9bf — UNKNOWN). Affected: P5, C7, C10, E3–E5. A2's new
+   `pep_c23_loop_statement`/`while_body` may narrow the loop half —
+   probe-worthy, not claimed.
+
+Reachable fraction (sampled, honest ranges): firmly lowerable today
+(seed-subset shapes: L1, C1, E1, E2 + maybe L3) ≈ **3–5/32**; A2-new-surface
+candidates (records/lists/unions/Str/while, guard-reads pending) ≈
+**12–15/32**; firmly blocked (SourceBytes, recursion, whole-program depth)
+≈ **12/32**. If A2's new lowering covers the used shapes, reachable jumps
+from ~4 to ~16/32 — and the next block is SourceBytes (lexer core) +
+recursion (parser/checker depth). Classification uncertainty: per-fn
+construct membership INFERRED from file-VALID corpus; only probed fns are
+ESTABLISHED individually.
+
+Top-3 ranked blockers for H2: (1) record/union/list/Str lowering
+completeness at 58fc9bf (biggest sample share, A2 already moving);
+(2) SourceBytes/host-grant model (totalizing for byte programs);
+(3) native recursion/loop-state gap (staged-proved vs native-unknown).
