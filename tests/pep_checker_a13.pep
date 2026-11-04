@@ -424,8 +424,8 @@ fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
   return reverse(reversed)
 }
 fn scope_key(node: FlatAstNode, role: Str) -> Int {
-  if node.kind == "if_statement" && role == "else" { return 3000001 + node.id * 2 } else {}
-  return 3000000 + node.id * 2
+  if node.kind == "if_statement" && role == "else" { return 3000001 + node.startByte * 2 } else {}
+  return 3000000 + node.startByte * 2
 }
 fn scope_chain(nodes: List[FlatAstNode], node: FlatAstNode, functionSyntaxId: Int, functionSemanticId: Int) -> List[Int] {
   var current = node
