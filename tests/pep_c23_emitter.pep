@@ -4214,7 +4214,12 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   // different chunk. Only the whole-program and epilogue paths need main, so they are the only
   // ones that require it. The requirement is unchanged for part == "all".
   let sectionNeedsMain = part == "all" || part == "main"
-  if functionCount == 0 || (sectionNeedsMain && !mainFound) {
+  // A declaration-only chunk has zero functions but real nodes, and it must still produce a
+  // `header` for the bounded header+units+epilogue assembly. A completely empty document keeps
+  // the original refusal (registration vectors pin it), as do whole/epilogue parts without main;
+  // function-scoped parts over a declaration chunk fail-closed on their own (unit index out of
+  // range).
+  if (functionCount == 0 && length(parsed.nodes) == 0) || (sectionNeedsMain && !mainFound) {
     return pep_c23_unsupported("Pep C23 emission requires a top-level function named main")
   } else {}
   if mainFound {
