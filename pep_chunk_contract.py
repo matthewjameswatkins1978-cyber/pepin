@@ -271,7 +271,7 @@ class DocumentIndex:
                             _int_scalar(fields["id"], "node id")))
         return tuple(node_id for _, node_id in sorted(ids))
 
-    def bounded_units(self, function_id):
+    def bounded_units(self, function_id, groups=None):
         """Bounded checking units covering one function, smallest first.
 
         Yields ``(label, chunk_ids, expect_returns)``. The whole body comes
@@ -280,10 +280,15 @@ class DocumentIndex:
         draws a spurious missing-return diagnostic; only the whole body is
         checked as terminal.
 
+        ``groups`` lets the caller supply its own covering set instead of the
+        default single-statement units: each entry is
+        ``(label, lo, hi, carriers, expect_returns)`` naming a half-open range
+        of top-level statements plus the earlier statement indexes to re-include
+        for binding context. That expresses the two-group scheme already proven
+        for `utf8_check`, where a later group reads bindings introduced earlier.
+
         Every unit keeps original span identity, so diagnostics still land on
-        real source offsets. The full output is a gapless cover: a statement is
-        covered by its own unit, and a statement whose block is itself over
-        budget is additionally available at block-member granularity.
+        real source offsets.
         """
         body = self.subtree(function_id)
         yield ("body", body, True)
@@ -292,6 +297,15 @@ class DocumentIndex:
                          for node_id in self.subtree(root)}
         keep_header = tuple(node_id for node_id in body
                             if node_id not in statement_ids)
+        if groups is not None:
+            for label, lo, hi, carriers, expect_returns in groups:
+                keep = set(keep_header)
+                for root in statements[lo:hi]:
+                    keep.update(self.subtree(root))
+                for index in carriers:
+                    keep.update(self.subtree(statements[index]))
+                yield (label, tuple(sorted(keep)), expect_returns)
+            return
         for position, statement in enumerate(statements):
             yield (f"statement[{position}]",
                    keep_header + self.subtree(statement), False)
@@ -307,8 +321,6 @@ class DocumentIndex:
                 yield (f"statement[{position}].body[{index}]",
                        tuple(node_id for node_id in body if node_id not in drop),
                        False)
-
-
 class ChunkPlan:
     """Covering chunk plan for one revision, with declared shared roots."""
 
