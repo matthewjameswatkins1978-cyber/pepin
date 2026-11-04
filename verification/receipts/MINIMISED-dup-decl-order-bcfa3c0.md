@@ -67,6 +67,22 @@ python verification\probes\dup_decl_minimiser.py D:\Projects\wt-a3-int-bcfa3c0
 python verification\probes\dup_decl_minimiser.py D:\Projects\wt-a3-a1-0c5f12b
 ```
 
+## Re-pin at A1's later head (2026-11-04)
+
+A1's branch advanced from `e5cf0cd` to **`97e420b`** ("test(staged): pin per-function staged ledger incl.
+make_progress flip") — a tests-only commit that does not touch the typed consumer. The finding was
+re-run there rather than assumed to persist:
+
+| probe | `bcfa3c0` (integrated candidate) | `97e420b` (A1's current head) |
+|---|---|---|
+| `dup_decl_minimiser.py` | 81-byte flip, seed `PEP_DUPLICATE_TYPE` | **same 81-byte flip, same seed code** |
+| `staged_metamorphic_matrix.py` | 13 cells: 12 pass / 1 fail | **13 cells: 12 pass / 1 fail** (same cell) |
+
+So the defect is **current on A1's newest commit**, not an artefact of the integrated candidate's older
+checker. A1's new ledger test pins per-function staged verdicts (`valid` / `STEP_LIMIT` landscape) and
+does **not** assert anything about duplicate declarations, so it neither covers nor crystallises the
+defect as expected behaviour.
+
 ## Fixture reproducibility (measured, and corrected once)
 
 The fixture's numbers above are byte-exact only if the file is checked out with LF. This repository runs
