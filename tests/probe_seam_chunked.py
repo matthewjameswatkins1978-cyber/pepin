@@ -22,7 +22,7 @@ remains mandatory.
 """
 import subprocess
 
-A1_SHA = "2f939a0959373c3cafb628e3c8ddfe9b8a6182ff"
+A1_SHA = "2e81f354a98a5c92e590ef2bb537b039b7127d36"
 import os
 import pathlib
 
@@ -36,6 +36,9 @@ def prepare():
     for source, output in (("examples/pep_lexer.pep", "a1_lexer.pep"),
                            ("examples/pep_parser.pep", "a1_parser.pep"),
                            ("tests/pep_checker_a13.pep", "a1_checker.pep"),
+                           # Transport helper is fetched WITH the pin so the probe never runs a
+                           # stale copy of A1's checked-fact marshaller against a newer checker.
+                           ("tests/chunk_helper.py", "a1_chunk_helper.py"),
                            ("pep_ocaml.ml", "a1_seed/pep_ocaml.ml")):
         data = subprocess.run(["git", "show", f"{A1_SHA}:{source}"], cwd=ROOT, check=True,
                               capture_output=True).stdout
@@ -53,8 +56,9 @@ def prepare():
 prepare()
 """Seam demonstration: A1's checked-chunk contract driving MY bounded emitter.
 
-Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (2f939a0)
-seed + checker with MY emitter in this worktree:
+Flow mirrors A1's tests/test_lexer_chunk_ledger.py exactly, at the A1_SHA pin below (2e81f35:
+R-ID-1 supply-time collision gate + union facts + T-REC pins, ancestry includes the
+f4eb231 CHECKED_CHUNK_CONTRACT) seed + checker with MY emitter in this worktree:
 
   parse whole fixture -> plan chunks (decl closure + per-function subtree + referenced decls)
   -> analyze_chunk per slice with external signatures -> emit MY header/units/epilogue FROM THE
