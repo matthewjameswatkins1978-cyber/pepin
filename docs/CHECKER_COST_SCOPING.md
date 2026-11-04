@@ -87,17 +87,65 @@ capability, not on a checker refactor.
 That makes this a language/host surface decision, not a local optimisation, and
 it should be taken deliberately rather than slipped in while chasing a fixture.
 
+## Upper-bound measurement: no lookup primitive can lift this ceiling
+
+If per-node cost were lookup-bound, replacing every whole-list name/id lookup
+would raise the ceiling. It does not.
+
+Stubbing `lookup_node`, `record_declaration`, `union_declaration`,
+`variant_declaration` and `is_constructor` to constant returns (diagnostic only,
+never shipped) still leaves the 66-node program over budget, and the failure site
+moves well away from the lookup family:
+
+| program | nodes | expires in (all lookups stubbed) |
+|---|---|---|
+| recpad-6 | 66 | `is_expression_kind` |
+| recpad-8 | 88 | `empty_node` |
+| recpad-10 | 110 | `resolve_all_records` |
+| recpad-12 | 132 | `type_shape_at` |
+| recpad-16 | 176 | `collect_bindings` |
+| recpad-20 | 220 | `collect_functions` |
+| recpad-24 | 264 | `count_children` |
+
+Caveat, stated honestly: each stub still constructs a `NodeLookup` record and
+calls `empty_node()`, so this is not a perfect "free" model. It is nonetheless
+decisive in direction: removing the five most expensive scanners neither lifts
+the ceiling nor keeps the failure in that family.
+
+### What the new site shows
+
+`is_expression_kind` is a disjunction chain of ~20 string comparisons
+(`kind == "integer" || kind == "boolean" || ...`). The interpreter ticks per
+evaluated expression, so every `||` alternative costs a tick, and this runs for
+every expression node. That is representative of the real shape of the cost:
+many small per-node predicate chains, not one expensive scan.
+
+### Conclusion, and the decision this forces
+
+Host primitives are **not** the fix, and none were added. Two further reasons:
+
+- host builtins are deliberately charged per element of work (`reverse` ticks per
+  head, `byte_slice` ticks per byte), so a positional lookup over a list would
+  either tick per element (no gain) or break the accounting model (gaming the
+  budget);
+- even granting a genuinely free lookup family, the ceiling holds.
+
+So whole-program checking beyond ~62 nodes is an **analysis-architecture**
+question: reduce the number of interpreted expressions per node (predicate
+chains, repeated passes, per-node record construction) rather than add
+capabilities. That is a design decision to be taken explicitly, not something to
+be discovered by attrition against fixtures.
+
 ## Recommendation
 
-Take B in two measured steps, smallest first:
+Do not add lookup primitives. The staged path remains the supported route for
+real modules (107 of 107 functions in `stdlib/collections.pep`), and lifting the
+whole-program ceiling needs a deliberate decision on analysis architecture:
 
-1. positional access, to convert `lookup_node` (31 sites) from O(n) to O(1), and
-   measure whether the 66-node ceiling moves at all;
-2. only if that is insufficient, an associative capability for the 172
-   name/kind-keyed sites.
+1. collapse the per-node predicate chains (`is_expression_kind` and peers) into
+   a single comparison or a precomputed classification;
+2. reduce the number of full passes over `nodes` per analysis;
+3. only then re-measure the ceiling and decide whether further work is warranted.
 
-Each step must show a before/after ceiling measurement. If step 1 alone does not
-move the ceiling — plausible, given the ablation showed migration between
-scanners — then the honest conclusion is that whole-program checking at this
-scale needs a different analysis architecture, not more primitives, and that is a
-design decision to be taken explicitly.
+Each step must show a before/after ceiling measurement on recpad-6, so progress
+is evidence rather than assertion.

@@ -245,6 +245,102 @@ class CheckerCostProfileTests(unittest.TestCase):
             session.process.stdin.close()
             session.process.terminate()
 
+    def test_lookup_primitives_cannot_lift_the_66_node_ceiling(self):
+        # Upper bound: stub every whole-list name/id lookup to a constant
+        # (diagnostic only, never shipped) and the 66-node program is still
+        # over budget, with the failure outside the lookup family. So no
+        # lookup primitive - host or otherwise - can lift this ceiling, and
+        # the next step must be analysis architecture rather than capability.
+        checker = (ROOT / "tests" / "pep_checker_a13.pep").read_text(encoding="utf-8")
+        stubs = {
+            "lookup_node": ("fn lookup_node(nodes: List[FlatAstNode], id: Int) -> NodeLookup {\n"
+                            "  return NodeLookup { found: false, node: empty_node() }\n}\n"),
+            "record_declaration": ("fn record_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {\n"
+                                  "  return NodeLookup { found: false, node: empty_node() }\n}\n"),
+            "union_declaration": ("fn union_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {\n"
+                                 "  return NodeLookup { found: false, node: empty_node() }\n}\n"),
+            "variant_declaration": ("fn variant_declaration(nodes: List[FlatAstNode], name: Str) -> NodeLookup {\n"
+                                   "  return NodeLookup { found: false, node: empty_node() }\n}\n"),
+            "is_constructor": ("fn is_constructor(nodes: List[FlatAstNode], name: Str) -> Bool {\n"
+                               "  return false\n}\n"),
+        }
+        patched = checker
+        for name, stub in stubs.items():
+            start = patched.index(f"fn {name}(")
+            tail = patched[start:]
+            end = tail.index("\n}\n") + 3
+            patched = patched[:start] + stub + tail[end:]
+        parts = []
+        for path in pep_c23.SOURCES:
+            text = path.read_text(encoding="utf-8")
+            if path.name == "pep_checker_a13.pep":
+                text = patched
+            parts.append(text)
+        bundle = "\n".join(parts)
+        spans = function_spans(bundle.split("\n"))
+
+        session = Session()
+        try:
+            opened = session.send({"schemaVersion": 3, "op": "open",
+                                   "source": bundle, "name": "stub-all",
+                                   "metadataOnly": True})
+            require(opened, "outcome", "ok", "open stub-all bundle")
+            revision, document = opened["revision"], opened["document"]
+            sample = session.send({"schemaVersion": 3, "op": "open_bytes",
+                                   "name": "validate", "bytes": []})
+            target = {"document": sample["document"],
+                      "revision": sample["revision"], "entryFunctions": []}
+            finished = pep_c23.parser_cursor_value(
+                sample["document"], sample["revision"], done=True,
+                lex_done=True, lex_stage="done")
+            for tool, function, arguments, expected in [
+                    ("pep-c23-parser-start", "parser_start", [],
+                     pep_c23.parser_cursor_value(sample["document"],
+                                                 sample["revision"])),
+                    ("pep-c23-parser-step", "parser_step", [finished],
+                     pep_c23.parser_chunk_value(sample["document"],
+                                                sample["revision"], finished)),
+                    ("pep-c23-checker", "analyze_parsed",
+                     [pep_c23.parser_progress(sample["document"],
+                                              sample["revision"])],
+                     pep_c23.checker_report(sample["document"],
+                                            sample["revision"]))]:
+                for op, payload in [
+                        ("tool_register", {"tool": tool, "function": function}),
+                        ("tool_validate", {"tool": tool,
+                                           "testVectors": [{
+                                               "arguments": arguments,
+                                               "expect": expected,
+                                               "semanticTarget": target}]}),
+                        ("tool_activate", {"tool": tool})]:
+                    session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                  "op": op, "document": document,
+                                  "revision": revision, **payload})
+            raw = RECPAD6.encode("utf-8")
+            opened_target = session.send({"schemaVersion": 3, "op": "open_bytes",
+                                          "name": "recpad6-stub",
+                                          "bytes": list(raw)})
+            self.assertEqual(opened_target.get("outcome"), "ok", opened_target)
+            sem = {"document": opened_target["document"],
+                   "revision": opened_target["revision"], "entryFunctions": []}
+            parsed = parse_target(session, raw, opened_target, revision)
+            response = session.send(
+                {"schemaVersion": 3, "toolProtocolVersion": 2,
+                 "op": "tool_invoke", "tool": "pep-c23-checker",
+                 "arguments": [parsed], "semanticTarget": sem})
+            self.assertEqual(response.get("outcome"), "error", response)
+            error = response.get("error") or {}
+            self.assertEqual(error.get("code"), "PEP_RUNTIME_STEP_LIMIT", error)
+            match = LOCATION_RE.search(error.get("message", ""))
+            self.assertIsNotNone(match, error.get("message"))
+            where = enclosing(spans, int(match.group(1)))
+            self.assertIsNotNone(where)
+            self.assertNotIn(where[0], stubs,
+                             f"budget still expires in stubbed {where[0]}()")
+        finally:
+            session.process.stdin.close()
+            session.process.terminate()
+
     def test_scanning_lookup_helpers_are_the_documented_hot_set(self):
         # Census of helpers that rescan the whole node list on every call.
         # Each is O(n) per call and several are called from inside node
