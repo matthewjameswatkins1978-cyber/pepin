@@ -15,7 +15,7 @@ Source read that defines the split (`tests/pep_checker_a13.pep` @ `727f8af`):
 
 So the producer guards *parsed == snapshot* and the consumer guards *fact == parsed*. **The stamp is a consistency gate between producer and consumer identity, not an integrity gate on content.**
 
-## Result: 9 claims, 8 held, 1 falsified
+## Result: 10 claims, 9 held, 1 falsified
 
 Oracle first (whole source via `pep.ps1 check --json`): INVALID → `invalid [PEP_TYPE_MISMATCH]`; VALID → `valid []`.
 
@@ -29,6 +29,7 @@ Oracle first (whole source via `pep.ps1 check --json`): INVALID → `invalid [PE
 | B1 | foreign **document** stamp refused | **HELD** `invalid [PEP_STALE_REVISION]` |
 | B2 | foreign **revision** stamp refused | **HELD** `invalid [PEP_STALE_REVISION]` |
 | B3 | **omitted** stamp fields fail closed | **HELD** transport `PEP_TOOL_ARGUMENT_FIELDS` "Record fields do not match the checked record type" |
+| A5 | **aliased synthetic ids** (distinct names, same target) | **HELD** `invalid [PEP_DUPLICATE_FUNCTION]` — added after the first pass to close the gap this receipt originally deferred |
 | C1 | **cross-target** facts refused (policy test, kept separate) | **HELD** `invalid [PEP_STALE_REVISION]` |
 
 A2 is the load-bearing control: identical slicing and identical fact provenance to A3, differing **only** in the fact's parameter type — honest facts reproduce the whole-source diagnostic, forged facts erase it. So the divergence is caused by fact content, not by the harness.
@@ -52,7 +53,7 @@ Probe reuses `tests/chunk_helper.py` from the pinned tree and `pep_chunk_contrac
 ## Honest limits
 
 - One two-function program, one forged axis (parameter type). Return-type forgery is covered separately in the Campaign-H probe and behaves the same way by the same code path — not re-measured here.
-- Aliased synthetic ids with distinct names (the old E1 shape) were not re-run on one target in this slice; scheduled as the next K1 increment rather than claimed.
+- Aliased synthetic ids with distinct names (the old E1 shape) were **added in the same probe** as A5 and refuse on one target; no longer deferred.
 - No native stage: K2 owns the question of what a `valid` forged chunk does downstream.
 
 ## Signal v0.1 handoff to A1 (K8, handoff 1 of 2)

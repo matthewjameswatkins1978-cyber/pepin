@@ -240,6 +240,15 @@ def main():
               a4["verdict"] == "invalid" and "PEP_DUPLICATE_FUNCTION" in a4["codes"], str(a4))
 
         # ---- B. stamp-integrity negatives ----------------------------------------
+        # A5: two DISTINCT names carrying the SAME synthetic ids, on one target. The
+        # G-A1-1 aliased-id rule should refuse; this is the increment K1 deferred.
+        aliased = json.loads(json.dumps(scale_i)) + [json.loads(json.dumps(scale_i[0]))]
+        aliased[-1]["name"] = "scale_shadow"
+        a5 = check(parsed_i, sem_i, "main", aliased)
+        claim("A5 aliased synthetic ids (distinct names) refuse on one target",
+              a5["verdict"] == "invalid" and "PEP_DUPLICATE_FUNCTION" in a5["codes"],
+              str(a5))
+
         foreign_doc = json.loads(json.dumps(scale_i))
         for sig in foreign_doc:
             sig["document"] = "doc-foreign"
