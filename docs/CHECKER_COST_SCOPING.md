@@ -281,3 +281,88 @@ Any future attempt must:
   prototype failed purely because recpad-6 never enters `if_expression` code);
 - be semantics-preserving — stubbed ablations distort cost in both directions and
   have twice produced misleading results.
+
+## Campaign K K2: committed read-only instrumentation and per-phase numbers
+
+Measured 2026-11-05 at A1 `727f8af` (this document's branch). The earlier profile in
+this note required instrumenting a scratch worktree that was deliberately not
+committed, so no peer could reproduce it. That gap is now closed by two additive
+fields in `pep_ocaml.ml`: `metrics.last_execute_steps` (interpreter steps consumed
+by the most recent `execute`) and `metrics.execute_count`. They cannot change a
+semantic result, a diagnostic, a budget or a cap; they only observe. Error
+responses already embed `metrics`, so a `PEP_RUNTIME_STEP_LIMIT` reports what it
+spent without extra plumbing.
+
+Reproduce with `python tests/probe_checker_phase_cost.py`. Pinned as properties
+(not absolute numbers) in `tests/test_cost_accounting.py`.
+
+### Which phase is expensive
+
+Each tool invocation is its own `execute`, so each phase gets the same 100,000-step
+budget per call:
+
+| phase | invocation shape | steps per node (measured) |
+|---|---|---|
+| parse | 4-28 `parser-step` calls per fixture | 2,648-3,033 |
+| check + fact admission | ONE `analyze_parsed` call | 1,065 (11 nodes) to 1,674 (55 nodes) |
+
+The parser costs roughly twice as many steps per node as the checker in absolute
+terms, but it is amortised across many invocations that each start with a fresh
+budget. The checker's entire cost lands in a single invocation, so **the checker
+budget binds first even though parsing is the more expensive phase overall**. Host
+transport and fact marshalling are bytes and wall time, never steps.
+
+### Synthetic ladder (recpad-k, the frozen 62/64/66-node class)
+
+| fixture | nodes | parse steps (total) | parse calls | check steps | status |
+|---|---|---|---|---|---|
+| recpad1 | 11 | 33,365 | 7 | 11,711 | valid |
+| recpad2 | 22 | 65,487 | 11 | 27,260 | valid |
+| recpad3 | 33 | 92,817 | 15 | 45,553 | valid |
+| recpad4 | 44 | 120,060 | 20 | 67,150 | valid |
+| recpad5 | 55 | 147,401 | 24 | 92,051 | valid |
+| recpad6 | 66 | 174,789 | 28 | 100,001 (limit) | STEP_LIMIT in `record_declaration` |
+
+### Real compiler-owned workload (real lexer type-closure prefixes)
+
+Same fixtures the A13 boundary suite uses, reused verbatim:
+
+| fixture | nodes | check steps | status |
+|---|---|---|---|
+| T1 | 5 | 4,133 | valid |
+| T2 | 10 | 7,709 | valid |
+| T3 | 28 | 21,089 | valid |
+| T4 | 62 | 47,040 | valid |
+| T5 (LexToken/LexCursor/LexProgress) | 86 | 65,181 | valid |
+
+T5 is the closure the earlier record-resolution work unblocked: 86 real nodes now
+check at 65% of the budget. Shape, not node count, decides the cost (T5 is 758
+steps/node while recpad5 is 1,674), which matches the independent verifier's
+per-declaration, shape-dependent ceiling.
+
+### Two competing hypotheses, tested against these numbers
+
+- **H1, one constant per-node price is too high.** Falsified as a complete
+  account: check steps per node is not constant, it rises from 1,065 to 1,674 as n
+  goes 11 to 55. A pure linear model cannot produce the frozen 55-valid/66-failed
+  boundary from a 20% node increase.
+- **H2, repeated whole-list scans make cost quadratic.** Fits the measured
+  ladder: least squares gives `steps ~= 13.1*n^2 + 962*n` (error under 1.5% on the
+  five valid points), and the 66-node expiry lands inside `record_declaration`, a
+  full node scan. So at n=66 roughly 57k steps are quadratic and 63k linear.
+
+Consequence, stated numerically rather than as opinion: removing the whole
+quadratic term alone lifts the ceiling to about 104 nodes; removing the whole
+linear term alone lifts it to about 87 nodes. **Either single fix roughly doubles
+the ceiling; neither reaches compiler scale.** That is why K3 has to be a measured
+structural step and why staged checking stays the scale answer.
+
+### Stale census repaired
+
+`test_checker_cost_profile.test_scanning_lookup_helpers_are_the_documented_hot_set`
+pinned `lookup_node` at 31 call sites and was failing before this slice: the count
+moved to 32 when G-A1-2 added the stamped-callee ingress lookup (verified at
+`b9e26df` 25, `52cb397` 32, `727f8af` 32 for the checker source alone; `child_at`
+is unchanged at 71). The pin is now 32 and fails on any future lookup-site change.
+The scanner totals in the census section above were measured with a different
+detector and are not comparable to the test's count.

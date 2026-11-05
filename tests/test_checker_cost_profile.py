@@ -386,7 +386,11 @@ class CheckerCostProfileTests(unittest.TestCase):
         # Pinned: child_at and lookup_node dominate. A drop here means the
         # lookups were indexed and the census must be re-measured.
         self.assertEqual(call_sites["child_at"], 71)
-        self.assertEqual(call_sites["lookup_node"], 31)
+        # Re-measured at A1 727f8af (Campaign K K2): the count moved 31 -> 32 when
+        # G-A1-2 added the stamped-callee ingress lookup. The pin is deliberately a
+        # census of the CURRENT checker source, so it should fail on any future
+        # lookup-site change and force a re-measure of the hot set.
+        self.assertEqual(call_sites["lookup_node"], 32)
 
 
 if __name__ == "__main__":

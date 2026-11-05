@@ -773,11 +773,20 @@ let checked_bin op a b sp =
  |"/"->if b=0L then runtime "PEP_RUNTIME_DIVISION_BY_ZERO" "Division by zero" sp else if a=Int64.min_int&&b= -1L then runtime "PEP_RUNTIME_OVERFLOW" "Integer division overflow" sp else VInt(Int64.div a b)
  |"neg"->if b=Int64.min_int then runtime "PEP_RUNTIME_OVERFLOW" "Integer negation overflow" sp else VInt(Int64.neg b)
  |_ ->assert false
+(* Read-only accounting (Campaign K K2): interpreter steps consumed by the most recent
+   execute, plus a process-lifetime execute count. Neither value influences semantics,
+   limits or diagnostics; they exist so per-phase cost is measurable from outside
+   without instrumenting a scratch worktree. *)
+let last_execute_steps = ref 0
+let execute_invocation_count = ref 0
 let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) ?(semantic_snapshot_value=None) ?(source_bytes_value=None) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
+ incr execute_invocation_count;
+ last_execute_steps := 0;
  let remaining_steps = ref step_limit in
  let tick sp =
-   decr remaining_steps;
+   incr last_execute_steps;
+  decr remaining_steps;
    if !remaining_steps < 0 then runtime "PEP_RUNTIME_STEP_LIMIT" "Execution step budget exceeded" sp
  in
  let rec eval env callstack e =
@@ -1186,8 +1195,8 @@ let session_typecheck_count = ref 0
 let session_cache_hits = ref 0
 
 let session_metrics_json () =
-  Printf.sprintf "{\"parse_count\":%d,\"typecheck_count\":%d,\"cache_hits\":%d}"
-    !session_parse_count !session_typecheck_count !session_cache_hits
+  Printf.sprintf "{\"parse_count\":%d,\"typecheck_count\":%d,\"cache_hits\":%d,\"last_execute_steps\":%d,\"execute_count\":%d}"
+    !session_parse_count !session_typecheck_count !session_cache_hits !last_execute_steps !execute_invocation_count
 
 let analyse_session_source source =
   let revision = "sha256:" ^ sha256_hex source in
