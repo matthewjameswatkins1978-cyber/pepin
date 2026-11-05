@@ -72,13 +72,17 @@ def host_builtins(document, revision):
         {"name": "returnType", "value": typed("Str", "ProgramInfo")},
         {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)},
         {"name": "startByte", "value": typed("Int", 0)},
-        {"name": "endByte", "value": typed("Int", 0)}]}
+        {"name": "endByte", "value": typed("Int", 0)},
+        {"name": "document", "value": typed("Str", document)},
+        {"name": "revision", "value": typed("Str", revision)}]}
     sig = {"type": "ResolvedSignature", "fields": [
         {"name": "functionId", "value": typed("Int", 2000000000)},
         {"name": "functionName", "value": typed("Str", "semantic_snapshot")},
         {"name": "params", "value": {"type": "List[ParamTypeFact]", "value": []}},
         {"name": "returnType", "value": typed("Str", "ProgramInfo")},
-        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)}]}
+        {"name": "returnShape", "value": shape("nominal", "ProgramInfo", 0)},
+        {"name": "document", "value": typed("Str", document)},
+        {"name": "revision", "value": typed("Str", revision)}]}
     prog_info = {"type": "ResolvedTypeDecl", "fields": [
         {"name": "typeName", "value": typed("Str", "ProgramInfo")},
         {"name": "typeKind", "value": typed("Str", "record")},
@@ -956,6 +960,279 @@ class TypedChunkTests(unittest.TestCase):
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
 
+    # --- External signature/fact ID batch-uniqueness (F1, A2 report).
+    #
+    # fetch_all_sigs gathers one header per function. Every header
+    # numbered from zero, so aggregated externals shared one synthetic
+    # identity and the checker resolved add_one(41) against the
+    # unrelated make_token(Str). Batch-unique deterministic IDs restore
+    # correct id-keyed lookup.
+
+    TWO_CALLEE_SOURCE = (b"fn add_one(x: Int) -> Int { return x }\n"
+                         b"fn make_token(s: Str) -> Str { return s }\n"
+                         b"fn main() -> Int { return add_one(41) }\n")
+
+    def open_two_callee(self, name):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name,
+                                     "bytes": list(self.TWO_CALLEE_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.TWO_CALLEE_SOURCE, target,
+                              self.tool_revision)
+        return target, sem, parsed
+
+    def test_external_signature_ids_are_unique_across_headers(self):
+        _, sem, parsed = self.open_two_callee("ids-unique")
+        first = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        second = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        self.assertEqual(len(first), 3)
+        semids = [s["semid"] for s in first]
+        synids = [s["synid"] for s in first]
+        self.assertEqual(len(set(semids)), len(first), semids)
+        self.assertEqual(len(set(synids)), len(first), synids)
+        self.assertEqual(first, second)
+
+    def test_two_external_callees_resolve_distinctly(self):
+        _, _, _, whole_status, _ = self.check_whole(
+            self.TWO_CALLEE_SOURCE, "two-cal-whole")
+        self.assertEqual(whole_status, "valid")
+        status, diags = self.check_body_with_facts(
+            self.TWO_CALLEE_SOURCE, "two-cal-chunk", "main")
+        self.assertEqual(status, "valid", diags)
+        self.assertEqual(diags, [])
+
+    # --- External-vs-external batch contradictions (G-A1-1, A3 E2b/E2a/E1).
+    #
+    # A batch that names one function twice (identically or
+    # contradictorily), or aliases one synthetic identity across two
+    # names, must fail closed with PEP_DUPLICATE_FUNCTION even though
+    # each fact alone looks well-formed. Uniform with the external-type
+    # repeat rule; seed parity for duplicate declarations.
+
+    DUP_CALLEE_SOURCE = (b"fn dup(x: Int) -> Int { return x }\n"
+                         b"fn main() -> Int { return dup(41) }\n")
+
+    def run_main_with_sigs(self, source, name, transform=None):
+        # Single-target flow: sigs are always fetched from the same
+        # open target as the body chunk (ingress requires identical
+        # document/revision stamps, so mixed-target batches refuse).
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+        if transform is not None:
+            sigs = transform(sigs)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        self.assertIn("main", bodies)
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed, bodies["main"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs]},
+            {"type": "List[ResolvedTypeDecl]", "value": []}, sem))
+        return report["status"]["value"], diag_tuples(report)
+
+    def fetch_sigs_for(self, source, name):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": name, "bytes": list(source)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem = {"document": target["document"],
+               "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, source, target, self.tool_revision)
+        return sem, parsed, fetch_all_sigs(
+            self.session, parsed, self.tool_revision, sem)
+
+    def test_contradictory_external_batch_is_refused(self):
+        # A3 E2b: same name, honest Int/arity1 + forged Bool/arity2.
+        # The source alone is seed-valid; the poisoned batch must refuse.
+        _, _, _, whole_status, _ = self.check_whole(
+            self.DUP_CALLEE_SOURCE, "e2b-whole")
+        self.assertEqual(whole_status, "valid")
+        def with_forged(order):
+            def tx(sigs):
+                honest = [s for s in sigs if s["name"] == "dup"]
+                forged = copy.deepcopy(honest[0])
+                forged["arity"] = 2
+                forged["rtype"] = "Bool"
+                forged["rshape"] = ("builtin", "Bool", 0)
+                forged["ptypes"] = [("Int", ("builtin", "Int", 0), 0),
+                                    ("Int", ("builtin", "Int", 0), 1)]
+                forged["semid"] = 9000 + len(sigs)
+                forged["synid"] = 1000000000 + len(sigs)
+                batch = honest + [forged]
+                return batch if order == "hf" else batch[::-1]
+            return tx
+        for tag in ("hf", "fh"):
+            status, diags = self.run_main_with_sigs(
+                self.DUP_CALLEE_SOURCE, f"e2b-chunk-{tag}",
+                with_forged(tag))
+            self.assertEqual(status, "invalid", (tag, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                                for code, _, _ in diags), (tag, diags))
+
+    def test_identical_duplicate_external_batch_is_refused(self):
+        # A3 E2a pinned: identical repeats refuse like contradictions,
+        # uniform with the external-type repeat rule.
+        def dup_twice(sigs):
+            dup = [s for s in sigs if s["name"] == "dup"]
+            return dup + [copy.deepcopy(dup[0])]
+        status, diags = self.run_main_with_sigs(
+            self.DUP_CALLEE_SOURCE, "e2a-chunk", dup_twice)
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                            for code, _, _ in diags), diags)
+
+    def test_colliding_external_ids_are_refused(self):
+        # A3 E1: two distinct callees sharing one synthetic identity must
+        # not validate, regardless of fact order.
+        _, _, _, whole_status, _ = self.check_whole(
+            self.TWO_CALLEE_SOURCE, "e1-whole")
+        self.assertEqual(whole_status, "valid")
+        def collide(sigs):
+            ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["semid"] = 9000
+                s["synid"] = 1000000000
+            return ext
+        def collide_rev(sigs):
+            return collide(sigs)[::-1]
+        for tag, tx in (("fwd", collide), ("rev", collide_rev)):
+            status, diags = self.run_main_with_sigs(
+                self.TWO_CALLEE_SOURCE, f"e1-chunk-{tag}", tx)
+            self.assertEqual(status, "invalid", (tag, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_FUNCTION"
+                                for code, _, _ in diags), (tag, diags))
+
+    # --- Source-stamped callee facts (G-A1-2, A2-ACKed schema).
+    #
+    # CheckedFunction/ResolvedSignature carry the target document and
+    # revision, stamped at production by the checker. Anything else
+    # refuses fail-closed with PEP_STALE_REVISION.
+
+    def test_external_callee_facts_carry_source_identity(self):
+        sem, _, sigs = self.fetch_sigs_for(self.TWO_CALLEE_SOURCE, "id-stamp")
+        self.assertTrue(len(sigs) >= 2)
+        for s in sigs:
+            self.assertEqual(s["document"], sem["document"])
+            self.assertEqual(s["revision"], sem["revision"])
+            fnv = fields_map(checked_fn_value(s))
+            self.assertEqual(fnv["document"]["value"], sem["document"])
+            self.assertEqual(fnv["revision"]["value"], sem["revision"])
+            sigv = fields_map(resolved_sig_value(s))
+            self.assertEqual(sigv["document"]["value"], sem["document"])
+            self.assertEqual(sigv["revision"]["value"], sem["revision"])
+
+    def test_foreign_stamped_callee_facts_are_refused(self):
+        def foreign_doc(sigs):
+            ext = [copy.deepcopy(s) for s in sigs
+                   if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["document"] = "foreign-doc"
+            return ext
+        status, diags = self.run_main_with_sigs(
+            self.TWO_CALLEE_SOURCE, "id-foreign-doc", foreign_doc)
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_STALE_REVISION"
+                            for code, _, _ in diags), diags)
+        def foreign_rev(sigs):
+            ext = [copy.deepcopy(s) for s in sigs
+                   if s["name"] in ("add_one", "make_token")]
+            for s in ext:
+                s["revision"] = "sha256:deadbeef"
+            return ext
+        status, diags = self.run_main_with_sigs(
+            self.TWO_CALLEE_SOURCE, "id-foreign-rev", foreign_rev)
+        self.assertEqual(status, "invalid", diags)
+        self.assertTrue(any(code == "PEP_STALE_REVISION"
+                            for code, _, _ in diags), diags)
+
+    def test_stale_revision_callee_facts_are_refused(self):
+        # Facts certified for source A must not validate a chunk of
+        # source B, even when the programs are textually almost identical.
+        src_a = self.TWO_CALLEE_SOURCE
+        src_b = src_a + b"\n"
+        sem_a, _, sigs_a = self.fetch_sigs_for(src_a, "id-stale-a")
+        target_b = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                       "name": "id-stale-b",
+                                       "bytes": list(src_b)})
+        self.assertEqual(target_b.get("outcome"), "ok", target_b)
+        sem_b = {"document": target_b["document"],
+                 "revision": target_b["revision"], "entryFunctions": []}
+        self.assertNotEqual(sem_a["revision"], sem_b["revision"])
+        parsed_b = parse_target(self.session, src_b, target_b, self.tool_revision)
+        nodes = fields_map(parsed_b)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed_b)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        self.assertIn("main", bodies)
+        report = fields_map(self.invoke_typed(
+            self.sliced(parsed_b, bodies["main"]),
+            {"type": "List[CheckedFunction]",
+             "value": [checked_fn_value(s) for s in sigs_a
+                       if s["name"] in ("add_one", "make_token")]},
+            {"type": "List[ResolvedSignature]",
+             "value": [resolved_sig_value(s) for s in sigs_a
+                       if s["name"] in ("add_one", "make_token")]},
+            {"type": "List[ResolvedTypeDecl]", "value": []}, sem_b))
+        self.assertEqual(report["status"]["value"], "invalid", report)
+        codes = [code for code, _, _ in diag_tuples(report)]
+        self.assertIn("PEP_STALE_REVISION", codes, codes)
+
+    def test_omitted_stamp_callee_facts_fail_closed(self):
+        # Facts without stamps never reach the checker: the tool boundary
+        # must fail closed instead of checking them as unattested.
+        _, sem, sigs = self.fetch_sigs_for(
+            self.TWO_CALLEE_SOURCE, "id-omitted")
+        ext = [s for s in sigs if s["name"] in ("add_one", "make_token")]
+        fns = [checked_fn_value(s) for s in ext]
+        sgs = [resolved_sig_value(s) for s in ext]
+        for v in fns + sgs:
+            fields = fields_map(v)
+            for gone in ("document", "revision"):
+                fields.pop(gone, None)
+            v["fields"] = [{"name": k, "value": w} for k, w in fields.items()]
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                     "name": "id-omitted-chunk",
+                                     "bytes": list(self.TWO_CALLEE_SOURCE)})
+        self.assertEqual(target.get("outcome"), "ok", target)
+        sem2 = {"document": target["document"],
+                "revision": target["revision"], "entryFunctions": []}
+        parsed = parse_target(self.session, self.TWO_CALLEE_SOURCE,
+                              target, self.tool_revision)
+        nodes = fields_map(parsed)["nodes"]["value"]
+        index = contract.DocumentIndex.from_parsed(parsed)
+        bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                  for node in nodes
+                  if nval(node, "kind") == "function"
+                  and str(nval(node, "parentId")) == "-1"}
+        response = self.session.send(
+            {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+             "tool": "pep-c23-checker-chunk-typed",
+             "arguments": [self.sliced(parsed, bodies["main"]),
+                           {"type": "List[CheckedFunction]", "value": fns},
+                           {"type": "List[ResolvedSignature]", "value": sgs},
+                           {"type": "List[ResolvedTypeDecl]", "value": []},
+                           {"type": "Bool", "value": True}],
+             "semanticTarget": sem2})
+        # Observed boundary behavior: tool-arg validation refuses the
+        # shape-mismatched value before the checker runs (fail-closed).
+        self.assertEqual(response.get("outcome"), "error", response)
+        self.assertEqual((response.get("error") or {}).get("code"),
+                         "PEP_TOOL_ARGUMENT_FIELDS", response)
+
     # --- Supply-time collision gate (R-ID-1, A3 T-CALL-6 class).
     #
     # A chunk declaring f plus an external function/signature fact for f
@@ -1013,6 +1290,72 @@ class TypedChunkTests(unittest.TestCase):
         status, diags = self.check_body_with_facts(source, "fn-ok-chunk", "f")
         self.assertEqual(status, "valid", diags)
         self.assertEqual(diags, [])
+
+    # --- T-REC-3 / T-REC-5 (A3 row 1-2 follow-ups): union-involved
+    # namesake shapes the X-series did not pin in this suite.
+
+    DUP_UNION_SOURCE = (b"type D = Left() | Right()\n"
+                        b"type D = Left() | Right()\n"
+                        b"fn f(d: D) -> Int {\n"
+                        b"    return d.a\n"
+                        b"}\n")
+
+    def test_union_union_namesake_split_across_chunks_is_refused(self):
+        # A3 T-REC-5: two same-name unions in separate declaration
+        # chunks must be refused (seed: PEP_DUPLICATE_TYPE).
+        _, _, _, whole_status, whole_diags = self.check_whole(
+            self.DUP_UNION_SOURCE, "uu-whole")
+        self.assertEqual(whole_status, "invalid")
+        self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                            for code, _, _ in whole_diags), whole_diags)
+        for reverse in (False, True):
+            status, diags = self.check_body_with_facts(
+                self.DUP_UNION_SOURCE, f"uu-chunk-{reverse}", "f",
+                reverse_facts=reverse)
+            self.assertEqual(status, "invalid", (reverse, diags))
+            self.assertTrue(any(code == "PEP_DUPLICATE_TYPE"
+                                for code, _, _ in diags),
+                            (reverse, diags))
+
+    def test_same_chunk_namesake_carried_flag_is_refused(self):
+        # A3 T-REC-3: whole-input producer facts for a same-chunk
+        # namesake (record+union and union+union) carry the flag, so a
+        # body chunk built from those facts alone must refuse.
+        for source, tag in ((self.CROSS_KIND_DUP, "kk-same"),
+                            (self.DUP_UNION_SOURCE, "uu-same")):
+            target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                         "name": f"same-{tag}",
+                                         "bytes": list(source)})
+            self.assertEqual(target.get("outcome"), "ok", target)
+            sem = {"document": target["document"],
+                   "revision": target["revision"], "entryFunctions": []}
+            parsed = parse_target(self.session, source, target,
+                                  self.tool_revision)
+            nodes = fields_map(parsed)["nodes"]["value"]
+            index = contract.DocumentIndex.from_parsed(parsed)
+            all_ids = [int(nval(node, "id")) for node in nodes]
+            facts = self.type_facts(parsed, sem, all_ids)
+            dup_flags = [fields_map(fact)["duplicateType"]["value"]
+                         for fact in facts]
+            self.assertIn(True, dup_flags, (tag, dup_flags))
+            sigs = fetch_all_sigs(self.session, parsed, self.tool_revision, sem)
+            ext = [s for s in sigs if s["name"] != "f"]
+            bodies = {str(nval(node, "text")): index.subtree(int(nval(node, "id")))
+                      for node in nodes
+                      if nval(node, "kind") == "function"
+                      and str(nval(node, "parentId")) == "-1"}
+            report = fields_map(self.invoke_typed(
+                self.sliced(parsed, bodies["f"]),
+                {"type": "List[CheckedFunction]",
+                 "value": [checked_fn_value(s) for s in ext]},
+                {"type": "List[ResolvedSignature]",
+                 "value": [resolved_sig_value(s) for s in ext]},
+                {"type": "List[ResolvedTypeDecl]", "value": facts}, sem))
+            self.assertEqual(report["status"]["value"], "invalid",
+                             (tag, report))
+            codes = [fields_map(item)["code"]["value"]
+                     for item in report.get("diagnostics", {}).get("value", [])]
+            self.assertIn("PEP_DUPLICATE_TYPE", codes, (tag, codes))
 
     # Caller-precondition note (not a runtime test): the closure gate covers
     # carried flags and repeated external names, but not a chunk that itself

@@ -1,6 +1,6 @@
 type PepTypeShape { kind: Str, name: Str, listDepth: Int }
 type ExpressionTypeAndShape { typeName: Str, shape: PepTypeShape }
-type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int }
+type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int, document: Str, revision: Str }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape, document: Str, revision: Str }
@@ -276,11 +276,11 @@ fn resolved_field_facts(records: List[ResolvedRecord], recordId: Int, fieldName:
 }
 fn find_function_by_syntax(functions: List[CheckedFunction], syntaxId: Int) -> FunctionLookup {
   for function in functions { if function.syntaxId == syntaxId { return FunctionLookup { found: true, function: function } } else {} }
-  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0, document: "", revision: "" } }
 }
 fn find_function(functions: List[CheckedFunction], name: Str) -> FunctionLookup {
   for function in functions { if function.name == name { return FunctionLookup { found: true, function: function } } else {} }
-  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0, document: "", revision: "" } }
 }
 fn find_binding(bindings: List[BindingFact], semanticId: Int) -> BindingLookup {
   for binding in bindings { if binding.semanticId == semanticId { return BindingLookup { found: true, binding: binding } } else {} }
@@ -408,7 +408,7 @@ fn declared_binding_shape(nodes: List[FlatAstNode], node: FlatAstNode) -> PepTyp
   let declared = child_at(nodes, node.id, role, 0)
   if declared.found { return type_shape_at(nodes, declared.node.id) } else { return empty_type_shape() }
 }
-fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
+fn collect_functions(nodes: List[FlatAstNode], document: Str, revision: Str) -> List[CheckedFunction] {
   var reversed: List[CheckedFunction] = []
   var ordinal = 0
   for node in nodes {
@@ -417,7 +417,7 @@ fn collect_functions(nodes: List[FlatAstNode]) -> List[CheckedFunction] {
       let resultShape = if declaredResult.found { type_shape_at(nodes, declaredResult.node.id) } else { empty_type_shape() }
       let resultType = if declaredResult.found { legacy_type_name(resultShape) } else { "" }
       let returnShape = if resultType != "" { empty_type_shape() } else { resultShape }
-      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte })
+      reversed = prepend(reversed, CheckedFunction { semanticId: 100000 + ordinal, syntaxId: node.id, name: node.text, arity: count_children(nodes, node.id, "parameter"), returnType: resultType, returnShape: returnShape, startByte: node.startByte, endByte: node.endByte, document: document, revision: revision })
       ordinal = ordinal + 1
     } else {}
   }
@@ -585,7 +585,7 @@ fn resolve_names(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
 }
 fn owner_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> FunctionLookup {
   for function in functions { if inside_function(node, function) { return FunctionLookup { found: true, function: function } } else {} }
-  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 } }
+  return FunctionLookup { found: false, function: CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0, document: "", revision: "" } }
 }
 fn inside_any_function(nodes: List[FlatAstNode], node: FlatAstNode, functions: List[CheckedFunction]) -> Bool {
   return owner_function(nodes, node, functions).found
@@ -594,10 +594,10 @@ fn is_expression_kind(kind: Str) -> Bool {
   return kind == "integer" || kind == "boolean" || kind == "string" || kind == "name" || kind == "call" || kind == "binary" || kind == "unary" || kind == "list" || kind == "if_expression" || kind == "record" || kind == "field_access" || kind == "match" || kind == "hole"
 }
 type ParamTypeFact { index: Int, typeName: Str, shape: PepTypeShape }
-type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact], returnType: Str, returnShape: PepTypeShape }
+type ResolvedSignature { functionId: Int, functionName: Str, params: List[ParamTypeFact], returnType: Str, returnShape: PepTypeShape, document: Str, revision: Str }
 type ResolvedTypeField { fieldName: Str, fieldTypeName: Str, fieldShape: PepTypeShape, fieldCode: Str, startByte: Int, endByte: Int, line: Int, column: Int }
 type ResolvedTypeDecl { typeName: Str, typeKind: Str, declStartByte: Int, declEndByte: Int, declLine: Int, declColumn: Int, duplicateType: Bool, document: Str, revision: Str, fields: List[ResolvedTypeField] }
-fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool) -> List[ResolvedSignature] {
+fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool, document: Str, revision: Str) -> List[ResolvedSignature] {
   var finished: List[ResolvedSignature] = []
   var currentId = -1
   var currentName = ""
@@ -608,7 +608,7 @@ fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool) -> Lis
   for node in nodes {
     if node.kind == "function" && node.parentId == -1 {
       if currentId != -1 {
-        finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape })
+        finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape, document: document, revision: revision })
       } else {}
       currentId = node.id
       currentName = node.text
@@ -632,7 +632,7 @@ fn resolve_all_signatures(nodes: List[FlatAstNode], includeReturns: Bool) -> Lis
     }
   }
   if currentId != -1 {
-    finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape })
+    finished = prepend(finished, ResolvedSignature { functionId: currentId, functionName: currentName, params: currentParams, returnType: currentReturnType, returnShape: currentReturnShape, document: document, revision: revision })
   } else {}
   return reverse(finished)
 }
@@ -1651,11 +1651,11 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   return false
 }
 
-fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], expectReturns: Bool) -> TypeAnalysis {
+fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName], externalSignatures: List[ResolvedSignature], externalRecords: List[ResolvedRecord], expectReturns: Bool, document: Str, revision: Str) -> TypeAnalysis {
   var reversedFacts: List[ExpressionTypeFact] = []
   let sequentialFunctionOwner = length(functions) != 1
   var activeFunctionFound = false
-  var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0 }
+  var activeFunction = CheckedFunction { semanticId: -1, syntaxId: -1, name: "", arity: 0, returnType: "", returnShape: empty_type_shape(), startByte: 0, endByte: 0, document: "", revision: "" }
   var reversedDiagnostics: List[CheckDiagnostic] = []
   var unreachable = UnreachableLookup { found: false, node: empty_node() }
   var resolvedRecords: List[ResolvedRecord] = []
@@ -2177,7 +2177,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let target = find_function(functions, node.text)
         if target.found {
           if !resolvedSigsReady {
-            resolvedSigs = append_signatures(resolve_all_signatures(nodes, false), externalSignatures)
+            resolvedSigs = append_signatures(resolve_all_signatures(nodes, false, document, revision), externalSignatures)
             resolvedSigsReady = true
           } else {}
           var index = 0
@@ -2498,7 +2498,7 @@ fn chunk_signatures(parsed: ParserProgress) -> List[ResolvedSignature] {
   let sourceLength = byte_length(source_bytes())
   let nodes = sort_nodes(parsed.nodes)
   if !tree_is_valid(nodes, sourceLength) { return [] } else {}
-  return resolve_all_signatures(nodes, true)
+  return resolve_all_signatures(nodes, true, authority.document, authority.revision)
 }
 fn chunk_type_declarations(parsed: ParserProgress) -> List[ResolvedTypeDecl] {
   let authority = semantic_snapshot()
@@ -2676,6 +2676,23 @@ fn analyze_chunk_typed(parsed: ParserProgress, externalFunctions: List[CheckedFu
     } else {}
     seenExternalTypeNames = prepend(seenExternalTypeNames, decl.typeName)
   }
+  // Callee-fact source identity (F2, A2-ACKed with authenticity caveat):
+  // external function/signature facts must carry the target document
+  // and revision, stamped at production by the checker. Anything else
+  // refuses fail-closed with the existing PEP_STALE_REVISION. Stamps
+  // prove consistency, not authenticity: a same-revision forgery
+  // that contradicts the source is refused downstream only where
+  // the checker can observe it.
+  for extFunction in externalFunctions {
+    if extFunction.document != parsed.document || extFunction.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External function facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
+  }
+  for extSignature in externalSignatures {
+    if extSignature.document != parsed.document || extSignature.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External signature facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
+  }
   var noExternalBindings: List[BindingFact] = []
   return analyze_chunk_inner_bound(parsed, externalFunctions, externalSignatures, external_records(externalTypes), noExternalBindings, expectReturns)
 }
@@ -2701,6 +2718,17 @@ fn analyze_chunk_typed_bound(parsed: ParserProgress, externalFunctions: List[Che
       return invalid_report(parsed.document, parsed.revision, 0, "PEP_DUPLICATE_TYPE", "Type name is declared more than once", empty_node())
     } else {}
     seenExternalTypeNames = prepend(seenExternalTypeNames, decl.typeName)
+  }
+  // Callee-fact source identity (F2, A2-ACKed with authenticity caveat).
+  for extFunction in externalFunctions {
+    if extFunction.document != parsed.document || extFunction.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External function facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
+  }
+  for extSignature in externalSignatures {
+    if extSignature.document != parsed.document || extSignature.revision != parsed.revision {
+      return invalid_report(parsed.document, parsed.revision, 0, "PEP_STALE_REVISION", "External signature facts belong to a different source revision; re-derive them for the target revision", empty_node())
+    } else {}
   }
   // Binding-fact provenance: external bindings must be attested to this
   // source revision like external types. Same-revision stamps are a
@@ -2775,15 +2803,50 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
         return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", uhitSig.node)
       } else {}
     }
+    // Batch-internal uniqueness (G-A1-1, A3 E2a/E2b/E1): repeated names
+    // or aliased synthetic ids across aggregated externals must fail
+    // closed. Seed parity for duplicate declarations; uniform with the
+    // external-type repeat rule. Builtins and constructors keep the
+    // whole-path exclusions. No local span exists for a purely external
+    // collision (a chunk-local one already returned above with it).
+    var seenExtFnNames: List[Str] = []
+    var seenExtFnIds: List[Int] = []
+    for extFn in externalFunctions {
+      if !known_builtin(extFn.name) && !is_constructor(nodes, extFn.name) {
+        if contains(seenExtFnNames, extFn.name) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", empty_node())
+        } else {}
+        if contains(seenExtFnIds, extFn.semanticId) || contains(seenExtFnIds, extFn.syntaxId) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "External function identity is declared more than once", empty_node())
+        } else {}
+      } else {}
+      seenExtFnNames = prepend(seenExtFnNames, extFn.name)
+      seenExtFnIds = prepend(seenExtFnIds, extFn.semanticId)
+      seenExtFnIds = prepend(seenExtFnIds, extFn.syntaxId)
+    }
+    var seenExtSigNames: List[Str] = []
+    var seenExtSigIds: List[Int] = []
+    for extSig in externalSignatures {
+      if !known_builtin(extSig.functionName) && !is_constructor(nodes, extSig.functionName) {
+        if contains(seenExtSigNames, extSig.functionName) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "Function name is declared more than once", empty_node())
+        } else {}
+        if contains(seenExtSigIds, extSig.functionId) {
+          return invalid_report(authority.document, authority.revision, 0, "PEP_DUPLICATE_FUNCTION", "External function identity is declared more than once", empty_node())
+        } else {}
+      } else {}
+      seenExtSigNames = prepend(seenExtSigNames, extSig.functionName)
+      seenExtSigIds = prepend(seenExtSigIds, extSig.functionId)
+    }
   } else {}
-  let functions = append_checked_functions(collect_functions(nodes), externalFunctions)
+  let functions = append_checked_functions(collect_functions(nodes, parsed.document, parsed.revision), externalFunctions)
   let collected = collect_bindings(nodes, functions, authority.document, authority.revision)
   var mergedBindings: List[BindingFact] = collected.bindings
   for fact in externalBindings { mergedBindings = append(mergedBindings, fact) }
   let bindingResult = BindingCollection { bindings: mergedBindings, diagnostics: collected.diagnostics }
   let nameResult = resolve_names(nodes, functions, bindingResult.bindings)
   let typedBindings = infer_binding_types(nodes, functions, bindingResult.bindings, nameResult.references)
-  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures, externalRecords, expectReturns)
+  let typeResult = type_analysis(nodes, functions, typedBindings, nameResult.references, externalSignatures, externalRecords, expectReturns, parsed.document, parsed.revision)
   let holes = hole_facts(nodes, functions, typedBindings, nameResult.references)
   var reversedCalls: List[ResolvedCall] = []
   var reversedDiagnostics: List[CheckDiagnostic] = []

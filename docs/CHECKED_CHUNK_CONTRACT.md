@@ -161,11 +161,18 @@ change that alters any rule below must keep that pin green and notify A2.
 
 1. **External functions carry placeholder ids, never addresses.**
    Whoever supplies external `CheckedFunction` values must use synthetic,
-   non-real ids (the harness uses semanticId `9000`, syntaxId
-   `1000000000`). The checker matches calls to functions **by name only**
+   non-real ids that are **unique across the whole aggregated batch**
+   (the harness assigns semanticId `9000+k`, syntaxId `1000000000+k` in
+   deterministic source order; per-header zero-based numbering collides
+   once headers are aggregated — measured A2 BOOT-A2-20261104-021,
+   where `add_one(41)` resolved against the unrelated `make_token(Str)`).
+   The checker matches calls to functions **by name only**
    (`find_function`) and copies the supplied ids through, so
    `ResolvedCall.calleeId` for a cross-chunk call is the placeholder
    (`9000`). The emitter must never use it as a target address.
+   Within one aggregated batch, external names must also be unique:
+   a repeated name or an aliased synthetic id is refused fail-closed
+   with `PEP_DUPLICATE_FUNCTION` (A3 E2a/E2b/E1 shapes).
 2. **The cross-chunk link is the call-site node, keyed by name.**
    `ResolvedCall.syntaxId` is the call node's id in **chunk (remapped)
    space**. The emitter resolves it against the chunk's own node list (the
@@ -191,7 +198,7 @@ change that alters any rule below must keep that pin green and notify A2.
    Multi-function chunks are not the bounded-unit shape; bounded emission
    uses one function chunk per unit.
 6. **Seam fields.** The contract covers `functions[]`
-   (`name`/`arity`/`returnType`/`returnShape`/ids), `calls[]`
+   (`name`/`arity`/`returnType`/`returnShape`/ids/`document`/`revision`), `calls[]`
    (`callerId`/`calleeId`/`syntaxId`/`startByte`/`endByte`), and
    `diagnostics[]`. `bindings`, `references` and `expressionTypes` are
    checker-internal and not seam.
@@ -199,13 +206,24 @@ change that alters any rule below must keep that pin green and notify A2.
    have unique function names (`PEP_DUPLICATE_FUNCTION` whole-path), so
    name-keyed resolution is unambiguous exactly when the source is valid.
 
-Known residual (disclosed, not covered): duplicate *function* names
-across a chunk and its external facts have the same shape as the
-repaired duplicate-*type* hole (local-first resolution, no diagnosis —
-the duplicate diagnostic's `lookup_node` guard swallows the synthetic
-id). No harness path produces it (gathering excludes the entry
-function), and no probe has demonstrated it. A3 welcome to attack it;
-a demonstration gets the same fail-closed treatment as the type hole.
+8. **Callee facts carry source identity.** `CheckedFunction` and
+`ResolvedSignature` values must carry the `document`/`revision` of
+the authorised target they were produced for, stamped at production
+by the checker (`semantic_snapshot`). The staged checker refuses any
+external callee fact whose stamp differs with the existing
+`PEP_STALE_REVISION`. Stamps prove consistency, not authenticity:
+a same-revision forgery the checker cannot observe stays accepted
+(A2-acknowledged limitation; no PKI is claimed).
+
+Closed residuals (were disclosed, now enforced): duplicate *function*
+names across a chunk and its external facts (R-ID-1, local span), and
+repeated names or aliased synthetic ids across aggregated externals
+(batch gate, empty span) are refused fail-closed with
+`PEP_DUPLICATE_FUNCTION`. Gathering still excludes the entry function
+by construction. Remaining open: forged same-revision facts that are
+internally consistent (valid names, unique ids, matching stamps) —
+labels, not authenticity. No wire-schema change beyond document and
+revision without a new explicit agreement.
 
 ## Measured on the real lexer
 
