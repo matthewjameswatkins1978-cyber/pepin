@@ -1053,6 +1053,42 @@ class TypedChunkTests(unittest.TestCase):
         return sem, parsed, fetch_all_sigs(
             self.session, parsed, self.tool_revision, sem)
 
+    def test_host_signature_transcription_is_pure_copy(self):
+        # K4: the honest host path cannot forge content. fetch_all_sigs +
+        # sigs_from_tool copy every content field from the checker's own
+        # tool output; checked_fn_value/resolved_sig_value transcribe the
+        # dicts field-exactly. The host invents only positional synthetic
+        # ids + the checker-opaque `node` annotation. Any future host
+        # transform breaks this pin.
+        source = ("fn add_one(x: Int) -> Int {\n  return x + 1\n}\n"
+                  "fn main() -> Int {\n  return add_one(41)\n}\n")
+        sem, parsed, sigs = self.fetch_sigs_for(
+            source.encode("utf-8"), "k4-pure-copy")
+        self.assertEqual(len(sigs), 2)
+        self.assertEqual(sem["document"], sigs[0]["document"])
+        self.assertEqual(sem["revision"], sigs[0]["revision"])
+        for sig in sigs:
+            fn = fields_map(checked_fn_value(sig))
+            rs = fields_map(resolved_sig_value(sig))
+            self.assertEqual(fn["name"]["value"], sig["name"])
+            self.assertEqual(int(fn["arity"]["value"]), sig["arity"])
+            self.assertEqual(fn["returnType"]["value"], sig["rtype"])
+            self.assertEqual(fn["document"]["value"], sig["document"])
+            self.assertEqual(fn["revision"]["value"], sig["revision"])
+            self.assertEqual(int(fn["semanticId"]["value"]), sig["semid"])
+            self.assertEqual(int(fn["syntaxId"]["value"]), sig["synid"])
+            rsh = fields_map(fn["returnShape"])
+            self.assertEqual((rsh["kind"]["value"], rsh["name"]["value"],
+                              int(rsh["listDepth"]["value"])), sig["rshape"])
+            self.assertEqual(rs["functionName"]["value"], sig["name"])
+            self.assertEqual(rs["document"]["value"], sig["document"])
+            self.assertEqual(rs["revision"]["value"], sig["revision"])
+            self.assertEqual(int(rs["functionId"]["value"]), sig["synid"])
+            self.assertEqual(len(rs["params"]["value"]), sig["arity"])
+            ptn = [fields_map(p)["typeName"]["value"]
+                   for p in rs["params"]["value"]]
+            self.assertEqual(ptn, [t for t, _, _ in sig["ptypes"]])
+
     def test_contradictory_external_batch_is_refused(self):
         # A3 E2b: same name, honest Int/arity1 + forged Bool/arity2.
         # The source alone is seed-valid; the poisoned batch must refuse.

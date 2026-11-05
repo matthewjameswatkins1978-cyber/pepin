@@ -151,6 +151,29 @@ a document id to the checker collided with a body chunk's remapped ids and
 existing chunked-mismatch regression caught it. Keep the two fields apart, and
 keep that regression running.
 
+## Trust boundary: producer trust (K4)
+
+Target-consistency is enforced (foreign/stale/omitted stamps refuse
+fail-closed); content-authenticity is assumed, not proven. The host
+(`fetch_all_sigs` + `sigs_from_tool`) is a pure transcription of tool
+output: every content field (name, arity, types, shapes, document,
+revision) is copied from the checker's own `chunk_signatures`
+response, and the host invents nothing except positional batch-unique
+synthetic ids (`9000+k`/`1000000000+k`) plus the `node` provenance
+annotation the checker never keys on. Pinned by
+`test_host_signature_transcription_is_pure_copy`.
+Consequence, read from the code: a same-target content forgery cannot
+arrive through the honest host path — the host has no field to lie
+with. It is reachable only by (a) hand-constructed facts that bypass
+`fetch_all_sigs` (exactly A3's V3 probe shape), or (b) a lying
+producer tool, which the registered-tool trust assumption excludes. A
+checker-side content check would need the callee's declaration bytes
+at ingress, which is precisely what chunking withholds; that check is
+therefore not a missing gate but a redesign. Until such a design
+lands, the enforced guarantee is target-consistency plus trusted
+producer, and A3's adapted same-target probe (V3.3) is the acceptance
+authority for the residual risk.
+
 ## Cross-chunk call lowering contract (A2 seam)
 
 Authoritative checker→emitter rules for a call whose callee lives in a
