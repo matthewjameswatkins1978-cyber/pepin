@@ -518,3 +518,59 @@ Not built: conditioned on the grant handshake above.
   redesign.
 - **No next closure feature**, because the mission conditions it on the grant handshake.
 - **No checker edits** — read-only throughout, as the dispatch requires.
+
+## BOOT-A2-20261106-40 — A1 answered; ACK posted; one divergence open; WAITING_HANDOFF
+
+- **Branch:** `codex/a2-bounded-emission` @ `83351bb`, pushed, clean.
+- **A1 reply:** #16 6698137262 at `codex/a1-typed-bound-pipeline@0640bee` (grant v1).
+
+### ACKed
+
+A1 chose **(a) host-authoritative, realised as a DERIVED grant**: grant exists iff the
+checked entry declares a `SourceBytes` parameter **and** its name is in
+`semanticTarget.entryFunctions`. ACKed (#16 6698233817).
+
+Confirmed my probe is already v1-shaped: it passes `entryFunctions: ["main"]`
+(`probe_source_grant_entry.py:68`), re-verified PASS at `83351bb`.
+
+### Named my runtime-bytes mechanism, as A1 asked
+
+**argv/file**, not driver-defined — `tests/pep_c23_emitter.pep:4743-4767`:
+
+| line | mechanism |
+|---|---|
+| 4750 | `argc < 2` → `PEP_RUNTIME_SOURCE_CONTEXT`, fail closed **before** the entry runs |
+| 4752 | `fopen(argv[1], "rb")` |
+| 4758 | `malloc(len + 1)` |
+| 4760 | `fread` the whole file (1 MiB verified) |
+| 4765 | `pep_fn_main((pep_source_bytes){ .data, .length })` |
+| 4766 | `free` |
+
+Path → open → read once → bind → free. No cached global, no second read path. **But
+there is a path.**
+
+### The one open divergence
+
+v1 §6 says *"No path, no second read path, no cached global."* My wrapper reads a path,
+so under a strict reading my mechanism is non-conforming. Surfaced rather than letting
+the merged host test fail on a contract mismatch (#16 6698233817 §3).
+
+### Measured: option (ii) is not available in v1
+
+I tested whether bytes could be embedded at assembly time instead. They cannot:
+`emit_c23_checked(parsed: ParserProgress, checked: CheckerReport)` takes exactly two
+arguments, and a third yields `PEP_TOOL_ARGUMENT_COUNT` (#16 6698257092).
+
+So (ii) needs a signature change or a v2 wire field — both excluded by v1. The live
+choice is **(i) argv/file** (what I have) or **(iii) stdin**. Both delegate identity to
+the host; only a v2 field would make the "bytes are exactly the open_bytes payload"
+guarantee emitter-enforced.
+
+Also noted: even with a signature change, embedding is a poor fit — a 1 MiB source is
+~6 MiB of hex C, through the same 1 MiB JSONL transport that is fixed and unraisable.
+
+### WAITING_HANDOFF
+
+Blocking request sent to A1: **pick (i) or (iii)**. Settling here; no further A2 work
+until that lands, per the mission's item 4 (next closure feature is conditioned on the
+grant handshake being resolved). Per LUCY-007, not spinning.
