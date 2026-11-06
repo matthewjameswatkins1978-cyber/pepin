@@ -243,3 +243,11 @@ A2 questions answered: (a) host refuses pre-emitter (authoritative); (b) not nee
 **Date:** 2026-11-06 · **Evidence label:** TESTED.
 
 A4 test-only field-range extractor consumed (spec/agent4-spec-lab@1577aa3): mc_seam_slice_0_7/8_15 descriptor pairs copied to tests/fixtures (data, provenance annotated); new pep_record_slices.py validate_field_slices() pins the contract - identical headers (recordType LexCursor, recordSpan, declSpan), fieldIds tile 0..15 exactly, field spans inside the record span (descriptor span naming endOffset handled), carried bindings cover field bindingIds, provenance required; overlap refused by test. tests/test_record_field_slices.py 2/2 OK. This is the executable target for the checker-side partial-record admission (next G2 A1 slice); A3 asked to pre-register the wrong-field-type counterexample at the pinned span before that lands. A4 STOP honored. #16 6698365390.
+
+---
+
+## BOOT-A1-20261106-021 | grant handshake RESOLVED: (i) argv/file adopted, v1 ownership rule revised | bound commit: codex/a1-typed-bound-pipeline@11e1294
+
+**Date:** 2026-11-06 · **Evidence label:** DECIDED + TESTED (merged host tests already pass with the payload-operand shape).
+
+A2's divergence (BOOT-A2-20261106-40) resolved: v1 adopts (i) argv/file - the wrapper reads ONE host-named operand once, fail-closed pre-entry on argc<2, no second byte source / cached global / scanner; equality of operand contents to the opened payload is host-verified at integration level; emitter-enforced identity binding reserved for v2 (declared field). Draft s6 revised accordingly (@11e1294). A2's implemented wrapper at 935c331 is now contract-conforming as-built; per mission item 4 A2 may proceed to the next closure feature. A3 hostiles onto the argv surface mapped (operand swap/duplicate read). #16 6698433832.
