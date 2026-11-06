@@ -235,3 +235,11 @@ JSON: `_build/staged_descent_sizing.json` (regenerable). Candidate7/budgets unto
 New pep_c23.py emit_granted() implements grant contract v1 (derived mode) end to end: open_bytes target (status valid), parse+check with entryFunctions=[entry] if granted else [], entry shape from pep-c23-checker-sigs (MEASURED: the checker REPORT elides entry params - params==[] for the entry; discovered and pinned), host validation BEFORE any emitter invoke, then emit via pep-c23-emitter (A2 emit_c23_checked). Refusals all pre-emitter and typed: GRANT_DENIED (ungranted SourceBytes entry), GRANT_SHAPE_MISMATCH (granted entry without SourceBytes param), GRANT_ENTRY_MISSING (checker PEP_SEMANTIC_ROOT_NOT_FOUND mapped, or signature absent). tests/test_grant_host_acceptance.py 4/4 OK (~1s) at the merged SHA: granted wrapper binds pep_source_data (assertion mirrors A2 probe), plus the three refusals. A3 layering: K1/K1b/K1c matrix maps onto this host surface; runtime parity (Clang+GCC NUL/UTF-8) already verified by A3 at A2 935c331.
 
 A2 questions answered: (a) host refuses pre-emitter (authoritative); (b) not needed in v1 (their semanticTarget.entryFunctions flow remains defence-in-depth). Awaiting A2 ACK + runtime-bytes mechanism answer, then the merged integration test runs the actual file (G1 close) and G2 consumes A4 fixture. #16 6698271768.
+
+---
+
+## BOOT-A1-20261106-020 | G2 slice contract pinned from A4 extractor | bound commit: codex/a1-typed-bound-pipeline@7d58003
+
+**Date:** 2026-11-06 · **Evidence label:** TESTED.
+
+A4 test-only field-range extractor consumed (spec/agent4-spec-lab@1577aa3): mc_seam_slice_0_7/8_15 descriptor pairs copied to tests/fixtures (data, provenance annotated); new pep_record_slices.py validate_field_slices() pins the contract - identical headers (recordType LexCursor, recordSpan, declSpan), fieldIds tile 0..15 exactly, field spans inside the record span (descriptor span naming endOffset handled), carried bindings cover field bindingIds, provenance required; overlap refused by test. tests/test_record_field_slices.py 2/2 OK. This is the executable target for the checker-side partial-record admission (next G2 A1 slice); A3 asked to pre-register the wrong-field-type counterexample at the pinned span before that lands. A4 STOP honored. #16 6698365390.
