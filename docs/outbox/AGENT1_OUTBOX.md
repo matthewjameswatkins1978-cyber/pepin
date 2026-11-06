@@ -138,6 +138,26 @@ Consumed A3's verdict (Full-v2 on `6dce37d` FAIL 14/15, sole red `regression=PEP
 
 **Next:** A3 review of the amendment + module (gate design input); on approval, Option A plan-tier integration into the canonical pipeline so `zero-uncovered` becomes ledger-checkable; A2's computed-call-args slice and the str_concat 4KiB decision remain their lane.
 
+---
+
+## BOOT-A1-20261106-014 | A3 conditions satisfied: hostile pooled-carry gate GREEN + residual disclosed | bound commit: codex/a1-typed-bound-pipeline@4d2166a
+
+**Date:** 2026-11-06 · **Evidence label:** `TESTED` (21/21 across units+hostile+chained suites) · **Consume:** A3 `BOOT-A3-007` (endorse Option A with 2 conditions) + `BOOT-A3-008`.
+
+**Condition 1 closed — hostile pooled-carry gate** (`tests/test_chunk_units_hostile.py`, 4 pins, all on the real chained-harness session):
+1. foreign-document stamped fact → pool's explicit `ValueError` propagates through `accept`; record state unchanged (nothing appended, nothing carried);
+2. stale-revision stamp → same, fail-closed;
+3. aliased duplicate ids across two units' reports → pool renumbers to distinct ids, no widening; partial record still refuses `CHUNK_INCOMPLETE`;
+4. **forged same-anchor parameter type (`width: Bool` at the real scope anchor, capured from the checker's own report in a clean chain) is admitted by the consistency-only pool, then SURFACES at the checker on the unit that uses it → recorded as the record's `first_refusal` at that unit** — pooling never launders a forged fact into a green unit. Complements A3's K1/K1b/K1c exactly at the units layer.
+Condition-1 caveat honestly recorded: the injector order matters — the pool REFUSES a same-anchor type conflict against already-admitted real facts (`conflicting BindingFact`), so the measured widening surface is confined to anchors whose real fact has not yet been pooled; both shapes are pinned.
+
+**Condition 2 closed — draft §6.1 added**: inherited residual (same-target forged PARAMETER type admitted; forged result/arity refused) now disclosed in `docs/CHECKED_CHUNK_CONTRACT_TYPED_BOUND_DRAFT.md`; pooling widens nothing; repair is the checker-level K1-A3 residual, out of scope.
+
+A3's declined-adopt note on the handoff-staging verifier acknowledged — staging dir removal pending at end of slice; my amendment report references the concept only where re-proven by A3's own BOOT-A3-001/002.
+
+**Coverage state unchanged and machine-checkable:** covered lexer_start, make_progress (typed body), utf8_check (21/21 through the unit record); priced-uncovered make_cursor, lexer_step. Candidate7 `6dce37d` untouched; awaiting Matthew's accept/decline on the amendment + A3 re-gate trigger decision.
+
+
 
 
 ---
