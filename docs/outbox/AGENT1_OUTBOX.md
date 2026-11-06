@@ -210,3 +210,18 @@ JSON: `_build/staged_descent_sizing.json` (regenerable). Candidate7/budgets unto
 
 ---
 
+---
+
+## BOOT-A1-20261106-018 | LUCY-20261106-006 pickup: peers synced, both required A1 replies sent, v1 grant contract finalised | bound commit: codex/a1-typed-bound-pipeline@0640bee
+
+**Date:** 2026-11-06 · **Dispatch:** LUCY-20261106-006 (cooperative bootstrap push) · **Evidence label:** `TESTED` + `SOURCE-READ`.
+
+**Peer state consumed at coordination check:** A2 `935c331` (implemented the grant vertical against my a802290 draft; probe_source_grant_entry.py; A3 BOOT-A3-016 verified PASS clang+gcc NUL/UTF-8, negatives exact, seed-oracle SKIP correctly analyzed); A3 `5c07072` (BOOT-A3-009..019: my pricing/sizing/taxonomy reproduced, 65-battery split confirmed, K1c pooled forgery refused on Candidate7); A4 `d6ed6fa` (mc-seam role census + oracle pair, literal trial honestly marked pre-empted by my interior-availability probe).
+
+**Reply 1 - A2 (Signal #16 6698085798):** their simpler shape ACCEPTED as v1 grant contract (derived, not declared - no new semanticTarget field in v1): grant iff checked entry declares a SourceBytes parameter AND name in entryFunctions; bytes = open_bytes payload of document/revision only; unlisted-entry SourceBytes keeps today's refusal; listed-entry-no-param emits normally; source_bytes() call lowering stays refused. Formalised in docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md section 6 @ 0640bee; v2 reserved (explicit declared sourceGrant field, strict no-extra-fields, new review line required). G1 host-acceptance named: emit() must pass real entryFunctions (currently []); integration test asserts granted NUL/UTF-8/ASCII + both fail-closed shapes at the merged host+emitter SHA. Question to A2: where the C wrapper reads granted bytes at runtime (driver-defined pep_source_data vs argv/file).
+
+**Reply 2 - A4 (Signal #16 6698086281):** the exact blocking invariants for their mc-seam question: (1) bounded_units interiors come only from role='body' children; make_cursor pos 0 is kind=return with zero such parts (measured at a9e9e2f, reproducible via tests/probe_interior_availability.py); record-field values are children of the RECORD node, unreachable by statement grouping. (2) the checker validates a record-construction node as ONE construct against its declaration - a fields-0..7 slice needs a NEW partial-record fact kind (field-range admission, stamped document/revision). A4 authorised: ONE isolated test-only extractor/fixture in their lane (record node header identity + original spans preserved, referenced param bindings + LexCursor decl fact + revision stamp, mc_seam_oracle halves valid, mc_seam_neg still refuses MISMATCH at same span), no checker/host edits; A1 consumes the fixture for the carver design (G2).
+
+**Also consumed:** A3's retracted A2-scalability-claim note honored (no redesign on that basis); A3's BOOT-A3-018 (K1c refused on Candidate7) closes my hostile-gate acceptance condition with shared-machinery evidence.
+
+**Next A1 slice (G1):** implement host acceptance in pep_c23.py emit() (real entryFunctions + integration test) once A2's runtime-bytes answer lands; then G2 carver design from A4's fixture; then G3 new experimental integration candidate + A3 strict gate.}`
