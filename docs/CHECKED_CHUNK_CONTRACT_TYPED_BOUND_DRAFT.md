@@ -1,0 +1,102 @@
+# DRAFT: Typed-bound chunk units — staged-checking contract amendment
+
+**Status:** DRAFT for A3 / Matthew review — 2026-11-06 (A1, LUCY-20261106-004 slice)
+**Not part of the accepted instrument.** The accepted contract remains
+`docs/CHECKED_CHUNK_CONTRACT.md` (frozen Candidate6/Candidate7 semantics); nothing
+here changes any shipped tool, budget, or test until explicitly accepted.
+**Evidence base (measured, builder-run):**
+`tests/probe_typed_bound_pipeline.py` @ `codex/a1-typed-bound-pipeline@04573c9`
+(receipt `BOOT-A1-20261106-011`, outbox `AGENT1_OUTBOX.md` in
+`codex/candidate7-20261105@d5a105a`), reusing `tests/test_chunk_typed.py`,
+`tests/test_chained_bindings.py` and `pep_chunk_contract.py` machinery verbatim.
+
+## 1. Problem
+
+The canonical staged pipeline plans ONE chunk per function (declaration closure +
+function subtree). Four real lexer functions do not fit that shape under the
+unchanged 100k-step / 1 MiB budgets: `utf8_check` (step limit at 268n),
+`make_progress`/`make_cursor` (step limit unscoped), `lexer_step` (transport).
+The checker ALREADY accepts finer slices (`analyze_chunk_typed`,
+`analyze_chunk_typed_bound`); the gap is that the *contract layer* has no record
+kind meaning "this function is covered by a multi-unit decomposition", so a
+decomposed function cannot count toward zero-uncovered coverage in the ledger.
+
+## 2. New contract record: the typed-bound function unit
+
+One **function unit record** (host-side, alongside `chunk_record`) per decomposed
+function, with fields and refusals mirroring `ChunkLedger.accept` discipline:
+
+- `entry`: function name; must resolve to one top-level function node of the
+  target document/revision (provenance identical to external fact stamps).
+- `units`: covering list of `(label, statement_range lo..hi, carried_statement_ranges,
+  unit_status, unit_report_fingerprint)`.
+  **Coverage completeness:** ascending statement ranges must exactly tile
+  `0..N` where `N = len(index.statement_children(function_id))` — no gap, no
+  overlap, else `UNIT_COVERAGE_MISMATCH`.
+- `fact_provenance`: each unit's external facts and carried `BindingFact`s must be
+  same-revision (existing `PEP_STALE_REVISION` gates) and **pool-renumbered**:
+  carried bindings pooled through `contract.BindingPool(document, revision)`
+  (dedupe by source identity; raw pooling is the measured 14/21 aliasing
+  failure — `test_raw_pooling_aliases_bindings_and_loses_coverage`).
+- `unit_status`: each unit's checker report status must be `"valid"` with an
+  EMPTY diagnostics list; any other status ⇒ the record refuses
+  (`UNIT_NOT_VALID`), and the recorded first-failing unit index is the
+  first refusing layer.
+- **Terminality:** only the last range may be checked with
+  `expect_returns=True`; earlier units are checked non-terminal
+  (`expect_returns=False`), mirroring `bounded_units` semantics so no spurious
+  missing-return diagnostic and no skipped-return laundering.
+- Source identity: every unit slice consumes original-id subtrees via
+  `index.subtree(...)` (header + statement subtrees), so line/span identity and
+  byte offsets are untouched (same mechanism as existing statement units).
+
+## 3. Ledger integration shape (minimum change)
+
+`ChunkLedger` gains nothing structural: a decomposed function contributes its
+function-unit record to the plan the way a chunk record does today; `complete()`
+totality additionally requires one unit record (or one plain chunk record) per
+planned function. Two concrete integration options for review:
+
+- **Option A (additive):** new plan tier — `plan_chunks` emits function units for
+  functions declared `decomposed` by the planner; `validate_chunk` accepts either
+  record kind per position. Frozen tool set unchanged.
+- **Option B (report-carried):** `emit_c23` consumes the union of unit reports as
+  the function's CheckerReport-equivalent facts (statement groups carry the same
+  original spans, so declaration-emittability agreement probes apply unchanged).
+
+Option A is cheaper to review; B is what emitter consumption eventually needs.
+**Recommendation:** accept A first; prototype B in a scratch before pinning.
+
+## 4. What this closes (measured, unchanged budgets)
+
+| function | route | evidence |
+|---|---|---|
+| `utf8_check` | bound statement groups, 21 units | 21/21 valid, 0 diagnostics; per-unit steps 15,896–89,918; 9 bindings carried |
+| `lexer_start` | body-only typed chunk + host `semantic_snapshot` facts | valid (landslide pin already measured in `test_chunk_typed`) |
+| `make_progress` (scoped) | body-only typed chunk + scope-fact closure | valid (unscoped stays STEP_LIMIT — the F1 measured trade; scoped is the production pattern) |
+
+## 5. What this does NOT close (priced honestly)
+
+- **`make_cursor`** — body is a SINGLE `return` statement (69-node giant record
+  literal) — measured: `statements == 1`, and its bound group 0 refuses with
+  `PEP_RUNTIME_STEP_LIMIT`. There is nothing for statement grouping to split, and
+  `bounded_units` yields no interior for it (`block_children` of a return is
+  empty). Needed mechanism: **expression-level staging** (sub-statement slice
+  records) — new checker capability, priced separately; deliberate source
+  restructuring of the accepted lexer is out of scope for this amendment.
+- **`lexer_step`** — whole-body slice exceeds the 1 MiB transport cap; bound
+  group 0 valid (11,704 steps) but group 1 hits the step ceiling; measured:
+  the function has **36 top-level statements** and `bounded_units` yields
+  **no interior unit at the failing statement** (`statement[1]` has no
+  `body`-role children), so the existing one-level interior mechanism does not
+  even engage there. Needed: statement-kind-aware **recursive staging** or a
+  deliberate, separately-reviewed decomposition of the canonical function.
+  Priced, not attempted in this slice.
+
+## 6. Non-goals
+
+No new language features; no `analyze_chunk` (frozen 3-arg tool) change; no
+budget, transport-cap, or frozen-test edit; no doctored acceptance matrices
+(Candidate6/7 66-node row stays recorded as measured RED). The amendment only
+gives the contract layer a record kind for checker capability that already
+exists and is measured green.
