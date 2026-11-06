@@ -87,3 +87,25 @@ frozen-test edit; A2's branch untouched; A3's branch untouched after RESTORE
 
 ---
 
+## BOOT-A1-20261106-011 | typed+bound statement-group pipeline measured: utf8_check COVERED | bound commit: codex/a1-typed-bound-pipeline@04573c9c4108a1bd7368f4149cae1304af5db797
+
+**Date:** 2026-11-06 (LUCY-20261106-004 A1 slice) · **Evidence label:** `TESTED` · **Canonical `examples/pep_lexer.pep` unchanged; budgets unchanged.**
+
+New probe `tests/probe_typed_bound_pipeline.py` (reuses `test_chunk_typed` + `test_chained_bindings` + `pep_chunk_contract` machinery verbatim; read-only, per-invocation steps from the read-only `metrics` counter) drives the canonical staged flow per hot function: (1) body-only TYPED chunk (`analyze_chunk_typed`) with scope-fact closure, (2) else the BOUND statement-group chain (`analyze_chunk_typed_bound` = `bound-chunk`) with `BindingPool` same-revision carried facts, totality = every top-level statement group `valid` with zero diagnostics and accepted == statement count.
+
+| function | body-only typed (scoped / unscoped) | bound chain | verdict |
+|---|---|---|---|
+| lexer_start | valid / valid | not needed | **COVERED** (typed body chunk; host `semantic_snapshot` facts) |
+| make_progress | valid / `PEP_RUNTIME_STEP_LIMIT` | not needed | **COVERED** (typed body chunk + scope facts; scoped is the production pattern) |
+| utf8_check | `PEP_RUNTIME_STEP_LIMIT` both | **21/21 groups valid, zero diagnostics**; steps 15,896–89,918 per group, all inside the 100k budget; 9 bindings carried at the end | **COVERED-BOUND** |
+| make_cursor | `PEP_RUNTIME_STEP_LIMIT` both | group 0 (the only statement) itself `PEP_RUNTIME_STEP_LIMIT` | NOT-COVERED — single-statement body (69n giant record literal) needs expression-level staging, not statement grouping |
+| lexer_step | transport-refusal (1 MiB) both | group 0 valid (11,704 steps); group 1 `PEP_RUNTIME_STEP_LIMIT` | NOT-COVERED — needs interior/loop-body staging above statement granularity |
+
+**Meaning for the gap:** the typed+bound route closes `utf8_check` (the 268-node worst cost case) AND keeps `lexer_start`/`make_progress` covered, all under unchanged 100k/1MiB budgets, same document/revision/semantic target, scope-anchored renumbered facts with stale/foreign/malformed refusal. The per-invocation evidence is deterministic and source-anchored; no tool/suite/cap changed.
+
+**What is NOT yet true (fail-closed, honestly):** this is a MEASURED BUILDER CAPABILITY, not a contract change. The canonical `ChunkLedger`/`plan_ids` flow still models one chunk per function; accepting a decomposed function (N statement groups) as ONE covered unit needs an explicit contract amendment (group coverage equals function subtree, carried-fact provenance per group, first-failing-group refusal) — separately reviewable, not smuggled into the accepted instrument. `make_cursor` (single giant statement) and `lexer_step` (giant statement) are priced as NEW mechanisms (expression-level / interior staging), not variants of chain(). Until that contract lands, zero-uncovered cannot be honestly claimed.
+
+**Next A1 slice:** draft the contract amendment shape (typed-bound unit records with group coverage facts) for A3/Matthew review, then make_cursor/lexer_step pricing; A3 independent gate of Candidate7 `6dce37d` remains the acceptance dependency and is untouched by this slice.
+
+---
+
