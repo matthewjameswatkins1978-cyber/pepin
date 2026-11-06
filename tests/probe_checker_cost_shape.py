@@ -13,6 +13,15 @@ Method: for each shape, build programs of increasing size, run parse -> check, a
 report the first size at which the checker refuses. Parse alone is known to handle
 >=2575 bytes, so a check failure here is the checker's cost, not the parser's.
 
+CORRECTION (probe_checker_cost_driver.py): the four shapes below all have SIMILAR
+NODE DENSITY, so they all hit the ceiling at a similar BYTE count and this probe
+originally concluded the cost was "per-byte, shape-independent". That was wrong.
+Varying node density shows the real driver is NODE COUNT: a 691-byte program with few
+nodes is checked fine while a 371-byte program with many nodes fails. The byte
+ceilings below are real but they are node-density-specific -- read them as "about N
+nodes", not as a byte budget. The cause is that the checker makes ~60 full scans of
+the node list (34 functions contain `for x in nodes`; type_analysis alone has 18).
+
 Run: python tests/probe_checker_cost_shape.py
 """
 import importlib.util
