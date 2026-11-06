@@ -22,7 +22,7 @@ remains mandatory.
 """
 import subprocess
 
-A1_SHA = "2ad750b51c58489aca6ca07e199116d0cb44e794"
+A1_SHA = "727f8af4d019e6e5e235ac26077a12b166b9c080"
 import os
 import pathlib
 
@@ -39,6 +39,12 @@ def prepare():
                            # Transport helper is fetched WITH the pin so the probe never runs a
                            # stale copy of A1's checked-fact marshaller against a newer checker.
                            ("tests/chunk_helper.py", "a1_chunk_helper.py"),
+                           # The checked-chunk contract is A1's, not A2's: fetch it WITH the
+                           # pin so a cold checkout imports the pinned contract instead of a
+                           # stale _build copy (measured: a fresh worktree has no
+                           # pep_chunk_contract.py at all, and the 4 Nov _build copy predates
+                           # the 2ad750b pin marker).
+                           ("pep_chunk_contract.py", "pep_chunk_contract.py"),
                            ("pep_ocaml.ml", "a1_seed/pep_ocaml.ml")):
         data = subprocess.run(["git", "show", f"{A1_SHA}:{source}"], cwd=ROOT, check=True,
                               capture_output=True).stdout
@@ -573,7 +579,13 @@ try:
                       "rshape": ("scalar", "", 0),
                       "ptypes": [("Int", ("scalar", "", 0), 0)],
                       "semid": 9700, "synid": 100009700,
-                      "node": "0", "start": "0", "end": "0"}
+                      "node": "0", "start": "0", "end": "0",
+                      # A1 727f8af's checked-fact marshallers read document/revision off
+                      # the fact itself (F2: checker-stamped at production). This hand-built
+                      # negative must carry the SAME authorised target, or it dies on a
+                      # KeyError instead of exercising the duplicate-name refusal it exists
+                      # to test.
+                      "document": sem["document"], "revision": sem["revision"]}
     dup_response = session.send(
         {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
          "tool": "pep-c23-checker-chunk",
