@@ -480,6 +480,163 @@ try:
             if out != b"42\n":
                 failures.append(f"reverse-{compiler_name}-output")
 
+    # ---- G-A2-7: native str_concat (A4 E8 top-ranked R1; source demand = the staged
+    # checker's own 13 nested diagnostic-composition sites at A1 @2ad750b, which this
+    # session's bundle already carries). One-shot emit through the same session; the bump-pool
+    # runtime makes chains, siblings and stale-let aliases sound by construction.
+    concat_source = (
+        'fn main() -> Int {\n'
+        '  let joined = str_concat("hello ", "world")\n'
+        '  say(joined)\n'
+        '  let chain = str_concat(str_concat("Unknown variable \'", "x"), "\'")\n'
+        '  say(chain)\n'
+        '  let first = str_concat("buf-1 ", "one")\n'
+        '  let second = str_concat("buf-2 ", "two")\n'
+        '  let combined = str_concat(first, second)\n'
+        '  say(combined)\n'
+        '  return 0\n'
+        '}\n')
+    concat_payload = concat_source.encode("utf-8")
+    concat_target = session.send({"schemaVersion": 3, "op": "open_bytes",
+                                  "name": "str-concat-fixture", "bytes": list(concat_payload)})
+    require(concat_target, "outcome", "ok", "open str-concat fixture")
+    concat_sem = {"document": concat_target["document"],
+                  "revision": concat_target["revision"], "entryFunctions": []}
+    concat_parsed = parse_target(session, concat_payload, concat_target, revision)
+    concat_checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                   "op": "tool_invoke", "tool": "pep-c23-checker",
+                                   "arguments": [concat_parsed], "semanticTarget": concat_sem})
+    str_concat_ok = concat_checked.get("outcome") == "ok"
+    if not str_concat_ok:
+        stage("str-concat-check", False, str(concat_checked.get("error"))[:200])
+        failures.append("str-concat-check")
+    else:
+        cstatus = fields_map(concat_checked["result"])["status"]["value"]
+        str_concat_ok = cstatus == "valid"
+        stage("str-concat-check", str_concat_ok, f"status={cstatus} (A1@pin checker owns the builtin)")
+        if not str_concat_ok:
+            failures.append("str-concat-check")
+    if str_concat_ok:
+        emitted = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                "op": "tool_invoke", "tool": "pep-c23-emitter",
+                                "arguments": [concat_parsed, concat_checked["result"]],
+                                "semanticTarget": concat_sem})
+        efields = fields_map(emitted["result"]) if emitted.get("outcome") == "ok" else {}
+        estatus = efields.get("status", {}).get("value", "")
+        csrc = "".join(p["value"] for p in efields.get("sourceParts", {}).get("value", [])) \
+            if efields else ""
+        emit_ok = emitted.get("outcome") == "ok" and estatus == "emitted" and "pep_str_concat(" in csrc
+        stage("str-concat-emit", emit_ok,
+              f"status={estatus} bytes={len(csrc)} "
+              f"diag={efields.get('diagnostic', {}).get('value', '')[:220]}")
+        if not emit_ok:
+            failures.append("str-concat-emit")
+        else:
+            concat_c = BUILD / "seam_str_concat.c"
+            concat_c.write_text(csrc, encoding="utf-8", newline="\n")
+            # Seed oracle: the SAME statements at top level (seed ignores fn main) -- parity is
+            # the whole positive claim; the entry-point difference stays stated as everywhere.
+            seed_stmts = concat_source.split("fn main() -> Int {\n", 1)[1].rsplit("}\n", 1)[0]
+            seed_stmts = seed_stmts.replace("  return 0\n", "")  # top-level return is invalid
+            seed_path = BUILD / "str_concat_seed.pep"
+            seed_path.write_text(seed_stmts, encoding="utf-8", newline="\n")
+            seed_ran = subprocess.run([str(A1_SEED), "run", str(seed_path)],
+                                      capture_output=True, check=False)
+            concat_seed = None
+            if seed_ran.returncode:
+                stage("str-concat-seed", False,
+                      seed_ran.stderr.decode("utf-8", "replace")[:200])
+                failures.append("str-concat-seed")
+            else:
+                concat_seed = seed_ran.stdout.replace(b"\r\n", b"\n")
+                expected_seed = b"hello world\nUnknown variable 'x'\nbuf-1 onebuf-2 two\n"
+                stage("str-concat-seed", concat_seed == expected_seed,
+                      f"seed={concat_seed!r}")
+                if concat_seed != expected_seed:
+                    failures.append("str-concat-seed")
+            if concat_seed is not None:
+                for compiler_name, extra in (("clang", ["-std=c23"]), ("gcc", ["-std=c2x"])):
+                    compiler = pep_c23.compiler_path(compiler_name)
+                    exe = BUILD / f"seam_str_concat_{compiler_name}.exe"
+                    built = subprocess.run(
+                        [str(compiler), *extra, "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-O2",
+                         str(concat_c), "-o", str(exe)],
+                        capture_output=True, text=True, check=False)
+                    if built.returncode:
+                        stage(f"str-concat-{compiler_name}", False, built.stderr[:500])
+                        failures.append(f"str-concat-{compiler_name}")
+                    else:
+                        ran = subprocess.run([str(exe)], capture_output=True, check=False)
+                        out = ran.stdout.replace(b"\r\n", b"\n")
+                        expected = concat_seed + b"0\n"
+                        stage(f"str-concat-{compiler_name}", out == expected,
+                              f"run_stdout={out!r}")
+                        if out != expected:
+                            failures.append(f"str-concat-{compiler_name}-output")
+    # Capacity negative: doubling past PEP_STR_CONCAT_CAPACITY must fail closed at RUNTIME.
+    # (Deliberately NOT seed-compared: the seed builtin is unbounded -- this is the documented
+    # semantic divergence, not a parity claim.)
+    # BISECTED 2026-11-04 (three failures, three distinct causes, all measured):
+    #   512-/64-/8-byte 16-let chains -> checker STEP_LIMIT: root cause NODE COUNT (~90 nodes)
+    #     against the known one-shot ceiling (~55-62, the 66n gate class, A1's lane);
+    #   1000-byte base -> LEXER STEP_LIMIT at 210:11: literal byte cost scales per byte.
+    # Final shape: capacity 4096, base 160, FIVE lets (~30 nodes, 320 literal bytes): x3=2560
+    # passes, x4's right operand (2560) exceeds 4096-2560 -> PEP_RUNTIME_STR_CONCAT_RANGE.
+    base = "A" * 160
+    neg_lines = ["fn main() -> Int {", f'  let x0 = str_concat("{base}", "{base}")']
+    for i in range(1, 5):
+        neg_lines.append(f"  let x{i} = str_concat(x{i - 1}, x{i - 1})")
+    neg_lines += ["  say(x4)", "  return 0", "}"]
+    neg_source = "\n".join(neg_lines) + "\n"
+    neg_payload = neg_source.encode("utf-8")
+    neg_target = session.send({"schemaVersion": 3, "op": "open_bytes",
+                               "name": "str-concat-capacity", "bytes": list(neg_payload)})
+    require(neg_target, "outcome", "ok", "open capacity fixture")
+    neg_sem = {"document": neg_target["document"],
+               "revision": neg_target["revision"], "entryFunctions": []}
+    neg_parsed = parse_target(session, neg_payload, neg_target, revision)
+    neg_checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                "op": "tool_invoke", "tool": "pep-c23-checker",
+                                "arguments": [neg_parsed], "semanticTarget": neg_sem})
+    neg_check_ok = neg_checked.get("outcome") == "ok"
+    if not neg_check_ok:
+        stage("str-concat-capacity", False,
+              f"check error={str(neg_checked.get('error'))[:200]}")
+        failures.append("str-concat-capacity")
+    neg_emitted = (session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                 "op": "tool_invoke", "tool": "pep-c23-emitter",
+                                 "arguments": [neg_parsed, neg_checked["result"]],
+                                 "semanticTarget": neg_sem})
+                   if neg_check_ok else {"outcome": "skipped"})
+    neg_fields = fields_map(neg_emitted["result"]) if neg_emitted.get("outcome") == "ok" else {}
+    neg_src = "".join(p["value"] for p in neg_fields.get("sourceParts", {}).get("value", [])) \
+        if neg_fields else ""
+    if not neg_check_ok:
+        pass  # failure already recorded with the check error
+    elif neg_fields.get("status", {}).get("value") != "emitted" or not neg_src:
+        stage("str-concat-capacity", False,
+              f"emit status={neg_fields.get('status', {}).get('value')} err={str(neg_emitted.get('error'))[:160]}")
+        failures.append("str-concat-capacity")
+    else:
+        neg_c = BUILD / "seam_str_concat_cap.c"
+        neg_c.write_text(neg_src, encoding="utf-8", newline="\n")
+        neg_compiler = pep_c23.compiler_path("clang")
+        neg_exe = BUILD / "seam_str_concat_cap.exe"
+        neg_built = subprocess.run(
+            [str(neg_compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic", "-Werror", "-O2",
+             str(neg_c), "-o", str(neg_exe)],
+            capture_output=True, text=True, check=False)
+        if neg_built.returncode:
+            stage("str-concat-capacity", False, neg_built.stderr[:400])
+            failures.append("str-concat-capacity")
+        else:
+            neg_ran = subprocess.run([str(neg_exe)], capture_output=True, check=False)
+            refused = neg_ran.returncode != 0 and b"PEP_RUNTIME_STR_CONCAT_RANGE" in neg_ran.stderr
+            stage("str-concat-capacity", refused,
+                  f"exit={neg_ran.returncode} stderr={neg_ran.stderr[:80]!r} (capacity divergence, seed unbounded)")
+            if not refused:
+                failures.append("str-concat-capacity")
+
     # ---- A2-3 NEGATIVE CONTROLS (Rolling Queue C): every cross-chunk refusal must fail
     # closed with its exact registered diagnostic and emit NOTHING, driven against the exact
     # chunk + report the positive proof used above -- no fabricated fixtures, no hand-written C.

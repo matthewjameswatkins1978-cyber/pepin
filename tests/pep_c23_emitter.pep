@@ -1108,6 +1108,13 @@ fn pep_c23_str_result_call(nodes: List[FlatAstNode], value: FlatAstNode) -> PepC
   if value.kind != "call" {
     return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
+  // str_concat is a BUILTIN (A1 844c8b0; seed @2ad750b): no top-level function node
+  // exists for pep_c23_function to find, and it returns Str -- classify it directly so
+  // let-inits and say() accept its results (Campaign G G-A2-7, source demand = the staged
+  // checker's own nested diagnostic composition).
+  if value.text == "str_concat" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
   let callee = pep_c23_function(nodes, value.text)
   if !callee.found {
     return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
@@ -1171,6 +1178,13 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
     }
     if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
     return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  // Direct str_concat CALLS classify too (G-A2-7): the two-arg dispatch validates its
+  // arguments through this function, and only the bump-pool builtin is added -- Str-returning
+  // user FUNCTIONS stay refused here, which is exactly the pinned say(<Str call>) boundary
+  // from F3 (a callee body could contain say, and say re-lowers its argument twice).
+  if value.kind == "call" && value.text == "str_concat" {
+    return PepC23NodeLookup { found: true, node: value }
   } else {}
   if value.kind == "field_access" {
     let owner = pep_c23_child(nodes, value.id, "value", 0)
@@ -2628,6 +2642,39 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       for part in loweredHaystack.sourceParts { parts = append(parts, part) }
       parts = append(parts, ", ")
       for part in loweredNeedle.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission {
+        status: "emitted",
+        sourceParts: parts,
+        diagnostic: ""
+      }
+    } else {}
+    // str_concat: same two-supported-Str-values contract as str_contains (Campaign G
+    // G-A2-7). Arguments may themselves be str_concat calls (the checker's nested
+    // chain) -- classification flows through pep_c23_str_result_call's builtin branch.
+    // Bump-pool storage means no aliasing rules are needed on the call side.
+    if node.text == "str_concat" {
+      if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 str_concat requires exactly two supported Str values")
+      } else {}
+      let leftValue = pep_c23_str_expression(nodes, function, argument.node)
+      let rightValue = pep_c23_str_expression(nodes, function, secondArgument.node)
+      // Side-specific diagnostics (G-A2-7): which argument failed classification is the
+      // difference between a five-minute fix and a hunt.
+      if !leftValue.found {
+        return pep_c23_unsupported("Pep C23 str_concat LEFT argument must resolve to a supported Str value")
+      } else {}
+      if !rightValue.found {
+        return pep_c23_unsupported("Pep C23 str_concat RIGHT argument must resolve to a supported Str value")
+      } else {}
+      let loweredLeft = pep_c23_expression(nodes, function, argument.node)
+      let loweredRight = pep_c23_expression(nodes, function, secondArgument.node)
+      if loweredLeft.status != "emitted" { return loweredLeft } else {}
+      if loweredRight.status != "emitted" { return loweredRight } else {}
+      var parts: List[Str] = ["pep_str_concat("]
+      for part in loweredLeft.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in loweredRight.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")")
       return PepC23Emission {
         status: "emitted",
@@ -4456,6 +4503,16 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;\n[[maybe_unused]] static int64_t pep_byte_at(pep_source_bytes source, int64_t offset) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if (offset < 0 || (uintmax_t)offset >= (uintmax_t)source.length) { fputs(\"PEP_RUNTIME_BYTE_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.data[(size_t)offset];\n}\n")
   reversed = prepend(reversed, "[[maybe_unused]] static int64_t pep_byte_length(pep_source_bytes source) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if ((uintmax_t)source.length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_LENGTH_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.length;\n}\n")
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_str;\n[[maybe_unused]] static _Bool pep_str_equal(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length != right.length) { return 0; }\n  for (size_t i = 0; i < left.length; ++i) { if (left.data[i] != right.data[i]) { return 0; } }\n  return 1;\n}\n[[maybe_unused]] static _Bool pep_str_contains(pep_str haystack, pep_str needle) {\n  if ((haystack.length != 0 && haystack.data == NULL) || (needle.length != 0 && needle.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (needle.length == 0) { return 1; }\n  if (needle.length > haystack.length) { return 0; }\n  size_t limit = haystack.length - needle.length;\n  for (size_t i = 0; i <= limit; ++i) {\n    size_t j = 0;\n    while (j < needle.length && haystack.data[i + j] == needle.data[j]) { ++j; }\n    if (j == needle.length) { return 1; }\n  }\n  return 0;\n}\n")
+  // str_concat (Campaign G G-A2-7): a fresh region from a per-run bump pool, so EVERY
+  // result stays valid for the whole run -- chains, siblings and let-bound aliases are all
+  // sound by construction (no buffer reuse), which is what the staged checker's nested
+  // message composition needs. The explicit divergence from the unbounded seed builtin:
+  // capacity PEP_STR_CONCAT_CAPACITY, and overflow fails closed at RUNTIME with
+  // PEP_RUNTIME_STR_CONCAT_RANGE (pinned by the probe's capacity negative). 4 KiB is a
+  // deliberate, single-constant choice for compiler-A v1: diagnostic messages are tens to
+  // hundreds of bytes, and a larger budget only delays the same fail-closed abort. Raising
+  // it later is a one-line change PLUS its capacity negative -- never a silent bump.
+  reversed = prepend(reversed, "#define PEP_STR_CONCAT_CAPACITY 4096\n[[maybe_unused]] static pep_str pep_str_concat(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length > PEP_STR_CONCAT_CAPACITY || right.length > PEP_STR_CONCAT_CAPACITY - left.length) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n  static unsigned char pep_concat_pool[PEP_STR_CONCAT_CAPACITY];\n  static size_t pep_concat_used = 0;\n  unsigned char *out = pep_concat_pool + pep_concat_used;\n  for (size_t i = 0; i < left.length; ++i) { out[i] = left.data[i]; }\n  for (size_t i = 0; i < right.length; ++i) { out[left.length + i] = right.data[i]; }\n  pep_concat_used += left.length + right.length;\n  return (pep_str){ .data = out, .length = left.length + right.length };\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const pep_str *data; size_t length; } pep_list_str;\n")
