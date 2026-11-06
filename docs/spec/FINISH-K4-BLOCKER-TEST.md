@@ -6,10 +6,16 @@ scratch). No native run claimed — native execution is A2/A3's lane.
 ## P1 (positive, L3-verbatim + driver): PASS
 
 `p1_record_return.pep`: `check --json` → **valid**, zero diagnostics.
-`run` → exit 0; oracle probe (top-level `say`, same file shape as H1 P1)
-prints `2/1/4/8`: advance_position(1,1,10)→(2,1),
-advance_position(4,7,65)→(4,8). Seed semantics of the real lexer
-function confirmed on the exact bytes, including the newline branch.
+`run` → exit 0 with no stdout; the oracle is return-encoded (`p.line * 10 +
+`p.column` = 21 for advance_position(1,1,10)→(2,1)), not printed.
+CORRECTION 2026-11-06 (A2 BOOT-A2-20261106-03, measured at `727f8af` and
+`57fe424`): the earlier "prints `2/1/4/8`" phrasing does not reproduce —
+the committed fixture contains no `say`, and a naive `say(a.line)`
+reconstruction is `PEP_TYPE_MISMATCH` (`say` takes `Str`). The
+(4,7,65)→(4,8) case is not in the committed fixture; A2's committed probe
+prints `2\n1\n4\n8\n` via `say(int_text(...))`. The fixture carries a
+local verbatim copy of the L3 logic, not the real lexer function.
+Values confirmed; call-shape claim retracted.
 
 ## P2 (negative, L4-shape type error): REFUSED correctly
 
@@ -46,5 +52,6 @@ primitive gap, marginal 3 lexer functions (L3/L5 now, L4 next).
 4. Limits: <1 KB programs, unchanged 100k steps, both compilers + seed
    oracle. No baseline suite.
 
-Falsifier of THIS doc: any seed-run output above that does not
-reproduce (`2/1/4/8`, exit 0; P2 `PEP_TYPE_MISMATCH`, exit 1).
+Falsifier of THIS doc: `check` on the committed fixtures not returning
+valid/exit 0 with return-encoded 21 for P1, or anything but `PEP_TYPE_MISMATCH`
+exit 1 for P2; or an A2 probe run contradicting the branched handoff outcomes.
