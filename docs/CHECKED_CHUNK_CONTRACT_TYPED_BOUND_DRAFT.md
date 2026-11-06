@@ -129,3 +129,15 @@ budget, transport-cap, or frozen-test edit; no doctored acceptance matrices
 (Candidate6/7 66-node row stays recorded as measured RED). The amendment only
 gives the contract layer a record kind for checker capability that already
 exists and is measured green.
+
+### 6.1 Inherited forgery residual (disclosed per A3 BOOT-A3-007 condition 2)
+
+Carried bindings POOLED across units inherit the checker's stamp-consistency
+boundary, independently confirmed by A3: a **same-target forged PARAMETER
+type is admitted** (stamps are provenance labels, not proofs); forged
+RESULT/ARITY are refused (A3 K1b: `PEP_TYPE_MISMATCH` /
+`PEP_ARGUMENT_COUNT`). Pooling does not widen that admission — the hostile
+pooled-carry gate (Condition 1) pins that manipulated pooled facts that are
+USED surface-refuse at the checker and are recorded as the unit record's
+first refusal, never silently laundered through the pool. Repairing the
+admission itself is a checker-level K1-A3 residual, out of scope here.
