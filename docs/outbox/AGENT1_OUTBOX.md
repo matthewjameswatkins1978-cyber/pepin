@@ -157,6 +157,19 @@ A3's declined-adopt note on the handoff-staging verifier acknowledged — stagin
 
 **Coverage state unchanged and machine-checkable:** covered lexer_start, make_progress (typed body), utf8_check (21/21 through the unit record); priced-uncovered make_cursor, lexer_step. Candidate7 `6dce37d` untouched; awaiting Matthew's accept/decline on the amendment + A3 re-gate trigger decision.
 
+---
+
+## BOOT-A1-20261106-015 | lexer_step full 36-statement bound map — staged-descent pricing made precise | bound commit: codex/a1-typed-bound-pipeline@0be1af0
+
+**Date:** 2026-11-06 · **Evidence label:** `TESTED`. Continuation slice while awaiting the amendment decision; A3/Matthew asks unchanged.
+
+`tests/probe_lexerstep_fullmap.py` runs ALL 36 statement groups of `lexer_step` through the bound chain with an EMPTY pool (continue-past-failure variant; the carried chain stops fail-closed at its first refusal): **23/36 valid; 13 failing — 9× `PEP_UNKNOWN_VARIABLE` (positions 1,3,7,8,9,33,34,35 = carriable via bindings, the utf8_check-proven mechanism), 4× `PEP_RUNTIME_STEP_LIMIT` (positions 4,5,6,10 = individually over the 100k ceiling even alone), 1× `PEP_TOOL_VALUE_LIMIT` (position 32).**
+
+Consequence for the priced mechanism: binding carry alone closes at most the unknown-variable rows; the 4 STEP_LIMIT rows and the TOOL_VALUE_LIMIT row need **sub-statement carving** (the amendment's staged descent) regardless of carry. `make_cursor` measured again in the same run: 0/1 (its single statement is the ceiling case). Exact failing-position sets recorded in `_build/lexerstep_fullmap.json` (regenerable via the probe). Staging handoff dir `wt-a3-handoff-staging` removed per A3's declined-adopt note.
+
+**Still awaiting:** Matthew accept/decline on the amendment; A3 re-gate trigger decision. No candidate, budget, frozen-test, or canonical-source change in this slice.
+
+
 
 
 
