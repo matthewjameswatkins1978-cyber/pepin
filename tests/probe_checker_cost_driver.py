@@ -20,6 +20,19 @@ This probe builds exactly that pair and compares where each hits the ceiling.
 If few-nodes survives where many-nodes fails, the scans dominate and the lever is
 indexing the node list instead of re-walking it ~60 times.
 
+RESULT, AND ITS LIMIT: few-nodes does survive where many-nodes fails, so node count
+matters and bytes alone do not. But probe_checker_node_ceiling.py then measured the
+ACTUAL node counts and found the ceiling is NOT a constant node budget either:
+
+  dense  (let statements)  40 nodes / 281 bytes
+  medium (calls)           44 nodes / 254 bytes
+  sparse (say + long strs) 56 nodes / 1501 bytes
+
+No linear model in nodes and bytes fits those three points (it would need a negative
+coefficient). So the honest conclusion is narrower than "node count is the driver":
+the cost is CONSTRUCT-DEPENDENT, node count matters more than bytes, and neither
+count alone predicts it. The ~60 node scans are a real cost but not the dominant one.
+
 Run: python tests/probe_checker_cost_driver.py
 """
 import importlib.util
