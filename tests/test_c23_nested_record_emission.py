@@ -81,7 +81,7 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
 
             generated = emit(source.read_bytes())
             self.assertRegex(generated, r"pep_record_\d+ pep_arg_\d+")
-            self.assertRegex(generated, r"pep_fn_\d+\(pep_local_\d+\)")
+            self.assertRegex(generated, r"pep_fn_[A-Za-z_0-9]+\(pep_local_\d+\)")
             self.assertIn(".pep_field_0.pep_field_0", generated)
             self.assertIn(".pep_field_0.pep_field_1", generated)
 
@@ -115,17 +115,17 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
             generated = emit(source.read_bytes())
             self.assertRegex(
                 generated,
-                r"pep_record_\d+ pep_fn_\d+\(void\);")
+                r"pep_record_\d+ pep_fn_[A-Za-z_0-9]+\(void\);")
             self.assertRegex(
                 generated,
-                r"pep_record_\d+ pep_fn_\d+\(pep_record_\d+ pep_arg_\d+\);")
+                r"pep_record_\d+ pep_fn_[A-Za-z_0-9]+\(pep_record_\d+ pep_arg_\d+\);")
             self.assertRegex(
                 generated,
                 r"pep_record_\d+ pep_result = pep_arg_\d+")
             self.assertRegex(
                 generated,
                 r"pep_record_\d+ pep_result = \(pep_record_\d+\)")
-            self.assertRegex(generated, r"pep_record_\d+ pep_local_\d+ = pep_fn_\d+\(\)")
+            self.assertRegex(generated, r"pep_record_\d+ pep_local_\d+ = pep_fn_[A-Za-z_0-9]+\(\)")
             self.assertIn(".pep_field_0.pep_field_0", generated)
             self.assertIn(".pep_field_1 = 23", generated)
 
@@ -162,7 +162,7 @@ class PepC23NestedRecordEmissionTests(unittest.TestCase):
                 r"typedef struct \{ uint32_t tag; union \{ struct \{ int64_t field_0; \} payload_1; \} payload; \} pep_union_\d+;")
             self.assertRegex(
                 generated,
-                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
+                r"pep_union_\d+ pep_fn_[A-Za-z_0-9]+\(pep_union_\d+ pep_arg_\d+\);")
             self.assertRegex(generated, r"\.tag = 0")
             self.assertRegex(
                 generated,
@@ -206,7 +206,7 @@ fn main() -> Int {
                 r"struct \{ pep_record_\d+ field_0; \} payload_1; \} payload; \} pep_union_\d+;")
             self.assertRegex(
                 generated,
-                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+\);")
+                r"pep_union_\d+ pep_fn_[A-Za-z_0-9]+\(pep_union_\d+ pep_arg_\d+\);")
             self.assertRegex(
                 generated,
                 r"\.tag = 1, \.payload\.payload_1 = \{ \.field_0 = \(pep_record_\d+\)")
@@ -365,7 +365,7 @@ fn main() -> Int {
             self.assertEqual(interpreted.stdout, "39\n")
 
             generated = emit(source.read_bytes())
-            self.assertRegex(generated, r"\.field_0 = pep_fn_\d+\(")
+            self.assertRegex(generated, r"\.field_0 = pep_fn_[A-Za-z_0-9]+\(")
             self.assertIn(".pep_field_0.pep_field_1", generated)
             generated_c = folder / "helper-returned-ast-location.c"
             generated_c.write_text(generated, encoding="utf-8", newline="\n")
@@ -470,7 +470,7 @@ fn main() -> Int { return choose(Some(7)) }
 
             generated = emit(source.read_bytes())
             signature = re.search(
-                r"int64_t (pep_fn_\d+)\(pep_union_(\d+) pep_arg_\d+\);",
+                r"int64_t (pep_fn_[A-Za-z_0-9]+)\(pep_union_(\d+) pep_arg_\d+\);",
                 generated)
             self.assertIsNotNone(signature, generated)
             function_name, union_id = signature.groups()
@@ -547,7 +547,7 @@ fn main() -> Int {
             self.assertIn("pep_recursive_0 == NULL", generated)
             self.assertRegex(
                 generated,
-                r"pep_union_\d+ pep_fn_\d+\(pep_union_\d+ pep_arg_\d+, pep_arena_t \*pep_arena\);")
+                r"pep_union_\d+ pep_fn_[A-Za-z_0-9]+\(pep_union_\d+ pep_arg_\d+, pep_arena_t \*pep_arena\);")
             self.assertIn("pep_arena), pep_arena)", generated)
             self.assertIn("pep_arena_init(&pep_arena, 0)", generated)
             self.assertIn("pep_arena_status(pep_arena)", generated)
@@ -769,7 +769,7 @@ fn main() -> Int {
             self.assertRegex(generated, r"pep_list_union_\d+ pep_arg_\d+")
             self.assertRegex(
                 generated,
-                r"pep_fn_\d+\(pep_local_\d+\.payload\.payload_1\.field_0, pep_arena\)")
+                r"pep_fn_[A-Za-z_0-9]+\(pep_local_\d+\.payload\.payload_1\.field_0, pep_arena\)")
             self.assertRegex(generated, r"pep_union_\d+ pep_local_\d+")
 
 
@@ -840,7 +840,7 @@ fn main() -> Int { return size(make()) }
             self.assertIn("pep_make_union_", generated)
             self.assertIn("pep_add(", generated)
             self.assertIn("pep_checked_length(", generated)
-            self.assertRegex(generated, r"pep_fn_\d+\(pep_fn_\d+\(pep_arena\), pep_arena\)")
+            self.assertRegex(generated, r"pep_fn_[A-Za-z_0-9]+\(pep_fn_[A-Za-z_0-9]+\(pep_arena\), pep_arena\)")
             c_file = folder / "recursive-return.c"
             c_file.write_text(generated, encoding="utf-8", newline="\n")
             arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
@@ -900,7 +900,7 @@ fn main() -> Int {
             self.assertIn("field_1 = (pep_list_union_", generated)
             self.assertRegex(
                 generated,
-                r"pep_fn_\d+\(pep_local_\d+\.payload\.payload_1\.field_1, pep_arena\)")
+                r"pep_fn_[A-Za-z_0-9]+\(pep_local_\d+\.payload\.payload_1\.field_1, pep_arena\)")
             generated_c = folder / "recursive-union-two-field-length-helper.c"
             generated_c.write_text(generated, encoding="utf-8", newline="\n")
             arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
@@ -955,7 +955,7 @@ fn main() -> Int {
             self.assertIn("field_0 = (pep_list_union_", generated)
             self.assertRegex(
                 generated,
-                r"pep_fn_\d+\(pep_local_\d+\.payload\.payload_1\.field_0, pep_arena\)")
+                r"pep_fn_[A-Za-z_0-9]+\(pep_local_\d+\.payload\.payload_1\.field_0, pep_arena\)")
             generated_c = folder / "recursive-union-first-list-helper.c"
             generated_c.write_text(generated, encoding="utf-8", newline="\n")
             arena_c = ROOT / "runtime" / "pep_arena" / "pep_arena.c"
@@ -1602,7 +1602,7 @@ fn main() -> Int {
             generated_path = folder / "generated.c"
             generated_path.write_text(generated, encoding="utf-8", newline="\n")
             letter_match = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+\);", generated)
             self.assertIsNotNone(letter_match, generated)
             calls = ", ".join(
                 f"pep_fn_{letter_match.group(1)}({value}) ? 1 : 0"

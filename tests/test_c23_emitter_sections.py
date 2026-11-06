@@ -41,7 +41,7 @@ class PepC23SectionTests(unittest.TestCase):
     def test_header_precedes_every_definition_and_main_is_last(self):
         generated = self.emit_text(TWO_FUNCTIONS)
         first_definition = generated.index("int64_t pep_fn_", generated.index(";\nint64_t") if ";\nint64_t" in generated else 0)
-        prototypes_end = max(match.end() for match in re.finditer(r"^int64_t pep_fn_\d+ ?\([^\n]*\);$",
+        prototypes_end = max(match.end() for match in re.finditer(r"^int64_t pep_fn_[A-Za-z_0-9]++ ?\([^\n]*\);$",
                                                                   generated, re.MULTILINE))
         main_start = generated.index("int main(")
         self.assertLess(prototypes_end, main_start)
@@ -54,15 +54,15 @@ class PepC23SectionTests(unittest.TestCase):
         generated = self.emit_text(TWO_FUNCTIONS)
         # Parameterless definitions are emitted as `name (void) {`, parameterised ones as
         # `name(args) {`, so the space before the parenthesis is optional in both shapes.
-        definitions = re.findall(r"^(int64_t pep_fn_\d+) ?\([^\n]*\{$", generated, re.MULTILINE)
-        prototypes = re.findall(r"^(int64_t pep_fn_\d+) ?\([^\n]*\);$", generated, re.MULTILINE)
+        definitions = re.findall(r"^(int64_t pep_fn_[A-Za-z_0-9]++) ?\([^\n]*\{$", generated, re.MULTILINE)
+        prototypes = re.findall(r"^(int64_t pep_fn_[A-Za-z_0-9]++) ?\([^\n]*\);$", generated, re.MULTILINE)
         self.assertEqual(len(definitions), 2)
         self.assertEqual(sorted(d for d in definitions), sorted(prototypes))
 
     def test_record_declarations_precede_functions_that_use_them(self):
         generated = self.emit_text(WITH_RECORD)
         record_typedef = generated.index("typedef struct {")
-        first_definition = re.search(r"^int64_t pep_fn_\d+ ?\([^\n]*\{$", generated, re.MULTILINE)
+        first_definition = re.search(r"^int64_t pep_fn_[A-Za-z_0-9]++ ?\([^\n]*\{$", generated, re.MULTILINE)
         self.assertIsNotNone(first_definition)
         self.assertLess(record_typedef, first_definition.start())
 
@@ -71,7 +71,7 @@ class PepC23SectionTests(unittest.TestCase):
         generated = self.emit_text(TWO_FUNCTIONS)
         main_start = generated.index("int main(")
         # split at the boundary between the last prototype and the first definition
-        first_definition = re.search(r"^int64_t pep_fn_\d+ ?\([^\n]*\{$", generated, re.MULTILINE).start()
+        first_definition = re.search(r"^int64_t pep_fn_[A-Za-z_0-9]++ ?\([^\n]*\{$", generated, re.MULTILINE).start()
         header, units, epilogue = (generated[:first_definition],
                                    generated[first_definition:main_start],
                                    generated[main_start:])

@@ -592,6 +592,152 @@ fn pep_c23_call_argument(nodes: List[FlatAstNode], function: FlatAstNode, node: 
 fn pep_c23_unsupported(message: Str) -> PepC23Emission {
   return PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: message }
 }
+// Lower one direct-function-body `say(...)` statement to the inlined runtime print helper. The
+// argument must classify as a Str value position through pep_c23_str_expression -- string literal,
+// Str parameter, immutable Str local, or Str field -- and is then lowered through the ordinary
+// expression path; those classified shapes have no side effects, so emitting the value twice for
+// `.data` and `.length` cannot observe an evaluation difference. Anything else refuses with its
+// shape named: wrong arity, a non-Str position such as int_text(...), or a non-say expression
+// statement. Say inside loop/conditional bodies stays with those bodies' own statement whitelists.
+fn pep_c23_say_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode) -> PepC23Emission {
+  let value = pep_c23_child(nodes, statement.id, "value", 0)
+  if !value.found || value.node.kind != "call" || value.node.text != "say" {
+    return pep_c23_unsupported("Pep C23 expression statements currently support only say(...)")
+  } else {}
+  var argumentCount = 0
+  var argumentNode = pep_c23_empty_ast_node()
+  for candidate in nodes {
+    if candidate.parentId == value.node.id && candidate.role == "argument" {
+      argumentCount = argumentCount + 1
+      if candidate.childIndex == 0 { argumentNode = candidate } else {}
+    } else {}
+  }
+  if argumentCount != 1 {
+    return pep_c23_unsupported("Pep C23 say requires exactly one argument")
+  } else {}
+  if !pep_c23_str_expression(nodes, function, argumentNode).found {
+    return pep_c23_unsupported("Pep C23 say lowers only string literals, Str parameters, Str locals and Str fields")
+  } else {}
+  let lowered = pep_c23_expression(nodes, function, argumentNode)
+  if lowered.status != "emitted" { return lowered } else {}
+  var parts: List[Str] = ["  pep_say("]
+  for part in lowered.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ".data, ")
+  for part in lowered.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ".length);\n")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+// ---- Cross-chunk call lowering (PEP-WB-A2-20261104-B slice A2-1).
+// The one- to four-parameter paths above resolve the callee from the SAME parsed nodes and then
+// validate its body shape. When the callee lives in another checked chunk those nodes do not
+// exist here, so this path resolves the target ONLY through the checked facts already in the
+// report: ResolvedCall.syntaxId identifies this call node, ResolvedCall.calleeId names exactly
+// one CheckedFunction (the checker resolved it against the supplied external signatures), and
+// that entry carries the authenticated name -- the name-based C symbol -- plus arity and result
+// type/shape. No textual name lookup happens here: missing, duplicate or disagreeing facts
+// refuse with their own diagnostic instead of guessing a target. Argument TYPE soundness is the
+// checker's (report status valid means types/arity were verified against external signatures);
+// this path re-checks arity against its own node count as fail-closed defence of forged or
+// mismatched reports, and the emit entry's document/revision identity check rejects stale facts
+// before any body is lowered.
+fn pep_c23_cross_chunk_call(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                             checked: CheckerReport) -> PepC23Emission {
+  var callMatches = 0
+  var calleeSemanticId = -1
+  for callFact in checked.calls {
+    if callFact.syntaxId == node.id {
+      callMatches = callMatches + 1
+      calleeSemanticId = callFact.calleeId
+    } else {}
+  }
+  if callMatches == 0 {
+    return pep_c23_unsupported("Pep C23 cross-chunk call has no resolved call fact")
+  } else {}
+  if !(callMatches <= 1) {
+    return pep_c23_unsupported("Pep C23 cross-chunk call has ambiguous resolved call facts")
+  } else {}
+  var targetMatches = 0
+  var calleeName = ""
+  var calleeArity = 0
+  var calleeReturn = ""
+  var calleeShapeKind = ""
+  for fnFact in checked.functions {
+    if fnFact.semanticId == calleeSemanticId {
+      targetMatches = targetMatches + 1
+      calleeName = fnFact.name
+      calleeArity = fnFact.arity
+      calleeReturn = fnFact.returnType
+      calleeShapeKind = fnFact.returnShape.kind
+    } else {}
+  }
+  if targetMatches == 0 {
+    return pep_c23_unsupported("Pep C23 cross-chunk call target is missing from the checked functions")
+  } else {}
+  if !(targetMatches <= 1) {
+    return pep_c23_unsupported("Pep C23 cross-chunk call target is ambiguous in the checked functions")
+  } else {}
+  let argumentCount = pep_c23_count_children(nodes, node.id, "argument")
+  if argumentCount != calleeArity {
+    return pep_c23_unsupported("Pep C23 cross-chunk call argument count disagrees with the checked arity")
+  } else {}
+  // Result support: Int and Bool always; a nominal record only when its declaration is visible
+  // in THIS chunk (the struct type must exist where the value is consumed -- the declaration
+  // chunk's header supplies it). Str, tagged unions and unknown results refuse: the callee-side
+  // unit refuses them too, and a call must not reference a symbol the assembly never emits.
+  if !(calleeReturn == "Int" || calleeReturn == "Bool") {
+    if !(calleeShapeKind == "nominal" && pep_c23_record_declaration(nodes, calleeReturn).found) {
+      return pep_c23_unsupported("Pep C23 cross-chunk calls support Int, Bool, and locally declared record results")
+    } else {}
+  } else {}
+  // Same fallible-argument rule as the ordered path, mirrored exactly: C leaves argument
+  // evaluation order unspecified, so more than one fallible argument refuses.
+  var fallibleArguments = 0
+  var arguments: List[FlatAstNode] = []
+  var wanted = 0
+  while !(argumentCount <= wanted) {
+    let argument = pep_c23_child(nodes, node.id, "argument", wanted)
+    if !argument.found {
+      return pep_c23_unsupported("Pep C23 call argument list has a gap")
+    } else {}
+    if pep_c23_infallible_value(nodes, argument.node) {
+      fallibleArguments = fallibleArguments + 1
+    } else {}
+    arguments = append(arguments, argument.node)
+    wanted = wanted + 1
+  }
+  if !(fallibleArguments <= 1) {
+    return pep_c23_unsupported("Pep C23 rejects multiple fallible call arguments because C argument evaluation order is unspecified")
+  } else {}
+  // Name-based symbol from the authenticated fact: the callee unit emits pep_fn_<name> too, so
+  // chunk-local id remapping can never split a call from its definition.
+  var parts: List[Str] = ["pep_fn_", calleeName, "("]
+  var emitted = 0
+  for argument in arguments {
+    let lowered = pep_c23_call_argument(nodes, function, argument,
+      PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() })
+    if lowered.status != "emitted" { return lowered } else {}
+    if emitted != 0 { parts = append(parts, ", ") } else {}
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    emitted = emitted + 1
+  }
+  parts = pep_c23_close_generated_call(nodes, parts, argumentCount)
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+// Checked-aware expression entry. The plain path runs FIRST, so every success and every refusal
+// except the missing-target one is byte-for-byte identical to today (one-shot and same-chunk
+// behaviour preserved by construction); "calls require a known target" is exactly where a
+// cross-chunk callee appears, and there the checked-fact path takes over. Supported statement
+// forms in this slice: let initialisers and direct return values -- the two sites threaded with
+// the real report. Nested calls inside arguments resolve same-chunk or refuse; conditional-return
+// bodies keep the plain path (documented boundary).
+fn pep_c23_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                              checked: CheckerReport) -> PepC23Emission {
+  let plain = pep_c23_expression(nodes, function, node)
+  if plain.status == "emitted" { return plain } else {}
+  if plain.diagnostic != "Pep C23 calls require a known target" { return plain } else {}
+  if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
+  return plain
+}
 fn pep_c23_close_generated_call(nodes: List[FlatAstNode], parts: List[Str], argumentCount: Int) -> List[Str] {
   var closedParts = parts
   if pep_c23_requires_arena(nodes) {
@@ -953,6 +1099,51 @@ fn pep_c23_record_value_type(nodes: List[FlatAstNode], function: FlatAstNode, va
   }
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
 }
+// A call to a zero-argument function whose DECLARED result is Str is a Str value position.
+// Only the declaration is consulted here (the call path separately validates target, arity and
+// body), and only `let` initialisers and name classifications use this -- say still refuses a
+// direct say(<call>) so its documented double-lowering of the argument can never re-emit a
+// callee body (a callee containing say would otherwise print twice).
+fn pep_c23_str_result_call(nodes: List[FlatAstNode], value: FlatAstNode) -> PepC23NodeLookup {
+  if value.kind != "call" {
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  // str_concat is a BUILTIN (A1 844c8b0; seed @2ad750b): no top-level function node
+  // exists for pep_c23_function to find, and it returns Str -- classify it directly so
+  // let-inits and say() accept its results (Campaign G G-A2-7, source demand = the staged
+  // checker's own nested diagnostic composition).
+  if value.text == "str_concat" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
+  let callee = pep_c23_function(nodes, value.text)
+  if !callee.found {
+    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  let calleeResult = pep_c23_child(nodes, callee.node.id, "return_type", 0)
+  if calleeResult.found && calleeResult.node.kind == "type_scalar" &&
+     calleeResult.node.text == "Str" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
+// Local-declaration hot-path variant: the CHECKER already recorded this call expression's
+// type in `expressionTypes`, so the declaration lookup is unnecessary here. Measured during
+// Campaign F F3: the per-call-initialiser `pep_c23_function` node scan tipped a near-ceiling
+// recursive-union fixture over the fixed 100,000-step emitter budget (ablated back to passing,
+// then this fact lookup restored it green). Early-exits on the syntaxId match. A missing fact
+// classifies as not-Str and falls to the int64_t default, which the C compiler then refuses --
+// fail-closed at the native build rather than silently wrong.
+fn pep_c23_str_typed_call(checked: CheckerReport, callNode: FlatAstNode) -> PepC23NodeLookup {
+  for fact in checked.expressionTypes {
+    if fact.syntaxId == callNode.id {
+      if fact.typeName == "Str" {
+        return PepC23NodeLookup { found: true, node: callNode }
+      } else {}
+      return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+    } else {}
+  }
+  return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+}
 fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value: FlatAstNode) -> PepC23NodeLookup {
   if value.kind == "string" { return PepC23NodeLookup { found: true, node: value } } else {}
   if value.kind == "name" {
@@ -973,13 +1164,27 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
             if initial.found && initial.node.kind == "name" &&
                pep_c23_str_parameter(nodes, function, initial.node.text).found {
               matches = matches + 1
-            } else {}
+            } else {
+              // Str local initialised by a Str-returning call (Campaign F F3): the call was
+              // emitted once at the let; say only re-emits the local NAME, so the side-effect
+              // argument for double-lowering still holds.
+              if initial.found && pep_c23_str_result_call(nodes, initial.node).found {
+                matches = matches + 1
+              } else {}
+            }
           }
         }
       } else {}
     }
     if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
     return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  } else {}
+  // Direct str_concat CALLS classify too (G-A2-7): the two-arg dispatch validates its
+  // arguments through this function, and only the bump-pool builtin is added -- Str-returning
+  // user FUNCTIONS stay refused here, which is exactly the pinned say(<Str call>) boundary
+  // from F3 (a callee body could contain say, and say re-lowers its argument twice).
+  if value.kind == "call" && value.text == "str_concat" {
+    return PepC23NodeLookup { found: true, node: value }
   } else {}
   if value.kind == "field_access" {
     let owner = pep_c23_child(nodes, value.id, "value", 0)
@@ -1019,9 +1224,14 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
   }
   if verbatim {
     let content = utf8_slice(source, contentStart, contentEnd)
+    // Pointer cast to the STRING LITERAL itself: a string literal has static storage duration,
+    // so a pep_str carrying it stays valid after the creating function returns. The previous
+    // block-scope compound-literal array died at the closing brace -- measured during Campaign
+    // F F3: a Str-result function returning one printed garbage under clang and GCC refused
+    // -Wdangling-pointer under -Werror. Same bytes, same explicit .length.
     return PepC23Emission { status: "emitted",
-      sourceParts: ["(pep_str){ .data = (const unsigned char[]){ \"", content,
-                    "\" }, .length = ", int_text(contentEnd - contentStart), " }"],
+      sourceParts: ["(pep_str){ .data = (const unsigned char *)\"", content,
+                    "\", .length = ", int_text(contentEnd - contentStart), " }"],
       diagnostic: "" }
   } else {}
   var offset = node.startByte + 1
@@ -1052,20 +1262,32 @@ fn pep_c23_string_literal(nodes: List[FlatAstNode], node: FlatAstNode) -> PepC23
         }
       }
     } else {}
-    if byteCount != 0 { reversedValues = prepend(reversedValues, ", ") } else {}
-    reversedValues = prepend(reversedValues, int_text(value))
+    // Three-digit octal instead of decimal: fixed width makes each escape unambiguous and
+    // covers every byte value including NUL and quote. The group is prepended backslash, high,
+    // mid, low so the tail's single reversal emits `\ H M L` forward. The result is a STRING
+    // LITERAL (static storage), required so a pep_str returned from a function outlives the
+    // callee frame -- the measured dangling-pointer failure of the compound-array form.
+    // Only / * - are used; the emitter never relies on an operator this file has not used.
+    let highDigit = value / 64
+    let midDigit = (value - (highDigit * 64)) / 8
+    let lowDigit = value - ((value / 8) * 8)
+    reversedValues = prepend(reversedValues, "\\")
+    reversedValues = prepend(reversedValues, int_text(highDigit))
+    reversedValues = prepend(reversedValues, int_text(midDigit))
+    reversedValues = prepend(reversedValues, int_text(lowDigit))
     byteCount = byteCount + 1
     offset = offset + 1
   }
   var reversed: List[Str] = [" }"]
   reversed = prepend(reversed, int_text(byteCount))
-  reversed = prepend(reversed, " }, .length = ")
+  reversed = prepend(reversed, "\", .length = ")
   if byteCount == 0 {
-    reversed = prepend(reversed, "0")
+    // The header already emitted the opening quote; one closing quote makes an empty literal.
+    reversed = prepend(reversed, "\"")
   } else {
     for part in reversedValues { reversed = prepend(reversed, part) }
   }
-  reversed = prepend(reversed, "(pep_str){ .data = (const unsigned char[]){ ")
+  reversed = prepend(reversed, "(pep_str){ .data = (const unsigned char *)\"")
   // The list is already in forward order: prepend builds it back to front from the tail, and each
   // prepend of a stored value restores that value's position. Reversing here would emit the bytes
   // backwards, which compiles but produces wrong string contents.
@@ -2193,7 +2415,11 @@ fn pep_c23_many_argument_call(nodes: List[FlatAstNode], function: FlatAstNode, c
   if !(fallibleArguments <= 1) {
     return pep_c23_unsupported("Pep C23 rejects multiple fallible call arguments because C argument evaluation order is unspecified")
   } else {}
-  var parts: List[Str] = ["pep_fn_", int_text(target.id), "("]
+  // Symbols are name-based: function names are unique per document (the checker refuses
+  // PEP_DUPLICATE_FUNCTION), so `pep_fn_<name>` is stable ACROSS chunk-local id remapping --
+  // chunked assembly would otherwise emit duplicate pep_fn_<id> symbols (measured collision:
+  // two chunks both remapping a function to id 18).
+  var parts: List[Str] = ["pep_fn_", target.text, "("]
   var emitted = 0
   for parameter in parameters {
     let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
@@ -2423,6 +2649,39 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         diagnostic: ""
       }
     } else {}
+    // str_concat: same two-supported-Str-values contract as str_contains (Campaign G
+    // G-A2-7). Arguments may themselves be str_concat calls (the checker's nested
+    // chain) -- classification flows through pep_c23_str_result_call's builtin branch.
+    // Bump-pool storage means no aliasing rules are needed on the call side.
+    if node.text == "str_concat" {
+      if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 str_concat requires exactly two supported Str values")
+      } else {}
+      let leftValue = pep_c23_str_expression(nodes, function, argument.node)
+      let rightValue = pep_c23_str_expression(nodes, function, secondArgument.node)
+      // Side-specific diagnostics (G-A2-7): which argument failed classification is the
+      // difference between a five-minute fix and a hunt.
+      if !leftValue.found {
+        return pep_c23_unsupported("Pep C23 str_concat LEFT argument must resolve to a supported Str value")
+      } else {}
+      if !rightValue.found {
+        return pep_c23_unsupported("Pep C23 str_concat RIGHT argument must resolve to a supported Str value")
+      } else {}
+      let loweredLeft = pep_c23_expression(nodes, function, argument.node)
+      let loweredRight = pep_c23_expression(nodes, function, secondArgument.node)
+      if loweredLeft.status != "emitted" { return loweredLeft } else {}
+      if loweredRight.status != "emitted" { return loweredRight } else {}
+      var parts: List[Str] = ["pep_str_concat("]
+      for part in loweredLeft.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in loweredRight.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission {
+        status: "emitted",
+        sourceParts: parts,
+        diagnostic: ""
+      }
+    } else {}
     if node.text == "contains" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 contains lowering requires a list and an Int value")
@@ -2572,10 +2831,14 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let result = pep_c23_child(nodes, target.node.id, "return_type", 0)
     let recordResult = result.found && result.node.kind == "type_named" && pep_c23_record_declaration(nodes, result.node.text).found
     let unionResult = result.found && result.node.kind == "type_named" && pep_c23_union_declaration(nodes, result.node.text).found
+    // Str results join this gate with the function gate (Campaign F F3): the callee body
+    // lowers through the same Str value positions say already exercises, and the call value
+    // flows into say-eligible locals/arguments as pep_str.
+    let stringResult = result.found && result.node.kind == "type_scalar" && result.node.text == "Str"
     // Arity itself is not checked here: three or more parameters are routed to the general
     // ordered path below, which enforces one argument per declared parameter.
-    if !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult) {
-      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar, record, or tagged-union result")
+    if !result.found || (pep_c23_c_scalar_type(result.node) == "" && !recordResult && !unionResult && !stringResult) {
+      return pep_c23_unsupported("Pep C23 calls require a known target with a supported scalar, Str, record, or tagged-union result")
     } else {}
     let targetStatement = pep_c23_last_statement(nodes, target.node)
     let targetValue = if targetStatement.found {
@@ -2640,7 +2903,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
           if loweredArgument.status != "emitted" { return loweredArgument } else {}
           if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
           if loweredThirdArgument.status != "emitted" { return loweredThirdArgument } else {}
-          var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+          var parts: List[Str] = ["pep_fn_", target.node.text, "("]
           for part in loweredArgument.sourceParts { parts = append(parts, part) }
           parts = append(parts, ", ")
           for part in loweredSecondArgument.sourceParts { parts = append(parts, part) }
@@ -2659,7 +2922,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         let loweredSecondArgument = pep_c23_call_argument(nodes, function, secondArgument.node, secondParameterType)
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
         if loweredSecondArgument.status != "emitted" { return loweredSecondArgument } else {}
-        var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+        var parts: List[Str] = ["pep_fn_", target.node.text, "("]
         for part in loweredArgument.sourceParts { parts = append(parts, part) }
         parts = append(parts, ", ")
         for part in loweredSecondArgument.sourceParts { parts = append(parts, part) }
@@ -2671,7 +2934,7 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
         } else {}
         let loweredArgument = pep_c23_call_argument(nodes, function, argument.node, parameterType)
         if loweredArgument.status != "emitted" { return loweredArgument } else {}
-        var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+        var parts: List[Str] = ["pep_fn_", target.node.text, "("]
         for part in loweredArgument.sourceParts { parts = append(parts, part) }
         parts = pep_c23_close_generated_call(nodes, parts, 1)
         return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
@@ -2699,10 +2962,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
          (!conditionalTarget && !pep_c23_call_free_expression(nodes, targetValue.node) &&
           !(recordResult && targetValue.found && targetValue.node.kind == "record" &&
             !pep_c23_infallible_value(nodes, targetValue.node)) &&
+          !(stringResult && targetValue.found && targetValue.node.kind == "string") &&
           !safeRecursiveUnionConstruction) {
         return pep_c23_unsupported("Pep C23 zero-argument calls require a call-free scalar result, safe record construction, or direct recursive-union constructor result")
       } else {}
-      var parts: List[Str] = ["pep_fn_", int_text(target.node.id), "("]
+      var parts: List[Str] = ["pep_fn_", target.node.text, "("]
       parts = pep_c23_close_generated_call(nodes, parts, 0)
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     }
@@ -2942,7 +3206,18 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       if recordType.found {
         cTypeParts = ["pep_record_", int_text(recordType.node.id)]
       } else {
-        return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+        // Str results join this branch for GUARD-CHAIN returns (Campaign G G-A2-3): the real
+        // lexer's stdlib/scan.pep `lex_error_code` returns string literals from statement-level
+        // `if ... { return ... } else {}` guards plus a fallthrough return -- checker-valid and
+        // the measured blocker since BOOT-A2-20261104-019 item 5. The lowered value is a
+        // static-storage pep_str (F3 lifetime repair) so returning it past the frame is safe,
+        // and Str equality already lowers through pep_str_equal (measured before this change).
+        // Every other unsupported result keeps the exact same refusal.
+        if result.node.kind == "type_scalar" && result.node.text == "Str" {
+          cTypeParts = ["pep_str"]
+        } else {
+          return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+        }
       }
     }
     let lowered = pep_c23_expression(nodes, function, value.node)
@@ -3182,7 +3457,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   parts = append(parts, "  }\n")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
-fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) -> PepC23Emission {
+fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, checked: CheckerReport) -> PepC23Emission {
   let parameters = pep_c23_parameters(nodes, function)
   let result = pep_c23_child(nodes, function.id, "return_type", 0)
   let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
@@ -3195,9 +3470,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   }
   if parameterProblem || length(parameters) != pep_c23_count_children(nodes, function.id, "parameter") ||
      (function.text == "main" && length(parameters) != 0) ||
-     resultCType == "" || resultCType == "pep_str" ||
+     resultCType == "" ||
      (function.text == "main" && result.node.text != "Int") {
-    return pep_c23_unsupported("Pep C23 functions require supported parameters and scalar or record results")
+    // Str results are the one missing shape the real lexer blocks on: `lex_error_code`
+    // passes the checker and then hit this gate (measured, BOOT-A2-20261104-019 item 5).
+    // The body path already lowers every Str value position (say proves it) and the wrapper
+    // is ctype-generic (`<ctype> pep_result = <expr>`), so admitting Str here is the whole
+    // feature: conditional-return and say-classification boundaries stay exactly as pinned.
+    return pep_c23_unsupported("Pep C23 functions require supported parameters and Str, scalar or record results")
   } else {}
   var localBindings: List[FlatAstNode] = []
   var localBindingsCollected = false
@@ -3247,7 +3527,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
           }
           // List descriptors have value semantics, so reassignment copies the descriptor.
         } else {
-          let initial = pep_c23_expression(nodes, function, initialValue.node)
+          let initial = pep_c23_expression_checked(nodes, function, initialValue.node, checked)
           if initial.status != "emitted" { return initial } else {}
         }
       } else {
@@ -3343,7 +3623,14 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
               returned = true
               returnStatement = PepC23NodeLookup { found: true, node: statement }
             } else {
-              return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+              if statement.kind == "expression_statement" {
+                // Validation gate: accept exactly the say(...) shape the assembly path lowers, so
+                // an unsupported expression statement still fails closed before any emission.
+                let sayCheck = pep_c23_say_statement(nodes, function, statement)
+                if sayCheck.status != "emitted" { return sayCheck } else {}
+              } else {
+                return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+              }
             }
           }
         }
@@ -3353,7 +3640,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode) 
   if statementCount == 0 || !returned { return pep_c23_unsupported("Pep C23 functions require a return statement") } else {}
   let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
   if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
-  return pep_c23_expression(nodes, function, value.node)
+  return pep_c23_expression_checked(nodes, function, value.node, checked)
 }
 fn pep_c23_function_at(functions: List[FlatAstNode], wanted: Int) -> PepC23NodeLookup {
   var index = 0
@@ -3618,12 +3905,12 @@ fn emit_c23_function_unit_bounded(parsed: ParserProgress, checked: CheckerReport
   }
 }
 
-fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool) -> PepC23Emission {
+fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool, checked: CheckerReport) -> PepC23Emission {
   var reversed: List[Str] = []
   if node.parentId == -1 && node.kind == "function" {
     let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
     let hasConditionalBody = conditionalBody.status == "emitted"
-    let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node) }
+    let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression(parsed.nodes, node, checked) }
     if lowered.status != "emitted" { return lowered } else {}
     let functionParameters = pep_c23_parameters(parsed.nodes, node)
     let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
@@ -3676,7 +3963,7 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
             for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
             bodyParts = append(bodyParts, ";\n")
           } else {
-            let initial = pep_c23_expression(parsed.nodes, node, initialValue.node)
+            let initial = pep_c23_expression_checked(parsed.nodes, node, initialValue.node, checked)
             // A record or union value type can only be carried by these initialiser shapes, so do
             // not pay two full node-list scans for a scalar literal. This runs for every local
             // binding, and the per-statement step cost is what bounds real compiler bodies.
@@ -3697,7 +3984,14 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
               } else {
                 if initialValue.node.kind == "field_access" {
                   pep_c23_str_expression(parsed.nodes, node, initialValue.node)
-                } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+                } else {
+                  // Str local from a Str-returning call: without this the ladder fell through
+                  // to int64_t and emitted type-wrong C instead of refusing or getting it
+                  // right (measured during Campaign F F3).
+                  if initialValue.node.kind == "call" {
+                    pep_c23_str_typed_call(checked, initialValue.node)
+                  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+                }
               }
             }
             if initialValue.node.kind == "record" && !localRecord.found {
@@ -3897,7 +4191,14 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
             } else { pep_c23_loop_statement(parsed.nodes, node, statement, 0, localBindings, result) }
             if loweredControl.status != "emitted" { return loweredControl } else {}
             for part in loweredControl.sourceParts { bodyParts = append(bodyParts, part) }
-          } else {}
+          } else {
+            if statement.parentId == node.id && statement.role == "statement" &&
+               statement.kind == "expression_statement" {
+              let loweredSay = pep_c23_say_statement(parsed.nodes, node, statement)
+              if loweredSay.status != "emitted" { return loweredSay } else {}
+              for part in loweredSay.sourceParts { bodyParts = append(bodyParts, part) }
+            } else {}
+          }
         }
       }
     }
@@ -3913,7 +4214,7 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
     }
     for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
     reversed = prepend(reversed, " pep_fn_")
-    reversed = prepend(reversed, int_text(node.id))
+    reversed = prepend(reversed, node.text)
     if length(functionParameters) == 0 {
       if requiresArena { reversed = prepend(reversed, " (pep_arena_t *pep_arena) {\n") } else {
         reversed = prepend(reversed, " (void) {\n")
@@ -4165,7 +4466,12 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   // different chunk. Only the whole-program and epilogue paths need main, so they are the only
   // ones that require it. The requirement is unchanged for part == "all".
   let sectionNeedsMain = part == "all" || part == "main"
-  if functionCount == 0 || (sectionNeedsMain && !mainFound) {
+  // A declaration-only chunk has zero functions but real nodes, and it must still produce a
+  // `header` for the bounded header+units+epilogue assembly. A completely empty document keeps
+  // the original refusal (registration vectors pin it), as do whole/epilogue parts without main;
+  // function-scoped parts over a declaration chunk fail-closed on their own (unit index out of
+  // range).
+  if (functionCount == 0 && length(parsed.nodes) == 0) || (sectionNeedsMain && !mainFound) {
     return pep_c23_unsupported("Pep C23 emission requires a top-level function named main")
   } else {}
   if mainFound {
@@ -4186,7 +4492,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
         return pep_c23_unsupported("Pep C23 main function must return Int")
       } else {}
     } else {}
-    return pep_c23_function_definition(parsed, selected.node, requiresArena)
+    return pep_c23_function_definition(parsed, selected.node, requiresArena, checked)
   } else {}
   var reversed: List[Str] = []
   reversed = prepend(reversed, "#include <stddef.h>\n")
@@ -4197,9 +4503,25 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;\n[[maybe_unused]] static int64_t pep_byte_at(pep_source_bytes source, int64_t offset) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if (offset < 0 || (uintmax_t)offset >= (uintmax_t)source.length) { fputs(\"PEP_RUNTIME_BYTE_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.data[(size_t)offset];\n}\n")
   reversed = prepend(reversed, "[[maybe_unused]] static int64_t pep_byte_length(pep_source_bytes source) {\n  if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n  if ((uintmax_t)source.length > (uintmax_t)INT64_MAX) { fputs(\"PEP_RUNTIME_LENGTH_RANGE\\n\", stderr); exit(1); }\n  return (int64_t)source.length;\n}\n")
   reversed = prepend(reversed, "typedef struct { const unsigned char *data; size_t length; } pep_str;\n[[maybe_unused]] static _Bool pep_str_equal(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length != right.length) { return 0; }\n  for (size_t i = 0; i < left.length; ++i) { if (left.data[i] != right.data[i]) { return 0; } }\n  return 1;\n}\n[[maybe_unused]] static _Bool pep_str_contains(pep_str haystack, pep_str needle) {\n  if ((haystack.length != 0 && haystack.data == NULL) || (needle.length != 0 && needle.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (needle.length == 0) { return 1; }\n  if (needle.length > haystack.length) { return 0; }\n  size_t limit = haystack.length - needle.length;\n  for (size_t i = 0; i <= limit; ++i) {\n    size_t j = 0;\n    while (j < needle.length && haystack.data[i + j] == needle.data[j]) { ++j; }\n    if (j == needle.length) { return 1; }\n  }\n  return 0;\n}\n")
+  // str_concat (Campaign G G-A2-7): a fresh region from a per-run bump pool, so EVERY
+  // result stays valid for the whole run -- chains, siblings and let-bound aliases are all
+  // sound by construction (no buffer reuse), which is what the staged checker's nested
+  // message composition needs. The explicit divergence from the unbounded seed builtin:
+  // capacity PEP_STR_CONCAT_CAPACITY, and overflow fails closed at RUNTIME with
+  // PEP_RUNTIME_STR_CONCAT_RANGE (pinned by the probe's capacity negative). 4 KiB is a
+  // deliberate, single-constant choice for compiler-A v1: diagnostic messages are tens to
+  // hundreds of bytes, and a larger budget only delays the same fail-closed abort. Raising
+  // it later is a one-line change PLUS its capacity negative -- never a silent bump.
+  reversed = prepend(reversed, "#define PEP_STR_CONCAT_CAPACITY 4096\n[[maybe_unused]] static pep_str pep_str_concat(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length > PEP_STR_CONCAT_CAPACITY || right.length > PEP_STR_CONCAT_CAPACITY - left.length) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n  static unsigned char pep_concat_pool[PEP_STR_CONCAT_CAPACITY];\n  static size_t pep_concat_used = 0;\n  unsigned char *out = pep_concat_pool + pep_concat_used;\n  for (size_t i = 0; i < left.length; ++i) { out[i] = left.data[i]; }\n  for (size_t i = 0; i < right.length; ++i) { out[left.length + i] = right.data[i]; }\n  pep_concat_used += left.length + right.length;\n  return (pep_str){ .data = out, .length = left.length + right.length };\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const pep_str *data; size_t length; } pep_list_str;\n")
+  // The print helper is placed unconditionally: detecting `say` with a node scan costs more
+  // than the one-shot emit_c23 budget leaves on a near-ceiling fixture (the depth-510 recursion
+  // regression tipped by ~hundreds of ticks with any conditional form; measured 2026-11-04).
+  // [[maybe_unused]] keeps -Wunused clean when nothing calls it, and programs without say produce
+  // byte-identical RUNTIME output -- only this fixed helper block is added to their generated C.
+  reversed = prepend(reversed, "[[maybe_unused]] static void pep_say(const unsigned char *value, unsigned long long length) {\n  if (length != 0 && value == NULL) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  for (unsigned long long pep_i = 0; pep_i < length; ++pep_i) { fputc((int)value[pep_i], stdout); }\n  fputc(10, stdout);\n}\n")
   if requiresArena {
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_int pep_list_int_prepend(pep_arena_t *pep_a, pep_list_int pep_values, int64_t pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_count * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_int pep_list_int_reverse(pep_arena_t *pep_a, pep_list_int pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_int){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(int64_t)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  int64_t *pep_out = (int64_t *)pep_arena_alloc(pep_a, pep_values.length * sizeof(int64_t), _Alignof(int64_t));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_int){ .data = pep_out, .length = pep_values.length };\n}\n")
     reversed = prepend(reversed, "[[maybe_unused]] static pep_list_bool pep_list_bool_prepend(pep_arena_t *pep_a, pep_list_bool pep_values, _Bool pep_value) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == SIZE_MAX || pep_values.length + 1 > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  size_t pep_count = pep_values.length + 1;\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_count * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  pep_out[0] = pep_value;\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i + 1] = pep_values.data[pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_count };\n}\n[[maybe_unused]] static pep_list_bool pep_list_bool_reverse(pep_arena_t *pep_a, pep_list_bool pep_values) {\n  if (pep_values.length != 0 && pep_values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  if (pep_values.length == 0) { return (pep_list_bool){ .data = NULL, .length = 0 }; }\n  if (pep_values.length > SIZE_MAX / sizeof(_Bool)) { fputs(\"PEP_RUNTIME_OVERFLOW\\n\", stderr); exit(1); }\n  _Bool *pep_out = (_Bool *)pep_arena_alloc(pep_a, pep_values.length * sizeof(_Bool), _Alignof(_Bool));\n  if (pep_out == NULL) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); exit(1); }\n  for (size_t pep_i = 0; pep_i < pep_values.length; ++pep_i) { pep_out[pep_i] = pep_values.data[pep_values.length - 1 - pep_i]; }\n  return (pep_list_bool){ .data = pep_out, .length = pep_values.length };\n}\n")
@@ -4209,13 +4531,26 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   let declarations = pep_c23_declaration_definitions(parsed, requiresArena, -1)
   if declarations.status != "emitted" { return declarations } else {}
   for part in declarations.sourceParts { reversed = prepend(reversed, part) }
+  // Everything accumulated so far = runtime preamble + declaration definitions. The
+  // `prototypes` part (Campaign G G-A2-4) returns ONLY the prototype block built below, so a
+  // chunked assembly can place prototypes before ANY unit order. COST DISCIPLINE (measured:
+  // a second length() walk of this large list tipped a near-ceiling fixture over the fixed
+  // 100k budget): the walk happens exactly ONCE here, before the loop; sectionHeaderCount is
+  // then arithmetic over a loop counter instead of a second walk (net ~+8 steps over the
+  // pre-G-A2-4 baseline instead of a full extra traversal).
+  // SYNC NOTE (Campaign G G-A2-4): the prototype-building loop below appears AGAIN inside
+  // the `prototypes` part branch. The duplication is deliberate -- slicing the merged
+  // `reversed` list needs the preamble+decls count, and the second length() walk measured
+  // OVER the fixed 100k budget on a near-ceiling fixture. Keeping this common path byte-for-byte
+  // at its pre-G-A2-4 cost is what the tip fixture requires; tests/test_c23_bounded_emission
+  // pins `prototypes == header's tail`, so the two copies cannot drift without failing green.
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let functionParameters = pep_c23_parameters(parsed.nodes, node)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
-      reversed = prepend(reversed, int_text(node.id))
+      reversed = prepend(reversed, node.text)
       if length(functionParameters) == 0 {
         if requiresArena { reversed = prepend(reversed, "(pep_arena_t *pep_arena);\n") } else {
           reversed = prepend(reversed, "(void);\n")
@@ -4246,12 +4581,57 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   if part == "header" {
     return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
   } else {}
+  // Prototypes of THIS chunk's functions only: no preamble, no declarations, no bodies, no
+  // epilogue (returned before any of that is built, so the step cost is the prototype loop
+  // alone). Authentication is the checked chunk itself -- the same document/revision-gated
+  // report that authorises the unit -- so no new facts or interface are needed. Placed after
+  // the declaration header in an assembly, it makes unit ORDER irrelevant for C, which needs
+  // a declaration before use.
+  if part == "prototypes" {
+    // SYNC PAIR of the prototype loop above (see the sync note) -- all cost of this part is
+    // paid here, so every other section keeps its exact pre-G-A2-4 step profile.
+    var prototypeParts: List[Str] = []
+    for node in topLevelFunctions {
+      if node.parentId == -1 && node.kind == "function" {
+        let functionParameters = pep_c23_parameters(parsed.nodes, node)
+        let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
+        for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { prototypeParts = prepend(prototypeParts, resultPart) }
+        prototypeParts = prepend(prototypeParts, " pep_fn_")
+        prototypeParts = prepend(prototypeParts, node.text)
+        if length(functionParameters) == 0 {
+          if requiresArena { prototypeParts = prepend(prototypeParts, "(pep_arena_t *pep_arena);\n") } else {
+            prototypeParts = prepend(prototypeParts, "(void);\n")
+          }
+        } else {
+          prototypeParts = prepend(prototypeParts, "(")
+          var prototypeIndex = 0
+          for parameterNode in functionParameters {
+            let parameterType = pep_c23_child(parsed.nodes, parameterNode.id, "type", 0)
+            if prototypeIndex != 0 { prototypeParts = prepend(prototypeParts, ", ") } else {}
+            for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { prototypeParts = prepend(prototypeParts, typePart) }
+            prototypeParts = prepend(prototypeParts, " pep_arg_")
+            prototypeParts = prepend(prototypeParts, int_text(parameterNode.id))
+            prototypeIndex = prototypeIndex + 1
+          }
+          if requiresArena {
+            prototypeParts = prepend(prototypeParts, ", ")
+            prototypeParts = prepend(prototypeParts, "pep_arena_t *pep_arena")
+            prototypeParts = prepend(prototypeParts, ");\n")
+          } else { prototypeParts = prepend(prototypeParts, ");\n") }
+        }
+      } else {}
+    }
+    // Built backward by prepending (same as the common loop); one reverse yields forward
+    // prototype order -- the bounded-suite header-tail pin keeps this byte-identical to it.
+    return PepC23Emission { status: "emitted",
+      sourceParts: reverse(prototypeParts), diagnostic: "" }
+  } else {}
   // `main` is the epilogue alone; the bodies are not part of it.
   var functionsToEmit: List[FlatAstNode] = topLevelFunctions
   if part == "main" { functionsToEmit = [] } else {}
   var sectionFunctionEnds: List[Int] = []
   for node in functionsToEmit {
-    let definition = pep_c23_function_definition(parsed, node, requiresArena)
+    let definition = pep_c23_function_definition(parsed, node, requiresArena, checked)
     if definition.status != "emitted" { return definition } else {}
     for part in definition.sourceParts { reversed = prepend(reversed, part) }
     sectionFunctionEnds = append(sectionFunctionEnds, length(reversed))
@@ -4262,7 +4642,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
     reversed = prepend(reversed, "  if (pep_arena_init(&pep_arena, 0) != PEP_ARENA_OK) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
     reversed = prepend(reversed, "  int64_t pep_main_result = pep_fn_")
-    reversed = prepend(reversed, int_text(mainId))
+    reversed = prepend(reversed, "main")
     reversed = prepend(reversed, "(pep_arena);\n")
     reversed = prepend(reversed, "  if (pep_arena_status(pep_arena) != PEP_ARENA_OK) { pep_arena_free(&pep_arena); fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
     reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)pep_main_result);\n")
@@ -4272,7 +4652,7 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   } else {
     reversed = prepend(reversed, "int main(void) {\n")
     reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
-    reversed = prepend(reversed, int_text(mainId))
+    reversed = prepend(reversed, "main")
     reversed = prepend(reversed, "()));\n")
     reversed = prepend(reversed, "  return 0;\n")
     reversed = prepend(reversed, "}\n")

@@ -70,7 +70,7 @@ class PepC23StrContainsTests(unittest.TestCase):
                           generated)
             self.assertIn("PEP_RUNTIME_INVALID_STR", generated)
             declarations = re.findall(
-                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_(\d+), pep_str pep_arg_(\d+)\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_str pep_arg_(\d+), pep_str pep_arg_(\d+)\);",
                 generated)
             self.assertEqual(len(declarations), 2, generated)
             contains_id, contains_haystack_id, contains_needle_id = declarations[0]
@@ -184,7 +184,7 @@ say(int_text(bool_int(different("café", "café"))))
             self.assertIn("static _Bool pep_str_equal(pep_str left, pep_str right)", generated)
             self.assertIn("PEP_RUNTIME_INVALID_STR", generated)
             declarations = re.findall(
-                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_\d+, pep_str pep_arg_\d+\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_str pep_arg_\d+, pep_str pep_arg_\d+\);",
                 generated)
             self.assertEqual(len(declarations), 3, generated)
             equal_id, relay_id, different_id = declarations
@@ -292,10 +292,10 @@ say(int_text(bool_int(is_terminal("validate"))))
 
             generated = emit(source.read_bytes())
             declarations = re.findall(
-                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_\d+, pep_str pep_arg_\d+\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_str pep_arg_\d+, pep_str pep_arg_\d+\);",
                 generated)
             terminal = re.search(
-                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_str pep_arg_\d+\);", generated)
             self.assertEqual(len(declarations), 1, generated)
             self.assertIsNotNone(terminal, generated)
             self.assertIn(" && ", generated)
@@ -315,9 +315,9 @@ say(int_text(bool_int(is_terminal("validate"))))
                 "  static const unsigned char done[] = {100, 111, 110, 101};\n"
                 "  static const unsigned char error[] = {101, 114, 114, 111, 114};\n"
                 f'  printf("%d\\n%d\\n%d\\n%d\\n%d\\n%d\\n", '
-                f"pep_fn_{declarations[0][0]}((pep_str){{validate, sizeof validate}}, (pep_str){{scan, sizeof scan}}), "
-                f"pep_fn_{declarations[0][0]}((pep_str){{validate, sizeof validate}}, (pep_str){{NULL, 0}}), "
-                f"pep_fn_{declarations[0][0]}((pep_str){{scan, sizeof scan}}, (pep_str){{scan, sizeof scan}}), "
+                f"pep_fn_{declarations[0]}((pep_str){{validate, sizeof validate}}, (pep_str){{scan, sizeof scan}}), "
+                f"pep_fn_{declarations[0]}((pep_str){{validate, sizeof validate}}, (pep_str){{NULL, 0}}), "
+                f"pep_fn_{declarations[0]}((pep_str){{scan, sizeof scan}}, (pep_str){{scan, sizeof scan}}), "
                 f"pep_fn_{terminal.group(1)}((pep_str){{done, sizeof done}}), "
                 f"pep_fn_{terminal.group(1)}((pep_str){{error, sizeof error}}), "
                 f"pep_fn_{terminal.group(1)}((pep_str){{validate, sizeof validate}}));\n"
@@ -391,7 +391,7 @@ say(int_text(bool_int(is_terminal(LexState { stage: "validate", mode: "scan" }))
             self.assertIn("pep_str pep_field_0;", record.group(1))
             self.assertIn("pep_str pep_field_1;", record.group(1))
             declarations = re.findall(
-                r"_Bool pep_fn_(\d+)\(pep_record_(\d+) pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_record_(\d+) pep_arg_\d+\);", generated)
             self.assertEqual(len(declarations), 2, generated)
             validate_id, record_id = declarations[0]
             terminal_id, terminal_record_id = declarations[1]
@@ -486,9 +486,12 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
 
             generated = emit(source.read_bytes())
             self.assertEqual(generated.count("pep_str pep_local_"), 1, generated)
-            self.assertIn(".data = (const unsigned char[]){ 195, 169, 9, 34, 92 }", generated)
+            # Static-storage string literal with fixed-width octal escapes (Campaign F F3):
+            # 195=\303 169=\251 9=\011 34=\042 92=\134 -- byte-identical to the old
+            # compound-array form, but the bytes now outlive the creating function frame.
+            self.assertIn(".data = (const unsigned char *)\"\\303\\251\\011\\042\\134\"", generated)
             self.assertIn(".length = 0", generated)
-            ids = re.findall(r"_Bool pep_fn_(\d+)\(void\);", generated)
+            ids = re.findall(r"_Bool pep_fn_([A-Za-z_0-9]+)\(void\);", generated)
             self.assertEqual(len(ids), 3, generated)
 
             generated_path = folder / "generated.c"
@@ -578,7 +581,7 @@ say(int_text(bool_int(utf8_and_escaped_literal())))
                              r"pep_arg_\d+\.pep_field_0")
             self.assertIn("pep_str_contains(", generated)
             wrapper = re.search(
-                r"_Bool pep_fn_(\d+)\(pep_str pep_arg_(\d+), pep_str pep_arg_(\d+)\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_str pep_arg_(\d+), pep_str pep_arg_(\d+)\);",
                 generated)
             self.assertIsNotNone(wrapper, generated)
             function_id = wrapper.group(1)
@@ -705,10 +708,10 @@ fn main() -> Int {
             self.assertIn("PEP_RUNTIME_DIVISION_BY_ZERO", generated)
             generated_path = folder / "generated.c"
             generated_path.write_text(generated, encoding="utf-8", newline="\n")
-            main_match = re.search(r"int64_t pep_fn_(\d+)\(void\);", generated)
+            main_match = re.search(r"int64_t pep_fn_([A-Za-z_0-9]+)\(void\);", generated)
             self.assertIsNotNone(main_match, generated)
             bool_parameter_ids = re.findall(
-                r"_Bool pep_fn_(\d+)\(_Bool pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(_Bool pep_arg_\d+\);", generated)
             self.assertEqual(len(bool_parameter_ids), 2, generated)
             harness_path = folder / "boolean-short-circuit-harness.c"
             harness_path.write_text(
@@ -791,7 +794,7 @@ fn main() -> Int {
 
             generated = emit(source.read_bytes())
             predicate = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
                 generated)
             self.assertIsNotNone(predicate, generated)
             generated_path = folder / "generated.c"
@@ -858,7 +861,7 @@ fn main() -> Int {
 
             generated = emit(source.read_bytes())
             predicate = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+\);", generated)
             self.assertIsNotNone(predicate, generated)
             generated_path = folder / "generated.c"
             generated_path.write_text(generated, encoding="utf-8", newline="\n")
@@ -940,7 +943,7 @@ fn ascii_continue(byte: Int) -> Bool {
             generated = emit(source.read_bytes())
             self.assertIn(" || ", generated)
             functions = re.findall(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+\);", generated)
             self.assertEqual(len(functions), 3, generated)
             continue_function = functions[-1]
             generated_path = folder / "generated.c"
@@ -1022,7 +1025,7 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             function = re.search(
-                r"int64_t pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                r"int64_t pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
                 generated)
             self.assertIsNotNone(function, generated)
             generated_path = folder / "generated.c"
@@ -1113,9 +1116,9 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             continuation = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+\);", generated)
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+\);", generated)
             scalar = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_\d+, int64_t pep_arg_\d+\);",
                 generated)
             self.assertIsNotNone(continuation, generated)
             self.assertIsNotNone(scalar, generated)
@@ -1221,7 +1224,7 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             declaration = re.search(
-                r"_Bool pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+), "
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_source_bytes pep_arg_(\d+), "
                 r"int64_t pep_arg_(\d+)\);",
                 generated)
             self.assertIsNotNone(declaration, generated)
@@ -1446,7 +1449,7 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             declaration = re.search(
-                r"_Bool pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+), "
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(pep_source_bytes pep_arg_(\d+), "
                 r"int64_t pep_arg_(\d+)\);", generated)
             self.assertIsNotNone(declaration, generated)
             function_id = declaration.group(1)
@@ -1580,7 +1583,7 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             declaration = re.search(
-                r"_Bool pep_fn_(\d+)\(int64_t pep_arg_(\d+), "
+                r"_Bool pep_fn_([A-Za-z_0-9]+)\(int64_t pep_arg_(\d+), "
                 r"pep_source_bytes pep_arg_(\d+), int64_t pep_arg_(\d+)\);",
                 generated)
             self.assertIsNotNone(declaration, generated)
@@ -1666,7 +1669,7 @@ fn main() -> Int { return 0 }
 
             generated = emit(source.read_bytes())
             declaration = re.search(
-                r"int64_t pep_fn_(\d+)\(pep_source_bytes pep_arg_(\d+)\);",
+                r"int64_t pep_fn_([A-Za-z_0-9]+)\(pep_source_bytes pep_arg_(\d+)\);",
                 generated)
             self.assertIsNotNone(declaration, generated)
             function_id = declaration.group(1)

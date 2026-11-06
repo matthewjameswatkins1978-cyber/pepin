@@ -36,9 +36,11 @@ SUPPORTED = ("fn helper_first() -> Int { return 1 }\n"
              "fn helper_second() -> Int { return 2 }\n"
              "fn main() -> Int { return helper_first() }\n")
 
-# `bad` is accepted by the checker but has no C23 lowering (Str result).
+# `bad` is accepted by the checker but has no C23 lowering. Straight-line Str RESULTS became
+# supported (Campaign F F3), so the unsupported peer is now a CONDITIONAL-return Str body,
+# which keeps its recorded boundary refusal (same fixture class as test_a14_c23's pin).
 MIXED = ("fn good() -> Int { return 1 }\n"
-         "fn bad() -> Str { return \"a\" }\n"
+         "fn bad() -> Str { if true { return \"yes\" } else { return \"no\" } }\n"
          "fn main() -> Int { return good() }\n")
 
 
@@ -156,7 +158,10 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "mixed")
         whole = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole[0], "unsupported")
-        self.assertIn("scalar or record results", whole[1])
+        # G-A2-3 moved the two-branch Str diagnostic one layer out (if_return_body still gates
+        # Str; the straight-line fall-through then wants a top-level return) -- still refused,
+        # still empty parts, only the message text changed.
+        self.assertIn("functions require a return statement", whole[1])
 
         status, diagnostic, parts = self._unit(parsed, checked, semantic, 0)
         self.assertEqual(status, "emitted", diagnostic)
@@ -166,7 +171,7 @@ class BoundedEmissionTests(unittest.TestCase):
         # The unsupported peer reports its own diagnostic, and nothing else does.
         peer_status, peer_diagnostic, peer_parts = self._unit(parsed, checked, semantic, 1)
         self.assertEqual(peer_status, "unsupported")
-        self.assertIn("scalar or record results", peer_diagnostic)
+        self.assertIn("functions require a return statement", peer_diagnostic)
         self.assertEqual(peer_parts, [])
 
     def test_sections_reassemble_to_the_one_shot_output(self):
@@ -185,6 +190,30 @@ class BoundedEmissionTests(unittest.TestCase):
             rebuilt.extend(unit)
         rebuilt.extend(epilogue)
         self.assertEqual(rebuilt, whole)
+
+    def test_prototypes_section_is_prototypes_only(self):
+        """G-A2-4: the `prototypes` part returns exactly the prototype block.
+
+        No preamble/includes, no declaration definitions, no function bodies, no epilogue --
+        and for a declaration-free fixture the bytes are precisely the tail of `header`, which
+        is what lets a chunked assembly place them ahead of ANY unit order (reverse order is
+        proven end-to-end in tests/probe_seam_chunked.py under both compilers).
+        """
+        parsed, checked, semantic = self._prepare(SUPPORTED, "prototypes-part")
+        status, diagnostic, parts = self._section(parsed, checked, semantic, "prototypes")
+        self.assertEqual(status, "emitted", diagnostic)
+        text = "".join(parts)
+        self.assertIn("int64_t pep_fn_helper_first", text)
+        self.assertIn("int64_t pep_fn_helper_second", text)
+        self.assertTrue(text.endswith(";\n"), "prototypes end at the last declaration")
+        self.assertNotIn("#include", text, "no runtime preamble in the prototypes part")
+        self.assertNotIn("pep_enter", text, "no function bodies in the prototypes part")
+        self.assertNotIn("int main", text, "no epilogue in the prototypes part")
+        header_status, header_diagnostic, header_parts = self._section(
+            parsed, checked, semantic, "header")
+        self.assertEqual(header_status, "emitted", header_diagnostic)
+        self.assertTrue("".join(header_parts).endswith(text),
+                        "prototypes are exactly the header's tail on a declaration-free fixture")
 
     def test_out_of_range_unit_fails_closed(self):
         parsed, checked, semantic = self._prepare(SUPPORTED, "supported-range")
@@ -311,7 +340,7 @@ class BoundedEmissionTests(unittest.TestCase):
         parsed, checked, semantic = self._prepare(MIXED, "section-boundedness")
         whole_status, whole_diagnostic, whole_parts = self._section(parsed, checked, semantic, "all")
         self.assertEqual(whole_status, "unsupported")
-        self.assertIn("scalar or record results", whole_diagnostic)
+        self.assertIn("functions require a return statement", whole_diagnostic)
         self.assertEqual(whole_parts, [])
 
         header_status, header_diagnostic, header_parts = self._section(parsed, checked, semantic, "header")
