@@ -1,0 +1,151 @@
+{
+ "header": {
+  "recordType": "LexCursor",
+  "recordSpan": {
+   "start": {
+    "offset": 644,
+    "line": 27,
+    "column": 10
+   },
+   "endOffset": 1048
+  },
+  "declSpan": {
+   "start": {
+    "offset": 0,
+    "line": 1,
+    "column": 1
+   },
+   "endOffset": 320
+  }
+ },
+ "fieldIds": [
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15
+ ],
+ "fields": [
+  {
+   "name": "tokenStart",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 806,
+     "line": 30,
+     "column": 17
+    },
+    "endOffset": 816
+   },
+   "bindingId": 8
+  },
+  {
+   "name": "tokenLine",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 829,
+     "line": 30,
+     "column": 40
+    },
+    "endOffset": 838
+   },
+   "bindingId": 9
+  },
+  {
+   "name": "tokenColumn",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 853,
+     "line": 30,
+     "column": 64
+    },
+    "endOffset": 864
+   },
+   "bindingId": 10
+  },
+  {
+   "name": "integerValue",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 884,
+     "line": 31,
+     "column": 19
+    },
+    "endOffset": 896
+   },
+   "bindingId": 11
+  },
+  {
+   "name": "integerOverflow",
+   "type": "Bool",
+   "span": {
+    "start": {
+     "offset": 915,
+     "line": 31,
+     "column": 50
+    },
+    "endOffset": 930
+   },
+   "bindingId": 12
+  },
+  {
+   "name": "escapePending",
+   "type": "Bool",
+   "span": {
+    "start": {
+     "offset": 951,
+     "line": 32,
+     "column": 20
+    },
+    "endOffset": 964
+   },
+   "bindingId": 13
+  },
+  {
+   "name": "stringPartStart",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 983,
+     "line": 32,
+     "column": 52
+    },
+    "endOffset": 998
+   },
+   "bindingId": 14
+  },
+  {
+   "name": "stringPartsReversed",
+   "type": "List[Str]",
+   "span": {
+    "start": {
+     "offset": 1025,
+     "line": 33,
+     "column": 26
+    },
+    "endOffset": 1044
+   },
+   "bindingId": 15
+  }
+ ],
+ "carriedBindings": [
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15
+ ],
+ "revision": {
+  "lexer_source": "pep_lexer.pep @57fe424==a9e9e2f(byte-identical)",
+  "oracle_sha256": "a353555ef9882766"
+ }
+}
