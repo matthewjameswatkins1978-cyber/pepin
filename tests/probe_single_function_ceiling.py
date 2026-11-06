@@ -4,11 +4,21 @@ The budget picture so far:
 
   single-budget emit_c23()   144 bytes
   staged full pipeline       335 bytes
-  check alone                230-260 bytes, shape-independent (~400 steps/byte)
+  check alone                ~250 bytes for the shapes measured
 
 That last number is the one that decides whether statement-level staged checking can
 work at all. If the checker handles ~250 bytes, then a single function must be under
 ~250 bytes to be checkable -- and the real lexer functions are much larger than that.
+
+CAVEAT, and it matters: an earlier version of this docstring called the check ceiling
+"shape-independent (~400 steps/byte)". That was RETRACTED. probe_checker_node_ceiling.py
+shows the cost is construct-dependent -- a sparse program (long string literals)
+reaches 1501 bytes where a dense one (let bindings) stops at 281. So the 293-byte
+figure below is the ceiling for THIS fixture (let statements), not a general byte
+budget. Read it as "about 40 nodes of this shape".
+
+That still decides the question this probe asks: the real lexer functions are far
+larger than any measured ceiling, whatever unit you use.
 
 This probe measures the ceiling for ONE function of increasing size, then compares it
 against the actual sizes of the real lexer functions. The comparison is the point: it

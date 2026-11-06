@@ -3,8 +3,10 @@ staged checking can work.
 
 A1's receipt 017 reports that `lexer_step` contains a 1033-node statement and that
 staged-descent sizing is "context-driven cost, not node count". My own measurements
-agree from the other side: the checker's ceiling is ~293 bytes per function and is
-shape-independent (~400 steps/byte).
+agree from the other side, and I have since bounded the cost model: it is NOT bytes,
+NOT node count, and NOT a linear combination of the two -- it is construct-dependent
+(probe_checker_node_ceiling.py). The 104-byte figure below is the ceiling for THIS
+fixture (a chain of `+ 1` terms), not a general byte budget.
 
 Those two findings together raise a question neither answers alone: if a SINGLE
 statement is larger than the whole budget, then no amount of statement-level carving
