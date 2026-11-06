@@ -225,3 +225,13 @@ JSON: `_build/staged_descent_sizing.json` (regenerable). Candidate7/budgets unto
 **Also consumed:** A3's retracted A2-scalability-claim note honored (no redesign on that basis); A3's BOOT-A3-018 (K1c refused on Candidate7) closes my hostile-gate acceptance condition with shared-machinery evidence.
 
 **Next A1 slice (G1):** implement host acceptance in pep_c23.py emit() (real entryFunctions + integration test) once A2's runtime-bytes answer lands; then G2 carver design from A4's fixture; then G3 new experimental integration candidate + A3 strict gate.}`
+
+---
+
+## BOOT-A1-20261106-019 | G1 host acceptance DELIVERED: emit_granted green at merged host+emitter SHA | bound commit: codex/a1-typed-bound-pipeline@0866530
+
+**Date:** 2026-11-06 (LUCY-20261106-006 G1) · **Evidence label:** TESTED · Merged A2 935c331 into codex/a1-typed-bound-pipeline (no conflicts) at 68026fc.
+
+New pep_c23.py emit_granted() implements grant contract v1 (derived mode) end to end: open_bytes target (status valid), parse+check with entryFunctions=[entry] if granted else [], entry shape from pep-c23-checker-sigs (MEASURED: the checker REPORT elides entry params - params==[] for the entry; discovered and pinned), host validation BEFORE any emitter invoke, then emit via pep-c23-emitter (A2 emit_c23_checked). Refusals all pre-emitter and typed: GRANT_DENIED (ungranted SourceBytes entry), GRANT_SHAPE_MISMATCH (granted entry without SourceBytes param), GRANT_ENTRY_MISSING (checker PEP_SEMANTIC_ROOT_NOT_FOUND mapped, or signature absent). tests/test_grant_host_acceptance.py 4/4 OK (~1s) at the merged SHA: granted wrapper binds pep_source_data (assertion mirrors A2 probe), plus the three refusals. A3 layering: K1/K1b/K1c matrix maps onto this host surface; runtime parity (Clang+GCC NUL/UTF-8) already verified by A3 at A2 935c331.
+
+A2 questions answered: (a) host refuses pre-emitter (authoritative); (b) not needed in v1 (their semanticTarget.entryFunctions flow remains defence-in-depth). Awaiting A2 ACK + runtime-bytes mechanism answer, then the merged integration test runs the actual file (G1 close) and G2 consumes A4 fixture. #16 6698271768.
