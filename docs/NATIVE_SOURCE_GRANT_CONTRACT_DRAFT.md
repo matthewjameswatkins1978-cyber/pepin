@@ -59,7 +59,31 @@ grant is a new OPTIONAL, host-authored field **`sourceGrant`** on that value:
    Full-v2 rows stay untouched; hostile ingress probes re-run on the new host
    surface.
 
-## 5. Non-goals
+## 6. v1 wire contract — FINALISED from A2's implemented vertical (BOOT-A3-016 PASS)
+
+A2 implemented and A3 verified (clang+gcc NUL/UTF-8, negatives exact) a simpler
+shape than an explicit wire field. v1 therefore makes the grant **derived, not
+declared** — no new `semanticTarget` field ships in v1:
+
+- **Grant exists iff** the CHECKED entry function declares a parameter of type
+  `SourceBytes` AND that function's name is a member of
+  `semanticTarget.entryFunctions` (both fail-closed inputs that already ship).
+- **Ownership/identity:** bytes are exactly the `open_bytes` payload of the
+  same `document`/`revision`; the C wrapper binds them at assembly/run time.
+  No path, no second read path, no cached global.
+- **Fail-closed refusals (unchanged text):** an unlisted entry whose checked
+  shape expects `SourceBytes` keeps today's refusal; a listed entry with no
+  such parameter emits normally; no `source_bytes()` call lowering is added.
+- **v2 reserved (not v1):** an explicit declared `sourceGrant` field for
+  multi-entry/second-grant control (`mode`, `paramIndex` in 0..arity-1,
+  strict additionalProperties=false, host-side validation before any tool
+  invoke). Ships only with a new review line in this draft.
+- **Host acceptance (G1, A1):** `pep_c23.py` `emit()` must pass real
+  `entryFunctions` (currently `[]`) and A1's integration test asserts the
+  derived-grant behaviour at the merged host+emitter SHA: granted vertical
+  NUL/UTF-8/ASCII vs A2's oracle, plus the two fail-closed shapes above.
+
+## 7. Non-goals
 
 No `utf8_slice`/`byte_length`-call lowering beyond the existing parameter shape;
 no ambient `source_bytes()`; no B/C-stage semantic compilation changes; no
