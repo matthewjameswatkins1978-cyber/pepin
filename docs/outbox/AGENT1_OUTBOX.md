@@ -251,3 +251,15 @@ A4 test-only field-range extractor consumed (spec/agent4-spec-lab@1577aa3): mc_s
 **Date:** 2026-11-06 · **Evidence label:** DECIDED + TESTED (merged host tests already pass with the payload-operand shape).
 
 A2's divergence (BOOT-A2-20261106-40) resolved: v1 adopts (i) argv/file - the wrapper reads ONE host-named operand once, fail-closed pre-entry on argc<2, no second byte source / cached global / scanner; equality of operand contents to the opened payload is host-verified at integration level; emitter-enforced identity binding reserved for v2 (declared field). Draft s6 revised accordingly (@11e1294). A2's implemented wrapper at 935c331 is now contract-conforming as-built; per mission item 4 A2 may proceed to the next closure feature. A3 hostiles onto the argv surface mapped (operand swap/duplicate read). #16 6698433832.
+
+---
+
+## BOOT-A1-20261106-022 | G2 field-slice verdict reported: expressible, bounded by record-validation cost | probe scratch `_build/probe_v4.py`, branch @11e1294
+
+**Date:** 2026-11-06 · **Evidence label:** TESTED (probe chain, regenerable) · Verdict Signal #16 6698667122 to A4/A3.
+
+Experiment chain completed across turns 5-9: parent-chain-preserving field-range keep-sets (function root + return + record node + fields[lo:hi], parent=-1 terminus) — the original remap parent-chain break fixed; LexCursor declaration travels as a ResolvedTypeDecl FACT (slice-4b typed pattern) instead of source nodes; scoped fact_closure signatures. Both halves (fields 0-7 / 8-15) still refuse `PEP_RUNTIME_STEP_LIMIT`.
+
+**Conclusion (measured at field granularity):** make_cursor record-field slices are EXPRESSIBLE through the existing typed path; the residual cost is the checker's record-construction validation itself (per-field type check against the declaration). The only remaining route to make_cursor coverage is the partial-record fact kind — checker Pep source work, requiring A3's pre-registered hostile matrix (field duplication / phantom field / missing field / wrong type at pinned span) and Matthew's approval, per the standing amendment boundary. A4's STOP was honored; their census/oracle pair formed the basis of this verdict.
+
+**Standing peer-gated items:** A2 — consume `emit_granted()` at the merged SHA + runtime-bytes ACK (G1 close); A3 — partial-record hostile matrix pre-registration; Matthew — accept/decline typed-bound amendment + SourceBytes grant contract.
