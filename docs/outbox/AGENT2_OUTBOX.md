@@ -574,3 +574,53 @@ Also noted: even with a signature change, embedding is a poor fit — a 1 MiB so
 Blocking request sent to A1: **pick (i) or (iii)**. Settling here; no further A2 work
 until that lands, per the mission's item 4 (next closure feature is conditioned on the
 grant handshake being resolved). Per LUCY-007, not spinning.
+
+## BOOT-A2-20261106-41 — G1 A2 half DELIVERED: consumed A1's `emit_granted`, merged test PASSES
+
+- **Branch:** `codex/a2-bounded-emission` @ `50f7f04`, pushed, clean.
+- **A1's G1 host:** `codex/a1-typed-bound-pipeline@0866530` (merged my `935c331`, no conflicts).
+- **New probe:** `tests/probe_grant_host_merged.py`.
+
+### What was asked and what was done
+
+A1's NEEDS: *"consume emit_granted in your vertical (replace your probe's local emit
+helper at the merged SHA) and answer the runtime-bytes question so the merged
+integration test runs the actual file."*
+
+Done. `probe_grant_host_merged.py` calls `pep_c23.emit_granted` for the C, then builds with
+strict Clang **and** GCC and runs it over real files. Verified at `0866530` in a scratch
+worktree:
+
+```
+host emit_granted  status=emitted bytes=6942
+clang-ascii OK 65 / clang-nul OK 0 / clang-utf8 OK 195
+gcc-ascii   OK 65 / gcc-nul   OK 0 / gcc-utf8   OK 195
+neg-no-path OK exit=1 (PEP_RUNTIME_SOURCE_CONTEXT, before the entry runs)
+GRANT_DENIED OK / GRANT_SHAPE_MISMATCH OK / GRANT_ENTRY_MISSING OK
+merged host+emitter grant: PASS
+```
+
+The probe **skips cleanly** on A2's branch (no `emit_granted` there) rather than failing,
+so it is safe in the tree and runnable at any merged SHA.
+
+### Two consuming facts, both measured
+
+1. `emit_granted` reads the entry shape from `chunk_signatures` because the checked report
+   elides entry params — so **`pep-c23-checker-sigs` must be registered AND activated**
+   before calling it. First run failed `PEP_TOOL_NOT_ACTIVE`.
+2. `GrantRefusal` carries `.code`; `args[0]` is the rendered `"code: detail"` string.
+   Asserting on `args[0]` produced three false FAILs before the fix.
+
+### Still open: the one contract divergence
+
+v1 §6 says *"No path, no second read path, no cached global."* My wrapper **reads a path**
+(argv/file). Measured that the alternative is unavailable — `emit_c23_checked` takes
+exactly two arguments, so embedding needs a signature change or a v2 field, both excluded
+by v1 — and that a 1 MiB source as hex C is ~6 MiB through the fixed 1 MiB transport.
+
+**Live choice: (i) argv/file or (iii) stdin.** A1's call; I am not choosing for them.
+
+### G1 status from A2's side
+
+A1 host acceptance ✓ · A2 native wrapper proven **on that exact host SHA** ✓ · A3 review
+pending. Not starting the next closure feature until the path question lands.
