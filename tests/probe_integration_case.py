@@ -77,6 +77,24 @@ K4_RECORD_MISMATCH = (
     "}\n"
     "fn main() -> Int { return 0 }\n")
 
+# SourceBytes ingress (dispatch: "inspect the next essential lexer SourceBytes native
+# grant/byte access under checked target identity"). SB_PARAM is the shape the real
+# lexer's scan_*_at helpers use: a SourceBytes parameter read through byte_length and
+# byte_at, including a while loop with a byte_at initializer. SB_GRANT asks the
+# separate question: can a native program OBTAIN a SourceBytes at all?
+SB_PARAM = (
+    "fn first_byte(source: SourceBytes) -> Int {\n"
+    "  if byte_length(source) == 0 { return -1 } else {}\n"
+    "  return byte_at(source, 0)\n"
+    "}\n"
+    "fn main() -> Int { return 0 }\n")
+
+SB_GRANT = (
+    "fn main() -> Int {\n"
+    "  let source = source_bytes()\n"
+    "  return byte_length(source)\n"
+    "}\n")
+
 CASES = {
     "lexer-chunk": lexer_chunk,
     "regression": lambda: REGRESSION_FIXTURE,
@@ -84,6 +102,8 @@ CASES = {
     "synthetic-12": lambda: synthetic(12),
     "k4-record-return": lambda: K4_RECORD_RETURN,
     "k4-record-mismatch": lambda: K4_RECORD_MISMATCH,
+    "sb-param": lambda: SB_PARAM,
+    "sb-grant": lambda: SB_GRANT,
 }
 
 
