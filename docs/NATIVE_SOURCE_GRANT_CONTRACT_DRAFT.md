@@ -78,6 +78,10 @@ declared** — no new `semanticTarget` field ships in v1:
   scanner; the host test verifies the operand's contents equal the
   `document`/`revision` payload (equality host-verified; emitter-enforced
   identity binding is v2). `source_bytes()` as a CALL stays refused.
+- **Host caller requirements (from A2's merged consumption, RECEIPT 41):**
+  `pep-c23-checker-sigs` must be registered AND activated before
+  `emit_granted()` is called (the checked report elides entry params); typed
+  refusals must be asserted via `GrantRefusal.code`, not the rendered message.
 - **Fail-closed refusals (unchanged text):** an unlisted entry whose checked
   shape expects `SourceBytes` keeps today's refusal; a listed entry with no
   such parameter emits normally; no `source_bytes()` call lowering is added.
