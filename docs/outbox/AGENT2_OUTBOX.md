@@ -91,3 +91,47 @@ ingress next.
 
 No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
 `manifest.json` change, no budget-cap change, no frozen-runner edit.
+
+## BOOT-A2-20261106-03 — K4 falsifier triggered: record returns ALREADY lower natively
+
+- **Commit:** `6e0ac7436cce8cc05b5050cc3389957521b66266`.
+- **New probe:** `tests/probe_k4_record_return.py`; two cases added to
+  `tests/probe_integration_case.py`.
+- **A4's own falsifier** (`docs/spec/K4-STDLIB-PRIMITIVE.md`): "A3 guard-read showing
+  L3-shape already lowers at 123d8b3 (record returns via existing machinery) — then the
+  primitive EXISTS and this card flips to NO-CHANGE, residual L6 control-flow."
+  **It already lowers.** No emitter change was needed.
+
+Evidence — both branches of `examples/pep_lexer.pep:90`, one fixture each
+(`python tests/probe_k4_record_return.py` → **exit 0**):
+
+| branch | call | check | emit | strict Clang `-std=c23` | strict GCC `-std=c2x` | seed oracle |
+|---|---|---|---|---|---|---|
+| newline (`byte == 10`) | `advance_position(1, 1, 10)` | valid, 0 diags | emitted, 6537 bytes | `21` | `21` | `21` |
+| ordinary | `advance_position(4, 7, 65)` | valid, 0 diags | emitted, 6537 bytes | `48` | `48` | `48` |
+
+Both compilers with `-Wall -Wextra -Wpedantic -Werror -O2`. Negative: the L4-shape
+`make_token` fixture with `text: 0` → `status=invalid`,
+`PEP_TYPE_MISMATCH` "Record field value type does not match its declaration", so a
+record-return path reuses the existing field-type gate rather than laundering.
+
+**Consequence:** K4 is **NO-CHANGE** on the primitive. The residual at the lexer header
+is **L6 control flow** (while + mutable state + source grants), not a missing record
+primitive.
+
+### Two incidental findings (both measured, both for A4)
+
+1. A4's doc says the seed oracle "prints 2/1/4/8" via top-level
+   `say(advance_position(...).line)`. **That does not reproduce.**
+   `say` is `[Str] -> Unit` at the `727f8af` seed *and* at the campaign tree
+   `57fe424` that A4 reports testing at, so `say(a.line)` is `PEP_TYPE_MISMATCH`
+   at 8:5. The **values** are right; the call shape needs `int_text`. The committed
+   oracle uses `say(int_text(...))` and does print `2\n1\n4\n8\n` at seed.
+2. Two call sites in one `main` exceed the one-shot checker ceiling:
+   `PEP_RUNTIME_STEP_LIMIT` at `2441:3`. Hence one fixture per branch.
+
+### Not claimed
+
+No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
+`manifest.json` change, no budget-cap change, no frozen-runner edit, and no claim
+that record returns were *missing* — they were never missing.
