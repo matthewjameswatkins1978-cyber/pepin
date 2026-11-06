@@ -27,8 +27,21 @@ with PEP_RUNTIME_STEP_LIMIT.
 The mechanism: that test drives the zero-argument `emit_c23()` entry, which calls
 `parser_parse_program()` and `analyze_parsed()` and then emits -- parse, check and
 emit inside ONE 100k budget. The emitter source is part of the bundle being
-checked, so every added line raises that cost. Measured: the test passes at
-`7b9f360` and fails with the ~10-line addition; reverting restores it.
+checked, so additions to it raise that cost.
+
+HEADROOM, measured by bisecting the addition (each row is a real run of that test):
+
+  16 comment lines                                  PASS
+  8 new trivial top-level functions                 PASS
+  1 trivial statement (`if 1 == 2`) in a tail fn    PASS
+  1 statement with a field access in a small fn     FAIL  PEP_RUNTIME_STEP_LIMIT
+  1 statement with a field access in a large fn     FAIL  PEP_RUNTIME_STEP_LIMIT
+  the int_text branch (field access + calls)        FAIL  PEP_RUNTIME_STEP_LIMIT
+
+So the margin is not line count and not function count: it is a handful of
+TYPE-CHECKED statements. Comments are free, new uncalled functions are nearly
+free, but a statement that the checker has to type is enough to tip it. The
+recursive-depth test is sitting within a few checked statements of the ceiling.
 
 The production path is unaffected: `emit_c23_checked(parsed, checked)` with
 pre-parsed, pre-checked arguments emits the same program fine, because each stage
