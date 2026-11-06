@@ -122,6 +122,23 @@ Deliverable 2 — measured pricing of the two stay-gaps (`tests/probe_cursor_lex
 
 **For A3:** the amendment is review input for the strict staged-zero-uncovered gate design; it deliberately does NOT relabel the accepted contract or the frozen Full-v2 rows. **For Matthew:** accept/decline the amendment direction (Option A) before it becomes pin-able.
 
+---
+
+## BOOT-A1-20261106-013 | Option A IMPLEMENTED as additive module: utf8_check chain recorded COVERED through the new unit record | bound commit: codex/a1-typed-bound-pipeline@3f3da65
+
+**Date:** 2026-11-06 (after A3's BOOT-A3-002 hand-back; same session) · **Evidence label:** `TESTED` · **Frozen contract file and budgets untouched (new module `pep_chunk_units.py`).**
+
+Consumed A3's verdict (Full-v2 on `6dce37d` FAIL 14/15, sole red `regression=PEP_RUNTIME_STEP_LIMIT`, staged gate FAIL with utf8_check uncovered — receipt `ACCEPT-BOOT-A3-002-CAND7-FULLV2-VERDICT.md`) and implemented the recommended lever exactly: `pep_chunk_units.py` implements the typed-bound function-unit record layer on top of existing machinery — exact statement-range tiling (`CHUNK_COVERAGE_MISMATCH` on overlap/bounds), pool-renumbered fail-closed carry (bindings admitted only from units reporting `valid` with zero diagnostics), sticky `first_refusal` (position/status/codes), structural last-unit closure, totality via `CHUNK_INCOMPLETE`. ONLY EXISTING refusal codes reused; zero edits to `pep_chunk_contract.py` (its header rule respected: no scope growth in the frozen module).
+
+**Pins (`tests/test_chunk_units.py`, 7/7 OK, chained harness's own session):** overlap/bounds refused; first-refusal sticks and blocks carry; whole-body unit completes `valid`; terminal must end at body; none-closes-body refusal; AND end-to-end **utf8_check via the real 21-unit bound chain records `status=valid`, `unitCount=21`, `bindingsCarried>=9`** through the new record. `tests.test_chained_bindings` still 10/10 (no regression).
+
+**One measured correction to the draft (recorded, not hidden):** driving the checker with `expect_returns=True` on a squeezed terminal slice costs more and crossed the 100k ceiling for utf8_check group 20 — so the record requires STRUCTURAL last-unit closure, and the missing-return semantic residual (whole-check absent-return diagnostic not reproduced by slices) is disclosed in the draft (`Terminality` section) and pinned via `checker_expect_returns=False` on the recording unit. Closing that residual is priced separately (whole-body sweep when affordable); never a budget change.
+
+**State after this slice:** covered (measured, machine-checkable): lexer_start, make_progress (typed body chunks), utf8_check (typed-bound unit record, 21/21). Uncovered: `make_cursor` (expression-level staging missing — measured 1-statement body), `lexer_step` (staged descent missing — measured 36 statements, no interior unit at the failing one). Both priced in receipt 012; neither claim is accepted-usable until A3 independently gates a candidate that carries the amendment.
+
+**Next:** A3 review of the amendment + module (gate design input); on approval, Option A plan-tier integration into the canonical pipeline so `zero-uncovered` becomes ledger-checkable; A2's computed-call-args slice and the str_concat 4KiB decision remain their lane.
+
+
 
 ---
 
