@@ -455,3 +455,66 @@ defects:
 
 Recorded because the first version of this table would have sent A2 chasing two
 non-existent emitter gaps.
+
+## BOOT-A2-20261106-39 — LUCY-20261106-006 pickup: grant handoff delivered, vertical boundary measured
+
+- **Branch:** `codex/a2-bounded-emission` @ `935c331`, pushed, remote-equal, clean.
+- **#16 posts:** 6698074255 (grant handoff + ACK/counterexample), 6698115244 (vertical boundary).
+
+### Delivered against the mission's item 4
+
+**Both questions A1 was told to ask:**
+
+1. **`sourceGrant` shape** — A1 has NOT posted it; `codex/a1-typed-bound-pipeline` is
+   still at `a9e9e2f`. My ACK is therefore against A1's draft
+   `docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md` @a802290, read in full and adopted over
+   my own earlier proposal.
+2. **Where my native wrapper consumes the grant** — `tests/pep_c23_emitter.pep`:
+   `grantEntry` computed at 4616–4626 (true iff `main` declares exactly one
+   `SourceBytes` parameter); wrapper branch at 4743; fail-closed `argc < 2` at 4750;
+   `fopen(argv[1])` at 4752; whole-file read at 4758–4760; passed to `pep_fn_main` at
+   4765.
+
+**Exact seed-oracle limitation** (measured): plain `run` refuses ungranted bytes with
+`PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is available only for a host-authorised v2
+semanticTarget` at 1:22. A seed oracle for a byte-reading program therefore cannot be
+produced from `run`; my probes iterate the same byte values as a literal `Int` list
+instead, and label that workaround as the authority boundary.
+
+**Test entry A1's host can invoke:** `python tests/probe_source_grant_entry.py` — exit
+0 at HEAD, drives the real session, builds with strict Clang AND GCC, runs over real
+files. No host change needed to run it.
+
+### The ONE blocking interface question
+
+**How does the emitter learn the grant is authorised?** My wrapper keys off the source
+shape alone; the emitter is a pure function of `(parsed, checked)` and never sees the
+host's `semanticTarget`, so it cannot distinguish "the host authorised this" from "the
+source merely declares it". That is a real gap against the draft's invariant 3. Options:
+(a) host-side refusal before calling the emitter, or (b) an explicit emitter grant
+argument. (a) is A1's file; (b) changes the emitter's tool signature. **A2 will
+implement its half once A1 chooses.**
+
+Also factual: `session_semantic_target` uses `session_exact_fields
+["document";"revision";"entryFunctions"]`, so a `sourceGrant` field is rejected today
+with `PEP_SEMANTIC_TARGET_FIELDS`. That is `pep_ocaml.ml`, A1's file.
+
+### Vertical boundary measured (mission objective 1)
+
+| fixture | bytes | nodes | result |
+|---|---|---|---|
+| `main(SourceBytes) { return byte_at(source, 0) }` | 66 | 8 | valid |
+| + real scan loop + `ascii_letter` | 313 | 53 | `PEP_RUNTIME_STEP_LIMIT` |
+| + real scan loop + `ascii_continue` closure | 477 | 75 | `PEP_RUNTIME_STEP_LIMIT` |
+
+A real scan loop plus even ONE lexer predicate is over the ceiling. The vertical
+therefore needs the **chunked** path, with `main` checked against external signatures.
+Not built: conditioned on the grant handshake above.
+
+### Not done, deliberately
+
+- **No scaling probes.** The global-O(n²)/55,930× claim was retracted at `5c25881`; the
+  settled model is ~linear in nodes, construct-dependent, global. Not a basis for
+  redesign.
+- **No next closure feature**, because the mission conditions it on the grant handshake.
+- **No checker edits** — read-only throughout, as the dispatch requires.
