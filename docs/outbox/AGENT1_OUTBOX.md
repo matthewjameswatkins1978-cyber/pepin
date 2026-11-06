@@ -169,6 +169,17 @@ Consequence for the priced mechanism: binding carry alone closes at most the unk
 
 **Still awaiting:** Matthew accept/decline on the amendment; A3 re-gate trigger decision. No candidate, budget, frozen-test, or canonical-source change in this slice.
 
+---
+
+## BOOT-A1-20261106-016 | native SourceBytes grant contract DRAFTED (entry-bound, revision-attested) | bound commit: codex/a1-typed-bound-pipeline@a802290
+
+**Date:** 2026-11-06 · **Evidence label:** `DRAFT` (host boundary design, grounded in measured peer findings) · **Candidate7/budgets untouched.**
+
+Lucy's item 3 (A1+A2 coordinate the host-owned `source_bytes()` target-grant contract) delivered as `docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md`: optional host-authored `sourceGrant {mode: entry-parameter}` on the existing `semanticTarget.v2`; the host native `main` wrapper passes the opened target's own bytes as the entry's first `SourceBytes` parameter (the exactly-already-lowering shape, runtime substrate present per A2); `source_bytes()` as a CALL stays refused — single semantic source, revision-bound wrapper abort, no ambient authority, refusals unchanged without the grant. Exit criteria: granted vertical end-to-end (strict Clang+GCC + seed oracle incl NUL/UTF-8), negative without grant, A3 re-gate trigger = published candidate carrying it; hostile ingress probes re-run on the new host surface.
+
+Handoffs: A2 reviews the wrapper-shape responsibility split (host wrapper vs emitter branch); A4's frontier S1–S3 shapes map onto the contract directly; Matthew accept/decline open on both drafts (typed-bound amendment + this grant contract). #16 comment 6690088045.
+
+
 
 
 
