@@ -51,11 +51,39 @@ def synthetic(count):
     return functions + "\nfn main() -> Int { return 0 }\n"
 
 
+# K4 (A4 spec/agent4-spec-lab@c25fab6, docs/spec/K4-STDLIB-PRIMITIVE.md): the one
+# primitive gap A4 identified -- a function RETURNING a record. P1 is the L3
+# `advance_position` shape verbatim from examples/pep_lexer.pep:90 (conditional
+# returns of a record literal, Int-only fields). P2 is the L4 `make_token` shape
+# with one wrong field type, which must refuse rather than launder.
+# NOTE: A4's doc writes the record type without commas; the real source syntax
+# (pep_lexer.pep:1) uses them, so these fixtures follow the source, not the doc.
+K4_RECORD_RETURN = (
+    "type SourcePosition { line: Int, column: Int }\n"
+    "fn advance_position(line: Int, column: Int, byte: Int) -> SourcePosition {\n"
+    "  if byte == 10 { return SourcePosition { line: line + 1, column: 1 } } else {\n"
+    "    return SourcePosition { line: line, column: column + 1 }\n"
+    "  }\n"
+    "}\n"
+    "fn main() -> Int {\n"
+    "  let p = advance_position(1, 1, 10)\n"
+    "  return p.line * 10 + p.column\n"
+    "}\n")
+
+K4_RECORD_MISMATCH = (
+    "type LexToken { kind: Str, text: Str, line: Int, column: Int }\n"
+    "fn make_token(kind: Str, text: Str, line: Int, column: Int) -> LexToken {\n"
+    "  return LexToken { kind: kind, text: 0, line: line, column: column }\n"
+    "}\n"
+    "fn main() -> Int { return 0 }\n")
+
 CASES = {
     "lexer-chunk": lexer_chunk,
     "regression": lambda: REGRESSION_FIXTURE,
     "synthetic-8": lambda: synthetic(8),
     "synthetic-12": lambda: synthetic(12),
+    "k4-record-return": lambda: K4_RECORD_RETURN,
+    "k4-record-mismatch": lambda: K4_RECORD_MISMATCH,
 }
 
 
