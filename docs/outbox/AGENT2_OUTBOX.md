@@ -407,3 +407,51 @@ MSVC's CRT marks `fopen`/`ftell` deprecated and clang reports that under the
 bundle's `-Werror` as a call-site diagnostic. `_CRT_SECURE_NO_WARNINGS` does not
 suppress it; the two call sites carry `#if defined(_MSC_VER) #pragma
 warning(disable: 4996) #endif` instead. Scoped to the granted wrapper only.
+
+## BOOT-A2-20261106-09 — lexer closure measured: 4/10 native, ZERO emitter refusals
+
+- **Commit:** `4bf597a1bc6831c90ccab288f3d4ffaf52df8165`.
+- **New probe:** `tests/probe_lexer_function_closure.py`.
+
+The A2-side closure measurement for Road 1, on the actual top-level functions of
+`examples/pep_lexer.pep` rather than a synthetic feature matrix. Each function is
+compiled as a real program with only the type declarations and callees it
+transitively needs; when it emits, the C is built with strict Clang `-std=c23`
+**and** GCC `-std=c2x` (`-Wall -Wextra -Wpedantic -Werror -O2`) and run.
+
+| function | check | emit | native |
+|---|---|---|---|
+| `ascii_letter` | valid | emitted | clang ok, gcc ok |
+| `ascii_digit` | valid | emitted | clang ok, gcc ok |
+| `ascii_continue` | valid | emitted | clang ok, gcc ok |
+| `advance_position` | valid | emitted | clang ok, gcc ok |
+| `utf8_check` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_cursor` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_token` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_progress` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `lexer_start` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `lexer_step` | transport 1 MiB | — | — |
+
+### The finding that matters
+
+**There are ZERO emitter refusals.** Every lexer function the checker can check,
+the emitter lowers, and both compilers run. The remaining six are blocked by the
+checker's fixed 100k step budget (5) and the 1 MiB JSONL transport limit (1) —
+both A1's lane.
+
+So **A2's emitter is not the bottleneck for the lexer.** Adding emitter features
+now would be speculative: there is no measured emitter gap to close. The next real
+dependency is staged checking, which A1 is already pricing.
+
+### Two probe bugs found and fixed while measuring
+
+Both had produced misleading rows, and both were probe defects, not emitter
+defects:
+
+1. A brace splitter that cut multi-line parameter lists at their first line, so
+   `make_cursor` / `make_token` / `make_progress` reported `PEP_PARSE_EXPECTED`.
+2. A missing callee closure, so `ascii_continue` reported `PEP_UNKNOWN_FUNCTION`
+   for `ascii_digit`.
+
+Recorded because the first version of this table would have sent A2 chasing two
+non-existent emitter gaps.
