@@ -194,3 +194,54 @@ of the two cards it was handed.
 No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
 `manifest.json` change, no budget-cap change, no frozen-runner edit. The runtime
 table is a substrate test with a hand-written driver, not Pep-level native execution.
+
+## BOOT-A2-20261106-05 — L6 measured: while lowers; the recursion blocker is computed call args from non-main functions
+
+- **Commit:** `fec4806af6035599cd2e3753c80b5f65d1bf4876`.
+- Cases added to `tests/probe_integration_case.py`: `while-byte`, `recursion`,
+  `call-arg-expr`, `computed-arg-main`, `computed-arg-nonmain`.
+
+The closure plan says *"measure recursion, not assume it's unsupported at current
+head"*. Measured.
+
+### while + mutable state: **LOWERS**
+
+`while !(byte_length(source) <= offset) { offset = offset + 1 }` over a `SourceBytes`
+parameter with `var` — check valid, **emits**.
+
+Incidental: **`<` is not a Pep operator at all** (`PEP_UNEXPECTED_CHARACTER`). The
+language has `<=`, `==`, `!=`, `&&`, `||`, `!`. The real lexer writes
+`while !(a <= b)`, and so does the fixture. My first fixture used `<` and was
+invalid Pep, not an emitter gap.
+
+### recursion: refused — but **not because it is recursion**
+
+The discriminating pair isolates the trigger. Same callee, same computed argument
+shape; the **only** difference is the call site:
+
+| call site | program | check | emit |
+|---|---|---|---|
+| `main` | `f(1 - 1)` | valid | **emitted** |
+| ordinary function | `f(n - 1)` inside `g` | valid | **unsupported** — *"Pep C23 one-parameter calls require one argument and a call-free target expression"* |
+
+Ruled out as causes, each by measurement:
+
+- **call depth** — `main -> g -> f` emits.
+- **computed arguments as such** — `add_one(20 + 21)` from `main` emits.
+- **`if` before the call** — `if n <= 0 { return 0 } else {}` then `return f(n) + 1`
+  emits.
+- **arithmetic after the call** — `return f(n) + 1` emits.
+
+So the real A2-owned blocker for the lexer's recursive/stateful helpers is
+**computed call arguments from non-main functions**, not recursion and not `while`.
+
+### One honest refusal that is a rule, not a gap
+
+`f(1) + g(2)` refuses with *"Pep C23 rejects two fallible operands because C operand
+evaluation order is unspecified"*. That is a deliberate safety rule and should stay.
+
+### Not claimed
+
+No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
+`manifest.json` change, no budget-cap change, no frozen-runner edit. `while-byte`
+emits but cannot be run natively yet, because it needs the `source_bytes()` grant.
