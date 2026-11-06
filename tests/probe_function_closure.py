@@ -80,10 +80,19 @@ def split_source(text):
 
 
 def split_declarations(declaration_text):
-    """`type Name { ... }` blocks, keyed by name."""
+    """Type declarations keyed by name: record blocks AND union declarations.
+
+    Both shapes occur in the real compiler source. `examples/pep_parser.pep` opens
+    with a 37-variant union (`type AstValue = AstAbsent() | ...`), and a splitter
+    that only understood `type Name { ... }` silently dropped it, which made every
+    parser fixture fail to parse for a reason that had nothing to do with the
+    function under test.
+    """
     found = {}
     for match in re.finditer(r"type\s+(\w+)\s*\{[^}]*\}", declaration_text):
         found[match.group(1)] = match.group(0)
+    for match in re.finditer(r"type\s+(\w+)\s*=\s*[^\n]+", declaration_text):
+        found.setdefault(match.group(1), match.group(0))
     return found
 
 
@@ -129,6 +138,12 @@ def needed_functions(functions, name, block):
 def measure(session, revision, source, name, label):
     """check -> emit -> (optionally) native. Returns (check, emit, detail)."""
     payload = source.encode("utf-8")
+    # Name the fixture-size boundary BEFORE the host refuses it, so a row that is
+    # really "this probe built too big a fixture" is not reported as a parse failure.
+    # 65536 is the host's documented source-open limit; it is not raisable.
+    if len(payload) > 65536:
+        return "fixture-too-large", "-", \
+            f"{len(payload)} bytes > 65536 source-open limit (probe limitation)"
     target = session.send({"schemaVersion": 3, "op": "open_bytes",
                            "name": label, "bytes": list(payload)})
     if target.get("outcome") != "ok":
@@ -138,7 +153,15 @@ def measure(session, revision, source, name, label):
     try:
         parsed = parse_target(session, payload, target, revision)
     except Exception as error:  # noqa: BLE001
-        return "parse-failed", "-", str(error)[:100]
+        # parse_target raises a generic RuntimeError, but the CAUSE is often a named
+        # platform limit inside the parser-step tool. Classify by the real code so a
+        # budget failure is not misfiled as a probe defect.
+        text = str(error)
+        for code in ("PEP_RUNTIME_STEP_LIMIT", "PEP_TOOL_VALUE_LIMIT",
+                     "PEP_SOURCE_BYTE_LIMIT", "PEP_RUNTIME_CALL_DEPTH"):
+            if code in text:
+                return code, "-", text[:100]
+        return "parse-failed", "-", text[:100]
     try:
         checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                 "op": "tool_invoke", "tool": "pep-c23-checker",
@@ -203,6 +226,10 @@ def main():
     global NATIVE
     parser = argparse.ArgumentParser()
     parser.add_argument("path", nargs="?", default="examples/pep_lexer.pep")
+    parser.add_argument("--with", dest="extra", action="append", default=[],
+                        help="another source whose TYPE DECLARATIONS are also available "
+                             "(the parser source is not self-contained: it uses the "
+                             "lexer's LexToken/LexCursor). Repeatable.")
     parser.add_argument("--no-native", action="store_true",
                         help="skip strict Clang/GCC compile-and-run")
     parser.add_argument("--filter", default="", help="only names containing this substring")
@@ -212,10 +239,16 @@ def main():
     source_path = (ROOT / arguments.path).resolve()
     declaration_text, functions = split_source(source_path.read_text(encoding="utf-8"))
     declarations = split_declarations(declaration_text)
+    for extra in arguments.extra:
+        extra_path = (ROOT / extra).resolve()
+        extra_text, _ = split_source(extra_path.read_text(encoding="utf-8"))
+        for name, declaration in split_declarations(extra_text).items():
+            declarations.setdefault(name, declaration)
     if arguments.filter:
         functions = [(n, b) for n, b in functions if arguments.filter in n]
     print(f"{source_path.name}: {len(functions)} function(s); "
-          f"{len(declarations)} declared type(s); native={NATIVE}")
+          f"{len(declarations)} declared type(s) "
+          f"(+{len(arguments.extra)} companion source(s)); native={NATIVE}")
 
     rows = []
     session = Session()
@@ -260,9 +293,11 @@ def main():
     # and only the emitter refusals are A2's to act on.
     emitter_refusals = [r for r in rows if r[2] == "unsupported"]
     non_native = [r for r in rows if r[2] == "emitted-but-not-native"]
-    probe_limited = [r for r in rows if r[1] in ("parse-failed", "open-failed")]
+    probe_limited = [r for r in rows if r[1] in ("parse-failed", "open-failed",
+                                                 "fixture-too-large")]
     platform = [r for r in rows if r[1] in ("PEP_RUNTIME_STEP_LIMIT", "transport-1MiB",
-                                            "PEP_TOOL_VALUE_LIMIT", "PEP_SOURCE_BYTE_LIMIT")
+                                            "PEP_TOOL_VALUE_LIMIT", "PEP_SOURCE_BYTE_LIMIT",
+                                            "PEP_RUNTIME_CALL_DEPTH")
                 or r[2] in ("transport-1MiB", "PEP_TOOL_VALUE_LIMIT")]
     checker_refused = [r for r in rows if r[1].startswith("invalid")]
     emitted = [r for r in rows if r[2] == "emitted"]
