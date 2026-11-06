@@ -1530,6 +1530,32 @@ fn pep_c23_call_free_expression(nodes: List[FlatAstNode], node: FlatAstNode) -> 
   } else {}
   return false
 }
+// A call ARGUMENT that is a pure function of the caller's parameters and literals:
+// parameter names, literals, and binary/unary combinations of those. Deliberately
+// EXCLUDES nested calls -- two fallible calls in one expression have unspecified C
+// evaluation order, which is the same rule the multi-argument paths already enforce.
+// This is what lets a callee body such as `return f(n - 1) + 1` pass the call-result
+// purity gate: the argument is computed, but it is still a pure function of `n`.
+fn pep_c23_parameter_value_expression(nodes: List[FlatAstNode], function: FlatAstNode, parameterName: Str, secondParameterName: Str, node: FlatAstNode) -> Bool {
+  if node.kind == "integer" { return true } else {}
+  if node.kind == "string" { return true } else {}
+  if node.kind == "boolean" { return true } else {}
+  if node.kind == "name" {
+    return node.text == parameterName || (secondParameterName != "" && node.text == secondParameterName)
+  } else {}
+  if node.kind == "binary" {
+    let left = pep_c23_child(nodes, node.id, "left", 0)
+    let right = pep_c23_child(nodes, node.id, "right", 1)
+    return left.found && right.found &&
+      pep_c23_parameter_value_expression(nodes, function, parameterName, secondParameterName, left.node) &&
+      pep_c23_parameter_value_expression(nodes, function, parameterName, secondParameterName, right.node)
+  } else {}
+  if node.kind == "unary" {
+    let operand = pep_c23_child(nodes, node.id, "operand", 0)
+    return operand.found && pep_c23_parameter_value_expression(nodes, function, parameterName, secondParameterName, operand.node)
+  } else {}
+  return false
+}
 fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode, parameterName: Str, secondParameterName: Str, node: FlatAstNode) -> Bool {
   if node.kind == "match" {
     let subject = pep_c23_child(nodes, node.id, "value", 0)
@@ -1600,8 +1626,12 @@ fn pep_c23_parameter_expression(nodes: List[FlatAstNode], function: FlatAstNode,
   if node.kind == "call" {
     let argument = pep_c23_child(nodes, node.id, "argument", 0)
     let extraArgument = pep_c23_child(nodes, node.id, "argument", 1)
-    return argument.found && !extraArgument.found && argument.node.kind == "name" &&
-      (argument.node.text == parameterName || (secondParameterName != "" && argument.node.text == secondParameterName))
+    // The argument may be a bare parameter name (the original shape) OR a computed
+    // value over parameters and literals. Both are pure functions of the parameters,
+    // which is all this gate claims. Nested calls stay refused: two fallible calls in
+    // one expression have unspecified C evaluation order.
+    return argument.found && !extraArgument.found &&
+      pep_c23_parameter_value_expression(nodes, function, parameterName, secondParameterName, argument.node)
   } else {}
   if node.kind == "binary" {
     let left = pep_c23_child(nodes, node.id, "left", 0)
