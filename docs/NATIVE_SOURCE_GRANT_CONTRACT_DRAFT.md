@@ -68,9 +68,16 @@ declared** — no new `semanticTarget` field ships in v1:
 - **Grant exists iff** the CHECKED entry function declares a parameter of type
   `SourceBytes` AND that function's name is a member of
   `semanticTarget.entryFunctions` (both fail-closed inputs that already ship).
-- **Ownership/identity:** bytes are exactly the `open_bytes` payload of the
-  same `document`/`revision`; the C wrapper binds them at assembly/run time.
-  No path, no second read path, no cached global.
+- **Ownership/identity (REVISED 2026-11-06, A2 divergence BOOT-A2-20261106-40):**
+  embedding the payload at assembly time is measured-impossible in v1 (fixed
+  2-arg emitter; 1 MiB -> ~6 MiB hex through frozen transport), so v1 grants
+  via **(i) argv/file**: the wrapper's ONLY byte input is ONE host-named
+  operand, opened once, read fully, bound, freed (`argc<2` ->
+  `PEP_RUNTIME_SOURCE_CONTEXT` before the entry runs). Revised rule: **single
+  source multiplicity** - no second byte source, no cached global, no
+  scanner; the host test verifies the operand's contents equal the
+  `document`/`revision` payload (equality host-verified; emitter-enforced
+  identity binding is v2). `source_bytes()` as a CALL stays refused.
 - **Fail-closed refusals (unchanged text):** an unlisted entry whose checked
   shape expects `SourceBytes` keeps today's refusal; a listed entry with no
   such parameter emits normally; no `source_bytes()` call lowering is added.
