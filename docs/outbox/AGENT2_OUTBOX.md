@@ -135,3 +135,62 @@ primitive.
 No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
 `manifest.json` change, no budget-cap change, no frozen-runner edit, and no claim
 that record returns were *missing* — they were never missing.
+
+## BOOT-A2-20261106-04 — SourceBytes: byte access lowers, the grant does not
+
+- **Commit:** `0843161ed36e8af1b0d4815a9f41503a6f6c8c88`.
+- **New probe:** `tests/probe_source_bytes_runtime.py`; `sb-param` and `sb-grant`
+  cases added to `tests/probe_integration_case.py`.
+
+Two questions, kept separate because they have different owners.
+
+### 1. Does the emitter lower SourceBytes byte access? **YES**
+
+A function taking a `SourceBytes` parameter and reading it through `byte_length` /
+`byte_at` — the shape the real lexer's `scan_*_at` helpers use — checks valid and
+**emits** (6008 bytes whole program, 320 bytes unit).
+
+The first refusal on this fixture was **not** a SourceBytes limitation: the
+if/else-only body refused with *"Pep C23 functions require a return statement"*, a
+shape rule. The trailing-return form emits.
+
+### 2. Can a native program OBTAIN a SourceBytes? **NO**
+
+`source_bytes()` refuses with *"Pep C23 cross-chunk call has no resolved call fact"* —
+it is not lowered as a builtin. **That is the real ingress gap**, and it is a
+host-grant boundary, not an emitter primitive (A4's K4 elimination table already
+assigned it to the host).
+
+### Runtime substrate (labelled as such, not Pep-level native execution)
+
+Because (2) refuses, a Pep-level native program cannot yet exercise byte access end
+to end. The emitted C is therefore included by a small driver with only the emitted
+`main` renamed. Strict Clang `-std=c23` and GCC `-std=c2x`
+(`-Wall -Wextra -Wpedantic -Werror -O2`), **both identical**:
+
+| input | expected | observed |
+|---|---|---|
+| empty source | `-1` | `-1` |
+| `"A"` | `65` | `65` |
+| NUL first byte | `0` | `0` |
+| UTF-8 U+00E9 (`0xC3 0xA9`) | `195` | `195` |
+
+Fail-closed negatives, each its own process:
+
+| negative | exit | stderr |
+|---|---|---|
+| `byte_at` past the end | 1 | `PEP_RUNTIME_BYTE_RANGE` |
+| `NULL` data with length 5 | 1 | `PEP_RUNTIME_INVALID_SOURCE_BYTES` |
+
+### Consequence
+
+The next actual dependency for the lexer is **not** byte access and **not** record
+returns. It is the **`source_bytes()` host grant** (host-owned) plus **L6 control
+flow** (while + mutable state). A2 has no emitter primitive left to add for either
+of the two cards it was handed.
+
+### Not claimed
+
+No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
+`manifest.json` change, no budget-cap change, no frozen-runner edit. The runtime
+table is a substrate test with a hand-written driver, not Pep-level native execution.
