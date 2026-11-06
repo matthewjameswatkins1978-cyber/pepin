@@ -343,3 +343,67 @@ nothing either.
 It keeps the seed's zero-argument `source_bytes()` meaning ("the document being
 compiled") without inventing a language-level file API, and it keeps the trust
 boundary where the seed already puts it: the host decides, the program consumes.
+
+## BOOT-A2-20261106-08 — entry-parameter SourceBytes grant implemented (A2 half)
+
+- **Commit:** `b22846149c073241d969458fd0375fbcff77e9dc`.
+- **New probe:** `tests/probe_source_grant_entry.py`.
+
+A1's draft contract (`docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md` @a802290, posted
+to #16 as comment 6690088045) superseded my proposal: the grant rides the **entry
+declaration**, and `source_bytes()` as a CALL stays refused. Adopted. My own
+proposal's `argv[1]`-based `source_bytes()` lowering is withdrawn.
+
+### What was implemented (A2's half)
+
+1. **Entry gate.** Exactly one new shape is admitted:
+   `fn main(<one SourceBytes parameter>)`. Everything else is unchanged — Int,
+   Bool and two-parameter mains still refuse with the identical diagnostic.
+2. **Non-arena epilogue.** A grant wrapper reads `argv[1]` once and passes it to
+   the entry as `(pep_source_bytes){ .data, .length }`.
+
+### Fail-closed behaviour, measured
+
+| case | result |
+|---|---|
+| no `argv[1]` | exit 1, `PEP_RUNTIME_SOURCE_CONTEXT` — refused **before** the entry runs |
+| unreadable path | exit 1, `PEP_RUNTIME_SOURCE_OPEN` |
+| empty file | a **valid** zero-length SourceBytes; `byte_at(0)` then trips `PEP_RUNTIME_BYTE_RANGE` |
+| Int / Bool / two-parameter main | still refused, unchanged diagnostic |
+| `source_bytes()` as a call | still refused, "no resolved call fact" |
+
+### Native evidence — strict Clang AND GCC, real files
+
+| file bytes | first byte |
+|---|---|
+| `"A"` | `65` |
+| `\x00A` (NUL) | `0` |
+| `\xC3\xA9` (U+00E9) | `195` |
+
+### COST DISCIPLINE — measured twice, and the first two attempts were over budget
+
+A second traversal of `topLevelFunctions` to locate the entry pushed the
+near-ceiling recursive-depth fixture over the fixed 100k budget
+(`PEP_RUNTIME_STEP_LIMIT` at 4455:8). Unconditional parameter lookups in the
+function gate did it again (9183:18). `grantEntry` is now computed inside the
+prototype loop that already walks that list and already calls
+`pep_c23_parameters`, and the gate's lookups run only for a one-parameter `main`.
+No cap was raised.
+
+### Host side is A1's and is NOT done
+
+- `session_semantic_target` uses `session_exact_fields fields
+  ["document";"revision";"entryFunctions"]`, so a `sourceGrant` field is **rejected
+  today** with `PEP_SEMANTIC_TARGET_FIELDS`.
+- The seed's `run` has no grant path at all (`PEP_RUNTIME_SOURCE_CONTEXT`), so the
+  seed oracle for this shape cannot be produced from `run` — only through
+  `semanticTarget`, whose only SourceBytes it supplies is `analysis.source`.
+- So: the emitter lowers the declared shape; **authorising it remains the host's
+  decision, and today the host rejects the field that would carry the authorisation.**
+
+### Windows toolchain note
+
+MSVC's CRT marks `fopen`/`ftell` deprecated and clang reports that under the
+bundle's `-Werror` as a call-site diagnostic. `_CRT_SECURE_NO_WARNINGS` does not
+suppress it; the two call sites carry `#if defined(_MSC_VER) #pragma
+warning(disable: 4996) #endif` instead. Scoped to the granted wrapper only.
