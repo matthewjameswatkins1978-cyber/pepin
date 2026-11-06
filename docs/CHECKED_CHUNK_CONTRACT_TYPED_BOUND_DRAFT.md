@@ -67,6 +67,27 @@ planned function. Two concrete integration options for review:
 Option A is cheaper to review; B is what emitter consumption eventually needs.
 **Recommendation:** accept A first; prototype B in a scratch before pinning.
 
+### 3.1 Option A insertion points (exact symbols, `pep_chunk_contract.py`)
+
+- `ChunkPlan` (L443): add an optional `decomposed` mapping
+  `{position: FileName}` or a parallel `unit_positions` so
+  `plan_ids(...)` can mark which positions are unit-backed; `describe()`
+  gains the same field (machine-checkable, additive).
+- `_plan` (L503): no change — the decomposition supplies the SAME node-id list
+  (whole function subtree) for the marked position, so existing node-coverage
+  invariants (`test_nodes_cover_the_document...`) hold unchanged.
+- `chunk_record` (L570) / `validate_chunk` (L589): dispatch on the plan mark —
+  a unit-backed position validates a SIGNED SUM of its unit reports instead of
+  one report (each unit's report fingerprint + pool generation; totality via
+  the section-2 tiling rule). First failing unit is preserved as
+  `first_refusal` in the record.
+- `ChunkLedger.accept/complete` (L671): unchanged for ordering;
+  `complete()` totals exactly as today since each marked position still ends
+  `valid`/`invalid`/`incomplete`.
+- Provenance: unit reports keep the SAME document/revision Gates via the
+  `bound-chunk` tool's existing `PEP_STALE_REVISION` ingress; no new host
+  authority, no relaxed refusal.
+
 ## 4. What this closes (measured, unchanged budgets)
 
 | function | route | evidence |
