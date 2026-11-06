@@ -40,8 +40,25 @@ HEADROOM, measured by bisecting the addition (each row is a real run of that tes
 
 So the margin is not line count and not function count: it is a handful of
 TYPE-CHECKED statements. Comments are free, new uncalled functions are nearly
-free, but a statement that the checker has to type is enough to tip it. The
-recursive-depth test is sitting within a few checked statements of the ceiling.
+free, but a statement that the checker has to type is enough to tip it.
+
+WHICH FUNCTIONS CAN TAKE WORK -- each probed with one trivial statement:
+
+  pep_c23_function_expression        PASS   (called once per function: O(1))
+  pep_c23_expression                 FAIL   (called once per expression node)
+  pep_c23_expression_checked         FAIL   (called once per expression node)
+  pep_c23_str_result_call            FAIL   (called once per call node)
+  pep_c23_str_expression             FAIL   (called once per Str value)
+  pep_c23_c_scalar_type              FAIL   (called once per type node)
+  pep_c23_function_definition        FAIL
+  pep_c23_declaration_definitions    FAIL
+  pep_c23_union_match_expression     FAIL
+  pep_c23_list_int_at (uncalled)     PASS
+
+The pattern is call frequency, not size: functions invoked once per NODE are
+frozen, functions invoked O(1) times or not at all can take work. That is why
+`return [ ... ]` landed (it went into pep_c23_function_expression) while
+`int_text` did not (it needs pep_c23_expression).
 
 The production path is unaffected, and this was measured rather than assumed. With
 the int_text branch applied, the SAME recursive fixture goes through three separate
