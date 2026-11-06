@@ -43,9 +43,18 @@ TYPE-CHECKED statements. Comments are free, new uncalled functions are nearly
 free, but a statement that the checker has to type is enough to tip it. The
 recursive-depth test is sitting within a few checked statements of the ceiling.
 
-The production path is unaffected: `emit_c23_checked(parsed, checked)` with
-pre-parsed, pre-checked arguments emits the same program fine, because each stage
-gets its own budget. So the constraint is specific to the zero-argument entry.
+The production path is unaffected, and this was measured rather than assumed. With
+the int_text branch applied, the SAME recursive fixture goes through three separate
+tool invocations -- parse, check, emit -- and all three succeed:
+
+  parse: ok
+  check: ok
+  emit:  ok
+
+Only the combined `emit_c23()` invocation fails. So the constraint is exactly the
+single-budget entry, not the emitter's capability. The host already uses the staged
+path (`emit_c23_checked` with pre-parsed, pre-checked arguments), so int_text would
+work in production today; it is the zero-argument test entry that cannot afford it.
 
 This probe therefore asserts the CURRENT state, so that whoever implements
 `int_text` has a truthful baseline and a named obstacle.
