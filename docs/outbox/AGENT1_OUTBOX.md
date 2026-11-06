@@ -179,6 +179,30 @@ Lucy's item 3 (A1+A2 coordinate the host-owned `source_bytes()` target-grant con
 
 Handoffs: A2 reviews the wrapper-shape responsibility split (host wrapper vs emitter branch); A4's frontier S1–S3 shapes map onto the contract directly; Matthew accept/decline open on both drafts (typed-bound amendment + this grant contract). #16 comment 6690088045.
 
+---
+
+## BOOT-A1-20261106-017 | staged-descent SIZING: failing lexer_step groups are small and context-driven, not node-driven | bound commit: codex/a1-typed-bound-pipeline@6d406cd
+
+**Date:** 2026-11-06 · **Evidence label:** `TESTED`.
+
+`tests/probe_staged_descent_sizing.py` measures per-statement node counts and per-invocation steps for every failing lexer_step group (empty pool, continue-past-failure):
+
+| statement | nodes | outcome | steps |
+|---|---|---|---|
+| 4, 5, 6 (width/minimum chain ifs) | 39 / 45 / 35 | STEP_LIMIT | 100,001 |
+| 10 (codepoint chain if) | 51 | STEP_LIMIT | 100,001 |
+| 1, 3, 7, 8, 9, 33, 34, 35 (unknown-var rows) | 3–28 | invalid | 12,629–93,928 |
+| 32 | **1,033** | `PEP_TOOL_VALUE_LIMIT` | 10,502 |
+| make_cursor pos 0 | **34** | STEP_LIMIT | 100,001 |
+
+**Three design facts this fixes for the staged-descent mechanism (receipts 012/015 refined):**
+1. The STEP_LIMIT statement groups are SMALL (35–51n) — per-invocation cost is **context/carry-driven** (ext-fact closure + carried bindings weight), not node-count-driven; carving must cut invocation context weight, not merely split counts. (With carry, group 1 crossed from 93,928-invalid to >100k-valid — measured both sides.)
+2. lexer_step position 32 is a genuine **1,033-node single statement** — the transport problem's core; sub-statement carving there is mandatory and mechanical.
+3. make_cursor's whole body is **34n and still dies** — expression-level staging must reduce per-invocation overhead (or drop carried weight), not just slice smaller pieces; its typed record literal is the cost center at any granularity.
+
+JSON: `_build/staged_descent_sizing.json` (regenerable). Candidate7/budgets untouched; still awaiting Matthew on the two drafts + A3 trigger.
+
+
 
 
 
