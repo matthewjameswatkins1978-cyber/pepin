@@ -179,6 +179,29 @@ def main():
                           f"exit={ran.returncode} stderr={ran.stderr[:60]!r}")
                     if not ok:
                         failures += 1
+                    # A DIRECTORY is not a source. The wrapper must fail closed rather
+                    # than read whatever the OS hands back.
+                    directory = BUILD / "grant_dir"
+                    directory.mkdir(exist_ok=True)
+                    ran = subprocess.run([str(exe), str(directory)],
+                                         capture_output=True, check=False)
+                    ok = ran.returncode != 0 and b"PEP_RUNTIME_SOURCE_OPEN" in ran.stderr
+                    print(f"neg-directory    {'OK' if ok else 'FAIL'} "
+                          f"exit={ran.returncode} stderr={ran.stderr[:60]!r}")
+                    if not ok:
+                        failures += 1
+                    # A LARGE file must be read whole, not truncated: the grant is the
+                    # target's own bytes, so a 1 MiB source must still report byte 0.
+                    large = BUILD / "grant_large.pep"
+                    large.write_bytes(b"Z" + b"x" * (1024 * 1024))
+                    ran = subprocess.run([str(exe), str(large)],
+                                         capture_output=True, check=False)
+                    out = ran.stdout.replace(b"\r\n", b"\n")
+                    ok = ran.returncode == 0 and out == b"90\n"
+                    print(f"large-file       {'OK' if ok else 'FAIL'} "
+                          f"exit={ran.returncode} out={out!r} (1 MiB source, byte 0 = 'Z')")
+                    if not ok:
+                        failures += 1
 
         # The grant must not leak: every other non-zero-arity main still refuses.
         for label, source in (
