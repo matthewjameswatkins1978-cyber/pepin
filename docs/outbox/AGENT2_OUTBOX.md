@@ -245,3 +245,101 @@ evaluation order is unspecified"*. That is a deliberate safety rule and should s
 No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
 `manifest.json` change, no budget-cap change, no frozen-runner edit. `while-byte`
 emits but cannot be run natively yet, because it needs the `source_bytes()` grant.
+
+## BOOT-A2-20261106-06 — computed call arguments inside non-main functions now emit
+
+- **Commit:** `e2b5bee1d1ff88aa6939152ee04edce46d8dcc09`.
+- **New probe:** `tests/probe_computed_call_args.py`.
+- **Emitter change:** `tests/pep_c23_emitter.pep` — new
+  `pep_c23_parameter_value_expression`, used by the generic call branch of
+  `pep_c23_parameter_expression`.
+
+### The defect
+
+The call-result purity gate required a call argument to be a **bare parameter
+name**. So `return f(n - 1) + 1` inside an ordinary function refused with
+*"Pep C23 one-parameter calls require one argument and a call-free target
+expression"*, while the same shape in `main` emitted — `main` has no parameters,
+so it took the zero-parameter path and a different predicate. That asymmetry is
+what made the refusal look like a recursion limitation.
+
+A computed argument over parameters and literals is just as pure as a bare name,
+which is all this gate claims. The gate now accepts it.
+
+### Deliberately NOT widened (asserted as negatives)
+
+| negative | result |
+|---|---|
+| `f(1) + g(2)` — two fallible operands | still refused: *"rejects two fallible operands because C operand evaluation order is unspecified"* |
+| `f(g(n))` — nested call as an argument | still refused: *"call-free target expression"* |
+
+### Evidence — `python tests/probe_computed_call_args.py` → exit 0
+
+| case | seed | strict Clang `-std=c23` | strict GCC `-std=c2x` |
+|---|---|---|---|
+| `recursion` (`countdown(3)`) | `3` | `3` | `3` |
+| `computed-arg-nonmain` (`g(1)`) | `1` | `1` | `1` |
+
+Both compilers with `-Wall -Wextra -Wpedantic -Werror -O2`.
+
+### No regression
+
+- `tests/probe_seam_chunked.py` → exit 0 (4 chunks, both assembly orders, 11 negatives)
+- `tests/probe_k4_record_return.py` → PASS
+- `tests/probe_source_bytes_runtime.py` → PASS
+- `tests.test_a14_c23` → 12/12 OK
+- 87 further emitter tests OK: `test_c23_emitter_invariants`, `_sections`,
+  `_section_identity`, `test_c23_arity`, `test_c23_str_result`, `test_c23_say`,
+  `test_c23_bounded_emission`, `test_c23_str_contains`, `test_c23_emitter_field_use`
+- 5 representative `test_c23_collections` cases OK. **The full collections suite
+  was not run**: 129 tests at ~33 s each is ~70 min, which exceeds a session. That
+  is pre-existing slowness, not a regression from this change.
+
+### Bundle hash moved — A1/A3 must re-pin
+
+`c1908d06bb7752e43bb5af3f743ab3bdf8bea45d0aec25b43ee3a65805f9e9ad`
+→ `0043343992e89847dde884a7c155385f83e2815c0b5d27fb855bbf197df39953`
+
+## BOOT-A2-20261106-07 — `source_bytes()` native grant: contract proposal for A1
+
+Not implemented. This is the coordination item the dispatch asked for, and the
+host side is A1's.
+
+### What the seed actually does (authoritative, read at the 727f8af pin)
+
+`source_bytes()` is a **host-authorised grant**, not a language primitive. With no
+grant the seed fails closed:
+
+```
+PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is available only for a host-authorised v2 semanticTarget
+```
+
+(`pep_ocaml.ml:847-849`; the grant arrives as `?(source_bytes_value=None)` on
+`execute`.) So a native program must not be able to mint a SourceBytes from
+nothing either.
+
+### Proposed contract
+
+1. **Semantics preserved.** `source_bytes()` stays a grant. Ungranted → fail closed
+   with `PEP_RUNTIME_SOURCE_CONTEXT`, exit 1. Same code, same meaning.
+2. **Grant mechanism.** The emitted C runtime holds one
+   `pep_source_bytes pep_granted_source` plus a `_Bool pep_source_granted`. The
+   main wrapper initialises it once, at startup, from the host: `argv[1]` names the
+   source file, the runtime reads it, sets the flag. No `argv[1]` → no grant.
+3. **Ownership split.**
+   - **A2 (emitter):** lower `source_bytes()` to a runtime accessor that aborts when
+     ungranted, and emit the grant initialisation in the main wrapper.
+   - **A1 (host):** decide and document what the host passes, and confirm the
+     checker's `SourceBytes` type identity is unchanged.
+4. **Fail-closed negatives to pin:** no grant → `PEP_RUNTIME_SOURCE_CONTEXT`;
+   unreadable file → a distinct code; empty file → a valid zero-length SourceBytes
+   (not an error); `byte_at`/`byte_length` bounds behaviour unchanged (already
+   proven in receipt 04).
+5. **Explicitly not in scope:** no new language feature, no checker change, no cap
+   change, and no general file access — one grant, set by the host, at startup.
+
+### Why this shape
+
+It keeps the seed's zero-argument `source_bytes()` meaning ("the document being
+compiled") without inventing a language-level file API, and it keeps the trust
+boundary where the seed already puts it: the host decides, the program consumes.
