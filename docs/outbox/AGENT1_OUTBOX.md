@@ -263,3 +263,13 @@ Experiment chain completed across turns 5-9: parent-chain-preserving field-range
 **Conclusion (measured at field granularity):** make_cursor record-field slices are EXPRESSIBLE through the existing typed path; the residual cost is the checker's record-construction validation itself (per-field type check against the declaration). The only remaining route to make_cursor coverage is the partial-record fact kind — checker Pep source work, requiring A3's pre-registered hostile matrix (field duplication / phantom field / missing field / wrong type at pinned span) and Matthew's approval, per the standing amendment boundary. A4's STOP was honored; their census/oracle pair formed the basis of this verdict.
 
 **Standing peer-gated items:** A2 — consume `emit_granted()` at the merged SHA + runtime-bytes ACK (G1 close); A3 — partial-record hostile matrix pre-registration; Matthew — accept/decline typed-bound amendment + SourceBytes grant contract.
+
+---
+
+## BOOT-A1-20261106-023 | G1 CLOSED: both halves delivered and consumed | bound commits: 0866530 (host) / a7d3ee1 (contract)
+
+**Date:** 2026-11-06 · **Evidence label:** TESTED (A2's merged probe PASS + my host tests 4/4).
+
+A2's merged probe `probe_grant_host_merged.py` @ `50f7f04` consumes my `emit_granted()` at `0866530`:C emitted, strict Clang+GCC over real files (ascii 65 / NUL 0 / UTF-8 195), all host refusals exact (`GRANT_DENIED`, `GRANT_SHAPE_MISMATCH`, `GRANT_ENTRY_MISSING`); skips cleanly on unmerged branches. Divergence resolution confirmed consumed: argv/file convorms under the REVISED s6 rule (@11e1294, receipt 021). Contract updated with A2's two consumption requirements (a7d3ee1): `pep-c23-checker-sigs` must be registered+activated pre-call; refusals assert via `GrantRefusal.code`.
+
+**G1 gate CLOSED.** Per mission item 4, A2 proceeds to the next compiler closure feature (computed call args in non-main functions). A3's hostile matrix on the argv mechanism (operand swap/duplicate read) is the remaining pre-candidate surface, alongside the G2 partial-record matrix and Matthew's two draft decisions. #16 6698725865.
