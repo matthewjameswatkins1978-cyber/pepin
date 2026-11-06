@@ -3498,8 +3498,27 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
       parameterProblem = true
     } else {}
   }
+  // Entry-parameter SourceBytes grant (A1 docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md
+  // @a802290, mode "entry-parameter"): the host's native main wrapper passes the
+  // opened target's OWN bytes as the entry's first SourceBytes parameter. This
+  // predicate admits exactly that one shape -- `fn main(<one SourceBytes parameter>)`
+  // -- and nothing else changes: source_bytes() as a CALL stays refused, no ambient
+  // authority is added, and every other parameterised main still refuses below.
+  // The bytes are the target's because the host wrapper is their only producer.
+  // COST DISCIPLINE: the parameter lookups run ONLY for a one-parameter main. Computing
+  // them unconditionally measured OVER the fixed 100k budget on the near-ceiling
+  // recursive-depth fixture, because pep_c23_child walks the node list.
+  var entrySourceOnly = false
+  if function.text == "main" && length(parameters) == 1 {
+    let entryParameter = pep_c23_child(nodes, function.id, "parameter", 0)
+    let entryParameterType = if entryParameter.found {
+      pep_c23_child(nodes, entryParameter.node.id, "type", 0)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    entrySourceOnly = entryParameterType.found &&
+      pep_c23_c_parameter_type(nodes, entryParameterType.node) == "pep_source_bytes"
+  } else {}
   if parameterProblem || length(parameters) != pep_c23_count_children(nodes, function.id, "parameter") ||
-     (function.text == "main" && length(parameters) != 0) ||
+     (function.text == "main" && length(parameters) != 0 && !entrySourceOnly) ||
      resultCType == "" ||
      (function.text == "main" && result.node.text != "Int") {
     // Str results are the one missing shape the real lexer blocks on: `lex_error_code`
@@ -4574,10 +4593,26 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   // OVER the fixed 100k budget on a near-ceiling fixture. Keeping this common path byte-for-byte
   // at its pre-G-A2-4 cost is what the tip fixture requires; tests/test_c23_bounded_emission
   // pins `prototypes == header's tail`, so the two copies cannot drift without failing green.
+  // Entry-parameter SourceBytes grant (A1 docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md
+  // @a802290, mode "entry-parameter"): `grantEntry` records whether the ENTRY declares
+  // exactly one SourceBytes parameter. It is computed HERE, inside the prototype loop
+  // that already walks topLevelFunctions and already calls pep_c23_parameters, because a
+  // second traversal of that list measured OVER the fixed 100k budget on the near-ceiling
+  // recursive-depth fixture (PEP_RUNTIME_STEP_LIMIT at 4455:8). Cost added: one string
+  // compare per top-level function; the parameter lookups run for `main` only.
+  var grantEntry = false
   for node in topLevelFunctions {
     if node.parentId == -1 && node.kind == "function" {
       let functionParameters = pep_c23_parameters(parsed.nodes, node)
       let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
+      if node.text == "main" && length(functionParameters) == 1 {
+        let grantParameter = pep_c23_child(parsed.nodes, node.id, "parameter", 0)
+        let grantParameterType = if grantParameter.found {
+          pep_c23_child(parsed.nodes, grantParameter.node.id, "type", 0)
+        } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+        grantEntry = grantParameterType.found &&
+          pep_c23_c_parameter_type(parsed.nodes, grantParameterType.node) == "pep_source_bytes"
+      } else {}
       for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
       reversed = prepend(reversed, " pep_fn_")
       reversed = prepend(reversed, node.text)
@@ -4680,12 +4715,52 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     reversed = prepend(reversed, "  return 0;\n")
     reversed = prepend(reversed, "}\n")
   } else {
-    reversed = prepend(reversed, "int main(void) {\n")
-    reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
-    reversed = prepend(reversed, "main")
-    reversed = prepend(reversed, "()));\n")
-    reversed = prepend(reversed, "  return 0;\n")
-    reversed = prepend(reversed, "}\n")
+    // Entry-parameter SourceBytes grant (A1 contract @a802290): when the entry declares
+    // exactly one SourceBytes parameter, the host wrapper supplies the opened target's
+    // own bytes here -- `argv[1]`, read once. Without argv[1] there is no grant and the
+    // program fails closed before the entry runs, so bytes can never be conjured. The
+    // Pep source never obtains authority; the host hands it to the entry. Every other
+    // entry shape takes the unchanged zero-argument wrapper below.
+    // BOUNDARY: this is the non-arena wrapper. A granted entry that also needs the arena
+    // is not a shape the lexer requires and is not handled here.
+    // COST DISCIPLINE: grantEntry is computed inside the prototype loop above, not by a
+    // second traversal here. A second walk of topLevelFunctions measured OVER the fixed
+    // 100k budget on the near-ceiling recursive-depth fixture
+    // (test_recursive_native_calls_enforce_pep_depth, PEP_RUNTIME_STEP_LIMIT at 4455:8).
+    if grantEntry {
+      // The wrapper opens the granted file itself. Windows/MSVC CRT marks fopen/ftell
+      // deprecated and clang reports that under the bundle's -Werror as a *call-site*
+      // diagnostic, so the two call sites carry a local pragma rather than a file-wide
+      // opt-out: nothing else in the bundle is affected, and a non-MSVC-compatible
+      // compiler never evaluates the guarded PP block.
+      reversed = prepend(reversed, "int main(int argc, char **argv) {\n")
+      reversed = prepend(reversed, "  if (argc < 2) { fputs(\"PEP_RUNTIME_SOURCE_CONTEXT\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "#if defined(_MSC_VER)\n#pragma warning(push)\n#pragma warning(disable: 4996)\n#endif\n")
+      reversed = prepend(reversed, "  FILE *pep_source_file = fopen(argv[1], \"rb\");\n")
+      reversed = prepend(reversed, "  if (pep_source_file == NULL) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  if (fseek(pep_source_file, 0, SEEK_END) != 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  long pep_source_length = ftell(pep_source_file);\n")
+      reversed = prepend(reversed, "  if (pep_source_length < 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  if (fseek(pep_source_file, 0, SEEK_SET) != 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  unsigned char *pep_source_data = (unsigned char *)malloc((size_t)pep_source_length + 1u);\n")
+      reversed = prepend(reversed, "  if (pep_source_data == NULL) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  if (pep_source_length > 0 && fread(pep_source_data, 1, (size_t)pep_source_length, pep_source_file) != (size_t)pep_source_length) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  (void)fclose(pep_source_file);\n")
+      reversed = prepend(reversed, "#if defined(_MSC_VER)\n#pragma warning(pop)\n#endif\n")
+      reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
+      reversed = prepend(reversed, "main")
+      reversed = prepend(reversed, "((pep_source_bytes){ .data = pep_source_data, .length = (size_t)pep_source_length })));\n")
+      reversed = prepend(reversed, "  free(pep_source_data);\n")
+      reversed = prepend(reversed, "  return 0;\n")
+      reversed = prepend(reversed, "}\n")
+    } else {
+      reversed = prepend(reversed, "int main(void) {\n")
+      reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
+      reversed = prepend(reversed, "main")
+      reversed = prepend(reversed, "()));\n")
+      reversed = prepend(reversed, "  return 0;\n")
+      reversed = prepend(reversed, "}\n")
+    }
   }
   // The epilogue parts are the ones prepended after the last body, i.e. the front of `reversed`.
   if part == "main" {
