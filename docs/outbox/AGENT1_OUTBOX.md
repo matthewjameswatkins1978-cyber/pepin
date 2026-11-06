@@ -109,3 +109,19 @@ New probe `tests/probe_typed_bound_pipeline.py` (reuses `test_chunk_typed` + `te
 
 ---
 
+## BOOT-A1-20261106-012 | typed-bound contract AMENDMENT DRAFTED + stay-gap pricing measured | bound commit: codex/a1-typed-bound-pipeline@135118d
+
+**Date:** 2026-11-06 (LUCY-20261106-004 A1 continuation) · **Evidence label:** `TESTED` (pricing) + `DRAFT` (amendment) · **Canonical lexer source untouched; budgets unchanged.**
+
+Deliverable 1 — `docs/CHECKED_CHUNK_CONTRACT_TYPED_BOUND_DRAFT.md` @ `135118d`: a reviewable amendment proposal (explicitly NOT part of the accepted instrument), grounded in `pep_chunk_contract.py`: typed-bound function-unit records with (a) exact statement-range tiling of `statement_children` (`UNIT_COVERAGE_MISMATCH` otherwise), (b) pool-renumbered same-revision carried facts (raw pooling is the measured 14/21 aliasing failure), (c) per-unit valid+zero-diagnostics with recorded first-failing unit (`UNIT_NOT_VALID`), (d) terminality only on the last range. Ledger integration: Option A (additive plan tier, recommended) vs Option B (report-carried for emitter consumption, prototype in scratch first).
+
+Deliverable 2 — measured pricing of the two stay-gaps (`tests/probe_cursor_lexerstep_pricing.py`, JSON at `_build/pricing_cursor_lexerstep.json`):
+- `make_cursor`: exactly **1** top-level statement (single giant return record literal, 69n); bound group 0 refuses `PEP_RUNTIME_STEP_LIMIT` — statement grouping has nothing to split; needs **expression-level staging** (new mechanism).
+- `lexer_step`: **36** top-level statements; no interior unit exists at the failing statement (`statement[1]` has no body-role children) so one-level `bounded_units` interiors do not engage; group 1 remains `PEP_RUNTIME_STEP_LIMIT` — needs statement-kind-aware **staged descent** or separately-reviewed canonical decomposition.
+- With the amendment accepted, covered set = lexer_start, make_progress (typed body), utf8_check (bound groups); uncovered after this slice = make_cursor, lexer_step (both priced, both measured).
+
+**For A3:** the amendment is review input for the strict staged-zero-uncovered gate design; it deliberately does NOT relabel the accepted contract or the frozen Full-v2 rows. **For Matthew:** accept/decline the amendment direction (Option A) before it becomes pin-able.
+
+
+---
+
