@@ -194,3 +194,327 @@ of the two cards it was handed.
 No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
 `manifest.json` change, no budget-cap change, no frozen-runner edit. The runtime
 table is a substrate test with a hand-written driver, not Pep-level native execution.
+
+## BOOT-A2-20261106-05 — L6 measured: while lowers; the recursion blocker is computed call args from non-main functions
+
+- **Commit:** `fec4806af6035599cd2e3753c80b5f65d1bf4876`.
+- Cases added to `tests/probe_integration_case.py`: `while-byte`, `recursion`,
+  `call-arg-expr`, `computed-arg-main`, `computed-arg-nonmain`.
+
+The closure plan says *"measure recursion, not assume it's unsupported at current
+head"*. Measured.
+
+### while + mutable state: **LOWERS**
+
+`while !(byte_length(source) <= offset) { offset = offset + 1 }` over a `SourceBytes`
+parameter with `var` — check valid, **emits**.
+
+Incidental: **`<` is not a Pep operator at all** (`PEP_UNEXPECTED_CHARACTER`). The
+language has `<=`, `==`, `!=`, `&&`, `||`, `!`. The real lexer writes
+`while !(a <= b)`, and so does the fixture. My first fixture used `<` and was
+invalid Pep, not an emitter gap.
+
+### recursion: refused — but **not because it is recursion**
+
+The discriminating pair isolates the trigger. Same callee, same computed argument
+shape; the **only** difference is the call site:
+
+| call site | program | check | emit |
+|---|---|---|---|
+| `main` | `f(1 - 1)` | valid | **emitted** |
+| ordinary function | `f(n - 1)` inside `g` | valid | **unsupported** — *"Pep C23 one-parameter calls require one argument and a call-free target expression"* |
+
+Ruled out as causes, each by measurement:
+
+- **call depth** — `main -> g -> f` emits.
+- **computed arguments as such** — `add_one(20 + 21)` from `main` emits.
+- **`if` before the call** — `if n <= 0 { return 0 } else {}` then `return f(n) + 1`
+  emits.
+- **arithmetic after the call** — `return f(n) + 1` emits.
+
+So the real A2-owned blocker for the lexer's recursive/stateful helpers is
+**computed call arguments from non-main functions**, not recursion and not `while`.
+
+### One honest refusal that is a rule, not a gap
+
+`f(1) + g(2)` refuses with *"Pep C23 rejects two fallible operands because C operand
+evaluation order is unspecified"*. That is a deliberate safety rule and should stay.
+
+### Not claimed
+
+No frozen Full-v2 run, no Candidate7, no acceptance, no master / `CURRENT.md` /
+`manifest.json` change, no budget-cap change, no frozen-runner edit. `while-byte`
+emits but cannot be run natively yet, because it needs the `source_bytes()` grant.
+
+## BOOT-A2-20261106-06 — computed call arguments inside non-main functions now emit
+
+- **Commit:** `e2b5bee1d1ff88aa6939152ee04edce46d8dcc09`.
+- **New probe:** `tests/probe_computed_call_args.py`.
+- **Emitter change:** `tests/pep_c23_emitter.pep` — new
+  `pep_c23_parameter_value_expression`, used by the generic call branch of
+  `pep_c23_parameter_expression`.
+
+### The defect
+
+The call-result purity gate required a call argument to be a **bare parameter
+name**. So `return f(n - 1) + 1` inside an ordinary function refused with
+*"Pep C23 one-parameter calls require one argument and a call-free target
+expression"*, while the same shape in `main` emitted — `main` has no parameters,
+so it took the zero-parameter path and a different predicate. That asymmetry is
+what made the refusal look like a recursion limitation.
+
+A computed argument over parameters and literals is just as pure as a bare name,
+which is all this gate claims. The gate now accepts it.
+
+### Deliberately NOT widened (asserted as negatives)
+
+| negative | result |
+|---|---|
+| `f(1) + g(2)` — two fallible operands | still refused: *"rejects two fallible operands because C operand evaluation order is unspecified"* |
+| `f(g(n))` — nested call as an argument | still refused: *"call-free target expression"* |
+
+### Evidence — `python tests/probe_computed_call_args.py` → exit 0
+
+| case | seed | strict Clang `-std=c23` | strict GCC `-std=c2x` |
+|---|---|---|---|
+| `recursion` (`countdown(3)`) | `3` | `3` | `3` |
+| `computed-arg-nonmain` (`g(1)`) | `1` | `1` | `1` |
+
+Both compilers with `-Wall -Wextra -Wpedantic -Werror -O2`.
+
+### No regression
+
+- `tests/probe_seam_chunked.py` → exit 0 (4 chunks, both assembly orders, 11 negatives)
+- `tests/probe_k4_record_return.py` → PASS
+- `tests/probe_source_bytes_runtime.py` → PASS
+- `tests.test_a14_c23` → 12/12 OK
+- 87 further emitter tests OK: `test_c23_emitter_invariants`, `_sections`,
+  `_section_identity`, `test_c23_arity`, `test_c23_str_result`, `test_c23_say`,
+  `test_c23_bounded_emission`, `test_c23_str_contains`, `test_c23_emitter_field_use`
+- 5 representative `test_c23_collections` cases OK. **The full collections suite
+  was not run**: 129 tests at ~33 s each is ~70 min, which exceeds a session. That
+  is pre-existing slowness, not a regression from this change.
+
+### Bundle hash moved — A1/A3 must re-pin
+
+`c1908d06bb7752e43bb5af3f743ab3bdf8bea45d0aec25b43ee3a65805f9e9ad`
+→ `0043343992e89847dde884a7c155385f83e2815c0b5d27fb855bbf197df39953`
+
+## BOOT-A2-20261106-07 — `source_bytes()` native grant: contract proposal for A1
+
+Not implemented. This is the coordination item the dispatch asked for, and the
+host side is A1's.
+
+### What the seed actually does (authoritative, read at the 727f8af pin)
+
+`source_bytes()` is a **host-authorised grant**, not a language primitive. With no
+grant the seed fails closed:
+
+```
+PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is available only for a host-authorised v2 semanticTarget
+```
+
+(`pep_ocaml.ml:847-849`; the grant arrives as `?(source_bytes_value=None)` on
+`execute`.) So a native program must not be able to mint a SourceBytes from
+nothing either.
+
+### Proposed contract
+
+1. **Semantics preserved.** `source_bytes()` stays a grant. Ungranted → fail closed
+   with `PEP_RUNTIME_SOURCE_CONTEXT`, exit 1. Same code, same meaning.
+2. **Grant mechanism.** The emitted C runtime holds one
+   `pep_source_bytes pep_granted_source` plus a `_Bool pep_source_granted`. The
+   main wrapper initialises it once, at startup, from the host: `argv[1]` names the
+   source file, the runtime reads it, sets the flag. No `argv[1]` → no grant.
+3. **Ownership split.**
+   - **A2 (emitter):** lower `source_bytes()` to a runtime accessor that aborts when
+     ungranted, and emit the grant initialisation in the main wrapper.
+   - **A1 (host):** decide and document what the host passes, and confirm the
+     checker's `SourceBytes` type identity is unchanged.
+4. **Fail-closed negatives to pin:** no grant → `PEP_RUNTIME_SOURCE_CONTEXT`;
+   unreadable file → a distinct code; empty file → a valid zero-length SourceBytes
+   (not an error); `byte_at`/`byte_length` bounds behaviour unchanged (already
+   proven in receipt 04).
+5. **Explicitly not in scope:** no new language feature, no checker change, no cap
+   change, and no general file access — one grant, set by the host, at startup.
+
+### Why this shape
+
+It keeps the seed's zero-argument `source_bytes()` meaning ("the document being
+compiled") without inventing a language-level file API, and it keeps the trust
+boundary where the seed already puts it: the host decides, the program consumes.
+
+## BOOT-A2-20261106-08 — entry-parameter SourceBytes grant implemented (A2 half)
+
+- **Commit:** `b22846149c073241d969458fd0375fbcff77e9dc`.
+- **New probe:** `tests/probe_source_grant_entry.py`.
+
+A1's draft contract (`docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md` @a802290, posted
+to #16 as comment 6690088045) superseded my proposal: the grant rides the **entry
+declaration**, and `source_bytes()` as a CALL stays refused. Adopted. My own
+proposal's `argv[1]`-based `source_bytes()` lowering is withdrawn.
+
+### What was implemented (A2's half)
+
+1. **Entry gate.** Exactly one new shape is admitted:
+   `fn main(<one SourceBytes parameter>)`. Everything else is unchanged — Int,
+   Bool and two-parameter mains still refuse with the identical diagnostic.
+2. **Non-arena epilogue.** A grant wrapper reads `argv[1]` once and passes it to
+   the entry as `(pep_source_bytes){ .data, .length }`.
+
+### Fail-closed behaviour, measured
+
+| case | result |
+|---|---|
+| no `argv[1]` | exit 1, `PEP_RUNTIME_SOURCE_CONTEXT` — refused **before** the entry runs |
+| unreadable path | exit 1, `PEP_RUNTIME_SOURCE_OPEN` |
+| empty file | a **valid** zero-length SourceBytes; `byte_at(0)` then trips `PEP_RUNTIME_BYTE_RANGE` |
+| Int / Bool / two-parameter main | still refused, unchanged diagnostic |
+| `source_bytes()` as a call | still refused, "no resolved call fact" |
+
+### Native evidence — strict Clang AND GCC, real files
+
+| file bytes | first byte |
+|---|---|
+| `"A"` | `65` |
+| `\x00A` (NUL) | `0` |
+| `\xC3\xA9` (U+00E9) | `195` |
+
+### COST DISCIPLINE — measured twice, and the first two attempts were over budget
+
+A second traversal of `topLevelFunctions` to locate the entry pushed the
+near-ceiling recursive-depth fixture over the fixed 100k budget
+(`PEP_RUNTIME_STEP_LIMIT` at 4455:8). Unconditional parameter lookups in the
+function gate did it again (9183:18). `grantEntry` is now computed inside the
+prototype loop that already walks that list and already calls
+`pep_c23_parameters`, and the gate's lookups run only for a one-parameter `main`.
+No cap was raised.
+
+### Host side is A1's and is NOT done
+
+- `session_semantic_target` uses `session_exact_fields fields
+  ["document";"revision";"entryFunctions"]`, so a `sourceGrant` field is **rejected
+  today** with `PEP_SEMANTIC_TARGET_FIELDS`.
+- The seed's `run` has no grant path at all (`PEP_RUNTIME_SOURCE_CONTEXT`), so the
+  seed oracle for this shape cannot be produced from `run` — only through
+  `semanticTarget`, whose only SourceBytes it supplies is `analysis.source`.
+- So: the emitter lowers the declared shape; **authorising it remains the host's
+  decision, and today the host rejects the field that would carry the authorisation.**
+
+### Windows toolchain note
+
+MSVC's CRT marks `fopen`/`ftell` deprecated and clang reports that under the
+bundle's `-Werror` as a call-site diagnostic. `_CRT_SECURE_NO_WARNINGS` does not
+suppress it; the two call sites carry `#if defined(_MSC_VER) #pragma
+warning(disable: 4996) #endif` instead. Scoped to the granted wrapper only.
+
+## BOOT-A2-20261106-09 — lexer closure measured: 4/10 native, ZERO emitter refusals
+
+- **Commit:** `4bf597a1bc6831c90ccab288f3d4ffaf52df8165`.
+- **New probe:** `tests/probe_lexer_function_closure.py`.
+
+The A2-side closure measurement for Road 1, on the actual top-level functions of
+`examples/pep_lexer.pep` rather than a synthetic feature matrix. Each function is
+compiled as a real program with only the type declarations and callees it
+transitively needs; when it emits, the C is built with strict Clang `-std=c23`
+**and** GCC `-std=c2x` (`-Wall -Wextra -Wpedantic -Werror -O2`) and run.
+
+| function | check | emit | native |
+|---|---|---|---|
+| `ascii_letter` | valid | emitted | clang ok, gcc ok |
+| `ascii_digit` | valid | emitted | clang ok, gcc ok |
+| `ascii_continue` | valid | emitted | clang ok, gcc ok |
+| `advance_position` | valid | emitted | clang ok, gcc ok |
+| `utf8_check` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_cursor` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_token` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `make_progress` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `lexer_start` | `PEP_RUNTIME_STEP_LIMIT` | — | — |
+| `lexer_step` | transport 1 MiB | — | — |
+
+### The finding that matters
+
+**There are ZERO emitter refusals.** Every lexer function the checker can check,
+the emitter lowers, and both compilers run. The remaining six are blocked by the
+checker's fixed 100k step budget (5) and the 1 MiB JSONL transport limit (1) —
+both A1's lane.
+
+So **A2's emitter is not the bottleneck for the lexer.** Adding emitter features
+now would be speculative: there is no measured emitter gap to close. The next real
+dependency is staged checking, which A1 is already pricing.
+
+### Two probe bugs found and fixed while measuring
+
+Both had produced misleading rows, and both were probe defects, not emitter
+defects:
+
+1. A brace splitter that cut multi-line parameter lists at their first line, so
+   `make_cursor` / `make_token` / `make_progress` reported `PEP_PARSE_EXPECTED`.
+2. A missing callee closure, so `ascii_continue` reported `PEP_UNKNOWN_FUNCTION`
+   for `ascii_digit`.
+
+Recorded because the first version of this table would have sent A2 chasing two
+non-existent emitter gaps.
+
+## BOOT-A2-20261106-39 — LUCY-20261106-006 pickup: grant handoff delivered, vertical boundary measured
+
+- **Branch:** `codex/a2-bounded-emission` @ `935c331`, pushed, remote-equal, clean.
+- **#16 posts:** 6698074255 (grant handoff + ACK/counterexample), 6698115244 (vertical boundary).
+
+### Delivered against the mission's item 4
+
+**Both questions A1 was told to ask:**
+
+1. **`sourceGrant` shape** — A1 has NOT posted it; `codex/a1-typed-bound-pipeline` is
+   still at `a9e9e2f`. My ACK is therefore against A1's draft
+   `docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md` @a802290, read in full and adopted over
+   my own earlier proposal.
+2. **Where my native wrapper consumes the grant** — `tests/pep_c23_emitter.pep`:
+   `grantEntry` computed at 4616–4626 (true iff `main` declares exactly one
+   `SourceBytes` parameter); wrapper branch at 4743; fail-closed `argc < 2` at 4750;
+   `fopen(argv[1])` at 4752; whole-file read at 4758–4760; passed to `pep_fn_main` at
+   4765.
+
+**Exact seed-oracle limitation** (measured): plain `run` refuses ungranted bytes with
+`PEP_RUNTIME_SOURCE_CONTEXT: source_bytes is available only for a host-authorised v2
+semanticTarget` at 1:22. A seed oracle for a byte-reading program therefore cannot be
+produced from `run`; my probes iterate the same byte values as a literal `Int` list
+instead, and label that workaround as the authority boundary.
+
+**Test entry A1's host can invoke:** `python tests/probe_source_grant_entry.py` — exit
+0 at HEAD, drives the real session, builds with strict Clang AND GCC, runs over real
+files. No host change needed to run it.
+
+### The ONE blocking interface question
+
+**How does the emitter learn the grant is authorised?** My wrapper keys off the source
+shape alone; the emitter is a pure function of `(parsed, checked)` and never sees the
+host's `semanticTarget`, so it cannot distinguish "the host authorised this" from "the
+source merely declares it". That is a real gap against the draft's invariant 3. Options:
+(a) host-side refusal before calling the emitter, or (b) an explicit emitter grant
+argument. (a) is A1's file; (b) changes the emitter's tool signature. **A2 will
+implement its half once A1 chooses.**
+
+Also factual: `session_semantic_target` uses `session_exact_fields
+["document";"revision";"entryFunctions"]`, so a `sourceGrant` field is rejected today
+with `PEP_SEMANTIC_TARGET_FIELDS`. That is `pep_ocaml.ml`, A1's file.
+
+### Vertical boundary measured (mission objective 1)
+
+| fixture | bytes | nodes | result |
+|---|---|---|---|
+| `main(SourceBytes) { return byte_at(source, 0) }` | 66 | 8 | valid |
+| + real scan loop + `ascii_letter` | 313 | 53 | `PEP_RUNTIME_STEP_LIMIT` |
+| + real scan loop + `ascii_continue` closure | 477 | 75 | `PEP_RUNTIME_STEP_LIMIT` |
+
+A real scan loop plus even ONE lexer predicate is over the ceiling. The vertical
+therefore needs the **chunked** path, with `main` checked against external signatures.
+Not built: conditioned on the grant handshake above.
+
+### Not done, deliberately
+
+- **No scaling probes.** The global-O(n²)/55,930× claim was retracted at `5c25881`; the
+  settled model is ~linear in nodes, construct-dependent, global. Not a basis for
+  redesign.
+- **No next closure feature**, because the mission conditions it on the grant handshake.
+- **No checker edits** — read-only throughout, as the dispatch requires.

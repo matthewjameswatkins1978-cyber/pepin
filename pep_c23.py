@@ -569,3 +569,92 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+class GrantRefusal(RuntimeError):
+    """Host-side SourceBytes entry-grant refusal (contract s6 @0640bee)."""
+
+    def __init__(self, code, detail):
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+
+
+def _typed_fields(value):
+    return {f["name"]: f["value"] for f in value.get("fields", [])}
+
+
+def emit_granted(session, tool_revision, source_bytes, name="native-entry",
+                 entry_name="main", *, granted=True, measurements=None):
+    """Host-side SourceBytes entry grant (grant contract v1, derived mode).
+
+    Contract (docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md s6 @0640bee): the
+    grant exists iff the CHECKED entry declares a parameter of type
+    SourceBytes AND its name is in semanticTarget.entryFunctions. The host
+    refuses BEFORE the emitter is invoked (GRANT_DENIED / GRANT_SHAPE_MISMATCH
+    / GRANT_ENTRY_MISSING); bytes are exactly this open_bytes payload; no
+    ambient authority and no source_bytes() lowering are added here.
+    """
+    measurements = measurements if measurements is not None else {}
+    target = session.send({"schemaVersion": 3, "op": "open_bytes",
+                           "name": name, "bytes": list(source_bytes)})
+    require(target, "outcome", "ok", f"open {name}")
+    require(target, "status", "valid", f"check {name}")
+    document, revision = target["document"], target["revision"]
+    semantic = {"document": document, "revision": revision,
+                "entryFunctions": [entry_name] if granted else []}
+    parsed = parse_target(session, source_bytes, target, tool_revision)
+    checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                            "op": "tool_invoke", "tool": "pep-c23-checker",
+                            "arguments": [parsed], "semanticTarget": semantic})
+    if checked.get("outcome") != "ok":
+        code = (checked.get("error") or {}).get("code")
+        if code == "PEP_SEMANTIC_ROOT_NOT_FOUND":
+            raise GrantRefusal("GRANT_ENTRY_MISSING",
+                               "host entry function does not resolve in the "
+                               "target revision (checker refuses pre-emitter)")
+        require(checked, "outcome", "ok", "check granted entry")
+    report_fields = _typed_fields(checked["result"])
+    status = report_fields["status"]["value"]
+    if status != "valid":
+        return {"status": status, "refusal": None, "c_source": None,
+                "document": document, "revision": revision}
+    # The checked report elides entry parameters (measured: params == []), so
+    # the entry shape comes from chunk_signatures (ResolvedSignature carries
+    # index/typeName per parameter).
+    sigs_response = session.send(
+        {"schemaVersion": 3, "toolProtocolVersion": 2, "op": "tool_invoke",
+         "tool": "pep-c23-checker-sigs", "arguments": [parsed],
+         "semanticTarget": semantic})
+    require(sigs_response, "outcome", "ok", "fetch granted entry signatures")
+    entry_shape = None
+    for sig in sigs_response["result"]["value"]:
+        sm = _typed_fields(sig)
+        if sm["functionName"]["value"] != entry_name:
+            continue
+        params = (sm.get("params") or {}).get("value") or []
+        if params:
+            pf = _typed_fields(params[0])
+            entry_shape = pf["typeName"]["value"]
+        break
+    if entry_shape is None:
+        raise GrantRefusal("GRANT_ENTRY_MISSING",
+                           f"no checked entry function named {entry_name!r}")
+    if granted and entry_shape != "SourceBytes":
+        raise GrantRefusal("GRANT_SHAPE_MISMATCH",
+                           f"entry parameter type is {entry_shape!r}, "
+                           "expected SourceBytes")
+    if not granted and entry_shape == "SourceBytes":
+        raise GrantRefusal("GRANT_DENIED",
+                           "entry expects SourceBytes but no grant was "
+                           "requested; refusal precedes the emitter")
+    emitted = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                            "op": "tool_invoke", "tool": "pep-c23-emitter",
+                            "arguments": [parsed, checked["result"]],
+                            "semanticTarget": semantic})
+    require(emitted, "outcome", "ok", "emit granted entry")
+    efields = _typed_fields(emitted["result"])
+    parts = (efields.get("sourceParts") or {}).get("value") or []
+    measurements["grant_emitted"] = efields["status"]["value"]
+    return {"status": efields["status"]["value"],
+            "refusal": efields.get("diagnostic", {}).get("value"),
+            "c_source": "".join(p["value"] for p in parts),
+            "document": document, "revision": revision}

@@ -95,6 +95,55 @@ SB_GRANT = (
     "  return byte_length(source)\n"
     "}\n")
 
+# L6 control flow (the residual A4's K4 card named after record returns closed).
+#
+# RECURSION: the closure plan says "measure recursion, not assume it's unsupported at
+# current head". Measured: it is refused, but NOT because it is recursion -- see the
+# COMPUTED_ARG_* pair below, which isolates the actual trigger.
+#
+# WHILE_BYTE: while + `var` + assignment over a SourceBytes parameter. NOTE `<` is not
+# a Pep operator at all (`PEP_UNEXPECTED_CHARACTER`); the language has `<=`, `==`,
+# `!=`, `&&`, `||`, `!`. The real lexer writes `while !(a <= b)`, and so does this.
+RECURSION = (
+    "fn countdown(n: Int) -> Int {\n"
+    "  if n <= 0 { return 0 } else {}\n"
+    "  return countdown(n - 1) + 1\n"
+    "}\n"
+    "fn main() -> Int { return countdown(3) }\n")
+
+WHILE_BYTE = (
+    "fn count_bytes(source: SourceBytes) -> Int {\n"
+    "  var offset = 0\n"
+    "  while !(byte_length(source) <= offset) {\n"
+    "    offset = offset + 1\n"
+    "  }\n"
+    "  return offset\n"
+    "}\n"
+    "fn main() -> Int { return 0 }\n")
+
+# The discriminating pair. Same callee, same computed argument shape; the ONLY
+# difference is whether the call site is in `main` or in an ordinary function.
+# main: emitted. ordinary function: refused. So the recursion blocker is not
+# recursion -- it is computed call arguments from non-main functions.
+COMPUTED_ARG_MAIN = (
+    "fn f(n: Int) -> Int { return n }\n"
+    "fn main() -> Int { return f(1 - 1) }\n")
+
+COMPUTED_ARG_NONMAIN = (
+    "fn f(n: Int) -> Int { return n }\n"
+    "fn g(n: Int) -> Int {\n"
+    "  if n <= 0 { return 0 } else {}\n"
+    "  return f(n - 1) + 1\n"
+    "}\n"
+    "fn main() -> Int { return g(1) }\n")
+
+# Isolates the recursion refusal: is it recursion, or is it a computed call argument?
+# Same callee shape as the seam probe's add_one(41), but the argument is a binary
+# expression instead of a literal.
+CALL_ARG_EXPR = (
+    "fn add_one(v: Int) -> Int { return v + 1 }\n"
+    "fn main() -> Int { return add_one(20 + 21) }\n")
+
 CASES = {
     "lexer-chunk": lexer_chunk,
     "regression": lambda: REGRESSION_FIXTURE,
@@ -104,6 +153,11 @@ CASES = {
     "k4-record-mismatch": lambda: K4_RECORD_MISMATCH,
     "sb-param": lambda: SB_PARAM,
     "sb-grant": lambda: SB_GRANT,
+    "recursion": lambda: RECURSION,
+    "while-byte": lambda: WHILE_BYTE,
+    "call-arg-expr": lambda: CALL_ARG_EXPR,
+    "computed-arg-main": lambda: COMPUTED_ARG_MAIN,
+    "computed-arg-nonmain": lambda: COMPUTED_ARG_NONMAIN,
 }
 
 
