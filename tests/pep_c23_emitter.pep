@@ -3689,6 +3689,19 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
   if statementCount == 0 || !returned { return pep_c23_unsupported("Pep C23 functions require a return statement") } else {}
   let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
   if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
+  // `return [ ... ]` had no lowering at all, while `let xs = [ ... ]` then `return xs`
+  // emitted. That gap blocked 5 of the emitter's own 101 functions -- every one of them
+  // returns List[Str] -- so the emitter could not emit itself. Route a List[Str] return
+  // literal through the same argument builder the call path already uses.
+  if value.node.kind == "list" {
+    let returnType = pep_c23_child(nodes, function.id, "return_type", 0)
+    let elementType = if returnType.found {
+      pep_c23_child(nodes, returnType.node.id, "element_type", 0)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    if elementType.found && elementType.node.text == "Str" {
+      return pep_c23_str_list_argument(nodes, function, value.node)
+    } else {}
+  } else {}
   return pep_c23_expression_checked(nodes, function, value.node, checked)
 }
 fn pep_c23_function_at(functions: List[FlatAstNode], wanted: Int) -> PepC23NodeLookup {
