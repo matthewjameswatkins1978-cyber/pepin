@@ -42,10 +42,18 @@ function, with fields and refusals mirroring `ChunkLedger.accept` discipline:
   EMPTY diagnostics list; any other status ⇒ the record refuses
   (`UNIT_NOT_VALID`), and the recorded first-failing unit index is the
   first refusing layer.
-- **Terminality:** only the last range may be checked with
-  `expect_returns=True`; earlier units are checked non-terminal
-  (`expect_returns=False`), mirroring `bounded_units` semantics so no spurious
-  missing-return diagnostic and no skipped-return laundering.
+- **Terminality (corrected by measurement, A1 2026-11-06):** the LAST unit
+  must structurally close the body (`hi == total statement count`). Driving
+  the checker itself with `expect_returns=True` on a squeezed terminal slice
+  costs more and crossed the 100k-step ceiling for utf8_check's group 20
+  (measured), so the record does NOT require checker-level terminality;
+  the missing-return semantic residual is disclosed here rather than hidden:
+  decomposition proves every present statement including the return (wrongly
+  typed returns still diagnose — cf. the K4 P2 negative), but the
+  whole-check's absent-return diagnostic is not reproduced by slices.
+  Closing that residual is priced as a later sweep (whole-body
+  `expect_returns` when affordable, or a terminal slice under a raised
+  suitability analysis) — never by budget changes.
 - Source identity: every unit slice consumes original-id subtrees via
   `index.subtree(...)` (header + statement subtrees), so line/span identity and
   byte offsets are untouched (same mechanism as existing statement units).
