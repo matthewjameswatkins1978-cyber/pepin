@@ -1,0 +1,151 @@
+{
+ "header": {
+  "recordType": "LexCursor",
+  "recordSpan": {
+   "start": {
+    "offset": 644,
+    "line": 27,
+    "column": 10
+   },
+   "endOffset": 1048
+  },
+  "declSpan": {
+   "start": {
+    "offset": 0,
+    "line": 1,
+    "column": 1
+   },
+   "endOffset": 320
+  }
+ },
+ "fieldIds": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7
+ ],
+ "fields": [
+  {
+   "name": "document",
+   "type": "Str",
+   "span": {
+    "start": {
+     "offset": 670,
+     "line": 28,
+     "column": 15
+    },
+    "endOffset": 678
+   },
+   "bindingId": 0
+  },
+  {
+   "name": "revision",
+   "type": "Str",
+   "span": {
+    "start": {
+     "offset": 690,
+     "line": 28,
+     "column": 35
+    },
+    "endOffset": 698
+   },
+   "bindingId": 1
+  },
+  {
+   "name": "status",
+   "type": "Str",
+   "span": {
+    "start": {
+     "offset": 708,
+     "line": 28,
+     "column": 53
+    },
+    "endOffset": 714
+   },
+   "bindingId": 2
+  },
+  {
+   "name": "stage",
+   "type": "Str",
+   "span": {
+    "start": {
+     "offset": 723,
+     "line": 28,
+     "column": 68
+    },
+    "endOffset": 728
+   },
+   "bindingId": 3
+  },
+  {
+   "name": "offset",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 742,
+     "line": 29,
+     "column": 13
+    },
+    "endOffset": 748
+   },
+   "bindingId": 4
+  },
+  {
+   "name": "line",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 756,
+     "line": 29,
+     "column": 27
+    },
+    "endOffset": 760
+   },
+   "bindingId": 5
+  },
+  {
+   "name": "column",
+   "type": "Int",
+   "span": {
+    "start": {
+     "offset": 770,
+     "line": 29,
+     "column": 41
+    },
+    "endOffset": 776
+   },
+   "bindingId": 6
+  },
+  {
+   "name": "mode",
+   "type": "Str",
+   "span": {
+    "start": {
+     "offset": 784,
+     "line": 29,
+     "column": 55
+    },
+    "endOffset": 788
+   },
+   "bindingId": 7
+  }
+ ],
+ "carriedBindings": [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7
+ ],
+ "revision": {
+  "lexer_source": "pep_lexer.pep @57fe424==a9e9e2f(byte-identical)",
+  "oracle_sha256": "a353555ef9882766"
+ }
+}
