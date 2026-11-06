@@ -1,0 +1,316 @@
+"""Stage ledger for Lucy's real lexer functions.
+
+Records, per real function in examples/pep_lexer.pep, whether the emitter reaches it
+today and — when it does not — which stage blocks it. This is a *ledger*, not an
+aspiration: the assertions name the current dependency so that when the checker or the
+transport improves, this test fails and forces a deliberate re-measure instead of the
+improvement passing unnoticed.
+
+Two kinds of assertion:
+
+- functions the emitter reaches are compiled by Clang and GCC and their stdout is
+  compared with the interpreter;
+- functions the emitter does not reach must fail at the stage recorded here, and must
+  not be silently emitter-refused.
+"""
+
+import pathlib
+import subprocess
+import tempfile
+import unittest
+
+from pep_c23 import emit
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PEP = ROOT / "pep.ps1"
+LEXER = ROOT / "examples" / "pep_lexer.pep"
+TEXT = LEXER.read_text(encoding="utf-8")
+CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
+GCC = pathlib.Path(r"C:\Users\Matmus\scoop\apps\mingw\current\bin\gcc.exe")
+NATIVE_AVAILABLE = CLANG.is_file() and GCC.is_file()
+
+
+def block(header):
+    """Extract one top-level `type`/`fn` block from the real lexer source."""
+    start = TEXT.index(f"\n{header}") if f"\n{header}" in TEXT else TEXT.index(header)
+    if TEXT[start] == "\n":
+        start += 1
+    depth = 0
+    index = TEXT.index("{", start)
+    for position in range(index, len(TEXT)):
+        character = TEXT[position]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return TEXT[start:position + 1]
+    raise AssertionError(header)
+
+
+def emitter_stage(source_text):
+    """Return 'emitted' or the pipeline stage that stopped it."""
+    try:
+        emit(source_text.encode("utf-8"))
+        return "emitted"
+    except ValueError:
+        return "emitter-refused"
+    except RuntimeError as error:
+        text = str(error)
+        if "check parsed source" in text:
+            return "checker-step-limit"
+        if "emit checked source" in text:
+            return "emitter-step-limit"
+        if "1 MiB" in text or "message limit" in text:
+            return "transport-1MiB"
+        return "other:" + text[:60]
+
+
+FUNCTION_BLOCKS = {
+    "ascii_letter": block("fn ascii_letter"),
+    "ascii_digit": block("fn ascii_digit"),
+    "ascii_continue": block("fn ascii_continue"),
+    "utf8_check": block("fn utf8_check"),
+    "advance_position": block("fn advance_position"),
+}
+
+
+class PepC23RealLexerStageTests(unittest.TestCase):
+    def invoke(self, *args):
+        return subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(PEP), *map(str, args)],
+            cwd=ROOT, text=True, capture_output=True, check=False)
+
+    def run_native(self, source_text, expected):
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp_dir:
+            directory = pathlib.Path(temp_dir)
+            reference = directory / "reference.pep"
+            reference.write_text(source_text + "say(int_text(main()))\n",
+                                 encoding="utf-8", newline="\n")
+            interpreted = self.invoke("run", reference)
+            self.assertEqual(interpreted.returncode, 0,
+                             interpreted.stdout + interpreted.stderr)
+            self.assertEqual(interpreted.stdout, f"{expected}\n")
+            generated = emit(source_text.encode("utf-8"))
+            if not NATIVE_AVAILABLE:
+                return
+            c_path = directory / "generated.c"
+            c_path.write_text(generated, encoding="utf-8", newline="\n")
+            for compiler in (CLANG, GCC):
+                with self.subTest(compiler=compiler.name):
+                    executable = directory / (compiler.stem + "-case.exe")
+                    built = subprocess.run(
+                        [str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic",
+                         "-Werror", "-O2", str(c_path), "-o", str(executable)],
+                        cwd=ROOT, text=True, capture_output=True, check=False)
+                    self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
+                    ran = subprocess.run([str(executable)], cwd=ROOT, text=True,
+                                         capture_output=True, check=False)
+                    self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                    self.assertEqual(ran.stdout, interpreted.stdout)
+
+    # --- functions the emitter reaches today --------------------------------
+
+    def test_real_character_classifiers_run_natively(self):
+        for name, argument, expected in (("ascii_letter", 95, 1),
+                                         ("ascii_digit", 55, 1)):
+            with self.subTest(function=name):
+                source = FUNCTION_BLOCKS[name] + (
+                    f"\nfn main() -> Int {{ return if {name}({argument}) {{ 1 }} else {{ 0 }} }}\n")
+                self.run_native(source, expected)
+
+    def test_real_ascii_continue_composite_emits(self):
+        """Three real lexer functions together: the composite the lexer actually uses."""
+        self.assertEqual(
+            emitter_stage(FUNCTION_BLOCKS["ascii_letter"] + "\n"
+                          + FUNCTION_BLOCKS["ascii_digit"] + "\n"
+                          + FUNCTION_BLOCKS["ascii_continue"] + "\n"
+                          + "fn main() -> Int { return 0 }\n"),
+            "emitted")
+
+    def test_real_advance_position_runs_natively(self):
+        source = block("type SourcePosition") + "\n" + FUNCTION_BLOCKS["advance_position"] + (
+            "\nfn main() -> Int {\n"
+            "  let next = advance_position(1, 9, 10)\n"
+            "  return next.line * 100 + next.column\n"
+            "}\n")
+        self.run_native(source, 201)
+
+    def test_real_advance_position_tracks_newlines_and_columns(self):
+        """The real position helper, exercised on both of its branches.
+
+        `advance_position` is the lexer's only position-tracking function that the
+        checker reaches today, so both outcomes are compiled and compared rather than
+        only the happy branch.
+        """
+        prefix = block("type SourcePosition") + "\n" + FUNCTION_BLOCKS["advance_position"] + "\n"
+        for label, byte, expected in (("newline", 10, 201), ("ordinary", 65, 308)):
+            with self.subTest(branch=label):
+                source = prefix + (
+                    "fn main() -> Int {\n"
+                    f"  let moved = advance_position({1 if label == 'newline' else 3}, "
+                    f"{5 if label == 'newline' else 7}, {byte})\n"
+                    "  return moved.line * 100 + moved.column\n"
+                    "}\n")
+                self.run_native(source, expected)
+
+    def test_real_lex_token_zero_argument_constructor_runs_natively(self):
+        """A function returning a real lexer record with a List[Str] field.
+
+        The full `make_token` takes eight parameters and is checker-blocked, but the
+        constructor *shape* — a function whose body is one record construction with
+        literal fields, including a list — is reachable, and it is what a real
+        constructor reduces to once its parameters are supplied.
+        """
+        source = block("type LexToken") + (
+            "\nfn token_string() -> LexToken {\n"
+            "  return LexToken { kind: \"string\", text: \"\", integerValue: 0, "
+            "stringParts: [\"ab\", \"cd\"], startByte: 3, endByte: 9, line: 1, column: 4 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_string()\n"
+            "  return length(token.stringParts)\n"
+            "}\n")
+        self.run_native(source, 2)
+
+    def test_real_lex_token_zero_argument_constructor_with_empty_list(self):
+        source = block("type LexToken") + (
+            "\nfn token_empty() -> LexToken {\n"
+            "  return LexToken { kind: \"\", text: \"\", integerValue: 0, stringParts: [], "
+            "startByte: 0, endByte: 0, line: 0, column: 0 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_empty()\n"
+            "  return length(token.stringParts)\n"
+            "}\n")
+        self.run_native(source, 0)
+
+    def test_real_utf8check_record_constructs_natively(self):
+        """A real lexer result type, constructed and projected without its function body."""
+        source = block("type Utf8Check") + (
+            "\nfn main() -> Int {\n"
+            "  let checked = Utf8Check { width: 2, invalidOffset: -1 }\n"
+            "  return checked.width * 10 + checked.invalidOffset + 1\n"
+            "}\n")
+        self.run_native(source, 20)
+
+    def test_constructor_with_nested_record_and_list_field_runs_natively(self):
+        """LexProgress-shaped: a record holding a nested record *and* a list field.
+
+        The real `LexProgress` needs `LexToken` and `LexCursor` alongside it, which is more
+        nodes than either stage allows, so the shape is exercised without those
+        dependencies — the same structure at a size that fits.
+        """
+        source = (
+            "type Inner { v: Int }\n"
+            "type Shape { inner: Inner, items: List[Int], count: Int }\n"
+            "fn make() -> Shape {\n"
+            "  return Shape { inner: Inner { v: 1 }, items: [2, 3], count: 4 }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let shape = make()\n"
+            "  return length(shape.items) + shape.count\n"
+            "}\n")
+        self.run_native(source, 6)
+
+    def test_constructor_with_a_list_of_records_runs_natively(self):
+        """A token-list field populated with one record element, as the lexer does."""
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List[Tokenish] }\n"
+            "fn made() -> Progressish {\n"
+            "  return Progressish { status: \"ok\", "
+            "tokens: [Tokenish { kind: \"a\", parts: [\"x\"] }] }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let progress = made()\n"
+            "  return length(progress.tokens) + 5\n"
+            "}\n")
+        self.run_native(source, 6)
+
+    def test_empty_record_list_literal_is_checker_blocked(self):
+        """A distinct checker divergence, handed to the checker lane.
+
+        `tokens: []` where the element type is a record is accepted by the OCaml oracle
+        (`pep.ps1 check` reports valid) but rejected by the Pep-written checker, so the
+        emitter never sees it. An empty `List[Str]` field is fine, so the gap is specific
+        to record element types. If this starts emitting, the divergence is fixed and the
+        census should be re-run deliberately.
+        """
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List<Tokenish> }\n"
+            "fn made() -> Progressish {\n"
+            "  return Progressish { status: \"ok\", tokens: [] }\n"
+            "}\n"
+            "fn main() -> Int { let progress = made()\n"
+            "  return length(progress.tokens) + 5 }\n")
+        self.assertEqual(emitter_stage(source), "emitter-refused")
+        with self.assertRaises(ValueError) as caught:
+            emit(source.encode("utf-8"))
+        # The pipeline surfaces this as an input-revision mismatch, not as a checker
+        # rejection: the Pep-written checker returns a report whose node count does not
+        # cover the parsed source, so the emitter's own guard fires first. Both messages
+        # mean "the checker did not accept this program"; the mismatch wording is worth
+        # knowing because it reads like a stale-input bug rather than a rejection.
+        message = str(caught.exception)
+        self.assertTrue("authorised source revision" in message
+                        or "requires a valid Pep checker report" in message, message)
+
+    def test_constructor_with_list_str_parameter_runs_natively(self):
+        """The `make_token` stringParts shape with a real parameter.
+
+        A `List[Str]` parameter forwarded into a record field, called with a list literal.
+        This is the constructor body the lexer needs; `make_token` itself is blocked only
+        by its eight-parameter signature and node count.
+        """
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "fn token_of(parts: List[Str]) -> Tokenish {\n"
+            "  return Tokenish { kind: \"a\", parts: parts }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let token = token_of([\"x\", \"y\"])\n"
+            "  return length(token.parts)\n"
+            "}\n")
+        self.run_native(source, 2)
+
+    def test_constructor_with_list_record_parameter_runs_natively(self):
+        """The `tokens` shape with a real `List[record]` parameter."""
+        source = (
+            "type Tokenish { kind: Str, parts: List[Str] }\n"
+            "type Progressish { status: Str, tokens: List[Tokenish] }\n"
+            "fn made(tokens: List[Tokenish]) -> Progressish {\n"
+            "  return Progressish { status: \"ok\", tokens: tokens }\n"
+            "}\n"
+            "fn main() -> Int {\n"
+            "  let progress = made([Tokenish { kind: \"a\", parts: [\"x\"] }])\n"
+            "  return length(progress.tokens) + 5\n"
+            "}\n")
+        self.run_native(source, 6)
+
+    # --- ledger: what the checker still blocks ------------------------------
+
+    def test_real_constructors_are_blocked_by_the_checker_not_the_emitter(self):
+        """Current dependency, recorded so an improvement forces a re-measure.
+
+        The emitter has native support for every construct these bodies use; they stop
+        in the Pep-written checker. If this assertion starts failing, the checker has
+        reached them and the constructor census must be re-run deliberately.
+        """
+        for name, header in (("make_token", "fn make_token"),
+                             ("utf8_check", "fn utf8_check")):
+            with self.subTest(function=name):
+                body = block(header)
+                types = ""
+                if "LexToken" in body:
+                    types = block("type LexToken") + "\n"
+                if "Utf8Check" in body:
+                    types = block("type Utf8Check") + "\n"
+                stage = emitter_stage(types + body + "\nfn main() -> Int { return 0 }\n")
+                self.assertEqual(stage, "checker-step-limit")
+                self.assertNotEqual(stage, "emitter-refused")
+
+
+if __name__ == "__main__":
+    unittest.main()

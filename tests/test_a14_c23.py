@@ -332,10 +332,13 @@ class A14C23EmissionTests(unittest.TestCase):
         )
 
     def test_unsupported_valid_program_is_reported_without_c_output(self):
-        emitted = self._emit("type Point { name: Str }\nfn main() -> Int { return 42 }")
-        self.assertEqual(scalar(emitted["status"]), "unsupported")
-        self.assertEqual(emitted["sourceParts"]["value"], [])
-        self.assertNotEqual(scalar(emitted["diagnostic"]), "")
+        # RETIRED FIRST CASE (Campaign G G-A2-1): `type Point { name: Str }` was pinned as
+        # unsupported in 09b19ff when Str record fields had no lowering. Measured: it ALREADY
+        # emitted at baseline ea0bc9a (A/B this session; original stash A/B at b37532a), so
+        # the expectation was stale, not the emitter wrong. The capability now has a STRONGER
+        # replacement -- native seed parity under BOTH compilers -- in
+        # test_str_record_field_programs_run_natively_with_seed_parity below. The remaining
+        # subcases here keep this test's original unsupported-without-C-output purpose.
         dual_failure = self._emit(
             "fn main() -> Int { return (9223372036854775807 + 1) + (1 / 0) }"
         )
@@ -365,7 +368,10 @@ class A14C23EmissionTests(unittest.TestCase):
         parameterized_main = self._emit("fn main(value: Int) -> Int { return value }")
         self.assertEqual(scalar(parameterized_main["status"]), "unsupported")
         self.assertEqual(parameterized_main["sourceParts"]["value"], [])
-        self.assertIn("functions require supported scalar parameters", scalar(parameterized_main["diagnostic"]))
+        # Fragment matches both the pre-F3 and current gate wording (the F3 reword put
+        # "and Str, scalar or record results" after "supported parameters"); this pin was
+        # MASKED behind the retired Point failure until G-A2-1 removed it.
+        self.assertIn("functions require supported parameters", scalar(parameterized_main["diagnostic"]))
         conditional_parameterized_main = self._emit(
             "fn main(flag: Bool) -> Int { if flag { return 1 } else { return 0 } }"
         )
@@ -386,6 +392,40 @@ class A14C23EmissionTests(unittest.TestCase):
         for_in = self._emit("fn main() -> Int { for item in [1] {} return 0 }")
         self.assertEqual(scalar(for_in["status"]), "unsupported")
         self.assertEqual(for_in["sourceParts"]["value"], [])
+
+    def test_str_record_field_programs_run_natively_with_seed_parity(self):
+        """G-A2-1: the capability behind the retired expectation, proven end to end.
+
+        PRE/POST (measured, not assumed): the retired fixture already EMITTED at baseline
+        ea0bc9a -- the 'unsupported' expectation dated from 09b19ff and was wrong by then.
+        POST at 59cde2f: the unused-record form emits and both strict compilers print 42;
+        a Str record field carrying raw UTF-8 plus an escape (slow literal path, static
+        storage after the F3 lifetime repair) constructs, projects through say, and prints
+        byte-identical to the seed reference under BOTH Clang and GCC.
+        Stale-fact refusal is N/A on this one-shot path (facts are host-constructed per
+        invocation); the cross-revision refusal is pinned in tests/probe_seam_chunked.py.
+        """
+        unused = "type Point { name: Str }\nfn main() -> Int { return 42 }"
+        emitted = self._emit(unused)
+        self.assertEqual(scalar(emitted["status"]), "emitted", emitted)
+        self.assertNotEqual(emitted["sourceParts"]["value"], [])
+        self._compile_and_run(unused, 42)
+
+        field_source = (
+            "type Point { name: Str }\n"
+            "fn main() -> Int {\n"
+            "  let p = Point { name: \"caf\u00e9\\n\" }\n"
+            "  say(p.name)\n"
+            "  return 0\n"
+            "}\n")
+        field_emitted = self._emit(field_source)
+        self.assertEqual(scalar(field_emitted["status"]), "emitted", field_emitted)
+        generated = "".join(scalar(part) for part in field_emitted["sourceParts"]["value"])
+        # Static-storage literal inside the record initialiser (F3 lifetime repair).
+        self.assertIn("(const unsigned char *)", generated)
+        # Native stdout = the field say (cafe + escape LF + say newline) then the return
+        # echo; _compile_and_run byte-matches BOTH compilers against the seed reference.
+        self._compile_and_run(field_source, "caf\u00e9\n\n0")
 
     def test_recursive_call_is_rejected_before_native_lowering(self):
         emitted = self._emit(

@@ -1,0 +1,1000 @@
+// Byte-level integer scanning over SourceBytes: the first thing every Pep-written lexer needs.
+//
+// `examples/pep_lexer.pep` hand-rolls digit classification and decimal accumulation inside its own
+// cursor. This module is the reusable form: a caller gets a value and the offset after it, or a
+// refusal with a diagnostic, and never has to re-derive either.
+//
+// Boundaries are explicit because the failure modes are real: a lone `byte_at` past the end raises
+// PEP_RUNTIME_BYTE_RANGE, and a long digit run silently overflows Int64. Both are refused here with
+// a diagnostic rather than left to the caller or to the runtime.
+
+type ScanInt {
+  status: Str,
+  diagnostic: Str,
+  value: Int,
+  nextOffset: Int
+}
+
+type ScanSum {
+  status: Str,
+  diagnostic: Str,
+  count: Int,
+  total: Int
+}
+
+fn scan_is_digit(byte: Int) -> Bool {
+  return 48 <= byte && byte <= 57
+}
+
+fn scan_is_space(byte: Int) -> Bool {
+  return byte == 32 || byte == 9 || byte == 10 || byte == 13
+}
+
+// Advance past spaces, tabs, CR and LF. Never reads past the end.
+fn scan_skip_space(source: SourceBytes, offset: Int) -> Int {
+  let length = byte_length(source)
+  // A position, not a verdict: a negative offset clamps to the start instead of asking byte_at for a
+  // negative index, which would raise PEP_RUNTIME_BYTE_RANGE. The scanners themselves refuse it.
+  if !(0 <= offset) { return 0 } else {}
+  var current = offset
+  while !(length <= current) && scan_is_space(byte_at(source, current)) {
+    current = current + 1
+  }
+  return current
+}
+
+// The largest value that can be multiplied by ten and still accept one more digit.
+fn scan_max_before_digit() -> Int {
+  return 922337203685477580
+}
+
+fn scan_refused(diagnostic: Str, offset: Int) -> ScanInt {
+  return ScanInt { status: "unsupported", diagnostic: diagnostic, value: 0, nextOffset: offset }
+}
+
+// Scan one base-10 integer starting exactly at `offset`. A non-digit refuses instead of returning
+// zero, so a caller cannot mistake "nothing here" for "the value 0".
+fn scan_int_at(source: SourceBytes, offset: Int) -> ScanInt {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_refused("Pep scan found no digits at the end of the source", offset) } else {}
+  if !scan_is_digit(byte_at(source, offset)) { return scan_refused("Pep scan found a non-digit where an integer was required", offset) } else {}
+  var value = 0
+  var current = offset
+  var digits = 0
+  while !(length <= current) && scan_is_digit(byte_at(source, current)) {
+    let digit = byte_at(source, current) - 48
+    // Guarding the MULTIPLY would reject Int64 max itself: 922337203685477580 * 10 still fits, and
+    // only the final digit decides whether the result does. So the last digit is what is bounded.
+    if scan_max_before_digit() <= value {
+      if scan_max_before_digit() == value {
+        // At exactly 922337203685477580 only a final digit of 7 or less keeps the result in range.
+        if 8 <= digit {
+          return scan_refused("Pep scan integer is too large for Int", current)
+        } else {}
+      } else {
+        // Any value already above that threshold overflowed on the next multiply, whatever the digit.
+        return scan_refused("Pep scan integer is too large for Int", current)
+      }
+    } else {}
+    value = value * 10 + digit
+    digits = digits + 1
+    current = current + 1
+  }
+  return ScanInt { status: "ok", diagnostic: "", value: value, nextOffset: current }
+}
+
+// Skip leading space and scan the integer that follows.
+fn scan_int_after_space(source: SourceBytes, offset: Int) -> ScanInt {
+  return scan_int_at(source, scan_skip_space(source, offset))
+}
+
+// Consumer-shaped entry: add up every whitespace-separated integer in the source. This is the shape a
+// lexer or a literal-table builder needs, and it exercises skipping, repeated scanning and refusal
+// propagation in one pass.
+fn scan_int_sum(source: SourceBytes) -> ScanSum {
+  let length = byte_length(source)
+  var offset = 0
+  var count = 0
+  var total = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      // Trailing whitespace: nothing left to scan; assigning here also ends the pass.
+      offset = length
+    } else {
+      let scanned = scan_int_at(source, offset)
+      if scanned.status == "ok" {
+        count = count + 1
+        total = total + scanned.value
+        offset = scanned.nextOffset
+      } else {
+        return ScanSum { status: "unsupported", diagnostic: scanned.diagnostic, count: count, total: total }
+      }
+    }
+  }
+  return ScanSum { status: "ok", diagnostic: "", count: count, total: total }
+}
+
+// Identifier scanning, the companion to digit scanning: a lexer needs both and should not re-roll
+// either. The slice is taken with `utf8_slice`, so a multi-byte identifier body is returned intact
+// and the reported width is bytes, not characters.
+fn scan_is_ident_start(byte: Int) -> Bool {
+  return (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122) || byte == 95
+}
+
+fn scan_is_ident_continue(byte: Int) -> Bool {
+  return scan_is_ident_start(byte) || scan_is_digit(byte)
+}
+
+type ScanIdent {
+  status: Str,
+  diagnostic: Str,
+  text: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_ident_at(source: SourceBytes, offset: Int) -> ScanIdent {
+  let length = byte_length(source)
+  if !(0 <= offset) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan offset is negative", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  if !(offset <= length) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan offset is past the end of the source", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  if length <= offset {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan found no identifier at the end of the source", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  if !scan_is_ident_start(byte_at(source, offset)) {
+    return ScanIdent { status: "unsupported", diagnostic: "Pep scan found a non-identifier start byte", text: "", byteLength: 0, nextOffset: offset }
+  } else {}
+  var current = offset
+  while !(length <= current) && scan_is_ident_continue(byte_at(source, current)) {
+    current = current + 1
+  }
+  return ScanIdent {
+    status: "ok",
+    diagnostic: "",
+    text: utf8_slice(source, offset, current),
+    byteLength: current - offset,
+    nextOffset: current
+  }
+}
+
+// Consumer-shaped entry: count whitespace-separated identifiers, refusing on anything that is neither
+// whitespace nor a valid identifier start. A lexer built on this reports a precise offset instead of
+// skipping silently.
+type ScanCount {
+  status: Str,
+  diagnostic: Str,
+  count: Int,
+  offset: Int
+}
+
+// Quoted-literal scanning: the third input a lexer needs beside identifiers and integers.
+//
+// `examples/pep_lexer.pep` tracks `escapePending` and `stringPartsReversed` by hand inside its cursor.
+// This is the reusable form: it returns the decoded fragments and the offset after the closing quote,
+// or a refusal that names the byte that stopped it. Fragments are returned rather than one joined
+// `Str` because the seed cannot concatenate strings; the caller joins.
+//
+// Scope, stated rather than implied: single-line literals only (an unescaped newline refuses);
+// escapes are \n \t \r \\ \" and \0; an unknown escape refuses instead of being passed through, so
+// a caller never silently loses a backslash.
+
+// `\0` produces a real NUL FRAGMENT at its exact position in `parts`. Measured against the seed:
+// `say("a\0b")`, `say("\0ab")` and `say("ab\0")` emit `61 00 62`, `00 61 62` and `61 62 00`, so the
+// previous count-without-fragment form made those three literals indistinguishable here (both
+// leading and trailing NUL cases returned `["ab"]` with a count of 1). The seed itself decodes the
+// source escape `"\0"` to a one-byte NUL string, so the scanner emits that same fragment: ordering
+// is preserved inside `parts` with no string concatenation anywhere. `isNul` stays so a caller that
+// cannot carry a NUL (a C string, say) can identify it, and `nulCount` remains as a cross-check
+// total that still equals the number of NUL fragments in `parts`.
+type ScanEscape {
+  supported: Bool,
+  isNul: Bool,
+  text: Str
+}
+
+fn scan_escape_text(byte: Int) -> ScanEscape {
+  if byte == 110 { return ScanEscape { supported: true, isNul: false, text: "\n" } } else {}
+  if byte == 116 { return ScanEscape { supported: true, isNul: false, text: "\t" } } else {}
+  if byte == 114 { return ScanEscape { supported: true, isNul: false, text: "\r" } } else {}
+  if byte == 92 { return ScanEscape { supported: true, isNul: false, text: "\\" } } else {}
+  if byte == 34 { return ScanEscape { supported: true, isNul: false, text: "\"" } } else {}
+  if byte == 48 { return ScanEscape { supported: true, isNul: true, text: "\0" } } else {}
+  return ScanEscape { supported: false, isNul: false, text: "" }
+}
+
+type ScanString {
+  status: Str,
+  diagnostic: Str,
+  parts: List[Str],
+  byteLength: Int,
+  nextOffset: Int,
+  nulCount: Int
+}
+
+fn scan_string_refused(diagnostic: Str, offset: Int) -> ScanString {
+  return ScanString {
+    status: "unsupported",
+    diagnostic: diagnostic,
+    parts: [],
+    byteLength: 0,
+    nextOffset: offset,
+    nulCount: 0
+  }
+}
+
+fn scan_string_at(source: SourceBytes, offset: Int) -> ScanString {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_string_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) {
+    return scan_string_refused("Pep scan offset is past the end of the source", offset)
+  } else {}
+  if length <= offset {
+    return scan_string_refused("Pep scan found no string literal at the end of the source", offset)
+  } else {}
+  if !(byte_at(source, offset) == 34) {
+    return scan_string_refused("Pep scan found no quote where a string literal was required", offset)
+  } else {}
+  var parts: List[Str] = []
+  var nuls = 0
+  var current = offset + 1
+  var runStart = current
+  while !(length <= current) {
+    let byte = byte_at(source, current)
+    if byte == 34 {
+      if runStart == current {
+        // Nothing pending; the literal closed exactly on a run boundary.
+      } else {
+        parts = append(parts, utf8_slice(source, runStart, current))
+      }
+      return ScanString {
+        status: "ok",
+        diagnostic: "",
+        parts: parts,
+        byteLength: current + 1 - offset,
+        nextOffset: current + 1,
+        nulCount: nuls
+      }
+    } else {}
+    if byte == 10 {
+      // The seed distinguishes this from EOF: PEP_NEWLINE_IN_STRING, not PEP_UNTERMINATED_STRING.
+      return scan_string_refused("Pep scan found an unescaped newline in a string literal", offset)
+    } else {}
+    if byte == 92 {
+      if runStart == current {
+        // Escape immediately after the opening quote or a previous escape.
+      } else {
+        parts = append(parts, utf8_slice(source, runStart, current))
+      }
+      if length <= current + 1 {
+        return scan_string_refused("Pep scan found an unterminated escape sequence", current)
+      } else {}
+      let escape = scan_escape_text(byte_at(source, current + 1))
+      if !escape.supported {
+        return scan_string_refused("Pep scan found an unsupported string escape", current)
+      } else {}
+      if escape.isNul {
+        // Counted AND emitted below as its own fragment, so leading, trailing and doubled NULs
+        // stay distinguishable in order.
+        nuls = nuls + 1
+      } else {}
+      parts = append(parts, escape.text)
+      current = current + 2
+      runStart = current
+    } else {
+      current = current + 1
+    }
+  }
+  return scan_string_refused("Pep scan found an unterminated string literal", offset)
+}
+
+fn scan_ident_count(source: SourceBytes) -> ScanCount {
+  let length = byte_length(source)
+  var offset = 0
+  var count = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      offset = length
+    } else {
+      let scanned = scan_ident_at(source, offset)
+      if scanned.status == "ok" {
+        count = count + 1
+        offset = scanned.nextOffset
+      } else {
+        return ScanCount { status: "unsupported", diagnostic: scanned.diagnostic, count: count, offset: offset }
+      }
+    }
+  }
+  return ScanCount { status: "ok", diagnostic: "", count: count, offset: offset }
+}
+
+// Symbol (punctuation and operator) scanning: the lexer input class the seed tracks as `Sym`,
+// beside whitespace, comments, identifiers, integers, quoted literals and holes.
+//
+// Grammar authority is the seed lexer in `pep_ocaml.ml`, and its precedence is unusual enough to
+// state exactly: the seven two-byte forms `<= == != && || -> =>` are tried first, then exactly
+// these single bytes `( ) { } [ ] , : ; + - * / = . | & !`. A lone `<` or `>` is NOT a symbol --
+// measured live against the OCaml seed, where `let a = 1 < 2;` fails PEP_UNEXPECTED_CHARACTER at
+// the `<` -- which is also why every comparison in this file is written `!(b <= a)`. This scanner
+// refuses a lone angle bracket instead of inventing a token the parser does not accept, and `?`
+// belongs to the hole scanner, so refusing it here is a boundary statement, not a grammar claim.
+//
+// "Maximal munch" means the seed's exact precedence, not a general operator table: a pair is
+// consumed only when both bytes match one of the seven forms, otherwise exactly one byte is
+// consumed or the scan refuses at that byte with `byteLength` 0, so a caller can never mistake a
+// refusal for a consumed byte.
+
+type ScanSym {
+  status: Str,
+  diagnostic: Str,
+  text: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_sym_refused(diagnostic: Str, offset: Int) -> ScanSym {
+  return ScanSym { status: "unsupported", diagnostic: diagnostic, text: "", byteLength: 0, nextOffset: offset }
+}
+
+// Name the unexpected character WITHOUT splitting it: ASCII is one byte, a UTF-8 lead byte covers
+// the widths below, and anything else (a continuation byte or a truncated final sequence) gets no
+// text rather than a one-byte slice that would raise PEP_RUNTIME_BYTE_BOUNDARY.
+fn scan_sym_unexpected(source: SourceBytes, offset: Int, head: Int) -> ScanSym {
+  var width = 0
+  if !(128 <= head) { width = 1 } else {}
+  if 192 <= head && head <= 223 { width = 2 } else {}
+  if 224 <= head && head <= 239 { width = 3 } else {}
+  if 240 <= head && head <= 252 { width = 4 } else {}
+  var text = ""
+  if !(width <= 0) && width <= byte_length(source) - offset {
+    text = utf8_slice(source, offset, offset + width)
+  } else {}
+  return ScanSym {
+    status: "unsupported",
+    diagnostic: "Pep scan found an unexpected character",
+    text: text,
+    byteLength: 0,
+    nextOffset: offset
+  }
+}
+
+fn scan_sym_at(source: SourceBytes, offset: Int) -> ScanSym {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_sym_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_sym_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_sym_refused("Pep scan found no symbol at the end of the source", offset) } else {}
+  let head = byte_at(source, offset)
+  var width = 0
+  // The seven two-byte forms, each decided by the pair alone; they cannot overlap on the same
+  // bytes, so the seed's relative check order between them is irrelevant.
+  if !(length <= offset + 1) {
+    let next = byte_at(source, offset + 1)
+    if head == 60 && next == 61 { width = 2 } else {}
+    if head == 61 && next == 61 { width = 2 } else {}
+    if head == 33 && next == 61 { width = 2 } else {}
+    if head == 38 && next == 38 { width = 2 } else {}
+    if head == 124 && next == 124 { width = 2 } else {}
+    if head == 45 && next == 62 { width = 2 } else {}
+    if head == 61 && next == 62 { width = 2 } else {}
+  } else {}
+  if width == 0 {
+    // The seed's single-byte list, byte-for-byte: ( ) { } [ ] , : ; + - * / = . | & !
+    if head == 40 || head == 41 || head == 123 || head == 125 || head == 91 || head == 93 { width = 1 } else {}
+    if head == 44 || head == 58 || head == 59 || head == 43 || head == 45 || head == 42 { width = 1 } else {}
+    if head == 47 || head == 61 || head == 46 || head == 124 || head == 38 || head == 33 { width = 1 } else {}
+  } else {}
+  if width == 0 { return scan_sym_unexpected(source, offset, head) } else {}
+  return ScanSym {
+    status: "ok",
+    diagnostic: "",
+    text: utf8_slice(source, offset, offset + width),
+    byteLength: width,
+    nextOffset: offset + width
+  }
+}
+
+// Consumer-shaped entry: count whitespace-separated symbols, refusing on the first byte that is
+// not one -- the same shape as `scan_ident_count`. A driver built on this reports the precise
+// offset where its input stopped being punctuation instead of skipping silently.
+type ScanSymCount {
+  status: Str,
+  diagnostic: Str,
+  count: Int,
+  offset: Int
+}
+
+fn scan_sym_count(source: SourceBytes) -> ScanSymCount {
+  let length = byte_length(source)
+  var offset = 0
+  var count = 0
+  while !(length <= offset) {
+    offset = scan_skip_space(source, offset)
+    if length <= offset {
+      offset = length
+    } else {
+      let scanned = scan_sym_at(source, offset)
+      if scanned.status == "ok" {
+        count = count + 1
+        offset = scanned.nextOffset
+      } else {
+        return ScanSymCount { status: "unsupported", diagnostic: scanned.diagnostic, count: count, offset: offset }
+      }
+    }
+  }
+  return ScanSymCount { status: "ok", diagnostic: "", count: count, offset: offset }
+}
+
+// --- Token input coverage: comments, holes, UTF-8 validation, position tracking, classification.
+//
+// Every rule below was measured against the seed before writing: `#` and `//` start a comment that
+// stops BEFORE the newline and a lone `/` is division (`6 / 2` checks valid); `?` carries a name
+// only when the byte after it is an identifier start (`?9` is a bare hole then the number 9);
+// source UTF-8 is validated with the seed's exact width/minimum/surrogate rules BEFORE any token
+// is read (measured PEP_INVALID_UTF8 offsets: a raw continuation byte is reported at its own
+// offset, a non-continuation after a lead at that non-continuation byte, overlong and width-0
+// leads at the lead); line/column advance is byte-based -- every byte increments the column and
+// ONLY `\n` resets it. Measured: the error byte in `let a = 1;\rlet b = <;` reports line 1 column
+// 20 (a lone CR is NOT a line break), while CRLF reports line 2 column 9, and EOF reports the
+// position AFTER all consumed whitespace (`let a =` -> line 1 column 8; `let a =\n` -> line 2
+// column 1).
+
+type ScanComment {
+  status: Str,
+  diagnostic: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_comment_refused(diagnostic: Str, offset: Int) -> ScanComment {
+  return ScanComment { status: "unsupported", diagnostic: diagnostic, byteLength: 0, nextOffset: offset }
+}
+
+// Consume a comment and stop AT the newline (or at end of source), exactly like the seed's
+// `while source.[i] <> '\n'` loop: the newline itself is left for the whitespace pass.
+fn scan_comment_at(source: SourceBytes, offset: Int) -> ScanComment {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_comment_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_comment_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_comment_refused("Pep scan found no comment at the end of the source", offset) } else {}
+  let head = byte_at(source, offset)
+  var starts = false
+  if head == 35 { starts = true } else {}
+  if head == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47 { starts = true } else {}
+  if !starts { return scan_comment_refused("Pep scan found no comment at this offset", offset) } else {}
+  var current = offset
+  while !(length <= current) && !(byte_at(source, current) == 10) {
+    current = current + 1
+  }
+  return ScanComment { status: "ok", diagnostic: "", byteLength: current - offset, nextOffset: current }
+}
+
+type ScanHole {
+  status: Str,
+  diagnostic: Str,
+  name: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_hole_refused(diagnostic: Str, offset: Int) -> ScanHole {
+  return ScanHole { status: "unsupported", diagnostic: diagnostic, name: "", byteLength: 0, nextOffset: offset }
+}
+
+// `?` alone (or before a non-identifier byte) is an unnamed hole; `?name` carries the name. The
+// seed requires an identifier-start byte directly after `?`, so `?9` is a bare hole followed by
+// the number 9, and the name slice is pure ASCII by construction.
+fn scan_hole_at(source: SourceBytes, offset: Int) -> ScanHole {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_hole_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_hole_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset { return scan_hole_refused("Pep scan found no hole marker at the end of the source", offset) } else {}
+  if !(byte_at(source, offset) == 63) {
+    return scan_hole_refused("Pep scan found no hole marker at this offset", offset)
+  } else {}
+  var current = offset + 1
+  var name = ""
+  if !(length <= current) && scan_is_ident_start(byte_at(source, current)) {
+    current = current + 1
+    while !(length <= current) && scan_is_ident_continue(byte_at(source, current)) {
+      current = current + 1
+    }
+    name = utf8_slice(source, offset + 1, current)
+  } else {}
+  return ScanHole { status: "ok", diagnostic: "", name: name, byteLength: current - offset, nextOffset: current }
+}
+
+type ScanUtf8 {
+  valid: Bool,
+  errorOffset: Int
+}
+
+// The seed's `invalid_utf8_offset`, ported without bitwise operators: the continuation test uses
+// range 128..191 (the seed `(byte land 0xc0) = 0x80`) and the low lead masks use division. Checks, in seed order: width ladder
+// (a continuation byte or a lead above 0xF7 has width 0), truncation, first non-continuation
+// byte, then overlong / above-0x10ffff / UTF-16-surrogate code points at the lead byte.
+fn scan_utf8_valid(source: SourceBytes) -> ScanUtf8 {
+  let length = byte_length(source)
+  var i = 0
+  while !(length <= i) {
+    let head = byte_at(source, i)
+    if !(128 <= head) {
+      i = i + 1
+    } else {
+      var width = 0
+      var minimum = 0
+      var codepoint = 0
+      if 192 <= head && head <= 223 {
+        width = 2
+        minimum = 128
+        codepoint = head - (head / 32) * 32
+      } else {}
+      if 224 <= head && head <= 239 {
+        width = 3
+        minimum = 2048
+        codepoint = head - (head / 16) * 16
+      } else {}
+      if 240 <= head && head <= 247 {
+        width = 4
+        minimum = 65536
+        codepoint = head - (head / 8) * 8
+      } else {}
+      if width == 0 || !(width <= length - i) {
+        return ScanUtf8 { valid: false, errorOffset: i }
+      } else {}
+      var bad = -1
+      var j = 1
+      while !(width <= j) {
+        let nextByte = byte_at(source, i + j)
+        let isContinuation = 128 <= nextByte && nextByte <= 191
+        if !isContinuation {
+          if bad == -1 { bad = i + j } else {}
+        } else {
+          codepoint = codepoint * 64 + (nextByte - (nextByte / 64) * 64)
+        }
+        j = j + 1
+      }
+      if !(bad == -1) { return ScanUtf8 { valid: false, errorOffset: bad } } else {}
+      if !(minimum <= codepoint) || 1114112 <= codepoint || (55296 <= codepoint && codepoint <= 57343) {
+        return ScanUtf8 { valid: false, errorOffset: i }
+      } else {}
+      i = i + width
+    }
+  }
+  return ScanUtf8 { valid: true, errorOffset: -1 }
+}
+
+type ScanPos {
+  status: Str,
+  diagnostic: Str,
+  line: Int,
+  column: Int
+}
+
+// Byte-based position at `offset`, seed rules: start at line 1 column 1, every byte advances the
+// column, and only byte 10 starts a new line at column 1; a lone CR is an ordinary byte. Calling
+// this at byte_length yields the seed's EOF position once whitespace has been consumed.
+fn scan_position_at(source: SourceBytes, offset: Int) -> ScanPos {
+  let length = byte_length(source)
+  if !(0 <= offset) {
+    return ScanPos { status: "unsupported", diagnostic: "Pep scan offset is negative", line: 1, column: 1 }
+  } else {}
+  if !(offset <= length) {
+    return ScanPos { status: "unsupported", diagnostic: "Pep scan offset is past the end of the source", line: 1, column: 1 }
+  } else {}
+  var line = 1
+  var column = 1
+  var i = 0
+  while !(offset <= i) {
+    if byte_at(source, i) == 10 {
+      line = line + 1
+      column = 1
+    } else {
+      column = column + 1
+    }
+    i = i + 1
+  }
+  return ScanPos { status: "ok", diagnostic: "", line: line, column: column }
+}
+
+type ScanKind {
+  status: Str,
+  diagnostic: Str,
+  kind: Str,
+  byteLength: Int,
+  nextOffset: Int
+}
+
+fn scan_kind_refused(diagnostic: Str, offset: Int) -> ScanKind {
+  return ScanKind { status: "unsupported", diagnostic: diagnostic, kind: "", byteLength: 0, nextOffset: offset }
+}
+
+// The seed's classification ladder as one callable step: whitespace, comment, identifier,
+// integer, string, hole, symbol, unexpected -- and `eof` at end of source, which is what the
+// driver turns into the EOF token. The span is exactly what consuming that input consumes. Input
+// whose scan FAILS (unterminated string, overflowing integer, unexpected byte) comes back
+// unsupported with its kind still named, so a driver can report the class that failed. Source
+// UTF-8 is validated separately BEFORE the ladder, exactly as the seed validates before lexing.
+fn scan_classify(source: SourceBytes, offset: Int) -> ScanKind {
+  let length = byte_length(source)
+  if !(0 <= offset) { return scan_kind_refused("Pep scan offset is negative", offset) } else {}
+  if !(offset <= length) { return scan_kind_refused("Pep scan offset is past the end of the source", offset) } else {}
+  if length <= offset {
+    return ScanKind { status: "ok", diagnostic: "", kind: "eof", byteLength: 0, nextOffset: offset }
+  } else {}
+  let head = byte_at(source, offset)
+  if scan_is_space(head) {
+    let next = scan_skip_space(source, offset)
+    return ScanKind { status: "ok", diagnostic: "", kind: "space", byteLength: next - offset, nextOffset: next }
+  } else {}
+  let isComment = head == 35 || (head == 47 && !(length <= offset + 1) && byte_at(source, offset + 1) == 47)
+  if isComment {
+    let comment = scan_comment_at(source, offset)
+    return ScanKind { status: comment.status, diagnostic: comment.diagnostic, kind: "comment",
+                      byteLength: comment.byteLength, nextOffset: comment.nextOffset }
+  } else {}
+  if scan_is_ident_start(head) {
+    let ident = scan_ident_at(source, offset)
+    return ScanKind { status: ident.status, diagnostic: ident.diagnostic, kind: "identifier",
+                      byteLength: ident.byteLength, nextOffset: ident.nextOffset }
+  } else {}
+  if scan_is_digit(head) {
+    let number = scan_int_at(source, offset)
+    if number.status == "ok" {
+      return ScanKind { status: "ok", diagnostic: "", kind: "integer",
+                        byteLength: number.nextOffset - offset, nextOffset: number.nextOffset }
+    } else {
+      // On failure nothing is consumed: byteLength is 0 and nextOffset is the digit that refused,
+      // so a driver names the exact position (the seed reports PEP_INT_LITERAL_RANGE over the run).
+      return ScanKind { status: "unsupported", diagnostic: number.diagnostic, kind: "integer",
+                        byteLength: 0, nextOffset: number.nextOffset }
+    }
+  } else {}
+  if head == 34 {
+    let literal = scan_string_at(source, offset)
+    return ScanKind { status: literal.status, diagnostic: literal.diagnostic, kind: "string",
+                      byteLength: literal.byteLength, nextOffset: literal.nextOffset }
+  } else {}
+  if head == 63 {
+    let hole = scan_hole_at(source, offset)
+    return ScanKind { status: hole.status, diagnostic: hole.diagnostic, kind: "hole",
+                      byteLength: hole.byteLength, nextOffset: hole.nextOffset }
+  } else {}
+  let symbol = scan_sym_at(source, offset)
+  if symbol.status == "ok" {
+    return ScanKind { status: "ok", diagnostic: "", kind: "symbol",
+                      byteLength: symbol.byteLength, nextOffset: symbol.nextOffset }
+  } else {
+    return ScanKind { status: "unsupported", diagnostic: symbol.diagnostic, kind: "unexpected",
+                      byteLength: 0, nextOffset: offset }
+  }
+}
+
+// --- The lexer driver: one source-backed pass that connects every scanner above into real tokens.
+//
+// The token shape is DELIBERATELY the canonical one from `examples/pep_lexer.pep` -- kind, text,
+// integerValue, stringParts, startByte, endByte, line, column -- so the slice-4 differential can
+// compare token-by-token without a translation layer. Canonical text semantics are mirrored:
+// integers and strings carry `text: ""` (their value lives in integerValue / stringParts), a bare
+// `_` word is a `hole` token like the seed's `Hole None`, a bare `?` is `hole` with empty text and
+// `?name` carries the name, comments and whitespace emit NO token, and `eof` is a real token at
+// the end position. String fragments carry the ordered NUL form (the canonical lexer itself
+// prepends "\0" for escaped NUL, so fragments agree by construction).
+//
+// Termination is bounded by construction: every loop iteration either consumes at least one byte
+// (all scanners return byteLength >= 1 on success -- each covered by its own unit test) or sets
+// `finished`. The explicit PEP_LEXER_NO_PROGRESS guard fail-closes that invariant if a scanner
+// regresses, instead of spinning. UTF-8 is validated BEFORE the ladder, exactly as the seed
+// validates the whole source before lexing. Errors carry the seed's own codes via
+// `lex_error_code`, with the token-start position the canonical lexer reports.
+
+type LexToken {
+  kind: Str,
+  text: Str,
+  integerValue: Int,
+  stringParts: List[Str],
+  startByte: Int,
+  endByte: Int,
+  line: Int,
+  column: Int
+}
+
+type LexResult {
+  status: Str,
+  errorCode: Str,
+  sourceBytes: Int,
+  errorStart: Int,
+  errorEnd: Int,
+  errorLine: Int,
+  errorColumn: Int,
+  tokens: List[LexToken]
+}
+
+fn lex_token(kind: Str, text: Str, integerValue: Int, stringParts: List[Str],
+             startByte: Int, endByte: Int, line: Int, column: Int) -> LexToken {
+  return LexToken {
+    kind: kind, text: text, integerValue: integerValue, stringParts: stringParts,
+    startByte: startByte, endByte: endByte, line: line, column: column
+  }
+}
+
+// Map a failed classification onto the seed's lexer error codes. The string sub-causes are
+// distinguished by the exact diagnostics scan_string_at produces (unit-tested on both sides), and
+// an unexpected byte is PEP_UNEXPECTED_CHARACTER whether it is ASCII or a valid multi-byte
+// character standing in code position (measured: `é` in code fails at its lead byte).
+fn lex_error_code(kind: Str, diagnostic: Str) -> Str {
+  if kind == "unexpected" { return "PEP_UNEXPECTED_CHARACTER" } else {}
+  if kind == "integer" { return "PEP_INT_LITERAL_RANGE" } else {}
+  if kind == "string" {
+    if diagnostic == "Pep scan found an unescaped newline in a string literal" {
+      return "PEP_NEWLINE_IN_STRING"
+    } else {}
+    if diagnostic == "Pep scan found an unsupported string escape" { return "PEP_INVALID_ESCAPE" } else {}
+    return "PEP_UNTERMINATED_STRING"
+  } else {}
+  return "PEP_LEXER_INPUT"
+}
+
+// Seed span END per error code, measured against pep.ps1 check --json: unexpected character ends
+// one byte past the byte (a multi-byte character in code position still spans ONE byte to the
+// seed); integer range ends past the whole digit run (the seed lexes all digits, then converts);
+// unterminated string ends at end of source (the seed fails where input ran out); newline-in-
+// string ends past the first unescaped newline; invalid escape ends past the bad escape char
+// (backslash + 2). `fallback` is the refusing scanner offset.
+fn lex_error_end(source: SourceBytes, errorCode: Str, start: Int, fallback: Int) -> Int {
+  let length = byte_length(source)
+  if errorCode == "PEP_UNEXPECTED_CHARACTER" { return start + 1 } else {}
+  if errorCode == "PEP_INT_LITERAL_RANGE" {
+    var p = start
+    while !(length <= p) && scan_is_digit(byte_at(source, p)) {
+      p = p + 1
+    }
+    return p
+  } else {}
+  if errorCode == "PEP_UNTERMINATED_STRING" { return length } else {}
+  if errorCode == "PEP_NEWLINE_IN_STRING" {
+    var p = start
+    while !(length <= p) && !(byte_at(source, p) == 10) {
+      p = p + 1
+    }
+    if length <= p { return p } else { return p + 1 }
+  } else {}
+  if errorCode == "PEP_INVALID_ESCAPE" { return fallback + 2 } else {}
+  return fallback
+}
+
+// Advance line/column over the consumed byte range [from, to): byte-based like the seed, only
+// byte 10 starts a line. Total driver cost stays linear because every byte is advanced once.
+fn lex_advance_pos(source: SourceBytes, from: Int, to: Int, line: Int, column: Int) -> ScanPos {
+  var currentLine = line
+  var currentColumn = column
+  var p = from
+  while !(to <= p) {
+    if byte_at(source, p) == 10 {
+      currentLine = currentLine + 1
+      currentColumn = 1
+    } else {
+      currentColumn = currentColumn + 1
+    }
+    p = p + 1
+  }
+  return ScanPos { status: "ok", diagnostic: "", line: currentLine, column: currentColumn }
+}
+
+// Build the emitted token for one classified non-skipped input. Re-scans integers and strings for
+// their values (classify returns spans only); that keeps scan_classify generic and costs at most
+// one extra linear pass over the source overall.
+fn lex_token_for(source: SourceBytes, kindName: Str, startByte: Int, endByte: Int,
+                 line: Int, column: Int) -> LexToken {
+  if kindName == "identifier" {
+    let word = utf8_slice(source, startByte, endByte)
+    if word == "_" {
+      return lex_token("hole", "", 0, [], startByte, endByte, line, column)
+    } else {
+      return lex_token("identifier", word, 0, [], startByte, endByte, line, column)
+    }
+  } else {}
+  if kindName == "integer" {
+    let number = scan_int_at(source, startByte)
+    return lex_token("integer", "", number.value, [], startByte, endByte, line, column)
+  } else {}
+  if kindName == "string" {
+    let literal = scan_string_at(source, startByte)
+    return lex_token("string", "", 0, literal.parts, startByte, endByte, line, column)
+  } else {}
+  if kindName == "hole" {
+    let hole = scan_hole_at(source, startByte)
+    return lex_token("hole", hole.name, 0, [], startByte, endByte, line, column)
+  } else {}
+  let symbol = scan_sym_at(source, startByte)
+  return lex_token("symbol", symbol.text, 0, [], startByte, endByte, line, column)
+}
+
+fn lex_source(source: SourceBytes) -> LexResult {
+  let length = byte_length(source)
+  let utf8 = scan_utf8_valid(source)
+  if !utf8.valid {
+    let pos = scan_position_at(source, utf8.errorOffset)
+    return LexResult {
+      status: "error", errorCode: "PEP_INVALID_UTF8", sourceBytes: length,
+      errorStart: utf8.errorOffset, errorEnd: utf8.errorOffset + 1,
+      errorLine: pos.line, errorColumn: pos.column, tokens: []
+    }
+  } else {}
+  var tokens: List[LexToken] = []
+  var offset = 0
+  var line = 1
+  var column = 1
+  var status = "ok"
+  var errorCode = ""
+  var errorStart = -1
+  var errorEnd = -1
+  var errorLine = -1
+  var errorColumn = -1
+  var finished = false
+  while !finished {
+    let classified = scan_classify(source, offset)
+    if classified.status != "ok" {
+      let pos = scan_position_at(source, offset)
+      status = "error"
+      errorCode = lex_error_code(classified.kind, classified.diagnostic)
+      errorStart = offset
+      // Seed span end differs per code; measured, not assumed (see lex_error_end).
+      errorEnd = lex_error_end(source, errorCode, offset, classified.nextOffset)
+      errorLine = pos.line
+      errorColumn = pos.column
+      finished = true
+    } else {}
+    if !finished && classified.kind == "eof" {
+      tokens = append(tokens, lex_token("eof", "", 0, [], offset, offset, line, column))
+      finished = true
+    } else {}
+    if !finished && classified.byteLength <= 0 {
+      // Fail-closed bounded-progress guard: a successful classification must consume something.
+      status = "error"
+      errorCode = "PEP_LEXER_NO_PROGRESS"
+      errorStart = offset
+      errorEnd = offset
+      errorLine = line
+      errorColumn = column
+      finished = true
+    } else {}
+    if !finished && (classified.kind == "space" || classified.kind == "comment") {
+      let moved = lex_advance_pos(source, offset, classified.nextOffset, line, column)
+      line = moved.line
+      column = moved.column
+      offset = classified.nextOffset
+    } else {}
+    if !finished && classified.kind != "space" && classified.kind != "comment" && classified.kind != "eof" {
+      tokens = append(tokens, lex_token_for(source, classified.kind, offset, classified.nextOffset, line, column))
+      let moved = lex_advance_pos(source, offset, classified.nextOffset, line, column)
+      line = moved.line
+      column = moved.column
+      offset = classified.nextOffset
+    } else {}
+  }
+  return LexResult {
+    status: status, errorCode: errorCode, sourceBytes: length,
+    errorStart: errorStart, errorEnd: errorEnd, errorLine: errorLine, errorColumn: errorColumn,
+    tokens: tokens
+  }
+}
+
+// --- A real consumer of the token stream: a census with delimiter-balance preflight.
+//
+// The shape a compiler driver needs before parsing: how many of each token class, and are the
+// brackets balanced. It consumes ONLY the driver's token stream (it never re-reads source bytes),
+// fails closed on the first unmatched closer with that token's exact position, and reports
+// unclosed openers at the end-of-input position. Boundary stated: depth balance is not nesting
+// grammar -- `([)]` balances by depth and is correctly left to the parser. A lex error passes
+// through as the driver's own error code with its position; counts are then zero, because input
+// that cannot be lexed has no trustworthy token classes. The eof token marks termination and is
+// not counted as input.
+
+type LexCensus {
+  status: Str,
+  diagnostic: Str,
+  errorStart: Int,
+  errorLine: Int,
+  errorColumn: Int,
+  sourceBytes: Int,
+  total: Int,
+  identifiers: Int,
+  integers: Int,
+  strings: Int,
+  holes: Int,
+  symbols: Int
+}
+
+fn lex_census(source: SourceBytes) -> LexCensus {
+  let lexed = lex_source(source)
+  var status = "ok"
+  var diagnostic = ""
+  var errorStart = -1
+  var errorLine = -1
+  var errorColumn = -1
+  var total = 0
+  var identifiers = 0
+  var integers = 0
+  var strings = 0
+  var holes = 0
+  var symbols = 0
+  var parens = 0
+  var brackets = 0
+  var braces = 0
+  var eofStart = -1
+  var eofLine = -1
+  var eofColumn = -1
+  if lexed.status == "ok" {
+    for token in lexed.tokens {
+      if token.kind == "eof" {
+        eofStart = token.startByte
+        eofLine = token.line
+        eofColumn = token.column
+      } else {
+        total = total + 1
+        if token.kind == "identifier" { identifiers = identifiers + 1 } else {}
+        if token.kind == "integer" { integers = integers + 1 } else {}
+        if token.kind == "string" { strings = strings + 1 } else {}
+        if token.kind == "hole" { holes = holes + 1 } else {}
+        if token.kind == "symbol" {
+          symbols = symbols + 1
+          if token.text == "(" { parens = parens + 1 } else {}
+          if token.text == "[" { brackets = brackets + 1 } else {}
+          if token.text == "{" { braces = braces + 1 } else {}
+          if token.text == ")" {
+            if parens <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing parenthesis"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { parens = parens - 1 }
+          } else {}
+          if token.text == "]" {
+            if brackets <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing bracket"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { brackets = brackets - 1 }
+          } else {}
+          if token.text == "}" {
+            if braces <= 0 {
+              status = "error"
+              diagnostic = "Pep census found an unmatched closing brace"
+              errorStart = token.startByte
+              errorLine = token.line
+              errorColumn = token.column
+            } else { braces = braces - 1 }
+          } else {}
+        } else {}
+      }
+    }
+    if status == "ok" && !(parens <= 0 && brackets <= 0 && braces <= 0) {
+      status = "error"
+      diagnostic = "Pep census found unclosed delimiters at end of input"
+      errorStart = eofStart
+      errorLine = eofLine
+      errorColumn = eofColumn
+    } else {}
+  } else {
+    status = "error"
+    diagnostic = lexed.errorCode
+    errorStart = lexed.errorStart
+    errorLine = lexed.errorLine
+    errorColumn = lexed.errorColumn
+  }
+  return LexCensus {
+    status: status, diagnostic: diagnostic,
+    errorStart: errorStart, errorLine: errorLine, errorColumn: errorColumn,
+    sourceBytes: lexed.sourceBytes, total: total,
+    identifiers: identifiers, integers: integers, strings: strings, holes: holes, symbols: symbols
+  }
+}
