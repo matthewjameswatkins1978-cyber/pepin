@@ -221,5 +221,9 @@ IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path
 
 ## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
 
+## 2026-11-07 | T2 probe v3: trailing-return classifiers per A1 v2 verdict (bba62be)
+
+Applied A1's exact diagnosis: is_fn_at/is_paren rewritten to result-var + trailing return (the only change); oracle unchanged 0/1/2, check valid 5 fns. Supersedes v2 handoff (same fork: emit -> arity probe; refuse -> record layer). A1 rerun requested (#16 6708554174). Frozen programs untouched; no checker/emitter edits.
+
 A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
 
