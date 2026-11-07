@@ -221,17 +221,16 @@ IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path
 
 ## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
 
-## 2026-11-07 | T2 verdict steelmanned, stands with reasoning (no code change)
-
-Attacked my own no-buffering verdict 7 ways (mutual recursion, call-before-def, prototypes, assign-vs-call, if/else presence, nested blocks, string/comment scanning) -- all resolve to prepass, 1-token lookahead, depth counter, or char-by-char streaming. Only unbounded-lookahead disambiguation would break it, excluded from Pep-0 by subset. Challenge open but unanswered after genuine attack. Posted as #16 6708660227. No code change.
-
-## 2026-11-07 | A3-074/075/076 Str route narrows (683eb23, no code change)
-
-Same-struct finding collapses runtime layer to a nominal-type bridge; remaining: contract-shape decision + emitter typing. No new A4 action; say(Str) path stands, v2/v3 + arity handoffs stand. Posted as #16 6708619018. No frozen move, no code change.
+A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
 
 ## 2026-11-07 | T2 probe v3: trailing-return classifiers per A1 v2 verdict (bba62be)
 
 Applied A1's exact diagnosis: is_fn_at/is_paren rewritten to result-var + trailing return (the only change); oracle unchanged 0/1/2, check valid 5 fns. Supersedes v2 handoff (same fork: emit -> arity probe; refuse -> record layer). A1 rerun requested (#16 6708554174). Frozen programs untouched; no checker/emitter edits.
 
-A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
+## 2026-11-07 | A3-074/075/076 Str route narrows (683eb23, no code change)
 
+Same-struct finding collapses runtime layer to a nominal-type bridge; remaining: contract-shape decision + emitter typing. No new A4 action; say(Str) path stands, v2/v3 + arity handoffs stand. Posted as #16 6708619018. No frozen move, no code change.
+
+## 2026-11-07 | T2 verdict steelmanned, stands with reasoning (no code change)
+
+Attacked my own no-buffering verdict 7 ways (mutual recursion, call-before-def, prototypes, assign-vs-call, if/else presence, nested blocks, string/comment scanning) -- all resolve to prepass, 1-token lookahead, depth counter, or char-by-char streaming. Only unbounded-lookahead disambiguation would break it, excluded from Pep-0 by subset. Challenge open but unanswered after genuine attack. Posted as #16 6708660227. No code change.
