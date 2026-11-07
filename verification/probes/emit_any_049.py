@@ -150,6 +150,7 @@ def main():
                 raise RuntimeError(f"{what}: {ef['diagnostic']['value'][:200]}")
             return "".join(p["value"] for p in ef["sourceParts"]["value"])
 
+        pieces = []
         first_label = labels[0]
         for stage, args, what in (
                 ("header", [sliced[first_label], reports[first_label], typed("Str", "header")], "header"),
@@ -158,12 +159,35 @@ def main():
             try:
                 out = invoke("pep-c23-section" if stage in ("header", "epilogue") else "pep-c23-unit",
                              args, what)
+                pieces.append(out)
                 print(f"  emit {stage:<16} OK ({len(out)} bytes)")
             except RuntimeError as error:
                 print(f"  emit {stage:<16} FIRST REFUSAL: {error}")
                 print(f"\nRESULT: REFUSED AT EMISSION ({stage})")
                 return 1
         print("\nRESULT: FULLY EMITTED - every function lowered")
+
+        # optional native stage: PEPIN_RUN_FIXTURES = semicolon-separated input paths
+        runs = [p for p in (os.environ.get("PEPIN_RUN_FIXTURES") or "").split(";") if p.strip()]
+        if runs:
+            import subprocess as sp
+            build = ROOT / "_build"
+            build.mkdir(parents=True, exist_ok=True)
+            c_path = build / "emitany_run.c"
+            c_path.write_text("".join(pieces), encoding="utf-8", newline="\n")
+            for comp, std in (("clang", "-std=c23"), ("gcc", "-std=c2x")):
+                exe = build / f"emitany_run_{comp}.exe"
+                cc = sp.run([str(pep_c23.compiler_path(comp)), std, "-Wall", "-Wextra",
+                             "-Wpedantic", "-Werror", "-O2", str(c_path), "-o", str(exe)],
+                            capture_output=True, text=True, check=False)
+                print(f"  build {comp:<6} {'OK' if cc.returncode == 0 else 'FAIL ' + cc.stderr.strip()[:120]}")
+                if cc.returncode != 0:
+                    continue
+                for fx in runs:
+                    rr = sp.run([str(exe), fx.strip()], capture_output=True, text=True,
+                                check=False)
+                    print(f"    run {comp} {fx.strip():<42} -> stdout={rr.stdout.strip()!r} "
+                          f"exit={rr.returncode}")
         return 0
     finally:
         session.close()
