@@ -119,3 +119,7 @@ Read A2 ac3e2ea: empty-then fixed in both walkers (suite 74 OK/1 skip), blocker 
 
 Read A3 a6ea71f: pre-registers V0-V6 ill-typed shape variants plus two A4 reference claims (continue-bytes 105/137/0/706, LF 3/5/0/39). A4 recomputed continue-bytes over git-object bytes: 706/105/137/0 (empty blob e69de29b, trivially 0) -- adopted values exact, no correction. V0-V6 verdicts are A3's gate alone; A4 publishes no parallel predictions. Also read A1 Q4 carried-bindings result (halves route viable; vehicle = field-range groups, A1-owned) -- no action items for A4. Posted as #16 6706861771. Freeze holds; standing by.
 
+## 2026-11-07 | D-A4 ROUTE posted, S-first (new mission 012, Phase D)
+
+New mission LUCY-20261107-012 supersedes STOP for this bounded mission only; no old-campaign resume. Posted D-A4 ROUTE (311 words, #16 6707382851) + BM lane receipt (checksum d0dcb7e9): smallest genuine compiler = single-pass Pep-0->C23, no AST/arena/IR/Str/List-of-structs (precedent C4/Oberon-0). R needs 3 coupled unproven items; S needs proven chunk pipeline + 1 unproven token/output primitive set -> S first. Falsifier: chunk-check + unit-emit a 3-element List[Int] via prepend with indexed loop reads. Next: run that probe on own lane and report PASS/FAIL.
+
