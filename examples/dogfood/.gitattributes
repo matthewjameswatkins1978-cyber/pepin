@@ -2,3 +2,5 @@
 # The byte-counting programs measure committed bytes; force LF on checkout
 # so a Windows worktree matches the pinned revision byte-for-byte.
 *.pep text eol=lf
+# pep0 CRLF acceptance fixture must keep its bytes to test CR handling.
+a_crlf.pep -text

@@ -49,6 +49,14 @@ Expected exit **5**, stdout exactly: `ERR unsupported`
 Bytes: none (0-byte file; seed-valid vacuous program).
 Expected exit **0**, stdout empty (no output).
 
+### `a_crlf.pep` — positive, CRLF line endings
+Bytes: `fn main() -> Int {\r\n  return 42\r\n}\r\n` (seed-valid; stored `-text` to preserve CRLF).
+Expected exit **0**, same 9-line C as `a_ok.pep`.
+
+### `a_u8.pep` — negative, non-ASCII space
+Bytes: `fn\u00a0main() -> Int { return 42 }\n` (NBSP U+00A0; seed-invalid).
+Expected exit **1**, stdout exactly: `ERR shape`
+
 ## Exit-code table
 
 | code | meaning | example |
