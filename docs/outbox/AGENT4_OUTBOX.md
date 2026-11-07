@@ -139,6 +139,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
 
+## 2026-11-07 | A3-047 absorbed: depth-driven cost rule adopted (9f8726e, no code change)
+
+A3 withdrew per-statement-scan/index recommendation (R2 falsified: deep expr costlier than 5 statements at same size); cost tracks expression DEPTH. S-sketch consequence: shallow-binary-tree discipline (depth <=2) for all Pep-0 code, on top of small-function sizes; single while/if shapes unchanged. List handoff + Int-only channel unchanged. Posted as #16 6707541284. No frozen move, no code change.
+
 A3-043: seam = builtins never get call facts; utf8_slice has zero lowering sites. Int-only channel decomposes into 3 bounded items: fact-or-factless admission (A1/A2 decision, supersedes my Q1 framing), by-name lowering (precedent exists), one C slice helper (only new native code). No new A4 asks; List handoff stands. Posted as #16 6707450731. Freeze holds.
 
 Read D-A3 (S gated on divergence spike; Str-concat unknown), D-A1 (R-lean + census falsifier; Str/heap pricing asked of A4), A3-042 (DIVERGENCE-2 NOT DEMONSTRATED; narrow checker-emitter seam, not Str construction). Posted Phase E (#16 6707428852) + BM receipt: answered A1's pricing with Int-only output-channel refinement (emit_span/emit_int shaped like byte_at; no Str creep, no seam contact); Q1->A2 (cost of one byte_at-shaped host builtin), Q2->A1 (seed-table registration required?), Q->A3 (pre-register divergence retest; assignment-RHS as third door?). Supported A1 census; List handoff stands. Challenge: S risk = List probe + descent-recursion emission only.
