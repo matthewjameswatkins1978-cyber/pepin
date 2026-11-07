@@ -2670,10 +2670,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let source = pep_c23_expression(nodes, function, argument.node)
       if source.status != "emitted" { return source } else {}
-      var parts: List[Str] = ["pep_byte_length("]
-      for part in source.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedLen: List[Str] = []
+      reversedLen = prepend(reversedLen, "pep_byte_length(")
+      for part in source.sourceParts { reversedLen = prepend(reversedLen, part) }
+      reversedLen = prepend(reversedLen, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedLen), diagnostic: "" }
     } else {}
     if node.text == "byte_at" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
@@ -2687,12 +2688,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let offset = pep_c23_expression(nodes, function, secondArgument.node)
       if source.status != "emitted" { return source } else {}
       if offset.status != "emitted" { return offset } else {}
-      var parts: List[Str] = ["pep_byte_at("]
-      for part in source.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ", ")
-      for part in offset.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedAt: List[Str] = []
+      reversedAt = prepend(reversedAt, "pep_byte_at(")
+      for part in source.sourceParts { reversedAt = prepend(reversedAt, part) }
+      reversedAt = prepend(reversedAt, ", ")
+      for part in offset.sourceParts { reversedAt = prepend(reversedAt, part) }
+      reversedAt = prepend(reversedAt, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedAt), diagnostic: "" }
     } else {}
     if node.text == "str_contains" {
       if !argument.found || !secondArgument.found || thirdArgument.found || extraArgument.found {
@@ -2904,14 +2906,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       if source.status != "emitted" { return source } else {}
       if start.status != "emitted" { return start } else {}
       if finish.status != "emitted" { return finish } else {}
-      var parts: List[Str] = ["pep_utf8_slice("]
-      for part in source.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ", ")
-      for part in start.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ", ")
-      for part in finish.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedSlice: List[Str] = []
+      reversedSlice = prepend(reversedSlice, "pep_utf8_slice(")
+      for part in source.sourceParts { reversedSlice = prepend(reversedSlice, part) }
+      reversedSlice = prepend(reversedSlice, ", ")
+      for part in start.sourceParts { reversedSlice = prepend(reversedSlice, part) }
+      reversedSlice = prepend(reversedSlice, ", ")
+      for part in finish.sourceParts { reversedSlice = prepend(reversedSlice, part) }
+      reversedSlice = prepend(reversedSlice, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedSlice), diagnostic: "" }
     } else {}
     if node.text == "int_text" {
       if !argument.found || secondArgument.found || thirdArgument.found || extraArgument.found {
@@ -2919,10 +2922,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       } else {}
       let loweredArgument = pep_c23_expression(nodes, function, argument.node)
       if loweredArgument.status != "emitted" { return loweredArgument } else {}
-      var parts: List[Str] = ["pep_int_text("]
-      for part in loweredArgument.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedText: List[Str] = []
+      reversedText = prepend(reversedText, "pep_int_text(")
+      for part in loweredArgument.sourceParts { reversedText = prepend(reversedText, part) }
+      reversedText = prepend(reversedText, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedText), diagnostic: "" }
     } else {}
     if !target.found {
       return pep_c23_unsupported("Pep C23 calls require a known target")
