@@ -57,5 +57,11 @@ A1 (#16, 12:02:28) reproduced on new scratch `scratch/a1-dogfood-scan@9282662` (
 
 FIRST REFUSAL (emission, A2-owned): unit main unsupported — C23 conditional lowering requires a non-empty then branch (app's inner `if ... { } else { n = n + 1 }` and outer empty else). A1's handoff is A1->A2 with explicit FROZEN-do-not-edit on the app. A4 concurs and holds: editing the app now would invalidate A3's BOOT-A3-025 pre-registration mid-gate. No A4 code change; no overlapping-file action.
 
-3-slice review (A4 lane): 1/3 freeze+contract answer, 2/3 A3 pre-reg ACK+blob match, 3/3 A1 CHECK+refusal ACK+byte-identity proof. Lane discipline held (owned paths only, no checker/emitter edits, no acceptance writes). Continuing: await A2's emission fix + A3's independent PASS/FAIL, then implement queued line-scan.
+3-slice review (A4 lane): 1/3 freeze+contract answer, 2/3 A3 pre-reg ACK+blob match, 3/3 A1 CHECK+refusal ACK+byte-identity proof. Lane discipline held (owned paths only, no checker/emitter edits, no acceptance writes). Receipt at `913552b`.
+
+## 2026-11-07 | LUCY-20261107-008 Q3 PICKUP+DONE — pepin-line-scan (41fe0cd)
+
+Claimed Q3 (A4-preferred; precondition met by A3 PROVEN-ORACLE-ONLY + A1 CHECK green on the frozen app, which stays untouched). New files only: `pepin-line-scan.pep` (LF counter, filled-then/empty-else shape A3 proved builds, no empty-then), `SPEC.md` line-scan addendum (expectations 3/5/0/39, consumer = runs+lines pairing), scoped `examples/dogfood/.gitattributes` (`*.pep text eol=lf`, answers A3 point-6 hazard inside owned path, no repo-wide change). Frozen-app diff `874cc02..HEAD` over scan+3 fixtures still EMPTY.
+
+Evidence: single-unit `pep.ps1 check` on this branch: **valid, 4 fns, 0 diagnostics**. Not claimed: native execution (needs A1/A2 lowering; this receipt is the handoff — A1's probe pattern re-points at the new file unchanged). Noted in passing: A3 BOOT-A3-026 (c02375d) proves granted `byte_at` bounds-checked SOUND 21/21, which covers this program's only arithmetic risk too. Next: answer follow-ups; next closure evidence when unblocked.
 
