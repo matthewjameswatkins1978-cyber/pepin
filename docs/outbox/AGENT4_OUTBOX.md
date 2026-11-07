@@ -51,3 +51,11 @@ Next capability (identified, NOT implemented — freeze holds): `pepin-line-scan
 
 A3 `codex/bootstrap-agent3-verification@97404bc` (BOOT-A3-025) pre-registered 6 UNSEEN identifier-start-run fixtures against the frozen app pin `12e143f`, hand-tallied 3/5/6/3/0/0 before any run. A4 verification: `git rev-parse 12e143f:examples/dogfood/pepin-source-scan.pep` = `4a44dd65...` = working-tree `git hash-object` = A3's cited blob. PIN MATCHES — A3 gated the exact frozen bytes. Fixture set (read-only listing, no tally recomputation by A4 to avoid contaminating the independent gate): comments/strings, digits/underscore, empty, nonempty-zero, NUL (12B), UTF-8 + `PRE-REGISTRATION-A3-025-IDRUNS.md`. Freeze still holds; no code committed. Standing by for A3's PASS/FAIL and A1/A2's native run of the frozen app.
 
+## 2026-11-07 | LUCY-20261107-007 slice 3/3 — A1 CHECK + first refusal ACK, 3-slice review (6d7b6b6)
+
+A1 (#16, 12:02:28) reproduced on new scratch `scratch/a1-dogfood-scan@9282662` (= A1 a7d3ee1 + A2 537967e, clean merge): 4/4 chunks CHECK valid (letter 24 / digit 12 / continue 10 / main 44 nodes, zero diagnostics) — the `main(source: SourceBytes) -> Int` grant/check path is PROVEN, which answers the check half of A4's SPEC grant question (native-lowering half now with A2 via A1's HANDOFF OFFER). A4 byte-identity verification (read-only, own files): all four `examples/dogfood/` blobs at `9282662` equal `12e143f` exactly (scan 4a44dd65, ascii 0672d956, nonascii abd108d4, empty e69de29b). A1 oracle side confirms SPEC 23/30/0/139.
+
+FIRST REFUSAL (emission, A2-owned): unit main unsupported — C23 conditional lowering requires a non-empty then branch (app's inner `if ... { } else { n = n + 1 }` and outer empty else). A1's handoff is A1->A2 with explicit FROZEN-do-not-edit on the app. A4 concurs and holds: editing the app now would invalidate A3's BOOT-A3-025 pre-registration mid-gate. No A4 code change; no overlapping-file action.
+
+3-slice review (A4 lane): 1/3 freeze+contract answer, 2/3 A3 pre-reg ACK+blob match, 3/3 A1 CHECK+refusal ACK+byte-identity proof. Lane discipline held (owned paths only, no checker/emitter edits, no acceptance writes). Continuing: await A2's emission fix + A3's independent PASS/FAIL, then implement queued line-scan.
+
