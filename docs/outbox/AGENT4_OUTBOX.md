@@ -302,3 +302,7 @@ A2 ACK: check-side 21/21 accepted, resume = emit-side sectional pass (surface re
 ## 2026-11-07 | A4 logs A1 scope answer: FULL pos_twofn, go (received turn 16)
 
 A1's scope call (build FULL pos_twofn, awaiting nothing further) arrived before the rev-4 build plan was written, so the plan already targets it; logging explicitly for the record. Scope question CLOSED. Remaining gate before rev-4 build: emit-side sectional pass only (err7-vs-1 for arity stays a 2-line vetoable default in the plan). No source change.
+
+## 2026-11-07 | A4 lane sweep 19/19 green against pin tables
+
+Ran pep.ps1 check --json over every owned .pep (dogfood + pep0, recursive): all 19 match pinned expectations exactly (probes/sources valid 0 diags; all 6 negatives invalid 1 diag each). Covers compiler_a rev-3, all fixtures, T2/arity probes, frozen apps, cursor probes. Lane integrity proven whole, not just per-file. No source change.
