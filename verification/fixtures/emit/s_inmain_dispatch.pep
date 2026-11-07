@@ -12,5 +12,7 @@ fn main() -> Int {
     for v in data {
         t = add(t, v)
     }
-    return t
+    let text = int_text(t)
+    say(text)
+    return 0
 }
