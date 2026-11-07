@@ -258,3 +258,7 @@ A2's repro (dbc5b4c) is decisive: 1100-node compiler-A AST ~13x over the 10k v2-
 ## 2026-11-07 | A4 CORRECTION + node census: 18 fns at rev-1 (not 19), 21 now; trim math vs walls
 
 Correction: compiler_a.pep @ 6ac7e09 has 18 fns, not 19 (my handoff post and A1's verify both said 19; rev-2 adds 3 matchers = 21 now). Census from seed check JSON (rev-2): 1339 AST nodes; top-5 phase fns (find_brace 281, main 219, find_ds 115, find_fn 94, find_parens 75) = 59%; all matchers/loops 15-44. Implication for the walls: even if the element budget alone moved to ~714, cutting 45%% means gutting err5/empty/boundary granularity the oracle explicitly demands -- a partial wall move does not save the full compiler; only A1's checker-cost fix + chunked/compressed AST argument (or host decision) unblocks slice 2. Fallback ladder in EXPECTED.md stands as written. No source change.
+
+## 2026-11-07 | A4 confirms A2 CORRECTION + ADDENDUM: three walls, position stands
+
+A2 ran frozen 214887a: 1448 nodes hits the 1 MiB client message wall before the other two even fire; addendum shows the emitter takes the same AST argument, so transport walls gate the emitter identically -- A1's fix must cover chunking/compression for both tools, checker step-cost alone is necessary but not sufficient. My growth 1100->1448 is moot: the 80-node step wall binds orders of magnitude below either revision, so no revision of a real compiler fits any single-wall raise. Position unchanged: full transport + checker fix, or reviewed host decision. Frozen, standing by.
