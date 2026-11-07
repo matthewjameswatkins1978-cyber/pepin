@@ -141,6 +141,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
 
+## 2026-11-07 | List verdict + convergence note (59c3207, no code change)
+
+A1 List bisection absorbed: CHECK green incl. for-in; EMIT blocked at two narrow named gates (top-level assignment form; nested cross-chunk call, facts present). S-as-prepend-accumulation falsified ONLY at gate 1; v6 loop idiom emits and T2 v2 already uses it. A3-054/055: Str needs one lowering; DIVERGENCE-2 fails at exactly one point. Convergence: R and S share the SAME emitter gap list now; remaining route difference is which compiler source to feed. Posted as #16 6707718149. No new A4 action; handoffs stand.
+
 Withdrew v1 offsets design before any run (A3-051: zero-conditional loops emit; nested returns unrepresentable). v2: counting passes via loop-free is_fn_at/is_paren, main via result var + trailing return. Single-unit check VALID 5 fns; oracle 0/1/2 unchanged. SPEC section updated. Updated handoff to A1 posted (#16 6707668486); v1 offer void, decision fork stated (emit->arity/type probe; refuse->record layer, no v1 rerun). Frozen scan/line-scan/cursor untouched; no checker/emitter edits.
 
 ## 2026-11-07 | A3-047 absorbed: depth-driven cost rule adopted (9f8726e, no code change)
