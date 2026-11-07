@@ -144,6 +144,19 @@ later. Chunk-check + unit-emit belong to A1 (updated handoff supersedes
 the v1 offer); a PASS feeds the T2 prepass design, a refusal extends the
 A3-051 emit corpus.
 
+## Arity follow-up probe (queued behind T2 v2, same lane)
+
+`arity_probe.pep`: two counting passes — pass 1 counts `fn ` occurrences,
+pass 2 counts `(` / `)` spans; arity = commas+1 per span (0 when empty).
+`main` returns 0 = agree, 1 = no definition, 2 = mismatch (covers no-call:
+args 0 vs params N). Flat calls only (documented limitation); same
+051-shaped idioms as T2 v2 (zero-conditional loops, hoisted calls,
+trailing return). Single-unit `check`: valid, 7 fns, 0 diagnostics.
+Reference over committed bytes: arity_ok 0, arity_bad 2, arity_nodef 1,
+arity_nocall 2 (independently recomputed). QUEUED, not handed off: will
+offer to A1 when the T2 v2 fork resolves, so as not to stack untested
+probes on a busy lane.
+
 ## Checkout guard
 
 `examples/dogfood/.gitattributes` pins `*.pep text eol=lf` so Windows
