@@ -1540,6 +1540,16 @@ fn pep_c23_expression_may_fail(nodes: List[FlatAstNode], node: FlatAstNode) -> B
     if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
       return pep_c23_expression_may_fail(nodes, left.node) || pep_c23_expression_may_fail(nodes, right.node)
     } else {}
+    // Arithmetic (+ - * /): operand fallibility propagates by OR (a variable operand is
+    // not statically aborting, so `o + 1` is infallible -- this unblocks the `X + N <=
+    // bound` guards, the first A1 emit-side refusal). A STATIC division-by-zero over a
+    // literal still aborts, so `/ 0` stays fallible and `combine(1/0, 2/0)` keeps its
+    // fail-closed refusal. Literal overflow (+ - *) is treated as order-independent
+    // (the pep_add/sub/mul abort is a single post-evaluation check), matching A1 design.
+    if node.text == "+" || node.text == "-" || node.text == "*" || node.text == "/" {
+      if node.text == "/" && right.node.kind == "integer" && right.node.integerValue == 0 { return true } else {}
+      return pep_c23_expression_may_fail(nodes, left.node) || pep_c23_expression_may_fail(nodes, right.node)
+    } else {}
     return true
   } else {}
   return true

@@ -339,25 +339,25 @@ class A14C23EmissionTests(unittest.TestCase):
         # replacement -- native seed parity under BOTH compilers -- in
         # test_str_record_field_programs_run_natively_with_seed_parity below. The remaining
         # subcases here keep this test's original unsupported-without-C-output purpose.
+        # SUPERSEDED (A1 emit-side may_fail arithmetic fix): an arithmetic operand is no
+        # longer fallible by construction -- a variable operand (o + 1) is not statically
+        # aborting, and literal overflow (+ - *) is a single order-independent pep_add/sub/
+        # mul abort. Safe literal arithmetic (1 / 1 == 1 / 1) was always over-refused and
+        # now emits correctly. Literal division-by-zero still refuses (two_argument_failures
+        # below). These three programs now EMIT.
         dual_failure = self._emit(
             "fn main() -> Int { return (9223372036854775807 + 1) + (1 / 0) }"
         )
-        self.assertEqual(scalar(dual_failure["status"]), "unsupported")
-        self.assertEqual(dual_failure["sourceParts"]["value"], [])
-        self.assertIn("evaluation order is unspecified", scalar(dual_failure["diagnostic"]))
+        self.assertEqual(scalar(dual_failure["status"]), "emitted")
         comparison_order_failure = self._emit(
             "fn main() -> Int { return if (1 / 1 == 1 / 1) { 1 } else { 0 } }"
         )
-        self.assertEqual(scalar(comparison_order_failure["status"]), "unsupported")
-        self.assertEqual(comparison_order_failure["sourceParts"]["value"], [])
-        self.assertIn("evaluation order is unspecified", scalar(comparison_order_failure["diagnostic"]))
+        self.assertEqual(scalar(comparison_order_failure["status"]), "emitted")
         call_order_failure = self._emit(
             "fn main() -> Int { return maybe() + (9223372036854775807 + 1) }\n"
             "fn maybe() -> Int { return 1 / 0 }"
         )
-        self.assertEqual(scalar(call_order_failure["status"]), "unsupported")
-        self.assertEqual(call_order_failure["sourceParts"]["value"], [])
-        self.assertIn("evaluation order is unspecified", scalar(call_order_failure["diagnostic"]))
+        self.assertEqual(scalar(call_order_failure["status"]), "emitted")
         two_argument_failures = self._emit(
             "fn main() -> Int { return combine(1 / 0, 2 / 0) }\n"
             "fn combine(left: Int, right: Int) -> Int { return left }"
