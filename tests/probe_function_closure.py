@@ -97,8 +97,16 @@ def split_declarations(declaration_text):
 
 
 def needed_declarations(declarations, block):
-    """Transitive closure of declared types referenced by the block."""
-    chosen = []
+    """Transitive closure of declared types referenced by the block, in DEPENDENCY order.
+
+    Order matters: the emitter refuses a record field whose type is a record declared
+    later ("record fields require Int, Bool, or a preceding record declaration"). The
+    first version of this helper returned declarations in discovery order, which put
+    CheckedFunction before PepTypeShape even though CheckedFunction has a
+    `returnShape: PepTypeShape` field -- producing a FALSE emitter refusal on
+    append_checked_functions. Emit dependencies first.
+    """
+    needed = []
     pending = [block]
     seen = set()
     while pending:
@@ -108,9 +116,29 @@ def needed_declarations(declarations, block):
                 continue
             if re.search(rf"\b{re.escape(name)}\b", text):
                 seen.add(name)
-                chosen.append(declaration)
+                needed.append((name, declaration))
                 pending.append(declaration)
-    return "\n".join(chosen)
+
+    # Topological order: a declaration may only be emitted once every declaration it
+    # references has been emitted. Cycles cannot occur in a valid Pep source.
+    ordered = []
+    emitted = set()
+    remaining = list(needed)
+    while remaining:
+        progressed = False
+        for name, declaration in list(remaining):
+            deps = {other for other, _ in needed
+                    if other != name and re.search(rf"\b{re.escape(other)}\b", declaration)}
+            if deps <= emitted:
+                ordered.append(declaration)
+                emitted.add(name)
+                remaining.remove((name, declaration))
+                progressed = True
+        if not progressed:
+            # Unresolvable cycle: fall back to discovery order rather than dropping.
+            ordered.extend(declaration for _, declaration in remaining)
+            break
+    return "\n".join(ordered)
 
 
 def needed_functions(functions, name, block):
