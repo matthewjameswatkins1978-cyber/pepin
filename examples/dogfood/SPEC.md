@@ -131,10 +131,11 @@ A3's nominated acceptance target for A2's emitter work.
 
 ## T2 self-check probe (A1 handoff, same claim pattern as List probe)
 
-`t2_names_probe.pep` v2 (051-shaped; supersedes the v1 offsets design):
-two counting passes — pass 1 counts `fn ` occurrences, pass 2 counts `(`
-bytes; `main` returns 0/1/2 via a result variable + trailing return
-(assign-in-branch idiom, no nested returns). Loops contain zero
+`t2_names_probe.pep` v3 (051-shaped; v2 rewritten per A1 v2 verdict so the two
+loop-free classifiers also use result-var + trailing return): two counting
+passes — pass 1 counts `fn ` occurrences, pass 2 counts `(` bytes;
+`main` returns 0/1/2 via a result variable + trailing return (assign-in-branch
+idiom, no in-branch returns). Loops contain zero
 conditionals (classification in loop-free `is_fn_at`/`is_paren`); user
 calls cross chunks (twins cover conditions, assignment-RHS now tested by
 this probe). Single-unit `check`: valid, 5 fns, 0 diagnostics (this

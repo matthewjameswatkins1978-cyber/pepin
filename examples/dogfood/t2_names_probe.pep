@@ -1,5 +1,6 @@
-// t2_names — T2 self-check probe v2, 051-shaped (LUCY-20261107-013 P2).
-// Loops contain ZERO conditionals: classification lives in loop-free
+// t2_names — T2 self-check probe v3: v2 + trailing returns in the two
+// loop-free classifiers (A1 v2 verdict: first refusal was missing trailing
+// return). Loops contain ZERO conditionals: classification lives in
 // helpers (is_fn_at, is_paren); loops only accumulate and advance.
 // Pass 1 counts "fn " occurrences; pass 2 counts byte-40 '(' occurrences.
 // main returns 0 = def+call present, 1 = no definition, 2 = no call.
@@ -8,19 +9,21 @@
 // Expected: t2_valid 0, t2_nodef 1, t2_nocall 2.
 
 fn is_fn_at(source: SourceBytes, o: Int) -> Int {
+  var r = 0
   if byte_at(source, o) == 102 && byte_at(source, o + 1) == 110 && byte_at(source, o + 2) == 32 {
-    return 1
+    r = 1
   } else {
-    return 0
   }
+  return r
 }
 
 fn is_paren(byte: Int) -> Int {
+  var r = 0
   if byte == 40 {
-    return 1
+    r = 1
   } else {
-    return 0
   }
+  return r
 }
 
 fn count_fn(source: SourceBytes) -> Int {
