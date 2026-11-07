@@ -98,10 +98,9 @@ arity); single-error reporting (first-error exit) satisfies every A3
 invalid-input case; C output order matches source order for structured
 code (headers/footers known a priori); the symbol table is parallel
 `List[Int]` triples (name-hash, start, length) with byte-compare on hash
-match -- no Str keys, no AST. Per A3-060 (List arguments cannot cross
-chunk boundaries), the table is a re-scan per query over granted bytes:
+match -- no Str keys, no AST. Per A3-060/061 (List-argument gate proposed then retracted as a confound), the working table is a re-scan per query over granted bytes:
 no stored table, hence no cross-chunk List values. A parallel-`List[Int]`
-table variant stays parked behind List-argument support; the no-token
+table variant is unblocked but untested; the no-token
 verdict is unchanged (re-scan needs no buffered tokens either). Excluded
 by subset definition (not by
 implementation): nested function definitions, multi-error recovery,
