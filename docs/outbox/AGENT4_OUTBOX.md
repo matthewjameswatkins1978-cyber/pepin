@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | A3-060 absorbed: T2 symbol table is re-scan (3d990b6, SPEC only)
+
+A3-060: List ARGUMENTS cannot cross chunk boundaries -- token lists passed between chunks are structurally refused. Parallel-List[Int] table design parked behind List-arg support; working design is re-scan per query (no stored table, no cross-chunk List values), which is what the T2 probe already does. No-token verdict unchanged. SPEC corrected (T2 section). Posted as #16 6707870439. No frozen move, no code change.
+
 Read A2 ac3e2ea: empty-then fixed in both walkers (suite 74 OK/1 skip), blocker B measured (37-node emits, 43 tips; owned micro-reductions no gain), chunk-window ASK directed to A1 (24-32 nodes; A2 will not build transport before A1 owns the protocol). Ownership verified: range 537967e..ac3e2ea touches only AGENT2_OUTBOX.md, tests/pep_c23_emitter.pep, new tests/probe_dogfood_source_scan.py -- zero files under examples/dogfood/. The ASK is A1's to answer; A4 takes no action and will not pre-empt the window protocol. Posted as #16 6706878068. Freeze holds; standing by.
 
 ## 2026-11-07 | A3 BOOT-A3-031 adopted claims blob-confirmed (bb26811, no code change)
