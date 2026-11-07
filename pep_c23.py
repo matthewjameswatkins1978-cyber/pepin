@@ -543,8 +543,15 @@ def main(argv=None):
         c_path.parent.mkdir(parents=True, exist_ok=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         c_path.write_text(source, encoding="utf-8", newline="\n")
-        built = subprocess.run([str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic",
-                                "-Werror", "-O2", str(c_path), "-o", str(output)],
+        # Arena-backed generated C may reference the pep_arena runtime header; the
+        # driver adds the include path exactly when the emit used it (thin host
+        # relay, no semantic content; fixed-substring detection).
+        compile_args = [str(compiler), "-std=c23", "-Wall", "-Wextra", "-Wpedantic",
+                        "-Werror", "-O2", str(c_path), "-o", str(output)]
+        if '#include "pep_arena.h"' in source:
+            compile_args += ["-I", str(ROOT / "runtime" / "pep_arena"),
+                             str(ROOT / "runtime" / "pep_arena" / "pep_arena.c")]
+        built = subprocess.run(compile_args,
                                text=True, capture_output=True, check=False)
         if built.stdout:
             print(built.stdout, end="")

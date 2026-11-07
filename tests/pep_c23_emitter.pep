@@ -3447,7 +3447,15 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       } else {}
       parts = append(parts, "}\n")
       return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
-    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments, returns, and conditionals with assignment sequences") }
+    } else {
+      if statement.kind == "expression_statement" {
+        let loweredSay = pep_c23_say_statement(nodes, function, statement)
+        if loweredSay.status != "emitted" { return loweredSay } else {}
+        var sayParts: List[Str] = []
+        for part in loweredSay.sourceParts { sayParts = append(sayParts, part) }
+        return PepC23Emission { status: "emitted", sourceParts: sayParts, diagnostic: "" }
+      } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments, returns, conditionals, and say statements") }
+    }
   }
 }
 // Arena-backed update of a mutable Int or Bool list binding. Only the binding being assigned may
@@ -5623,19 +5631,52 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
     sectionFunctionEnds = append(sectionFunctionEnds, length(reversed))
   }
   let sectionBodyCount = length(reversed)
-  if requiresArena {
-    reversed = prepend(reversed, "int main(void) {\n")
-    reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
-    reversed = prepend(reversed, "  if (pep_arena_init(&pep_arena, 0) != PEP_ARENA_OK) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
-    reversed = prepend(reversed, "  int64_t pep_main_result = pep_fn_")
-    reversed = prepend(reversed, "main")
-    reversed = prepend(reversed, "(pep_arena);\n")
-    reversed = prepend(reversed, "  if (pep_arena_status(pep_arena) != PEP_ARENA_OK) { pep_arena_free(&pep_arena); fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
-    reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)pep_main_result);\n")
-    reversed = prepend(reversed, "  pep_arena_free(&pep_arena);\n")
-    reversed = prepend(reversed, "  return 0;\n")
-    reversed = prepend(reversed, "}\n")
+ if requiresArena {
+  if grantEntry {
+   // COMBINED arena+grant wrapper (A2 token-triple shape): the granted argv[1] file bytes
+   // feed the entry's SourceBytes while the arena lives across the run; the wrapper owns
+   // both lifetimes. Lines are verbatim copies of the non-arena grant wrapper with the
+   // call extended by `, pep_arena` and the arena lifetime inserted; grantEntry is already
+   // computed in the prototype loop, so no second traversal was added.
+        reversed = prepend(reversed, "int main(int argc, char **argv) {\n")
+        reversed = prepend(reversed, "  if (argc < 2) { fputs(\"PEP_RUNTIME_SOURCE_CONTEXT\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "#if defined(_MSC_VER)\n#pragma warning(push)\n#pragma warning(disable: 4996)\n#endif\n")
+        reversed = prepend(reversed, "  FILE *pep_source_file = fopen(argv[1], \"rb\");\n")
+        reversed = prepend(reversed, "  if (pep_source_file == NULL) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  if (fseek(pep_source_file, 0, SEEK_END) != 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  long pep_source_length = ftell(pep_source_file);\n")
+        reversed = prepend(reversed, "  if (pep_source_length < 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  if (fseek(pep_source_file, 0, SEEK_SET) != 0) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  unsigned char *pep_source_data = (unsigned char *)malloc((size_t)pep_source_length + 1u);\n")
+        reversed = prepend(reversed, "  if (pep_source_data == NULL) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  if (pep_source_length > 0 && fread(pep_source_data, 1, (size_t)pep_source_length, pep_source_file) != (size_t)pep_source_length) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+        reversed = prepend(reversed, "  (void)fclose(pep_source_file);\n")
+        reversed = prepend(reversed, "#if defined(_MSC_VER)\n#pragma warning(pop)\n#endif\n")
+      reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
+      reversed = prepend(reversed, "  if (pep_arena_init(&pep_arena, 0) != PEP_ARENA_OK) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  int64_t pep_main_result = pep_fn_")
+        reversed = prepend(reversed, "main")
+        reversed = prepend(reversed, "((pep_source_bytes){ .data = pep_source_data, .length = (size_t)pep_source_length }, pep_arena);\n")
+      reversed = prepend(reversed, "  if (pep_arena_status(pep_arena) != PEP_ARENA_OK) { pep_arena_free(&pep_arena); fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)pep_main_result);\n")
+      reversed = prepend(reversed, "  pep_arena_free(&pep_arena);\n")
+        reversed = prepend(reversed, "  free(pep_source_data);\n")
+      reversed = prepend(reversed, "  return 0;\n")
+      reversed = prepend(reversed, "}\n")
   } else {
+      reversed = prepend(reversed, "int main(void) {\n")
+      reversed = prepend(reversed, "  pep_arena_t *pep_arena = NULL;\n")
+      reversed = prepend(reversed, "  if (pep_arena_init(&pep_arena, 0) != PEP_ARENA_OK) { fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  int64_t pep_main_result = pep_fn_")
+        reversed = prepend(reversed, "main")
+      reversed = prepend(reversed, "(pep_arena);\n")
+      reversed = prepend(reversed, "  if (pep_arena_status(pep_arena) != PEP_ARENA_OK) { pep_arena_free(&pep_arena); fputs(\"PEP_RUNTIME_ARENA_FAILURE\\n\", stderr); return 1; }\n")
+      reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)pep_main_result);\n")
+      reversed = prepend(reversed, "  pep_arena_free(&pep_arena);\n")
+      reversed = prepend(reversed, "  return 0;\n")
+      reversed = prepend(reversed, "}\n")
+  }
+ } else {
     // Entry-parameter SourceBytes grant (A1 contract @a802290): when the entry declares
     // exactly one SourceBytes parameter, the host wrapper supplies the opened target's
     // own bytes here -- `argv[1]`, read once. Without argv[1] there is no grant and the
