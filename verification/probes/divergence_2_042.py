@@ -211,6 +211,12 @@ def main():
     for tag, path in (("A", INPUT_A), ("B", INPUT_B)):
         ran = subprocess.run([str(gen_exe), str(path)], capture_output=True, text=True, check=False)
         out = ran.stdout
+        # The emitted program's epilogue prints its returned Int to stdout
+        # (BOOT-A3-064/071), so the captured stream ends with a bare integer line
+        # that is not C. Drop exactly one such trailing line - nothing else is
+        # filtered, so no other output can be silently discarded.
+        import re as _re
+        out = _re.sub(r"\n?-?[0-9]+\n?$", "\n", out)
         emitted[tag] = out
         (BUILD / f"div2_out_{tag}.c").write_text(out, encoding="utf-8", newline="\n")
         gate.row(f"run:generator-{tag}", ran.returncode == 0 and out.strip() != "",
