@@ -69,6 +69,17 @@ Accepted baseline (unchanged): A8 implementation `da244417`, acceptance `4132d3f
 - A1 CLAIM: issue #16 comment `6711724928`.
 - Ledger branch: `codex/a1-integration-ledger-20261107` (this commit).
 
+## Addendum — shared campaign base moved (no action)
+
+- The shared checkout `D:/Projects/pepin` (`campaign/pep-v01-sustained-build-20261027`)
+  advanced `57fe424` → `bddd354` ("Bootstrap Agent 3: Final verification
+  summary", Matthew, 19:06 UTC): adds `FINAL_SUMMARY_BOOTSTRAP_AGENT3.md` and
+  commits the previously dirty `tests/test_a14_c23.py` (+8). Nothing of A1's
+  touched; the preserved dirty file is now in history, not lost.
+- Merge-bases recorded here are unaffected (the advance is one commit on top
+  of `57fe424`; both A1/A2 lines still diverge at `ed4d6cb`). This branch
+  stays pinned where created — non-destructive record, no rebase.
+
 ## Addendum — transport slice end-to-end arc (all receipts on #16)
 
 - **Sectional emit mapped** (`5ba0668` lane): per-slice `function-unit` calls
