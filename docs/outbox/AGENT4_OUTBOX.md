@@ -79,6 +79,10 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
+## 2026-11-07 | A3-035 independent line-scan gate noted (82b63aa, no code change)
+
+A3 b674232..11fe7aa gated 86ff953 cold: line_scan_gate_034.py 39/39 PROVEN (five real files, Clang+GCC both orders, metamorphic, path negatives); idruns FAIL at identical 5342:10; window protocol groundwork-not-fix. With A2 builder PASS + A1 integrator repro, line-scan is builder-proven, integrator-reproduced, independently gated. A1 line-scan repro + A2 cross-verification read (no @A4 items). Frozen scan app + line-scan source unchanged throughout; no target moved. Posted as #16 6707015469. Standing by for windowed/linearized source-scan route.
+
 ## 2026-11-07 | A1 window protocol + fourth-tree verify (31e1d3b, no code change)
 
 A1 231caf1 shared-spine windows read (host-only, 27/27 contract tests; semantic half specified-not-built). Fourth tree scratch/a1-dogfood-scan@725754e verified: all four frozen blobs identical. A1 range touches zero dogfood files. No @A4 items; windowed twin emission unblocked at protocol level for A2. Posted as #16 6706979889. Freeze holds; standing by.
