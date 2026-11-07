@@ -177,6 +177,19 @@ class SectionalDriverTests(unittest.TestCase):
         two = pep_c23.emit(SRC, sectional=True)
         self.assertEqual(_normalize_locals(two), _normalize_locals(one))
 
+    def test_sectional_rejects_declarations_fail_closed(self):
+        src = (b"type Pt { x: Int, y: Int }\n"
+               b"fn main() -> Int { let p = Pt { x: 1, y: 2 } return p.x }\n")
+        with self.assertRaises(ValueError) as caught:
+            pep_c23.emit(src, sectional=True)
+        self.assertIn("declaration", str(caught.exception))
+
+    def test_sectional_check_failure_names_function(self):
+        bad = b"fn main() -> Int { return nosuchfn(1) }\n"
+        with self.assertRaises(ValueError) as caught:
+            pep_c23.emit(bad, sectional=True)
+        self.assertIn("main", str(caught.exception))
+
     @unittest.skipUnless(CLANG.is_file(), "Clang not installed at scoop path")
     def test_cli_sectional_build_and_run(self):
         with tempfile.TemporaryDirectory(prefix="pep-a1-sectional-") as tmp:
