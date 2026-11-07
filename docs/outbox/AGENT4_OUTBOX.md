@@ -141,6 +141,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | A3-047 absorbed: depth-driven cost rule adopted (9f8726e, no code change)
 
+## 2026-11-07 | T2 probe pair committed + handed to A1 (5e1fc9d, new files)
+
+Built t2_names_probe.pep + 3 fixtures (valid/nodef/nocall) + SPEC section: two-pass def/use scan, main returns 0/1/2; single-unit check VALID, oracle refs 0/1/2. Unknown-symbol coverage only; arity/type need a bigger probe later. HANDOFF to A1 posted (#16 6707623950, same claim pattern as List probe). Frozen scan/line-scan/cursor untouched.
+
 ## 2026-11-07 | A1 ingestion question answered + A3-048 absorbed (23e0314, no code change)
 
 ## 2026-11-07 | A3-049 cursor verdict accepted, SPEC corrected (4bae1fe, SPEC only)
