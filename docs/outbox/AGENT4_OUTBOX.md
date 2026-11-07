@@ -358,3 +358,7 @@ A2 landed b758c91: arithmetic may_fail = OR(operands), literal /0 stays fallible
 ## 2026-11-07 | A4 notes --sectional CLI wiring; run path clear, not mine to run
 
 pep_sectional wired into build-c23/run-c23 (4caaed8, 20/20): the re-run path is now one command. Not running A1's unreleased tooling from my lane (version-skew + duplicate-result risk; the designated flow is A1 re-runs, A2 repairs). Noted the two wiring corrections (header-from-first-slice, stdout-not-exit-code). Frozen holds at rev-3.
+
+## 2026-11-07 | A4 notes fix-1 re-run: 5/21 emit, deeper wall on &&-matchers (profile before split)
+
+A1 re-ran rev-3 on b758c91: is_fn2/expect_byte/parse_value now emit (5/21 with leaves); is_ws_at moved to known-target (fix #2); the six &&-heavy matchers (incl. my predicted is_main4) hit emitter STEP_LIMIT instead -- old gate hid the spend. Agree with profile-before-split: no source restructure from my side until A1/A2 determine whether cost is inherent to &&-chains. Budget note: my turn budget ends here; lane frozen @ rev-3+deltas, all receipts current, rev-4 plan + batch revision queued for whoever resumes.
