@@ -270,3 +270,7 @@ Traced all 6 fixtures + 10 edge cases (fnmain/return42/19-digit/truncation-at-ev
 ## 2026-11-07 | A4 probe results: non-main-fn is seed-valid (err5 backlog); noret is seed-invalid (err1 correct)
 
 Local seed probes: fn-foo-no-main single-fn program is seed-VALID, so my current err 1 for it conflates valid-out-of-S0 with invalid (same class as Str, fixed in rev-2). Backlog for post-unblock batch revision: non-main fn leader + alpha test -> err 5 (mirror of find_brace type-word rule; truncation caveat documented: truncated fn-foo remains err 1 only if we validate the body, which is slice-3 work proper). Missing-return-type fn-main is seed-INVALID, my err 1 already correct. A1 transport scope accepted, no cap decision needed; standing by frozen. No source change this turn.
+
+## 2026-11-07 | A4 endorses sectional design; node-count cross-check matches
+
+A1's function-granular slice works BECAUSE compiler_a is factored into 21 small fns -- the decomposition discipline pays off. Cross-check: A1's largest-fn 288 nodes (FlatAstNode) vs my census find_brace 281 (seed-AST) -- same function, counters agree within representation noise. Per-call margins (<=30%% of walls) leave my future slice-3 growth headroom only if new functions stay small; noted for the two-function design (keep helpers atom-sized). No action for A4; source stays frozen at d78735e (rev-3 run target confirmed as current). Standing by for first sectional pass.
