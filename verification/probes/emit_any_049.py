@@ -94,8 +94,12 @@ def main():
         if st != "valid":
             print("RESULT: host analysis refuses this program - not an emitter question")
             return 1
+        # Library sources (e.g. examples/pep_lexer.pep) have no `main`; declaring a missing
+        # entry yields PEP_SEMANTIC_ROOT_NOT_FOUND from the signature stage. Select the entry
+        # only when the source actually defines one.
+        entry = ["main"] if b"fn main(" in app else []
         sem = {"document": target["document"], "revision": target["revision"],
-               "entryFunctions": ["main"]}
+               "entryFunctions": entry}
         parsed = parse_target(session, app, target, revision)
         pf = fm(parsed)
         nodes = pf["nodes"]["value"]
