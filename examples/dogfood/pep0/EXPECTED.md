@@ -41,15 +41,24 @@ Expected exit **2**, stdout exactly: `ERR literal`
 Bytes: `fn main() -> Int { return 42 ]\n`.
 Expected exit **1**, stdout exactly: `ERR shape`
 
+### `a_str.pep` — negative, unsupported return type
+Bytes: `fn main() -> Str { return "s" }\n` (seed-valid: returns Str; out of subset S0).
+Expected exit **5**, stdout exactly: `ERR unsupported`
+
+### `a_empty.pep` — edge, empty input
+Bytes: none (0-byte file; seed-valid vacuous program).
+Expected exit **0**, stdout empty (no output).
+
 ## Exit-code table
 
 | code | meaning | example |
 |---|---|---|
-| 0 | ok, valid C on stdout | `a_ok.pep` |
+| 0 | ok, valid C on stdout — or empty input, silent | `a_ok.pep`, `a_empty.pep` |
 | 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `fn foo...`, `fnmain...` |
 | 2 | bad literal (no digits, or glued `return42`) | `a_badlit.pep` |
 | 3 | trailing junk after valid form | `...} extra` |
 | 4 | literal longer than 18 digits (out of subset, kept distinct) | 19+ digit run |
+| 5 | unsupported (seed-valid but out-of-subset type word) | `a_str.pep` (`-> Str`) |
 
 ## Prime emitter-refusal candidates for A2's run (most to least likely)
 

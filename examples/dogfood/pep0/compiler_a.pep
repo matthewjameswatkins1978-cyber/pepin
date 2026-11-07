@@ -6,8 +6,10 @@
 // Input: granted file bytes via main(source). Output: C23 fragments via
 // say, one per line (newlines are insignificant in C; punctuation is
 // emitted via int_text so literals stay alphanumeric+space).
-// Exit codes: 0 ok, 1 bad shape, 2 bad literal, 3 trailing junk,
-// 4 literal too long. Truncated inputs fail closed, never wrong C.
+// Exit codes: 0 ok (empty input also exits 0 silent, mirroring seed-valid),
+// 1 bad shape, 2 bad literal, 3 trailing junk, 4 literal too long,
+// 5 unsupported (seed-valid but out-of-subset, e.g. `-> Str`).
+// Truncated inputs fail closed, never wrong C.
 
 fn is_ws(b: Int) -> Int {
   var r = 0
@@ -81,6 +83,33 @@ fn is_urn3(source: SourceBytes, o: Int) -> Int {
   return r
 }
 
+fn is_str3(source: SourceBytes, o: Int) -> Int {
+  var r = 0
+  if o + 3 <= byte_length(source) && byte_at(source, o) == 83 && byte_at(source, o + 1) == 116 && byte_at(source, o + 2) == 114 {
+    r = 1
+  } else {
+  }
+  return r
+}
+
+fn is_bool4(source: SourceBytes, o: Int) -> Int {
+  var r = 0
+  if o + 4 <= byte_length(source) && byte_at(source, o) == 66 && byte_at(source, o + 1) == 111 && byte_at(source, o + 2) == 111 && byte_at(source, o + 3) == 108 {
+    r = 1
+  } else {
+  }
+  return r
+}
+
+fn is_unit4(source: SourceBytes, o: Int) -> Int {
+  var r = 0
+  if o + 4 <= byte_length(source) && byte_at(source, o) == 85 && byte_at(source, o + 1) == 110 && byte_at(source, o + 2) == 105 && byte_at(source, o + 3) == 116 {
+    r = 1
+  } else {
+  }
+  return r
+}
+
 fn expect_byte(source: SourceBytes, o: Int, want: Int) -> Int {
   var r = 0
   if o + 1 <= byte_length(source) && byte_at(source, o) == want {
@@ -147,6 +176,11 @@ fn parse_value(source: SourceBytes, o: Int, end: Int) -> Int {
 fn find_fn(source: SourceBytes) -> Int {
   var err = 0
   var o = skip_ws(source, 0)
+  var e0len = byte_length(source) - o
+  if e0len <= 0 {
+    err = 6
+  } else {
+  }
   if is_fn2(source, o) == 0 {
     err = 1
   } else {
@@ -174,6 +208,10 @@ fn find_fn(source: SourceBytes) -> Int {
   var out = 0 - 1
   if err == 0 {
     out = o
+  } else {
+  }
+  if err == 6 {
+    out = 0 - 6
   } else {
   }
   return out
@@ -218,6 +256,7 @@ fn find_brace(source: SourceBytes, p: Int, err_in: Int) -> Int {
   var out = 0 - 1
   var o = p
   var err = err_in
+  var e0 = err_in
   if err == 0 {
     o = skip_ws(source, o)
   } else {
@@ -246,6 +285,30 @@ fn find_brace(source: SourceBytes, p: Int, err_in: Int) -> Int {
     err = 1
   } else {
   }
+  if e0 == 0 && err == 1 && is_str3(source, o) == 1 {
+    err = 5
+  } else {
+  }
+  if e0 == 0 && err == 1 && is_bool4(source, o) == 1 {
+    err = 5
+  } else {
+  }
+  if e0 == 0 && err == 1 && is_unit4(source, o) == 1 {
+    err = 5
+  } else {
+  }
+  if e0 == 0 && err == 5 && is_str3(source, o) == 1 && is_ws_at(source, o + 3) == 0 && expect_byte(source, o + 3, 123) == 0 {
+    err = 1
+  } else {
+  }
+  if e0 == 0 && err == 5 && is_bool4(source, o) == 1 && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
+    err = 1
+  } else {
+  }
+  if e0 == 0 && err == 5 && is_unit4(source, o) == 1 && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
+    err = 1
+  } else {
+  }
   if err == 0 {
     o = o + 3
   } else {
@@ -264,6 +327,10 @@ fn find_brace(source: SourceBytes, p: Int, err_in: Int) -> Int {
   }
   if err == 0 {
     out = o
+  } else {
+  }
+  if err == 5 {
+    out = 0 - 5
   } else {
   }
   return out
@@ -350,9 +417,15 @@ fn main(source: SourceBytes) -> Int {
   var err = 0
   var neg1 = 0 - 1
   var neg2 = 0 - 2
+  var neg5 = 0 - 5
+  var neg6 = 0 - 6
   var h1 = find_fn(source)
   if h1 == neg1 {
     err = 1
+  } else {
+  }
+  if h1 == neg6 {
+    err = 6
   } else {
   }
   var h2 = find_parens(source, h1, err)
@@ -363,6 +436,10 @@ fn main(source: SourceBytes) -> Int {
   var h3 = find_brace(source, h2, err)
   if err == 0 && h3 == neg1 {
     err = 1
+  } else {
+  }
+  if h3 == neg5 {
+    err = 5
   } else {
   }
   var ds = find_ds(source, h3, err)
@@ -419,6 +496,14 @@ fn main(source: SourceBytes) -> Int {
   }
   if err == 4 {
     say("ERR longlit")
+  } else {
+  }
+  if err == 5 {
+    say("ERR unsupported")
+  } else {
+  }
+  if err == 6 {
+    err = 0
   } else {
   }
   return err

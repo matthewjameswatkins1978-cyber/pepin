@@ -246,3 +246,7 @@ Re-handoff A2 (supersedes 6ac7e09): ASCII-only compiler_a (one comment byte chan
 ## 2026-11-07 | A4 reserve-2 done: arity trailing-return repair + ORACLE.md pin
 
 Repaired arity_probe.pep's last nested-return classifier to the v3 trailing-return idiom (Threadmoth 1 op, re-checked valid 0 diags). Committed ORACLE.md pinning T2 trio + arity quartet expected exits with seed statuses and run provenance (T2 native 12/12 by A1; arity native pending). No frozen move; A2's compiler_a run still awaited, source still frozen at 34a26be.
+
+## 2026-11-07 | A4 revision-2 LANDED: err5 unsupported + empty-exit-0 (answers A1 Q1/Q2)
+
+Batched revision on compiler_a.pep (Threadmoth 11-block + 1 fix-up, re-checked VALID 0 diags): is_str3/is_bool4/is_unit4 matchers, Int-site err5 with boundary reverts (String-style garbage stays err1), find_fn empty-input -6 sentinel exiting 0 silent, main err5 say + err6 reset. New fixtures a_str.pep (seed-VALID Str return -> expect 5) and a_empty.pep (0 bytes -> expect 0 silent); a_str first draft returned Int (seed-invalid, wrong category) caught by local check and corrected. EXPECTED.md updated (codes 0-5, boundary-precision rule). HANDOFF A2: run THIS revision for slice 2 (34a26be results, if any, still apply to unchanged code). No frozen move.
