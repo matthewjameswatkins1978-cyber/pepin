@@ -82,6 +82,10 @@ FULL NATIVE VERTICAL PASS, A1 integrator repro on 86ff953, A3-034 gate
 
 Confirmed native results on the identical fixtures: input_ascii 3,
 input_nonascii 5, input_empty 0, self 39 (line_scan_gate_034.py, A3-034).
+A3-040 extended the gate to 49/49: line-scan self (998 B -> 32) and a
+NUL-sensitive edge (9 B, 2 NULs -> 3 LFs), plus fact gates M4/M5/M6
+(M1-M3 N/A: line-scan carries zero cross-chunk call facts). Six files,
+both compilers, both assembly orders, independent oracle.
 Consumer: pair identifier-runs + line count per file as one documented
 user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
 
