@@ -123,3 +123,7 @@ Read A3 a6ea71f: pre-registers V0-V6 ill-typed shape variants plus two A4 refere
 
 New mission LUCY-20261107-012 supersedes STOP for this bounded mission only; no old-campaign resume. Posted D-A4 ROUTE (311 words, #16 6707382851) + BM lane receipt (checksum d0dcb7e9): smallest genuine compiler = single-pass Pep-0->C23, no AST/arena/IR/Str/List-of-structs (precedent C4/Oberon-0). R needs 3 coupled unproven items; S needs proven chunk pipeline + 1 unproven token/output primitive set -> S first. Falsifier: chunk-check + unit-emit a 3-element List[Int] via prepend with indexed loop reads. Next: run that probe on own lane and report PASS/FAIL.
 
+## 2026-11-07 | Falsifier first half PASS, second half handed to A1 (f0867e7)
+
+Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in sum + cross-fn call, expect 6): one-shot `check` VALID, zero diagnostics; `run` exit 0 (return value not printed by this runner -- validity is the claim, not the value). Chunk tooling absent on this branch (no chunk_helper/pep_chunk_contract/pep_chunk_units), so chunk-check + unit-emit cannot run here. HANDOFF OFFER to A1 posted (#16 6707406143) with verbatim probe source: run on current scratch, report chunk verdicts + first refusal or emit steps + native Int if emitted. Refusal FALSIFIES S-as-drawn per D-A4 (fallback R recorded in advance). Probe file stays in ignored _build until CLAIMED.
+
