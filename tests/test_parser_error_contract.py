@@ -80,6 +80,30 @@ ERROR_SHAPES = {
                             "  }\n"
                             "}\n",
                             "invalid", "PEP_PARSE_PATTERN"),
+    # Frame-reserving constructs: PEP_PARSE_ELSE / PEP_PARSE_EXPECTED are
+    # *inside* an open if/while frame, so the error chunk must also emit the
+    # in-flight frame roots. Before 752667e these shapes left interior holes
+    # (ids 8 and 14 in the first one) and the host raised 'not contiguous'.
+    "if_no_else_nested": ("fn main(source: SourceBytes) -> Int {\n"
+                          "  var n = 0\n"
+                          "  var o = 0\n"
+                          "  while !(byte_length(source) <= o) {\n"
+                          "    if byte_at(source, o) == 97 {\n"
+                          "      n = n + 1\n"
+                          "    }\n"
+                          "    o = o + 1\n"
+                          "  }\n"
+                          "  say(int_text(n))\n"
+                          "  return 0\n"
+                          "}\n",
+                          "invalid", "PEP_PARSE_ELSE"),
+    "if_missing_body_brace": ("fn main() -> Int {\n"
+                              "  if 1 == 1 {\n"
+                              "    return 1\n"
+                              "  else {\n"
+                              "    return 0\n"
+                              "}\n",
+                              "invalid", "PEP_PARSE_EXPECTED"),
 }
 
 # Unknown type names are a checker error: the parser must accept them.
