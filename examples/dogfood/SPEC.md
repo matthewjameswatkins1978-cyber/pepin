@@ -96,9 +96,11 @@ the token-list framework is NOT built. Forward/mutual recursion is handled
 by a signature prepass over raw bytes (scan for `fn`, record name-span and
 arity); single-error reporting (first-error exit) satisfies every A3
 invalid-input case; C output order matches source order for structured
-code (headers/footers known a priori); the symbol table is parallel
+code (headers/footers known a priori); the symbol table was sketched as parallel
 `List[Int]` triples (name-hash, start, length) with byte-compare on hash
-match -- no Str keys, no AST. Per A3-060/061 (List-argument gate proposed then retracted as a confound), the working table is a re-scan per query over granted bytes:
+match -- no Str keys, no AST. Per A3-060/061
+(List-argument gate proposed then retracted as a confound), the working
+table is a re-scan per query over granted bytes:
 no stored table, hence no cross-chunk List values. A parallel-`List[Int]`
 table variant is unblocked but untested; the no-token
 verdict is unchanged (re-scan needs no buffered tokens either). Excluded
