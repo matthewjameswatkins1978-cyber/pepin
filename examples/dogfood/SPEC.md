@@ -125,16 +125,18 @@ A3's nominated acceptance target for A2's emitter work.
 
 ## T2 self-check probe (A1 handoff, same claim pattern as List probe)
 
-`t2_names_probe.pep`: two-pass scan over granted bytes — pass 1 finds the
-first `fn ` name-start (or -1), pass 2 finds the first `(` call paren (or
--1); `main` returns 0 = def+call present, 1 = no definition, 2 = no call.
-Fixed-shape probe, not a general lexer (matches exactly one-spaced `fn `).
-Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch). Reference
-over committed bytes: t2_valid (68 B) 0, t2_nodef (27 B) 1, t2_nocall
-(28 B) 2. Covers unknown-symbol (missing def); arity/type need a bigger
-probe later. Chunk-check + unit-emit belong to A1 (tooling absent here);
-emit refusal of these while/if shapes would extend A3-049, a PASS feeds
-the T2 prepass design.
+`t2_names_probe.pep` v2 (051-shaped; supersedes the v1 offsets design):
+two counting passes — pass 1 counts `fn ` occurrences, pass 2 counts `(`
+bytes; `main` returns 0/1/2 via a result variable + trailing return
+(assign-in-branch idiom, no nested returns). Loops contain zero
+conditionals (classification in loop-free `is_fn_at`/`is_paren`); user
+calls cross chunks (twins cover conditions, assignment-RHS now tested by
+this probe). Single-unit `check`: valid, 5 fns, 0 diagnostics (this
+branch). Reference over committed bytes unchanged: t2_valid 0, t2_nodef
+1, t2_nocall 2. Covers unknown-symbol; arity/type need a bigger probe
+later. Chunk-check + unit-emit belong to A1 (updated handoff supersedes
+the v1 offer); a PASS feeds the T2 prepass design, a refusal extends the
+A3-051 emit corpus.
 
 ## Checkout guard
 

@@ -1,49 +1,62 @@
-// t2_names — T2 self-check probe, Phase E follow-up (LUCY-20261107-013 P2).
-// Pass 1 (signature scan): offset just past first "fn ", or -1.
-// Pass 2 (use scan): offset of first byte 40 '(' (call paren), or -1.
+// t2_names — T2 self-check probe v2, 051-shaped (LUCY-20261107-013 P2).
+// Loops contain ZERO conditionals: classification lives in loop-free
+// helpers (is_fn_at, is_paren); loops only accumulate and advance.
+// Pass 1 counts "fn " occurrences; pass 2 counts byte-40 '(' occurrences.
 // main returns 0 = def+call present, 1 = no definition, 2 = no call.
 // Fixed-shape probe, not a general lexer: matches exactly "fn " with one
-// space; reports offsets, never materialises names as Str.
+// space; reports counts, never materialises names as Str.
 // Expected: t2_valid 0, t2_nodef 1, t2_nocall 2.
 
-fn ascii_letter(byte: Int) -> Bool {
-  return (65 <= byte && byte <= 90) || (97 <= byte && byte <= 122) || byte == 95
+fn is_fn_at(source: SourceBytes, o: Int) -> Int {
+  if byte_at(source, o) == 102 && byte_at(source, o + 1) == 110 && byte_at(source, o + 2) == 32 {
+    return 1
+  } else {
+    return 0
+  }
 }
 
-fn find_fn(source: SourceBytes) -> Int {
+fn is_paren(byte: Int) -> Int {
+  if byte == 40 {
+    return 1
+  } else {
+    return 0
+  }
+}
+
+fn count_fn(source: SourceBytes) -> Int {
+  var n = 0
   var o = 0
   var length = byte_length(source)
   while !(length <= o + 2) {
-    if byte_at(source, o) == 102 && byte_at(source, o + 1) == 110 && byte_at(source, o + 2) == 32 {
-      return o + 3
-    } else {
-      o = o + 1
-    }
+    n = n + is_fn_at(source, o)
+    o = o + 1
   }
-  return 0 - 1
+  return n
 }
 
-fn find_call(source: SourceBytes) -> Int {
+fn count_call(source: SourceBytes) -> Int {
+  var n = 0
   var o = 0
   var length = byte_length(source)
   while !(length <= o) {
-    if byte_at(source, o) == 40 {
-      return o
-    } else {
-      o = o + 1
-    }
+    n = n + is_paren(byte_at(source, o))
+    o = o + 1
   }
-  return 0 - 1
+  return n
 }
 
 fn main(source: SourceBytes) -> Int {
-  if find_fn(source) == 0 - 1 {
-    return 1
+  var r = 0
+  if count_fn(source) == 0 {
+    r = 1
   } else {
-    if find_call(source) == 0 - 1 {
-      return 2
-    } else {
-      return 0
-    }
   }
+  if r == 0 {
+    if count_call(source) == 0 {
+      r = 2
+    } else {
+    }
+  } else {
+  }
+  return r
 }
