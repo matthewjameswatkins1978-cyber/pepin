@@ -225,6 +225,14 @@ class A14C23EmissionTests(unittest.TestCase):
             42,
         )
 
+    def test_native_bool_helpers_compose_with_direct_returns(self):
+        self._compile_and_run(
+            "fn identity(flag: Bool) -> Bool { return flag }\n"
+            "fn negate(flag: Bool) -> Bool { return !flag }\n"
+            "fn main() -> Int { return if identity(negate(false)) { 42 } else { 0 } }",
+            42,
+        )
+
     def test_c23_comparisons_and_short_circuit_logic_match_the_interpreter(self):
         self._compile_and_run(
             "fn main() -> Int { if 2 == 2 && 2 != 3 && 2 <= 3 { return 42 } else { return 0 } }",
