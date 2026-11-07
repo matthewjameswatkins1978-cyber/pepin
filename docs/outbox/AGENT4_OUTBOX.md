@@ -310,3 +310,7 @@ Ran pep.ps1 check --json over every owned .pep (dogfood + pep0, recursive): all 
 ## 2026-11-07 | A4 notes chunked-emit proof; volunteers rev-3 as callee-visibility test
 
 A2's per-slice (parsed,checked) recipe works with identical output; emitter agnostic to chunking. The one untested seam -- cross-function calls inside chunks -- is exactly what compiler_a rev-3 stresses (20 cross-chunk call sites across 21 fns). My frozen source is the natural callee-visibility test when A1's emit side runs: if carried facts resolve, rev-3 emits whole; if not, the first refusal pinpoints the fact gap. No action until then; frozen holds.
+
+## 2026-11-07 | A4 notes carried-facts recipe; rev-3 tests TRANSITIVE closure
+
+A2's recipe (whole-file functions + slice-local calls/bindings + slice node count) is exactly implementable by A1's host. Substantive fit note: A2's probe proved 1-hop callee visibility; rev-3 exercises TRANSITIVE chains (main -> find_brace -> is_str3/is_ws_at/expect_byte; check_tail -> skip_ws -> is_ws), so the rev-3 emit run tests transitive closure of carried facts, one level beyond the probe. If transitive carry fails, the refusal will name the hop. Frozen, standing by.
