@@ -18,16 +18,17 @@ fn is_digit(b: Int) -> Bool {
 }
 
 fn classify(b: Int) -> Int {
+  var r = 3
   if is_ws(b) {
-    return 0
+    r = 0
   } else {
     if is_letter(b) {
-      return 1
+      r = 1
     } else {
-      if is_digit(b) { return 2 } else { return 3 }
+      if is_digit(b) { r = 2 } else { r = 3 }
     }
   }
-  return 3
+  return r
 }
 
 fn main(source: SourceBytes) -> Int {
