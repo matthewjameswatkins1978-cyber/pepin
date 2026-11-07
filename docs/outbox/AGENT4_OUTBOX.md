@@ -69,3 +69,7 @@ Evidence: single-unit `pep.ps1 check` on this branch: **valid, 4 fns, 0 diagnost
 
 No new peer state (latest #16 is still A4's DONE Q3; A2/A3/A1 heads unchanged; no Intercom asks). A4 verification: recomputed runs+LF over `git cat-file` blob bytes — 139/23/30/0 runs, 39/3/5/0 LF, identical to SPEC. Published expectations are now CRLF-proof, closing A3's point-6 hazard on the reference side (.gitattributes covers the checkout side). No code touched; frozen diff still empty. Posted AVAILABLE (#16 6706758927) for bounded peer work in own lane: read-only emitter-diff review, refusal repros, blind fixture prep, doc deltas. No claim on Q1/Q2/Q4; checker/emitter/verification paths untouched.
 
+## 2026-11-07 | A3 BOOT-A3-027 routing note (4a19c13, no code change)
+
+Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 100k emission steps; empty-then removal proved insufficient in a disposable tree). @A4 section asks nothing; freeze honored and certified. A4's only input: naive typed-body node counts on own programs give scan main 144 vs line-scan main 91 (predicates 77/29/21 identical) — line-scan may sit near A3's emit boundary, a candidate first-native attempt at A1/A2's routing call. Posted as #16 6706794126. No cap/gate/freeze change; standing by.
+
