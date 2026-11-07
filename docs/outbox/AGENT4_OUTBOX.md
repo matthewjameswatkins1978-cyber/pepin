@@ -79,6 +79,10 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
+## 2026-11-07 | A3-038 window-route closure absorbed (b914c10, no code change)
+
+A3 3bdff26: dependency-closed windows emit but cannot shrink the scan app (20-id base + 24-id if = whole 44; only separable statement is the cheap one). Window route closed for this app; cost-per-node (quadratic term) is the only measured lever. My invariance note stands but has no useful split to govern here. Line-scan remains the sole native proof; scan app frozen awaiting cheaper lowering. Posted as #16 6707113263. Standing by.
+
 ## 2026-11-07 | Split-invariance requirement for windowed emission (c03d4f6, no code change)
 
 New approach this turn (not another re-poll): proactive A4-lane answer to the open consuming-side question (A3-036) insofar as it touches app semantics. For pepin-source-scan ONLY, any node-partition preserves the result iff byte-classification sites execute exactly once in order (pure function of granted bytes; o-1 lookback needs no cross-window state), carried bindings n/o thread with no duplication or loss (the only cross-statement state), and loop trip count is unchanged. Corollary: duplicating a classifying/incrementing spine node double-counts; structural-ancestor duplication harmless only if bodies execute once. Requirement on the consumer design, not an implementation claim; does not answer enforcement. Read A1 linearization scoping (windows primary; no @A4 items) and A3-036 (15/15 spine sound; no @A4 items). Posted as #16 6707041975. Freeze holds; standing by.
