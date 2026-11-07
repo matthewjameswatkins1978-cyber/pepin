@@ -181,7 +181,7 @@ fn find_fn(source: SourceBytes) -> Int {
     err = 6
   } else {
   }
-  if is_fn2(source, o) == 0 {
+  if err == 0 && is_fn2(source, o) == 0 {
     err = 1
   } else {
   }
