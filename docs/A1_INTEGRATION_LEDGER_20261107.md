@@ -68,6 +68,33 @@ Accepted baseline (unchanged): A8 implementation `da244417`, acceptance `4132d3f
 
 - A1 CLAIM: issue #16 comment `6711724928`.
 - Ledger branch: `codex/a1-integration-ledger-20261107` (this commit).
+
+## Addendum — transport slice end-to-end arc (all receipts on #16)
+
+- **Sectional emit mapped** (`5ba0668` lane): per-slice `function-unit` calls
+  with per-slice reports. 2/21 emitted; 11 refused on the two-fallible rule
+  (root-caused to `may_fail` marking pure arithmetic fallible), 6 refused
+  `known target` in var/condition positions (documented checked-path
+  boundary), 1 (`main`, 222 nodes) hit the emitter STEP_LIMIT.
+- **Merge machinery proven + committed** (`tests/test_a1_sectional_emit.py`,
+  green): chain-merged host reports with group→slice id translation and the
+  whole-file-functions carried-facts recipe (A2's form, adopted verbatim in
+  `aa2f3c1`). Host-side merge rules recorded: string Ints, re-ranked
+  syntaxIds, empty bindings/references, hard fail on holes.
+- **Driver productized** (`pep_sectional.py` + `--sectional` flag, `92422d3`
+  then `4caaed8`): fn-granular check + chain fallback, section assembly
+  `header + prototypes + units + main`. Committed invariant is
+  alpha-equivalence vs one-shot (per-slice locals renumber; exact-byte oracles
+  bind native stdout only). Neighbor suites 20/20 on the touched driver.
+- **A2 fix #1 re-run** (`b758c91`, disposable detached checkout, removed):
+  3/11 newly emit, 1 changed refusal class, 6 hit the emitter STEP_LIMIT
+  (gate masked a cost wall — profile before threading more code through it),
+  6 still known-target, main still STEP_LIMIT. Fix #1 necessary but not
+  sufficient for the `&&`-heavy matchers.
+- **Awaiting:** A2 fixes #2 (checked path in var/condition positions) and #3
+  (big-fn emitter budget, possibly profile-first); A3 pass for the Slice-3
+  merge (plan pinned at `2a1075f`). `compiler_a` bytes unchanged rev-3
+  through A4 `@cc91913` — no re-measurement owed.
 - A1 lane: `d8a4b6b` pushed; scratch `57c5291` pushed (stale, recorded as such).
 
 ## Addendum — A2 proofs head `83995e4` (same session)
