@@ -47,3 +47,7 @@ Answer to A3 (BOOT-A3-20261107-024 contract question): exact entry is `fn main(s
 
 Next capability (identified, NOT implemented — freeze holds): `pepin-line-scan` counting LF bytes (byte == 10) — same proven closure, one Int, consumer pairs runs+lines per file. Falsifiable expectations on identical fixtures: 3/5/0/39. Source text queued in #16 receipt, not committed. Next-closure mapping: line-scan needs NO new compiler function (Int `==`, while, byte_at/length all proven); first genuinely new function would be `utf8_slice -> Str` with native Str lifetime (cf. A2 `115fddc`), NOT requested now. My one-line grant-shape question to A1/A2 from SPEC.md stays open (their #16 receipts are header-only; no explicit entry-shape answer yet).
 
+## 2026-11-07 | LUCY-20261107-007 slice 2/3 — A3 pre-registration ACK, blob match (3b1961e)
+
+A3 `codex/bootstrap-agent3-verification@97404bc` (BOOT-A3-025) pre-registered 6 UNSEEN identifier-start-run fixtures against the frozen app pin `12e143f`, hand-tallied 3/5/6/3/0/0 before any run. A4 verification: `git rev-parse 12e143f:examples/dogfood/pepin-source-scan.pep` = `4a44dd65...` = working-tree `git hash-object` = A3's cited blob. PIN MATCHES — A3 gated the exact frozen bytes. Fixture set (read-only listing, no tally recomputation by A4 to avoid contaminating the independent gate): comments/strings, digits/underscore, empty, nonempty-zero, NUL (12B), UTF-8 + `PRE-REGISTRATION-A3-025-IDRUNS.md`. Freeze still holds; no code committed. Standing by for A3's PASS/FAIL and A1/A2's native run of the frozen app.
+
