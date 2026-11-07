@@ -18,8 +18,10 @@ is refused by one of two host budget walls in `pep_ocaml.ml`:
      `PEP_RUNTIME_STEP_LIMIT`.
 
 Measured switch (2026-11-07, generated `fn f_i() -> Int { return 42 }` x N):
-  80 funcs / 324 nodes -> PEP_RUNTIME_STEP_LIMIT;  180 funcs / 724 nodes ->
-  PEP_TOOL_VALUE_LIMIT. Both walls are checker/host-path limits (A1 lane / host
+  19 funcs / 80 nodes -> PEP_RUNTIME_STEP_LIMIT; 180 funcs / 724 nodes ->
+  PEP_TOOL_VALUE_LIMIT; 340 funcs / 1364 nodes -> the 1 MiB JSONL message limit
+  (pep_c23.py MAX_SESSION_MESSAGE_BYTES, hit client-side before the host). All three
+  are checker/host transport limits (A1 lane / host budget decision), NOT emitter
   budget decision), NOT emitter refusals -- the emitter never runs.
 """
 
@@ -84,6 +86,16 @@ class CheckerBudgetWalls(unittest.TestCase):
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
             self.assertIn("check parsed source", result.stderr)
             self.assertIn("PEP_TOOL_VALUE_LIMIT", result.stderr)
+
+    def test_checker_jsonl_message_wall(self):
+        # ~340 trivial functions (~1364 nodes) serialise past the 1 MiB JSONL
+        # message limit client-side (pep_c23.py MAX_SESSION_MESSAGE_BYTES) before
+        # the host even decodes the request. This is the exact wall A4's latest
+        # compiler_a.pep @ 214887a (1448 nodes) hits.
+        with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+            result = self._build(pathlib.Path(temp), "messagelimit", _tiny_program(340))
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("1 MiB", result.stderr)
 
 
 if __name__ == "__main__":
