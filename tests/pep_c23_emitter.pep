@@ -1115,6 +1115,16 @@ fn pep_c23_str_result_call(nodes: List[FlatAstNode], value: FlatAstNode) -> PepC
   if value.text == "str_concat" {
     return PepC23NodeLookup { found: true, node: value }
   } else {}
+  // utf8_slice is a BUILTIN (seed pep_ocaml.ml SourceBytes/Int/Int -> Str): no top-level
+  // function node exists for pep_c23_function to find, mirroring str_concat (G-A2-7).
+  // Classify its call as a Str value so let-inits, returns and say() accept it
+  // (DIVERGENCE-2 seam, A2 2026-11-07).
+  if value.text == "utf8_slice" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
+  if value.text == "int_text" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
   let callee = pep_c23_function(nodes, value.text)
   if !callee.found {
     return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
@@ -1183,6 +1193,13 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
   // arguments through this function, and only the bump-pool builtin is added -- Str-returning
   // user FUNCTIONS stay refused here, which is exactly the pinned say(<Str call>) boundary
   // from F3 (a callee body could contain say, and say re-lowers its argument twice).
+  if value.kind == "call" && value.text == "utf8_slice" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
+
+  if value.kind == "call" && value.text == "int_text" {
+    return PepC23NodeLookup { found: true, node: value }
+  } else {}
   if value.kind == "call" && value.text == "str_concat" {
     return PepC23NodeLookup { found: true, node: value }
   } else {}
@@ -2850,6 +2867,40 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let list = pep_c23_list_literal(nodes, function, argument.node)
       if !list.found { return pep_c23_unsupported("Pep C23 length lowering requires a direct integer list literal or immutable list binding") } else {}
       return PepC23Emission { status: "emitted", sourceParts: [int_text(pep_c23_count_children(nodes, list.node.id, "element"))], diagnostic: "" }
+    } else {}
+    if node.text == "utf8_slice" {
+      if !argument.found || !secondArgument.found || !thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 utf8_slice requires a SourceBytes value and two Int offsets")
+      } else {}
+      if argument.node.kind != "name" ||
+         !pep_c23_source_bytes_parameter(nodes, function, argument.node.text).found {
+        return pep_c23_unsupported("Pep C23 utf8_slice currently requires a direct SourceBytes parameter")
+      } else {}
+      let source = pep_c23_expression(nodes, function, argument.node)
+      let start = pep_c23_expression(nodes, function, secondArgument.node)
+      let finish = pep_c23_expression(nodes, function, thirdArgument.node)
+      if source.status != "emitted" { return source } else {}
+      if start.status != "emitted" { return start } else {}
+      if finish.status != "emitted" { return finish } else {}
+      var parts: List[Str] = ["pep_utf8_slice("]
+      for part in source.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in start.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ", ")
+      for part in finish.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else {}
+    if node.text == "int_text" {
+      if !argument.found || secondArgument.found || thirdArgument.found || extraArgument.found {
+        return pep_c23_unsupported("Pep C23 int_text requires one Int value")
+      } else {}
+      let loweredArgument = pep_c23_expression(nodes, function, argument.node)
+      if loweredArgument.status != "emitted" { return loweredArgument } else {}
+      var parts: List[Str] = ["pep_int_text("]
+      for part in loweredArgument.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
     } else {}
     if !target.found {
       return pep_c23_unsupported("Pep C23 calls require a known target")
@@ -4575,6 +4626,16 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
   // hundreds of bytes, and a larger budget only delays the same fail-closed abort. Raising
   // it later is a one-line change PLUS its capacity negative -- never a silent bump.
   reversed = prepend(reversed, "#define PEP_STR_CONCAT_CAPACITY 4096\n[[maybe_unused]] static pep_str pep_str_concat(pep_str left, pep_str right) {\n  if ((left.length != 0 && left.data == NULL) || (right.length != 0 && right.data == NULL)) { fputs(\"PEP_RUNTIME_INVALID_STR\\n\", stderr); exit(1); }\n  if (left.length > PEP_STR_CONCAT_CAPACITY || right.length > PEP_STR_CONCAT_CAPACITY - left.length) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n  static unsigned char pep_concat_pool[PEP_STR_CONCAT_CAPACITY];\n  static size_t pep_concat_used = 0;\n  unsigned char *out = pep_concat_pool + pep_concat_used;\n  for (size_t i = 0; i < left.length; ++i) { out[i] = left.data[i]; }\n  for (size_t i = 0; i < right.length; ++i) { out[left.length + i] = right.data[i]; }\n  pep_concat_used += left.length + right.length;\n  return (pep_str){ .data = out, .length = left.length + right.length };\n}\n")
+  // utf8_slice runtime (DIVERGENCE-2 seam): slice the granted SourceBytes at UTF-8
+  // boundaries into a pep_str, mirroring the seed interpreter's checks exactly
+  // (PEP_RUNTIME_BYTE_RANGE / PEP_RUNTIME_BYTE_BOUNDARY / PEP_RUNTIME_INVALID_UTF8).
+  // Results live in a per-run bump pool like pep_str_concat (whole-run validity by
+  // construction, capacity fail-closed); same deliberate 4 KiB single-constant choice.
+  reversed = prepend(reversed, "[[maybe_unused]] static pep_str pep_utf8_slice(pep_source_bytes source, int64_t start, int64_t finish) {\n if (source.length != 0 && source.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_SOURCE_BYTES\\n\", stderr); exit(1); }\n if (start < 0 || finish < start || (uintmax_t)finish > (uintmax_t)source.length) { fputs(\"PEP_RUNTIME_BYTE_RANGE\\n\", stderr); exit(1); }\n if (start != 0 && (uintmax_t)start < (uintmax_t)source.length && (source.data[(size_t)start] & 0xC0) == 0x80) { fputs(\"PEP_RUNTIME_BYTE_BOUNDARY\\n\", stderr); exit(1); }\n if ((uintmax_t)finish < (uintmax_t)source.length && (source.data[(size_t)finish] & 0xC0) == 0x80) { fputs(\"PEP_RUNTIME_BYTE_BOUNDARY\\n\", stderr); exit(1); }\n size_t pep_slice_len = (size_t)(finish - start); size_t pep_slice_i = 0; while (pep_slice_i < pep_slice_len) {\n  unsigned char pep_lead = source.data[(size_t)start + pep_slice_i];\n  size_t pep_seq;\n  if (pep_lead < 0x80) { pep_seq = 1; }\n  else if (pep_lead >= 0xC2 && pep_lead <= 0xDF) { pep_seq = 2; }\n  else if (pep_lead >= 0xE0 && pep_lead <= 0xEF) { pep_seq = 3; }\n  else if (pep_lead >= 0xF0 && pep_lead <= 0xF4) { pep_seq = 4; }\n  else { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n  if (pep_slice_i + pep_seq > pep_slice_len) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n  if (pep_seq >= 2) { unsigned char pep_second = source.data[(size_t)start + pep_slice_i + 1];\n   if ((pep_second & 0xC0) != 0x80) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n   if (pep_lead == 0xE0 && pep_second < 0xA0) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n   if (pep_lead == 0xED && pep_second >= 0xA0) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); } }\n  if (pep_seq >= 3) { if ((source.data[(size_t)start + pep_slice_i + 2] & 0xC0) != 0x80) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); } }\n  if (pep_seq == 4) { unsigned char pep_second = source.data[(size_t)start + pep_slice_i + 1];\n   if ((source.data[(size_t)start + pep_slice_i + 3] & 0xC0) != 0x80) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n   if (pep_lead == 0xF0 && pep_second < 0x90) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); }\n   if (pep_lead == 0xF4 && pep_second > 0x8F) { fputs(\"PEP_RUNTIME_INVALID_UTF8\\n\", stderr); exit(1); } }\n  pep_slice_i = pep_slice_i + pep_seq; }\n if (pep_slice_len > PEP_STR_CONCAT_CAPACITY) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n static unsigned char pep_utf8_slice_pool[PEP_STR_CONCAT_CAPACITY];\n static size_t pep_utf8_slice_used = 0;\n if (pep_slice_len != 0 && pep_utf8_slice_used > PEP_STR_CONCAT_CAPACITY - pep_slice_len) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n unsigned char *pep_slice_out = pep_utf8_slice_pool + pep_utf8_slice_used;\n for (size_t i = 0; i < pep_slice_len; ++i) { pep_slice_out[i] = source.data[(size_t)start + i]; }\n pep_utf8_slice_used += pep_slice_len;\n return (pep_str){ .data = pep_slice_out, .length = pep_slice_len };\n}\n")
+  // int_text runtime (A2 int channel; A3 amendment to PATCH-PROPOSAL-UTF8-SLICE):
+  // decimal formatting of the seed's Int64.to_string (minus sign mirrored),
+  // fail-closed bump-pool result storage like pep_utf8_slice / pep_str_concat.
+  reversed = prepend(reversed, "[[maybe_unused]] static pep_str pep_int_text(int64_t value) {\n unsigned long long pep_mag = (value < 0) ? (unsigned long long)(-(value + 1)) + 1ULL : (unsigned long long)value;\n unsigned char pep_buf[24]; size_t pep_len = 0; _Bool pep_negative = value < 0;\n do { pep_buf[pep_len] = (unsigned char)('0' + (pep_mag % 10ULL)); pep_len = pep_len + 1; pep_mag = pep_mag / 10ULL; } while (pep_mag != 0);\n size_t pep_total = pep_len + (pep_negative ? 1U : 0U);\n if (pep_total > PEP_STR_CONCAT_CAPACITY) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n static unsigned char pep_int_text_pool[PEP_STR_CONCAT_CAPACITY]; static size_t pep_int_text_used = 0;\n if (pep_int_text_used > PEP_STR_CONCAT_CAPACITY - pep_total) { fputs(\"PEP_RUNTIME_STR_CONCAT_RANGE\\n\", stderr); exit(1); }\n unsigned char *pep_text_out = pep_int_text_pool + pep_int_text_used;\n if (pep_negative) { *pep_text_out = (unsigned char)'-'; pep_text_out = pep_text_out + 1; }\n while (pep_len != 0) { *pep_text_out = pep_buf[pep_len - 1]; pep_text_out = pep_text_out + 1; pep_len = pep_len - 1; }\n pep_int_text_used += pep_total;\n return (pep_str){ .data = pep_int_text_pool + (pep_int_text_used - pep_total), .length = pep_total };\n}\n")
   reversed = prepend(reversed, "typedef struct { const int64_t *data; size_t length; } pep_list_int;\n_Bool pep_contains_int(pep_list_int values, int64_t needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const _Bool *data; size_t length; } pep_list_bool;\n_Bool pep_contains_bool(pep_list_bool values, _Bool needle) {\n  if (values.length != 0 && values.data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t i = 0; i < values.length; ++i) { if (values.data[i] == needle) { return 1; } }\n  return 0;\n}\n")
   reversed = prepend(reversed, "typedef struct { const pep_str *data; size_t length; } pep_list_str;\n")

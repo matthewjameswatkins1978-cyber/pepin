@@ -403,11 +403,7 @@ class PepC23CliTests(unittest.TestCase):
              "fn main() -> Unit { return say(\"hello\") }\n",
              "Pep C23 unsupported: Pep C23 main function must return Int",
              "valid"),
-            ("say-non-str-argument",
-             "fn main() -> Int { say(int_text(42)); return 0 }\n",
-             "Pep C23 unsupported: Pep C23 say lowers only string literals, Str parameters, Str locals and Str fields",
-             "valid"),
-            ("ill-typed-main",
+                        ("ill-typed-main",
              "fn main() -> Int { return true }\n",
              "Pep C23 unsupported: Pep C23 emission requires a valid Pep checker report",
              "invalid"),
@@ -430,6 +426,21 @@ class PepC23CliTests(unittest.TestCase):
                             self.assertEqual(native.stdout, "")
                             self.assertEqual(native.stderr.strip(), diagnostic)
                             self.assertFalse(generated.exists())
+
+    def test_say_int_text_builtin_emits_natively(self):
+        # A2 int channel (DIVERGENCE-2 seam): int_text is a Str-producing builtin,
+        # classified and lowered by name like str_concat; was previously a pinned
+        # refusal (say-non-str-argument). Pins the new native behaviour on both
+        # compilers, including the negative Int decimal form.
+        source_text = "fn main() -> Int { let text = int_text(-42)\nsay(str_concat(\"answer:\", text))\nreturn 0 }"
+        for compiler in (CLANG, GCC):
+            with self.subTest(compiler=compiler.name):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    source = pathlib.Path(temp) / "int_text_emit.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    native = self.invoke("run-c23", source, "--compiler", compiler)
+                    self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+                    self.assertIn("answer:-42", native.stdout)
 
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
