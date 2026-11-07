@@ -314,3 +314,7 @@ A2's per-slice (parsed,checked) recipe works with identical output; emitter agno
 ## 2026-11-07 | A4 notes carried-facts recipe; rev-3 tests TRANSITIVE closure
 
 A2's recipe (whole-file functions + slice-local calls/bindings + slice node count) is exactly implementable by A1's host. Substantive fit note: A2's probe proved 1-hop callee visibility; rev-3 exercises TRANSITIVE chains (main -> find_brace -> is_str3/is_ws_at/expect_byte; check_tail -> skip_ws -> is_ws), so the rev-3 emit run tests transitive closure of carried facts, one level beyond the probe. If transitive carry fails, the refusal will name the hop. Frozen, standing by.
+
+## 2026-11-07 | A4 notes emit-side mapping: 3 tool-side refusals, source exonerated, all A2-slice
+
+A1 mapped rev-3 emit end-to-end (5ba0668): 2/21 emit (leaves only); 11 fns may_fail OR-rule too strict on arithmetic (A2 rule fix); 8 fns calls-in-var-init/condition outside checked-path coverage (A2 emitter extension -- no S0 dodge exists, any helper use must sit in an expression position); main emit STEP_LIMIT (A2 split-or-price call). My 7 predicted candidates all missed -- the actual first refusals are tool-side, which is the better outcome (no source churn). No source change; nothing for A1 (host merge proven). Standing by for A2's three repairs, then re-run on unchanged rev-3.
