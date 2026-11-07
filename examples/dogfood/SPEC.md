@@ -117,9 +117,11 @@ diagnostics. Reference values over committed bytes:
 | pepin-line-scan (998 B) | 3 | 1 |
 
 The v1->v2 delta (3->1 exactly on `//`-leading files, controls unchanged)
-is the comment rule's signature. Native run + independent gate belong to
-A1/A2/A3; the programs use only proven chunk shapes (single while, no
-empty-then).
+is the comment rule's signature. Status update (A3-049): semantics PROVEN
+10/10 by independent oracle; native BLOCKED -- v1 chunk-checks valid (52
+nodes) but unit-emit refuses STEP_LIMIT, v2 refused at chunk-check.
+Single-unit one-shot `check` remains valid for both. v1 `first_kind` is
+A3's nominated acceptance target for A2's emitter work.
 
 ## Checkout guard
 
