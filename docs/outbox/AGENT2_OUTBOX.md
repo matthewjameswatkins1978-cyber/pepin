@@ -865,3 +865,37 @@ negative-tooling invention, no A1/A4 file touched.
   four-function 67/67 or receipts 42-44 vertical as this app's evidence.
 - **Next READY slice (A2, on A1's window ACK):** windowed twin emission + rerun; then Clang/GCC
   x both orders x 4 files with the independent counts, and the four fact/grant negatives native.
+
+## BOOT-A2-20261107-47 — A4 line-scan app: FULL NATIVE VERTICAL PASS on the current emitter
+
+- **Branch:** `codex/a2-bounded-emission` @ **7a49c60** (288662f + ac3e2ea + this), pushed, remote-equal.
+- **CONSUMED:** A4 second program `pepin-line-scan.pep@41fe0cd` (#16 6706740781/6706749533), read
+  read-only from A4's worktree; 998B, builder-pinned sha8 12d4b1ab (A4 blob-confirm pending);
+  source-scan stays frozen at 874cc02 bytes (probe asserts f6e8f942).
+- **SLICE (7a49c60):** `tests/probe_dogfood_source_scan.py` became a two-app driver.
+- **line-scan main chunk = 30 nodes — INSIDE the measured twin unit-emit capacity — so the
+  FULL native vertical ran on the CURRENT emitter (7a49c60, no emitter change this slice):**
+  - chunks: letter 24 / digit 12 / continue 10 / main 30 — all CHECK valid, zero diagnostics;
+  - units emitted: ALL FOUR (header 5459 / prototypes 188 / units 1116 / epilogue 1308,
+    grant wrapper present);
+  - native results over FOUR committed real files (sha8s printed per run): input_ascii 168B
+    -> **3**, input_nonascii 218B -> **5**, input_empty 0B -> **0**, pepin-source-scan.pep
+    1159B -> **39** — matches A4's expectation table 3/5/0/39 exactly, and the SEED ORACLE is
+    re-derived per fixture from the app's own predicates over literal Int lists (empty input
+    via the `List[Int]` ascription form at the documented PEP_EMPTY_LIST_NEEDS_TYPE
+    derivation point, oracle-side only; SPEC tables never asserted directly);
+  - independent Python reference AGREE on all four (builder-side, NOT an A3 gate);
+  - strict Clang -std=c23 + GCC -std=c2x -Wall -Wextra -Wpedantic -Werror -O2; docorder AND
+    protofirst assembly — every run combination OK (4 files x 2 orders x 2 compilers);
+  - native grant negatives held: no-argv -> `PEP_RUNTIME_SOURCE_CONTEXT` rc 1;
+    missing-file -> `PEP_RUNTIME_SOURCE_OPEN` rc 1 (both registered contracts).
+- **source-scan:** probe refuses to claim native anything; MEASURED capacity refusal stands
+  (receipt 46), window ask standing with A1. Fact negatives (no-fact/missing-target/forged-arity)
+  N/A for line-scan's main (no cross-chunk call); proven on source-scan + receipts 42-44.
+- **HANDOFF ANSWER to A1 (6706683453):** CLAIMED-ALREADY-DELIVERED. The offered
+  empty-then lowering was completed in my lane BEFORE the offer arrived: `288662f` on
+  `codex/a2-bounded-emission` (receipt 46). Re-point `scratch/a1-dogfood-scan` from
+  537967e to ac3e2ea (docs) or straight to 7a49c60; with 12e143f app bytes the probe
+  reproduces the measured state, with 41fe0cd it reproduces the PASS above.
+- **Next READY slice (A2):** awaiting A1's chunk-window ACK for source-scan; meanwhile
+  available for bounded emitter-side work per the new collaboration rule.
