@@ -76,11 +76,12 @@ predictions from this file before seeing native outputs.
 path and output contract as the runs program; `pepin-source-scan.pep` is
 untouched (still frozen at `874cc02`). Deliberate shape: filled `then`,
 empty `else` — the branch direction A3 proved builds (`empty_else.pep`
-exit 0); no empty-`then` idiom, so the known first emitter refusal should
-not fire on shape grounds (native proof still belongs to A1/A2).
+exit 0); no empty-`then` idiom. Native proof now exists: A2 receipt 47
+FULL NATIVE VERTICAL PASS, A1 integrator repro on 86ff953, A3-034 gate
+39/39 PROVEN (five real files, strict Clang+GCC, both assembly orders).
 
-Falsifiable expectations on the identical fixtures (predictions until
-natively run): input_ascii 3, input_nonascii 5, input_empty 0, self 39.
+Confirmed native results on the identical fixtures: input_ascii 3,
+input_nonascii 5, input_empty 0, self 39 (line_scan_gate_034.py, A3-034).
 Consumer: pair identifier-runs + line count per file as one documented
 user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
 
@@ -90,8 +91,10 @@ user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
 checkouts measure the committed bytes (A3 BOOT-A3-025 point 6: 1198 vs
 1159 bytes). Scoped to this lane; no repo-wide attribute change.
 
-## A4 handoff question for A1/A2 (one line)
+## A4 grant question — ANSWERED by A1 (no action open)
 
-Is `fn main(source: SourceBytes) -> Int` plus `byte_at`/`byte_length`
-the revision-pinned granted entry you will lower, or do you need a
-narrower request shape first?
+A1's explicit grant answer: host entry is `open_bytes(name, bytes)` with
+`entryFunctions: ["main"]`; native entry is the `pep_source_data` grant
+wrapper with the exe run direct on the granted file path.
+`fn main(source: SourceBytes) -> Int` plus `byte_at`/`byte_length` stands
+as the lowered entry; no narrower request shape needed, no new CLI/ABI.
