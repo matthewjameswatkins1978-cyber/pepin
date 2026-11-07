@@ -123,6 +123,19 @@ nodes) but unit-emit refuses STEP_LIMIT, v2 refused at chunk-check.
 Single-unit one-shot `check` remains valid for both. v1 `first_kind` is
 A3's nominated acceptance target for A2's emitter work.
 
+## T2 self-check probe (A1 handoff, same claim pattern as List probe)
+
+`t2_names_probe.pep`: two-pass scan over granted bytes — pass 1 finds the
+first `fn ` name-start (or -1), pass 2 finds the first `(` call paren (or
+-1); `main` returns 0 = def+call present, 1 = no definition, 2 = no call.
+Fixed-shape probe, not a general lexer (matches exactly one-spaced `fn `).
+Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch). Reference
+over committed bytes: t2_valid (68 B) 0, t2_nodef (27 B) 1, t2_nocall
+(28 B) 2. Covers unknown-symbol (missing def); arity/type need a bigger
+probe later. Chunk-check + unit-emit belong to A1 (tooling absent here);
+emit refusal of these while/if shapes would extend A3-049, a PASS feeds
+the T2 prepass design.
+
 ## Checkout guard
 
 `examples/dogfood/.gitattributes` pins `*.pep text eol=lf` so Windows
