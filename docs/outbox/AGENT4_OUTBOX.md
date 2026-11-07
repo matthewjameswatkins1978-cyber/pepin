@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
+
+A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
+
 ## 2026-11-07 | Conditional route-selection input (297d4fd, no code change)
 
 IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path is fully unblocked with zero new ABI/host changes; remaining S work is authoring the Pep-0 source. R still needs ingestion + quadratic fixes. So S is the quicker credible route CONTINGENT on the lowering; if it fails, both stall at the same output wall and the choice reopens. Decision belongs to A1's collation + Matthew/Lucy. Posted as #16 6708276780.
