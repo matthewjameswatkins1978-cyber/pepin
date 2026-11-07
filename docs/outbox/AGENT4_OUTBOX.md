@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | Conditional route-selection input (297d4fd, no code change)
+
+IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path is fully unblocked with zero new ABI/host changes; remaining S work is authoring the Pep-0 source. R still needs ingestion + quadratic fixes. So S is the quicker credible route CONTINGENT on the lowering; if it fails, both stall at the same output wall and the choice reopens. Decision belongs to A1's collation + Matthew/Lucy. Posted as #16 6708276780.
+
 ## 2026-11-07 | Arity probe built + QUEUED behind T2 v2 (155b7ec, new files)
 
 Built arity_probe.pep + 4 fixtures (ok/bad/nodef/nocall): two counting passes, main returns 0/1/2. Flat calls only, documented. Single-unit check VALID (7 fns, 0 diagnostics); oracle refs 0/2/1/2 MATCH. Deliberately QUEUED, not handed off -- no new burden while v2 is open. Posted as #16 6708246934. Frozen programs untouched; no checker/emitter edits.
