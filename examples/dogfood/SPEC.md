@@ -89,6 +89,38 @@ both compilers, both assembly orders, independent oracle.
 Consumer: pair identifier-runs + line count per file as one documented
 user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
 
+## T2 cursor probe, no token framework (LUCY-20261107-013 P2)
+
+Verdict: no stored-token/AST requirement found inside Pep-0 as scoped, so
+the token-list framework is NOT built. Forward/mutual recursion is handled
+by a signature prepass over raw bytes (scan for `fn`, record name-span and
+arity); single-error reporting (first-error exit) satisfies every A3
+invalid-input case; C output order matches source order for structured
+code (headers/footers known a priori); the symbol table is parallel
+`List[Int]` triples (name-hash, start, length) with byte-compare on hash
+match -- no Str keys, no AST. Excluded by subset definition (not by
+implementation): nested function definitions, multi-error recovery,
+reorder-dependent emission. Open challenge: name one Pep-0 program shape
+needing random access to more than one buffered token and this verdict flips.
+
+`cursor_kind_v1.pep` (whitespace skip only) vs `cursor_kind_v2.pep` (plus
+`//`-comment skip): first significant byte -> 1 name-start, 2
+digit-start, 3 other, 0 end. Both single-unit `check` valid, 0
+diagnostics. Reference values over committed bytes:
+
+| fixture | v1 | v2 |
+|---|---|---|
+| input_ascii (168 B, `fn`...) | 1 | 1 |
+| input_nonascii (218 B, `//`...) | 3 | 1 |
+| input_empty (0 B) | 0 | 0 |
+| pepin-source-scan (1159 B) | 3 | 1 |
+| pepin-line-scan (998 B) | 3 | 1 |
+
+The v1->v2 delta (3->1 exactly on `//`-leading files, controls unchanged)
+is the comment rule's signature. Native run + independent gate belong to
+A1/A2/A3; the programs use only proven chunk shapes (single while, no
+empty-then).
+
 ## Checkout guard
 
 `examples/dogfood/.gitattributes` pins `*.pep text eol=lf` so Windows
