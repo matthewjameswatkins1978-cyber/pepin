@@ -727,16 +727,82 @@ fn pep_c23_cross_chunk_call(nodes: List[FlatAstNode], function: FlatAstNode, nod
 // except the missing-target one is byte-for-byte identical to today (one-shot and same-chunk
 // behaviour preserved by construction); "calls require a known target" is exactly where a
 // cross-chunk callee appears, and there the checked-fact path takes over. Supported statement
-// forms in this slice: let initialisers and direct return values -- the two sites threaded with
-// the real report. Nested calls inside arguments resolve same-chunk or refuse; conditional-return
-// bodies keep the plain path (documented boundary).
+// forms in this slice: let initialisers, direct return values, and binary operand trees --
+// the sites threaded with the real report. Nested calls inside arguments resolve same-chunk
+// or refuse; conditional-return bodies keep the plain path (documented boundary).
 fn pep_c23_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
                               checked: CheckerReport) -> PepC23Emission {
   let plain = pep_c23_expression(nodes, function, node)
   if plain.status == "emitted" { return plain } else {}
   if plain.diagnostic != "Pep C23 calls require a known target" { return plain } else {}
   if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
+  if node.kind == "binary" { return pep_c23_binary_checked(nodes, function, node, checked) } else {}
   return plain
+}
+
+// Checked binary lowering: entered only when the plain lowering refused with the
+// missing-target diagnostic, so operator shape was already vetted by pep_c23_expression.
+// Mirrors the plain binary gates (missing operand, two fallible operands, neg) and lowers
+// operands through THIS checked entry, so a cross-chunk call nested in either operand
+// resolves through the same checked facts as a top-level call. Str-comparison operands keep
+// the plain refusal: a Str operand position cannot carry a resolvable cross-chunk call (the
+// cross-chunk result gate refuses Str results).
+fn pep_c23_binary_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                          checked: CheckerReport) -> PepC23Emission {
+  let left = pep_c23_child(nodes, node.id, "left", 0)
+  let right = pep_c23_child(nodes, node.id, "right", 1)
+  if !left.found || !right.found {
+    return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
+  } else {}
+  if node.text != "&&" && node.text != "||" && pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
+    return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
+  } else {}
+  if node.text == "neg" {
+    let lowered = pep_c23_expression_checked(nodes, function, right.node, checked)
+    if lowered.status != "emitted" { return lowered } else {}
+    var parts: List[Str] = ["pep_neg("]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {}
+  let loweredLeft = pep_c23_expression_checked(nodes, function, left.node, checked)
+  if loweredLeft.status != "emitted" { return loweredLeft } else {}
+  let loweredRight = pep_c23_expression_checked(nodes, function, right.node, checked)
+  if loweredRight.status != "emitted" { return loweredRight } else {}
+  return pep_c23_binary_apply(node, loweredLeft.sourceParts, loweredRight.sourceParts)
+}
+
+// Binary operator application for the CHECKED path only. This is the byte-identical TWIN of
+// the tail inlined in the plain binary block; the plain path keeps its original inline form
+// because its execution step profile sits at the 100k tool_step_budget edge on real programs.
+// The two must stay byte-identical in their emitted operator shapes.
+fn pep_c23_binary_apply(node: FlatAstNode, leftParts: List[Str], rightParts: List[Str]) -> PepC23Emission {
+  let helper = if node.text == "+" { "pep_add" } else {
+    if node.text == "-" { "pep_sub" } else {
+      if node.text == "*" { "pep_mul" } else {
+        if node.text == "/" { "pep_div" } else { "" }
+      }
+    }
+  }
+  if helper != "" {
+    var parts: List[Str] = [helper, "("]
+    for part in leftParts { parts = append(parts, part) }
+    parts = append(parts, ", ")
+    for part in rightParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {}
+  if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
+    var parts: List[Str] = ["("]
+    for part in leftParts { parts = append(parts, part) }
+    parts = append(parts, " ")
+    parts = append(parts, node.text)
+    parts = append(parts, " ")
+    for part in rightParts { parts = append(parts, part) }
+    parts = append(parts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {}
+  return pep_c23_unsupported("Pep C23 binary operator is unsupported")
 }
 fn pep_c23_close_generated_call(nodes: List[FlatAstNode], parts: List[Str], argumentCount: Int) -> List[Str] {
   var closedParts = parts
@@ -3079,6 +3145,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     let loweredRight = pep_c23_expression(nodes, function, right.node)
     if loweredLeft.status != "emitted" { return loweredLeft } else {}
     if loweredRight.status != "emitted" { return loweredRight } else {}
+    // This tail stays INLINE in the plain path: the emitter's tool_invoke execution sits at
+    // the 100k tool_step_budget edge on real programs (measured: countdown-depth-510 emission
+    // was pushed over budget by one extra call per binary expression), so the plain path keeps
+    // its exact original step profile. pep_c23_binary_apply is the fail-closed checked-path
+    // TWIN of this block; the two must stay byte-identical in their emitted operator shapes.
     let helper = if node.text == "+" { "pep_add" } else {
       if node.text == "-" { "pep_sub" } else {
         if node.text == "*" { "pep_mul" } else {
