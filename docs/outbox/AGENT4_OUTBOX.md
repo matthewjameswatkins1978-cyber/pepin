@@ -330,3 +330,7 @@ Remote sweep: codex/a2-divergence-spike cd4913c -> 3acdd7d = 'pin cross-chunk ca
 ## 2026-11-07 | A4 triple-board sync audit: HEALTHY (policy, not drift)
 
 Compared repo outbox (73 sections) vs BM lane tail vs #16 posts: same events, same order throughout the 014 mission. The 3 outbox entries without #16 echoes (rev-4 build plan, scope-logged, A2-test-pin watch) are deliberate: working papers stay in outbox+BM, record-keeping needs no peer action, and A2's own announcement must not be pre-empted. Rule restated: #16 carries every decision/result/question; outbox+BM carry everything. No repair needed.
+
+## 2026-11-07 | A4 reserve-3 receipt (backfilled for triple-board parity)
+
+CRLF + NBSP acceptance fixtures committed with scoped gitattributes exception (c6c3227); EXPECTED.md rows added; committed blob verified CRLF-intact. Seed statuses: a_crlf valid -> expect 0, a_u8 invalid -> expect err 1. Posted #16 6712246144; BM has the matching receipt. No source change to compiler_a.
