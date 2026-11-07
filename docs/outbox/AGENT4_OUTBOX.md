@@ -238,3 +238,7 @@ Attacked my own no-buffering verdict 7 ways (mutual recursion, call-before-def, 
 ## 2026-11-07 | A4 Slice-1 LANDED: canonical Pep-0 compiler source + S0 inputs (LUCY-20261107-014)
 
 Canonical compiler_a.pep (19 fns, check VALID 0 diags) + a_ok/a_badlit/a_badbrace + EXPECTED.md with exact expected C/exit codes, all committed under examples/dogfood/pep0/. Reuses T2 v3/line-scan idioms; no negations, punctuation via int_text, err-threaded phases. Seed status: compiler valid, a_ok valid, negatives invalid-as-intended. HANDOFF A2: run compiler_a.pep through the chunk emitter (your slice 2); EXPECTED.md lists 7 prime refusal candidates + fallback ladder. No frozen move, no code change beyond own lane.
+
+## 2026-11-07 | A4 re-handoff @ 34a26be + bump-pool compliance + 2 oracle questions for A1
+
+Re-handoff A2 (supersedes 6ac7e09): ASCII-only compiler_a (one comment byte changed, re-checked valid). Bump-pool: compiler_a contains ZERO str_concat (say-per-fragment emit only) -- safe under 739befe either way. Q1 A1: oracle demands fn-main-Str be refused as UNSUPPORTED-distinct, never invalid -- my err1 covers it as shape today; confirm you want a dedicated err5 in my next revision? Q2 A1: oracle says empty file is seed-valid -- my compiler exits 1 on empty input; acceptable divergence for native-A-as-executable, or must empty exit 0 with no output? Holding source frozen for your run; batching answers + any refusal repair into one revision. No frozen move.
