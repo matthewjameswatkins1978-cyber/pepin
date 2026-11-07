@@ -1186,8 +1186,20 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
         }
       } else {}
     }
-    if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
-    return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+ if matches == 1 { return PepC23NodeLookup { found: true, node: value } } else {}
+ // Token-piece lane (A1 rung-iii): a loop-body `let` whose initialiser is a Str-returning
+ // call (utf8_slice) lowered to `pep_str pep_local_<id>` at the let itself, so the NAME is a
+ // Str value for str_concat/prepend validation just like a function-level Str local.
+ // The enclosing-while lookup performs the ancestor check, so a same-named binding in a
+ // different function cannot be matched here.
+ let enclosingWhile = pep_c23_enclosing_while_binding(nodes, function, value, value.text)
+ if enclosingWhile.found {
+ let enclosingValue = pep_c23_child(nodes, enclosingWhile.node.id, "value", 0)
+ if enclosingValue.found && pep_c23_str_result_call(nodes, enclosingValue.node).found {
+ return PepC23NodeLookup { found: true, node: value }
+ } else {}
+ } else {}
+ return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
   } else {}
   // Direct str_concat CALLS classify too (G-A2-7): the two-arg dispatch validates its
   // arguments through this function, and only the bump-pool builtin is added -- Str-returning
@@ -3474,17 +3486,24 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
     if statement.parentId == loop.id && statement.role == "body" {
       if statement.kind == "if_statement" || statement.kind == "return" || statement.kind == "let" {
         if statement.kind == "let" {
-          let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
-          if !initialValue.found || initialValue.node.kind != "call" ||
-             initialValue.node.text != "byte_at" {
-            return pep_c23_unsupported("Pep C23 while-local lets currently require a byte_at initializer")
-          } else {}
-          let loweredValue = pep_c23_expression(nodes, function, initialValue.node)
-          if loweredValue.status != "emitted" { return loweredValue } else {}
-          var bindingParts: List[Str] = ["    int64_t pep_local_", int_text(statement.id), " = "]
-          for part in loweredValue.sourceParts { bindingParts = append(bindingParts, part) }
-          bindingParts = append(bindingParts, ";\n")
-          for part in bindingParts { parts = append(parts, part) }
+ let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+ if !initialValue.found {
+  return pep_c23_unsupported("Pep C23 while-local lets currently require a byte_at initializer")
+ } else {}
+ let strInitialValue = pep_c23_str_result_call(nodes, initialValue.node)
+ let loweredValue = pep_c23_expression(nodes, function, initialValue.node)
+ if loweredValue.status != "emitted" { return loweredValue } else {}
+ if strInitialValue.found {
+  var strBindingParts: List[Str] = [" pep_str pep_local_", int_text(statement.id), " = "]
+  for part in loweredValue.sourceParts { strBindingParts = append(strBindingParts, part) }
+  strBindingParts = append(strBindingParts, ";\n")
+  for part in strBindingParts { parts = append(parts, part) }
+ } else {
+  var bindingParts: List[Str] = [" int64_t pep_local_", int_text(statement.id), " = "]
+  for part in loweredValue.sourceParts { bindingParts = append(bindingParts, part) }
+  bindingParts = append(bindingParts, ";\n")
+  for part in bindingParts { parts = append(parts, part) }
+ }
         } else {
           let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings, result)
           if loweredConditional.status != "emitted" { return loweredConditional } else {}
