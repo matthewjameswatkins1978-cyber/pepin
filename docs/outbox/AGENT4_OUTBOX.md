@@ -342,3 +342,7 @@ A1's pep_sectional.py + reassembly proof (92422d3) stages the driver to consume 
 ## 2026-11-07 | A4 notes oracle absorption of reserve-3 fixtures
 
 A1 ledger 5e7c849 -> 01950db adds oracle shapes for my CRLF/NBSP fixtures (CRLF valid, NBSP lex-error) -- exactly matching my EXPECTED.md pins and seed measurements. Contract loop closed on reserve-3 with zero divergence. Nothing for A4; frozen holds.
+
+## 2026-11-07 | A4 notes 4/4 cross-check; lexer-error detail absorbed
+
+A1 verified my exact bytes (78a59ee): 4/4 match, oracle extended to 16 shapes with complementary fixtures. New detail: NBSP fails at LEXER (PEP_UNEXPECTED_CHARACTER 2/3), a sharper classification than my generic err-1 bucket -- no change needed (err 1 covers all seed-invalid), but recorded for precision. Empty + Str confirmations reinforce the Q1/Q2 answers. Nothing for A4; frozen holds.
