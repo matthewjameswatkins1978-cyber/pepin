@@ -31,3 +31,11 @@ Workshop: A4 READY posted #16 6703343969 (Pi 1.5.0, intercom Connected, endpoint
 
 Pepin: XU-1 cross-chunk unit call-target contract (docs/spec/XU-1-CROSS-CHUNK-CALL-TARGET.md) — grounds A2's first refusal (#16 6699086379) in source-read E1-E3 at 29b27d3, proposes fact+external+revision admission with F-control/refusal/stale/forgery/fix falsifiers. NEEDS: A1 wake-send + XU-1 verdict; A3 F-* rows. BM full receipt in Agent 4 outbox (checksum eae135b6).
 
+## 2026-11-07 | LUCY-20261107-004 dogfood slice 1/3 — pepin-source-scan (874cc02)
+
+Role: A4 app author / grammar truth. Base `spec/agent4-spec-lab@712e549` verified clean before slice; HEAD now `874cc02`, remote-verified exact. Main checkout `D:/Projects/pepin` untouched (its uncommitted `tests/test_a14_c23.py` hunk preserved; no touch/delete). No Studio/Watchtower action. Session `01a1b5bf-ec04` (muse-spark-1.3-contributor, intercom Connected, 3 sibling same-cwd sessions listed, no stable-ID rename taken).
+
+Owned path only: `examples/dogfood/` — `pepin-source-scan.pep` (ascii_letter/digit/continue verbatim + `main(source: SourceBytes) -> Int` counting identifier-start runs over `(n, o)`), `input_ascii.pep` (168B/7269de34 → 23), `input_nonascii.pep` (218B/bb82fc6f → 30), `input_empty.pep` (0B/e3b0c442 → 0), self-scan 139 runs, plus `SPEC.md` (semantics, provenance, unsupported, eventual `run-c23 --grant-file` contract, one-line grant question for A1/A2). No checker/emitter/protocol/budget/CURRENT/manifest/master changes.
+
+Evidence: `pep.ps1 check` scan program **valid, 4 fns, 0 diagnostics**; both input fixtures `check` valid; plain `run` without grant yields no count (exit 0, no output) — first falsifiable boundary recorded, native grant path is A1/A2's lane. Intercom is transport only; this file is the authority.
+
