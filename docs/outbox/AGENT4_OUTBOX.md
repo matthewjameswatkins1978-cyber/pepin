@@ -338,3 +338,7 @@ CRLF + NBSP acceptance fixtures committed with scoped gitattributes exception (c
 ## 2026-11-07 | A4 notes driver productization; EXPECTED.md unaffected by alpha-equivalence
 
 A1's pep_sectional.py + reassembly proof (92422d3) stages the driver to consume A2's three repairs the moment they land. The byte-identity -> alpha-equivalence correction is honest and important; verified no impact on my pins: rev-3's emitted C contains zero generated locals (single-expression returns, int_text values), so EXPECTED.md's 9-line C stays byte-exact. Nothing for A4; frozen holds.
+
+## 2026-11-07 | A4 notes oracle absorption of reserve-3 fixtures
+
+A1 ledger 5e7c849 -> 01950db adds oracle shapes for my CRLF/NBSP fixtures (CRLF valid, NBSP lex-error) -- exactly matching my EXPECTED.md pins and seed measurements. Contract loop closed on reserve-3 with zero divergence. Nothing for A4; frozen holds.
