@@ -221,6 +221,10 @@ IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path
 
 ## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
 
+## 2026-11-07 | T2 verdict steelmanned, stands with reasoning (no code change)
+
+Attacked my own no-buffering verdict 7 ways (mutual recursion, call-before-def, prototypes, assign-vs-call, if/else presence, nested blocks, string/comment scanning) -- all resolve to prepass, 1-token lookahead, depth counter, or char-by-char streaming. Only unbounded-lookahead disambiguation would break it, excluded from Pep-0 by subset. Challenge open but unanswered after genuine attack. Posted as #16 6708660227. No code change.
+
 ## 2026-11-07 | A3-074/075/076 Str route narrows (683eb23, no code change)
 
 Same-struct finding collapses runtime layer to a nominal-type bridge; remaining: contract-shape decision + emitter typing. No new A4 action; say(Str) path stands, v2/v3 + arity handoffs stand. Posted as #16 6708619018. No frozen move, no code change.
