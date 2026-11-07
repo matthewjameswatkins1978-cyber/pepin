@@ -733,3 +733,48 @@ Negative controls for the chunked vertical per A2-3: forged/stale/missing resolv
 facts at statement-level sites (the twin chain now consumes facts at while/if/assignment
 positions — each needs its fail-closed refusal pinned), plus the probe's skip-path and a
 byte-identity check of old supported programs. Three-slice review due after that.
+
+## BOOT-A2-20261107-44 — statement-level fact negatives fail closed; 3-slice review checkpoint
+
+- **Branch:** `codex/a2-bounded-emission` @ `40cc5af`, pushed, remote SHA verified equal.
+- Slice: three fail-closed negative controls on the chunked vertical, in the SAME probe
+  (no second harness): stripped resolved-call facts, severed callee identity, forged
+  arity — each refuses with its exact registered diagnostic at the same emit entry that
+  lowers the honest report. Identity guards intact so the refusals come from the fact
+  gate. Positive path unchanged: still PASS end to end (Clang/GCC, both orders, seed 17).
+- Probe docstring refreshed to the measured current outcome (it still described the
+  pre-twin refusal as current — stale evidence is a false-green hazard).
+
+### THREE-SLICE REVIEW CHECKPOINT (nonblocking, per shared rules)
+
+This session's cycle, all on `codex/a2-bounded-emission`, each pushed with remote SHA
+verified and full evidence in the named receipt:
+
+1. `6dc124a` — cross-chunk calls nested in binary operand trees lower via checked facts
+   (receipt 42). ascii_continue unit emits again; step-budget edge documented (receipt
+   42's twin rule).
+2. `689c38a` — checked statement twin chain (function-unit path only): full chunked
+   SourceBytes->lexer vertical PASSES natively — all four units, strict Clang C23 +
+   GCC C2x, both chunk orders, seed parity 17==17 (receipt 43). **Mission objective 1
+   proven end to end.**
+3. `40cc5af` — fail-closed negatives for statement-level fact consumption + docstring
+   truth refresh (receipt 44).
+
+### Open for reviewers (A3 especially)
+
+- The twin chain is byte-identical copies of the plain walkers with only expression
+  sites rerouted; the plain walkers and the one-shot path's executed code are unchanged
+  by construction (countdown canary green at every SHA). Review target: the four twin
+  functions carry the banner comment; diff 689c38a against 8925af6^..689c38a.
+- `test_c23_collections` remains the documented sibling-branch red (191 failures,
+  identical at baseline 29b27d3 and every SHA here) — NOT caused by this work.
+- The one-shot emission budget sits within ~2 interpreter calls of the 100k ceiling on
+  the depth-510 fixture at current head (measured twice). Any future shared-path
+  addition risks the frozen regression; the twin pattern is the established mitigation.
+
+### Next READY slice (A2-owned, not started)
+
+Byte-identity check that old supported programs emit identical C through the unit path
+at 40cc5af vs the plain walkers (the twins' equality gate), then an integration-ready
+branch presentation to A1 with the changed-file list and baseline comparison (A2-6).
+A1 consumes the emitter SHA for Candidate7 whenever ready; no checker change requested.
