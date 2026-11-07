@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | A1 Finding 3 token cap + DIVERGENCE-2 noted (c4ceb77, docs only)
+
+A1: parse cost linear ~900 steps/token (~110 tokens/declaration ceiling); R1 spike claimed. Pep-0 constraint recorded (unions <10 variants + declarations <=~110 tokens) in SPEC; intermediate duplication introduced+repaired openly (history kept). A2: DIVERGENCE-2 DEMONSTRATED pending A3 gate. Posted as #16 6708115380. No frozen move, no code change.
+
 ## 2026-11-07 | A1 Finding 2 union cap adopted (6986172, SPEC only)
 
 A1: flat AND recursive union ladders refuse at k=20 (164 steps at k=10); unions >=~15 variants unparseable; R-spike = repair union-declaration parse. S side: Pep-0 carries no large recursive unions by design -- now a MEASURED constraint (<10 variants), recorded in SPEC. Subset stands, no repair needed. Posted as #16 6708031081. No frozen move, no code change.
