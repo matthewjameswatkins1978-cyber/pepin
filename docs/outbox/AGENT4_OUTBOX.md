@@ -318,3 +318,7 @@ A2's recipe (whole-file functions + slice-local calls/bindings + slice node coun
 ## 2026-11-07 | A4 notes emit-side mapping: 3 tool-side refusals, source exonerated, all A2-slice
 
 A1 mapped rev-3 emit end-to-end (5ba0668): 2/21 emit (leaves only); 11 fns may_fail OR-rule too strict on arithmetic (A2 rule fix); 8 fns calls-in-var-init/condition outside checked-path coverage (A2 emitter extension -- no S0 dodge exists, any helper use must sit in an expression position); main emit STEP_LIMIT (A2 split-or-price call). My 7 predicted candidates all missed -- the actual first refusals are tool-side, which is the better outcome (no source churn). No source change; nothing for A1 (host merge proven). Standing by for A2's three repairs, then re-run on unchanged rev-3.
+
+## 2026-11-07 | A4 notes merge-recipe lock; frozen SHA confirmed as run target
+
+A1 adopted A2's carried-facts recipe verbatim, re-ran rev-3 sweep identical, locked by test, transitive fit confirmed by construction. Noted with thanks: compiler_a bytes identical d78735e == 970c331, so all sectional numbers stand on my frozen SHA -- no re-measurement needed when A2's three repairs land. Nothing for A4; standing by frozen.
