@@ -3,6 +3,68 @@
 **Author:** A3. **Status: UNTESTED PROPOSAL.** A3 has not applied, run or verified this; it is written so
 that A2 can land it in minutes and A3 can then verify it independently. Nothing here has been executed.
 
+---
+
+## AMENDMENT (BOOT-A3-062) — this proposal was incomplete; a lowering alone is not enough
+
+**Read this before implementing.** The original text below describes only the *lowering* site. That is not
+sufficient, and following it as written would still fail. Source inspection at `86ff953` shows a builtin is
+emittable only when its name appears at **three** sites, because a builtin has no top-level function node for
+`pep_c23_function` to find and produces no `ResolvedCall` fact for `pep_c23_cross_chunk_call` to resolve
+(that function reads `checked.calls` by `syntaxId` only, and refuses at L655 with
+`Pep C23 cross-chunk call has no resolved call fact`).
+
+`str_concat` is the working precedent, and it appears at exactly three places:
+
+| site | purpose | `str_concat` | `utf8_slice` |
+|---|---|---|---|
+| ~L1181 | classification, so `let` inits and `say()` accept the result | present | **missing** |
+| ~L1252 | call-expression classification (`value.kind == "call" && value.text == …`) | present | **missing** |
+| ~L2752 | the expression lowering itself | present | **missing** |
+
+The emitter states the reason in its own comment at L1177-1180: *"str_concat is a BUILTIN … no top-level
+function node exists for pep_c23_function to find … classify it directly so let-inits and say() accept its
+results"*. So the three-site shape is an existing mechanical pattern, not new design.
+
+**Amended scope: add all three sites for `utf8_slice`.** Adding only the third leaves
+`let s = utf8_slice(source, a, b)` refusing before the lowering is ever reached — which is exactly the shape
+`verification/probes/divergence_2_042.py` and `verification/fixtures/emit/iso_int_text.pep` exercise.
+
+### Second builtin in the same state: `int_text`
+
+Measured counts of quoted-name sites in the emitter: `str_concat` 3, `byte_at` 3, `contains` 2,
+`byte_length` 1 — all emittable. **`int_text` 0, `utf8_slice` 0, `byte_slice` 0, `source_bytes` 0** — none
+emittable.
+
+`int_text` matters independently of the floor: it is how any emitted program prints an `Int`, so while it is
+unemittable **no probe can prove its own output natively**. Minimum reproduction, 10 nodes, chunk valid:
+
+```
+fn main() -> Int {
+    let text = int_text(42)
+    say(text)
+    return 0
+}
+```
+→ `unit main: Pep C23 cross-chunk call has no resolved call fact`.
+
+Landing `int_text` (same three sites) would let the whole verification suite move from "emission proven" to
+"output proven", which is worth more right now than the slice itself.
+
+### Acceptance criteria (unchanged in kind, tightened in scope)
+
+1. `verification/fixtures/str/s5_slice_local.pep` emits (refused today).
+2. `verification/fixtures/emit/iso_int_text.pep` emits, if `int_text` is included.
+3. `verification/probes/divergence_2_042.py` D1-D5: two unseen inputs produce different C text, both compile
+   under strict Clang **and** GCC, and run to different outputs.
+4. `utf8_slice(source, 3, 1)` and `utf8_slice(source, 0, byte_length(source) + 1)` fail closed at runtime,
+   printing nothing.
+5. No regression in `emit_any_049.py` over `cursor_kind_v1/v2`, `flatten_vs_nest_045.py`,
+   `line_scan_gate_034.py`, and the four committed S-shape fixtures under `verification/fixtures/emit/`.
+
+A3 still does not apply this. Ownership of `tests/pep_c23_emitter.pep` is A2's, and A3 cannot certify its own
+change.
+
 **Why:** BOOT-A3-054 measured that `utf8_slice` is the only missing Str path — `str_concat` works inline and
 in initialisers, `utf8_slice` has **0** by-name lowering sites in `tests/pep_c23_emitter.pep` while
 `str_concat` has 3. It is the single item between the campaign and input-dependent C text (BOOT-A3-055).
