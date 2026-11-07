@@ -3483,7 +3483,12 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
           for part in loweredConditional.sourceParts { parts = append(parts, part) }
         }
       } else {
-        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support byte_at lets, assignments, returns, and conditionals") } else {}
+        if statement.kind == "expression_statement" {
+          let loweredSay = pep_c23_say_statement(nodes, function, statement)
+          if loweredSay.status != "emitted" { return loweredSay } else {}
+          for part in loweredSay.sourceParts { parts = append(parts, part) }
+        } else {
+        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support byte_at lets, assignments, returns, conditionals, and say statements") } else {}
         let value = pep_c23_child(nodes, statement.id, "value", 0)
         if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
         // Only a list value, a name, or a prepend/reverse call can carry a list update, and this
@@ -3532,6 +3537,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
         for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
         for part in loweredValue.sourceParts { parts = append(parts, part) }
         parts = append(parts, ";\n")
+        }
       }
     } else {}
   }
