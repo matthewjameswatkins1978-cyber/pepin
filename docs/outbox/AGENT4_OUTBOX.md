@@ -129,6 +129,10 @@ Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in su
 
 ## 2026-11-07 | Phase E exchange posted (d70c13e, no code change)
 
+## 2026-11-07 | T2 verdict + cursor probe pair committed (f2f70b0)
+
+LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found inside Pep-0 as scoped (prepass covers forward/mutual recursion; single-error reporting; source-order C output; parallel-Int symbol table). Token-list framework NOT built. cursor_kind_v1/v2.pep committed, both check valid; refs v1 1/3/0/3/3 vs v2 1/1/0/1/1 with exact //-file delta. Open challenge posted. Native run + gate are A1/A2/A3's. Posted as #16 6707502372. Frozen scan/line-scan untouched.
+
 ## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
 
 A3-043: seam = builtins never get call facts; utf8_slice has zero lowering sites. Int-only channel decomposes into 3 bounded items: fact-or-factless admission (A1/A2 decision, supersedes my Q1 framing), by-name lowering (precedent exists), one C slice helper (only new native code). No new A4 asks; List handoff stands. Posted as #16 6707450731. Freeze holds.
