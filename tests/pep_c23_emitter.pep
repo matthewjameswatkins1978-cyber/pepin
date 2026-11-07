@@ -1162,7 +1162,7 @@ fn pep_c23_str_expression(nodes: List[FlatAstNode], function: FlatAstNode, value
     var matches = 0
     for binding in nodes {
       if binding.parentId == function.id && binding.role == "statement" &&
-         binding.kind == "let" && binding.text == value.text {
+         (binding.kind == "let" || binding.kind == "var") && binding.text == value.text {
         let initial = pep_c23_child(nodes, binding.id, "value", 0)
         if initial.found && initial.node.kind == "string" {
           matches = matches + 1
@@ -3604,12 +3604,13 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
       if (statement.kind == "let" || statement.kind == "var") && !returned {
         let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
         if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
-        if statement.kind == "var" {
-          let stringLocalValue = pep_c23_str_expression(nodes, function, initialValue.node)
-          if stringLocalValue.found {
-            return pep_c23_unsupported("Pep C23 mutable Str local bindings are not yet lowered")
-          } else {}
-        } else {}
+ if statement.kind == "var" {
+ // Mutable Str bindings are lowered by the assembly walker (pep_str pep_local_N),
+ // so assignments must not re-refuse here (A1 rung-iii accumulator probe).
+ let stringLocalValue = pep_c23_str_expression(nodes, function, initialValue.node)
+ if stringLocalValue.found {
+ } else {}
+ } else {}
         if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
           let recursiveUnionList = if statement.kind == "let" {
             pep_c23_union_list_local_declaration(nodes, function, statement.text)
