@@ -442,6 +442,26 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
                     self.assertIn("answer:-42", native.stdout)
 
+    def test_say_utf8_slice_emits_and_built_natively(self):
+        # A2 DIVERGENCE-2 channel: utf8_slice is classified/lowered by name like
+        # str_concat; the compiled compiler-substitute reads granted argv[1] bytes at
+        # runtime, so run-c23 (which passes no argv) is not exercised here. Pin the
+        # emission + strict build instead; runtime semantics are covered by the A3
+        # gate probes (emit_any_049 / divergence_2_042).
+        source_text = "fn main(source: SourceBytes) -> Int {\nsay(str_concat(\"head:\", utf8_slice(source, 0, 3)))\nreturn 0 }"
+        for compiler in (CLANG, GCC):
+            with self.subTest(compiler=compiler.name):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    source = pathlib.Path(temp) / "utf8_slice_emit.pep"
+                    source.write_text(source_text, encoding="utf-8", newline="\n")
+                    generated = pathlib.Path(temp) / "utf8_slice_emit.c"
+                    built = pathlib.Path(temp) / "utf8_slice_emit.exe"
+                    native = self.invoke("build-c23", source, "--compiler", compiler,
+                                         "--emit-c", generated, "--output", built)
+                    self.assertEqual(native.returncode, 0, native.stdout + native.stderr)
+                    self.assertTrue(generated.exists(), generated)
+                    self.assertIn("pep_utf8_slice(", generated.read_text(encoding="utf-8"))
+
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             source = pathlib.Path(temp) / "protected.pep"
