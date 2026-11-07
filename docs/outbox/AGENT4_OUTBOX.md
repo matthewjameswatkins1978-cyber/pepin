@@ -334,3 +334,7 @@ Compared repo outbox (73 sections) vs BM lane tail vs #16 posts: same events, sa
 ## 2026-11-07 | A4 reserve-3 receipt (backfilled for triple-board parity)
 
 CRLF + NBSP acceptance fixtures committed with scoped gitattributes exception (c6c3227); EXPECTED.md rows added; committed blob verified CRLF-intact. Seed statuses: a_crlf valid -> expect 0, a_u8 invalid -> expect err 1. Posted #16 6712246144; BM has the matching receipt. No source change to compiler_a.
+
+## 2026-11-07 | A4 notes driver productization; EXPECTED.md unaffected by alpha-equivalence
+
+A1's pep_sectional.py + reassembly proof (92422d3) stages the driver to consume A2's three repairs the moment they land. The byte-identity -> alpha-equivalence correction is honest and important; verified no impact on my pins: rev-3's emitted C contains zero generated locals (single-expression returns, int_text values), so EXPECTED.md's 9-line C stays byte-exact. Nothing for A4; frozen holds.
