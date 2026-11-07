@@ -462,6 +462,52 @@ class PepC23CliTests(unittest.TestCase):
                     self.assertTrue(generated.exists(), generated)
                     self.assertIn("pep_utf8_slice(", generated.read_text(encoding="utf-8"))
 
+    def test_input_dependent_c23_divergence_end_to_end(self):
+        # DIVERGENCE-2 (A2 seam @7335114): the compiled compiler-substitute reads an
+        # unseen argv[1] file and prints C23 that depends on it. Two unseen inputs
+        # must produce two different valid C texts (compiled+executed strictly).
+        import subprocess
+        source_text = [
+            "fn main(source: SourceBytes) -> Int {",
+            "  var n = 0",
+            "  var o = 0",
+            "  while !(byte_length(source) <= o) {",
+            "    if byte_at(source, o) == 97 {",
+            "      n = n + 1",
+            "    } else {",
+            "    }",
+            "    o = o + 1",
+            "  }",
+            "  say(str_concat(\"int main(void){return \", str_concat(int_text(n), \";}\")))",
+            "  return 0",
+            "}",
+        ]
+        expected_counts = {"run_short": 3, "run_long": 4}
+        for compiler in (CLANG, GCC):
+            with self.subTest(compiler=compiler.name):
+                with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
+                    source = pathlib.Path(temp) / "divergence.pep"
+                    source.write_text("\n".join(source_text) + "\n", encoding="utf-8", newline="\n")
+                    generated = pathlib.Path(temp) / "divergence.c"
+                    built = pathlib.Path(temp) / "divergence.exe"
+                    build = self.invoke("build-c23", source, "--compiler", compiler,
+                                        "--emit-c", generated, "--output", built)
+                    self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+                    emitted = {}
+                    for run_name, count in expected_counts.items():
+                        input_path = pathlib.Path(temp) / (run_name + ".txt")
+                        input_path.write_bytes(b"a" * count)
+                        ran = subprocess.run([str(built), str(input_path)],
+                                             capture_output=True, text=True,
+                                             encoding="utf-8", check=False)
+                        lines = ran.stdout.split("\n")
+                        # the emitted wrapper prints pep_fn_main's Int return last;
+                        # the generated C is everything before it (documented behaviour)
+                        emitted[run_name] = "\n".join(lines[:-2]) if len(lines) >= 2 else ran.stdout
+                    self.assertIn("int main(void){return 3;}", emitted["run_short"])
+                    self.assertIn("int main(void){return 4;}", emitted["run_long"])
+                    self.assertNotEqual(emitted["run_short"], emitted["run_long"])
+
     def test_emit_c_collision_does_not_overwrite_pep_source(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "_build") as temp:
             source = pathlib.Path(temp) / "protected.pep"
