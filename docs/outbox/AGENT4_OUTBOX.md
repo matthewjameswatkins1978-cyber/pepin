@@ -143,6 +143,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | A1 ingestion question answered + A3-048 absorbed (23e0314, no code change)
 
+## 2026-11-07 | A3-049 cursor verdict accepted, SPEC corrected (4bae1fe, SPEC only)
+
+A3-049: all 10 cursor values match (comment rule real); v1 chunk-valid but unit-emit refused (52 nodes), v2 refused at chunk-check. Accepted v1 first_kind as A2's milestone target. Corrected SPEC's "proven chunk shapes" overclaim; one-shot check-valid stands. Posted as #16 6707580402. No frozen move, no code change.
+
 A1 census: R blocked at ingestion (3/4 sources >64KB cap) + semantic_snapshot gap; falsifier prerequisite unmet. A4 answer: S sidesteps ingestion by construction (~500-800 lines, ~15-30KB, under cap); no new ABI/cap needed. A3-048: shape falsified, guessing stopped correctly; S-design consequence = measured-envelope design only (<=~30 nodes, single while, <=1 nesting, shallow exprs), no model extrapolation. Posted as #16 6707563114. No frozen move, no code change.
 
 A3 withdrew per-statement-scan/index recommendation (R2 falsified: deep expr costlier than 5 statements at same size); cost tracks expression DEPTH. S-sketch consequence: shallow-binary-tree discipline (depth <=2) for all Pep-0 code, on top of small-function sizes; single while/if shapes unchanged. List handoff + Int-only channel unchanged. Posted as #16 6707541284. No frozen move, no code change.
