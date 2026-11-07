@@ -1544,24 +1544,39 @@ fn parser_begin_function(cursor: ParserCursor, header: AstParse) -> ParserChunk 
   }
 }
 
+fn parser_match_error(cursor: ParserCursor, parsed: AstParse,
+  matchFrame: ParserFrame, returnFrame: ParserFrame, endByte: Int) -> ParserChunk {
+  let matchRoot = FlatAstNode {
+    id: matchFrame.nodeId, parentId: returnFrame.nodeId,
+    childIndex: matchFrame.rootChildIndex, role: matchFrame.rootRole,
+    kind: "match", text: "", integerValue: 0, booleanValue: false,
+    stringParts: [], startByte: matchFrame.startByte, endByte: endByte,
+    line: matchFrame.line, column: matchFrame.column }
+  let returnRoot = FlatAstNode {
+    id: returnFrame.nodeId, parentId: returnFrame.parentId,
+    childIndex: returnFrame.rootChildIndex, role: returnFrame.rootRole,
+    kind: "return", text: "", integerValue: 0, booleanValue: false,
+    stringParts: [], startByte: returnFrame.startByte, endByte: endByte,
+    line: returnFrame.line, column: returnFrame.column }
+  let failed = ParserCursor {
+    document: cursor.document, revision: cursor.revision,
+    stream: parsed.stream, nextNodeId: cursor.nextNodeId, done: true,
+    functionActive: cursor.functionActive, functionName: cursor.functionName,
+    functionStartByte: cursor.functionStartByte,
+    functionLine: cursor.functionLine, functionColumn: cursor.functionColumn,
+    functionRootId: cursor.functionRootId,
+    functionChildIndex: cursor.functionChildIndex,
+    topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames }
+  return parser_chunk(failed, parser_error_status(parsed),
+    [returnRoot, matchRoot], true, parsed.errorCode, parsed.message,
+    parsed.errorStart, parsed.errorEnd, parsed.errorLine, parsed.errorColumn)
+}
+
 fn parser_begin_return_match(cursor: ParserCursor, keyword: LexToken,
   matchToken: LexToken, stream: ParserStream) -> ParserChunk {
   let context = parser_current_context(cursor)
   let returnId = cursor.nextNodeId
   let matchId = returnId + 1
-  let subject = parse_expression(stream, 0, false, 2)
-  if !subject.ok { return parser_finish_step(cursor, subject) } else { }
-  let open = expect_symbol(subject.stream, "{")
-  if !open.ok {
-    if open.stream.lexErrorCode != "" {
-      return parser_finish_step(cursor, parse_lex_error(open.stream))
-    } else { }
-    return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED",
-      "Expected '{'", open.token, open.stream))
-  } else { }
-  let state = flat_node(subject.value, matchId, 0, "value",
-    FlatState { nextId: matchId + 1, nodesReversed: [] })
-  let subjectNodes = reverse(state.nodesReversed)
   let matchFrame = ParserFrame { kind: "match", nodeId: matchId,
     parentId: returnId, rootChildIndex: 0, rootRole: "value",
     startByte: matchToken.startByte, line: matchToken.line,
@@ -1570,6 +1585,24 @@ fn parser_begin_return_match(cursor: ParserCursor, keyword: LexToken,
     parentId: context.parentId, rootChildIndex: context.childIndex,
     rootRole: context.role, startByte: keyword.startByte,
     line: keyword.line, column: keyword.column, text: "", bodyChildIndex: 0 }
+  let subject = parse_expression(stream, 0, false, 2)
+  if !subject.ok {
+    return parser_match_error(cursor, subject, matchFrame, returnFrame,
+      subject.stream.lexCursor.offset)
+  } else { }
+  let open = expect_symbol(subject.stream, "{")
+  if !open.ok {
+    if open.stream.lexErrorCode != "" {
+      return parser_match_error(cursor, parse_lex_error(open.stream),
+        matchFrame, returnFrame, open.stream.lexCursor.offset)
+    } else { }
+    return parser_match_error(cursor, parse_error("PEP_PARSE_EXPECTED",
+      "Expected '{'", open.token, open.stream), matchFrame, returnFrame,
+      open.stream.lexCursor.offset)
+  } else { }
+  let state = flat_node(subject.value, matchId, 0, "value",
+    FlatState { nextId: matchId + 1, nodesReversed: [] })
+  let subjectNodes = reverse(state.nodesReversed)
   let next = ParserCursor {
     document: cursor.document, revision: cursor.revision, stream: open.stream,
     nextNodeId: state.nextId, done: false, functionActive: cursor.functionActive,
@@ -1584,8 +1617,16 @@ fn parser_begin_return_match(cursor: ParserCursor, keyword: LexToken,
 }
 
 fn parser_step_match_arm(cursor: ParserCursor, frame: ParserFrame) -> ParserChunk {
+  let below = parser_frame_pop(cursor.frames)
+  let returnFrame = parser_frame_top(below)
   let next = stream_peek(cursor.stream, 0)
-  if !next.ok { return parser_finish_step(cursor, parse_lex_error(next.stream)) } else { }
+  if !next.ok {
+    if returnFrame.kind != "return_stmt" {
+      return parser_finish_step(cursor, parse_lex_error(next.stream))
+    } else { }
+    return parser_match_error(cursor, parse_lex_error(next.stream), frame,
+      returnFrame, cursor.stream.lexCursor.offset)
+  } else { }
   if next.token.kind == "symbol" && next.token.text == "}" {
     let close = stream_take(next.stream)
     let matchRoot = FlatAstNode {
@@ -1641,22 +1682,48 @@ fn parser_step_match_arm(cursor: ParserCursor, frame: ParserFrame) -> ParserChun
   let beforeOffset = cursor.stream.lexCursor.offset
   let beforeCount = length(cursor.stream.bufferedTokens)
   let pattern = parse_pattern(next.stream, 2)
-  if !pattern.ok { return parser_finish_step(cursor, pattern) } else { }
+  if !pattern.ok {
+    if returnFrame.kind != "return_stmt" {
+      return parser_finish_step(cursor, pattern)
+    } else { }
+    return parser_match_error(cursor, pattern, frame, returnFrame,
+      pattern.stream.lexCursor.offset)
+  } else { }
   let arrow = expect_symbol(pattern.stream, "=>")
   if !arrow.ok {
     if arrow.stream.lexErrorCode != "" {
-      return parser_finish_step(cursor, parse_lex_error(arrow.stream))
+      if returnFrame.kind != "return_stmt" {
+        return parser_finish_step(cursor, parse_lex_error(arrow.stream))
+      } else { }
+      return parser_match_error(cursor, parse_lex_error(arrow.stream),
+        frame, returnFrame, arrow.stream.lexCursor.offset)
     } else { }
-    return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED",
-      "Expected '=>'", arrow.token, arrow.stream))
+    if returnFrame.kind != "return_stmt" {
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_EXPECTED",
+        "Expected '=>'", arrow.token, arrow.stream))
+    } else { }
+    return parser_match_error(cursor, parse_error("PEP_PARSE_EXPECTED",
+      "Expected '=>'", arrow.token, arrow.stream), frame, returnFrame,
+      arrow.stream.lexCursor.offset)
   } else { }
   let result = parse_expression(arrow.stream, 0, true, 2)
-  if !result.ok { return parser_finish_step(cursor, result) } else { }
+  if !result.ok {
+    if returnFrame.kind != "return_stmt" {
+      return parser_finish_step(cursor, result)
+    } else { }
+    return parser_match_error(cursor, result, frame, returnFrame,
+      result.stream.lexCursor.offset)
+  } else { }
   if result.stream.lexCursor.offset == beforeOffset &&
      length(result.stream.bufferedTokens) == beforeCount {
     let stuck = stream_peek(result.stream, 0)
-    return parser_finish_step(cursor, parse_error("PEP_PARSE_NO_PROGRESS",
-      "Parser made no progress", stuck.token, stuck.stream))
+    if returnFrame.kind != "return_stmt" {
+      return parser_finish_step(cursor, parse_error("PEP_PARSE_NO_PROGRESS",
+        "Parser made no progress", stuck.token, stuck.stream))
+    } else { }
+    return parser_match_error(cursor, parse_error("PEP_PARSE_NO_PROGRESS",
+      "Parser made no progress", stuck.token, stuck.stream), frame,
+      returnFrame, stuck.stream.lexCursor.offset)
   } else { }
   let armSpan = ast_combine(ast_value_span(pattern.value),
     ast_value_span(result.value))
