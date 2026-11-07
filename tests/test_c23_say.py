@@ -126,31 +126,23 @@ class SayNativeTests(unittest.TestCase):
 
 
 class SayBackendRefusalTests(unittest.TestCase):
-    def test_non_str_value_position_refuses_after_the_checker_accepts(self):
-        """say(int_text(42)) is valid Pep -- the checker passes it -- so this refusal is the
-        emitter's own bound, not a checker artifact."""
-        with self.assertRaises(ValueError) as caught:
-            emit_c('fn main() -> Int {\n  say(int_text(42))\n  return 0\n}\n')
-        self.assertIn("Pep C23 say lowers only string literals, Str parameters, Str locals and Str fields",
-                      str(caught.exception))
-
+    def test_say_int_text_builtin_emits_in_value_position(self):
+        """SUPERSEDED refusal pin (A2 int channel @7335114): say(int_text(42)) used to be a
+        pinned emitter bound; it now lowers natively like str_concat. Pins the emission."""
+        c_source = emit_c('fn main() -> Int {\n say(int_text(42))\n return 0\n}\n')
+        self.assertIn("pep_int_text(", c_source)
+        self.assertIn("pep_say(", c_source)
     def test_non_say_expression_statement_refuses(self):
         with self.assertRaises(ValueError) as caught:
             emit_c("fn main() -> Int {\n  42 + 1\n  return 0\n}\n")
         self.assertIn("Pep C23 expression statements currently support only say(...)",
                       str(caught.exception))
 
-    def test_say_inside_a_while_body_keeps_the_loop_statement_whitelist(self):
-        """v1 boundary: say lowers at direct function-body level only; nested bodies keep their
-        own explicit whitelists rather than silently dropping the statement."""
-        source = ('fn main() -> Int {\n  var i = 0\n  while i <= 1 {\n'
-                  '    say("x")\n    i = i + 1\n  }\n  return i\n}\n')
-        with self.assertRaises(ValueError) as caught:
-            emit_c(source)
-        message = str(caught.exception)
-        self.assertTrue(
-            "while bodies support" in message or "loop bodies support" in message,
-            f"expected a loop-statement whitelist refusal, got: {message[:300]}")
+    def test_say_inside_a_while_body_emits_per_iteration(self):
+        """SUPERSEDED v1 boundary (A2 emit-loop idiom @445a152): say inside a while body now
+        lowers per iteration; pins the emission instead of the old whitelist refusal."""
+        c_source = emit_c('fn main() -> Int {\n var i = 0\n while i <= 1 {\n say("x")\n i = i + 1\n }\n return i\n}\n')
+        self.assertIn("pep_say(", c_source)
 
 
 if __name__ == "__main__":
