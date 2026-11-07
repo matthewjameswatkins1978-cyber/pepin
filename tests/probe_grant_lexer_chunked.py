@@ -31,21 +31,21 @@ boundary, labelled as such.
 
 Requires a checker with chunk tooling (A1 11e1294 or later); SKIPS on a tree without it.
 
-MEASURED OUTCOME at A1 a7d3ee1 (2026-11-06):
+MEASURED OUTCOME at A1 a7d3ee1 + A2 689c38a (2026-11-07):
 
-  chunk ascii_letter   nodes= 24 status=valid
-  chunk ascii_digit    nodes= 12 status=valid
-  chunk ascii_continue nodes= 10 status=valid
-  chunk main           nodes= 29 status=valid
-  units emitted: ascii_letter, ascii_digit
-  FIRST REFUSAL: unit ascii_continue -> "Pep C23 calls require a known target"
+  chunk ascii_letter/ascii_digit/ascii_continue/main: all four CHECK valid
+  units emitted: ALL FOUR; header=5459 prototypes=188 units=1131 epilogue=1308
+  seed oracle: 17; docorder/protofirst x clang/gcc: all OK
+  -> chunked SourceBytes->lexer vertical: PASS (exit 0)
 
-So the CHUNKED CHECK works for the whole vertical (all four chunks, 10-29 nodes each,
-well under the single-unit ceiling that refused the same program at 53 nodes onwards),
-but the UNIT EMITTER cannot lower ascii_continue's cross-chunk calls -- even though the
-chunk report carries two resolved call facts for them (calleeId 9000/9001, syntaxId
-6/8, measured). That is the first refusing layer, and it is reported rather than crashed
-past.
+The unit emitter lowers cross-chunk calls from the chunk reports' resolved call facts,
+including calls nested in binary operand trees (return ascii_letter(byte) ||
+ascii_digit(byte)) and in while/if statement conditions (if ascii_continue(byte_at(...))),
+via the checked twin chain (function-unit path only; the one-shot emitter's executed code
+and step profile are unchanged). Fail-closed negative controls run in the SAME probe:
+a main report with the resolved call facts stripped, one with the ascii_continue callee
+identity severed, and one with a forged arity must each refuse with their exact
+registered diagnostics, at the same emit entry that lowers the honest report.
 
 Run: python tests/probe_grant_lexer_chunked.py
 """
@@ -269,6 +269,61 @@ def main():
             "docorder": header + units + epilogue,
             "protofirst": header + prototypes + units + epilogue,
         }
+
+        # ---- negative controls: stripped, severed and arity-forged facts ---------
+        # The twin chain consumes resolved call facts at statement-level sites (while/if
+        # conditions, loop assignments). Each tampered main report must fail closed at
+        # the SAME emit entry with its exact registered refusal. Identity guards
+        # (document/revision/syntaxNodeCount) are left intact, so the refusal comes
+        # from the fact gate, not the stale-input gate.
+        def recmap(rec):
+            return {f["name"]: f["value"] for f in rec["fields"]}
+
+        def with_field(rec, name, value):
+            return {"type": rec["type"], "fields": [
+                ({"name": f["name"], "value": value} if f["name"] == name else f)
+                for f in rec["fields"]]}
+
+        def expect_refusal(label, report, needle):
+            piece, why = try_invoke("pep-c23-unit",
+                                    [sliced["main"], report, typed("Int", 0)],
+                                    f"negative {label}")
+            if piece is not None:
+                print(f"NEGATIVE {label}: FAIL (expected refusal, got emission)")
+                return 1
+            if needle not in why:
+                print(f"NEGATIVE {label}: FAIL (refusal {why!r} lacks {needle!r})")
+                return 1
+            print(f"NEGATIVE {label}: OK ({needle[:64]})")
+            return 0
+
+        main_report = reports["main"]
+        main_fields = recmap(main_report)
+        calls = json.loads(json.dumps(main_fields["calls"]["value"]))
+        functions = json.loads(json.dumps(main_fields["functions"]["value"]))
+        continue_sem = int(recmap(next(x for x in functions
+                                       if recmap(x)["name"]["value"] == "ascii_continue"))
+                           ["semanticId"]["value"])
+        continue_fact = next(f for f in calls
+                             if int(recmap(f)["calleeId"]["value"]) == continue_sem)
+        failures += expect_refusal(
+            "no-fact", with_field(main_report, "calls",
+                                  {"type": "List[ResolvedCall]", "value": []}),
+            "Pep C23 cross-chunk call has no resolved call fact")
+        severed = with_field(continue_fact, "calleeId", typed("Int", 999999))
+        severed_calls = {"type": "List[ResolvedCall]", "value": [
+            severed if recmap(f)["syntaxId"] == recmap(continue_fact)["syntaxId"] else f
+            for f in calls]}
+        failures += expect_refusal(
+            "missing-target", with_field(main_report, "calls", severed_calls),
+            "Pep C23 cross-chunk call target is missing from the checked functions")
+        forged_fns = [with_field(f, "arity", typed("Int", 2))
+                      if recmap(f)["name"]["value"] == "ascii_continue" else f
+                      for f in functions]
+        failures += expect_refusal(
+            "arity", with_field(main_report, "functions",
+                                {"type": "List[CheckedFunction]", "value": forged_fns}),
+            "Pep C23 cross-chunk call argument count disagrees with the checked arity")
     finally:
         session.close()
 
