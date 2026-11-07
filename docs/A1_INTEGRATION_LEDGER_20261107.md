@@ -145,33 +145,36 @@ fallback). Target `d78735e` (9639 B, 21 fns, 1452 nodes):
 
 ## Addendum — Slice-3 merge plan (prepared, NOT executed; still gated on A3 pass)
 
-Tip-vs-tip `544a0c0` (A1) .. `739befe` (A2) is 13 files, +522/-1049, verified
-this session. Everything else is byte-identical between the lanes. Per-file
-resolution strategy for the future candidate integration (re-diff at merge
-time: A2 Slice-2 refusal repair will move emitter + cli again):
+Tip-vs-tip `b449179` (A1) .. `bea071a` (A2) is 22 files, +1172/-1771,
+re-verified this session (was 13 files at `544a0c0`..`739befe`; both lanes
+moved since). Everything else is byte-identical between the lanes. Per-file
+resolution strategy for the future candidate integration:
 
 - `examples/pep_parser.pep` (371): **take A1 wholesale.** A2 never touched the
   parser; A1's resumptions + error contracts parse A4's real `compiler_a.pep`
-  complete (1100 nodes, 428 steps, measured).
-- `tests/pep_c23_emitter.pep` (198): **take A2 wholesale.** Delta inspected
-  hunk-by-hunk: utf8_slice classification/emission, mutable-Str while-body
-  lowering, int_text/utf8_slice bump-pool runtimes, arena-gated assembly.
-  Lowering-only — no parser/chunk-contract interface drift.
-- `pep_c23.py` (11): **take A2's arena-relay hunk** (adds `-I runtime/pep_arena`
-  + `pep_arena.c` when the emit references `pep_arena.h`; strict flags
-  preserved). Verify A1 driver needs (SourceBytes grants) intact at merge.
-- `tests/test_c23_say.py` (30): **take A2's.** It documents the supersede of
-  the two A1-guarded refusal pins (say-int_text, say-in-while) with landing
-  SHAs; the old pins must not be re-added.
-- `tests/test_c23_cli.py` (87): **hand-merge only.** Keep A2's supersede notes
-  plus any A1-only cases; inspect hunks at merge time, never auto-resolve.
+  complete (1452 nodes rev-3, 428+ steps, measured).
+- `tests/pep_c23_emitter.pep` (272): **take A2 wholesale.** Delta now covers
+  the may_fail OR-rule (fix #1, verified by A1 re-run), append→prepend cost
+  work, plus the earlier lowering set. Still lowering-only — no
+  parser/chunk-contract interface drift.
+- `pep_c23.py` (23, 4 hunks): **hunk-level union.** A2's arena-relay hunk +
+  A1's `--sectional` flag / `emit(sectional=)` kwarg / driver branch live in
+  distinct regions (verified: no overlapping hunks). Take both, verify
+  SourceBytes grants + strict flags intact at merge.
+- `tests/test_c23_say.py` (30): **take A2's** (documented supersedes stand).
+- `tests/test_c23_cli.py` (87): **hand-merge only**, unchanged rule.
+- `tests/test_a14_c23.py` (18): **take A2's** (one-sided A2 change: arith-guard
+  supersession pins).
 - **Union, no conflict:** A1 side takes `tests/test_parser_error_contract.py`,
-  `tests/test_a1_record_construct_seam.py` + `mc_seam_*` + list-native
-  probe/fixture; A2 side takes `tests/test_c23_bump_pool_boundary.py`,
-  `tests/test_c23_compiler_a_backend.py`.
+  `tests/test_a1_record_construct_seam.py` + `mc_seam_*`, list-native
+  probe/fixture, `pep_sectional.py`, `tests/test_a1_sectional_driver.py`,
+  `tests/test_a1_sectional_emit.py`; A2 side takes `test_c23_arith_guard.py`,
+  `test_c23_bump_pool_boundary.py`, `test_c23_bump_pool_overflow_asan.py`,
+  `test_c23_checker_budget_walls.py`, `test_c23_chunked_emission.py`,
+  `test_c23_compiler_a_backend.py`, `test_c23_cross_chunk_call.py`.
 - Post-merge gate before reporting: contract 3/3, seam 1/1, list-native PASS,
-  `test_c23_cli` full, A2's in-repo proofs, and the 428-step `compiler_a.pep`
-  chunk parse re-run against the merged parser.
-- A3 pass remains the entry condition per the dispatch; A4 revision and A2
-  refusal repair are expected to move `spec/agent4-spec-lab` and the emitter
-  side further before then.
+  sectional driver + emit 8/8, `test_c23_cli` full, bounded-emission 19/19,
+  A2's in-repo proofs, and the `compiler_a.pep` sectional check re-run
+  against the merged tree (expect emit to advance past fix #1/#2).
+- A3 pass remains the entry condition per the dispatch. Re-diff at merge
+  time regardless: both lanes are still moving.
