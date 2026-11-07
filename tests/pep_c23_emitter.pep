@@ -3381,7 +3381,9 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
           } else {}
         }
       }
-      if !foundThen { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
+      // Empty-then with a non-empty else is A4 dogfood shape one (12e143f nested if);
+      // empty then AND empty/no else still refuses (registered text unchanged).
+      if !foundThen && !foundElse { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
       var parts: List[Str] = [indent, "if (!!("]
       for part in loweredCondition.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")) {\n")
@@ -4476,7 +4478,9 @@ fn pep_c23_loop_statement_checked(nodes: List[FlatAstNode], function: FlatAstNod
           } else {}
         }
       }
-      if !foundThen { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
+      // Empty-then with a non-empty else is A4 dogfood shape one (12e143f nested if);
+      // empty then AND empty/no else still refuses (registered text unchanged).
+      if !foundThen && !foundElse { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
       var parts: List[Str] = [indent, "if (!!("]
       for part in loweredCondition.sourceParts { parts = append(parts, part) }
       parts = append(parts, ")) {\n")
