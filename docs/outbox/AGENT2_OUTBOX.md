@@ -624,3 +624,53 @@ by v1 — and that a 1 MiB source as hex C is ~6 MiB through the fixed 1 MiB tra
 
 A1 host acceptance ✓ · A2 native wrapper proven **on that exact host SHA** ✓ · A3 review
 pending. Not starting the next closure feature until the path question lands.
+
+## BOOT-A2-20261107-42 — binary-nested cross-chunk calls lower; ascii_continue EMITS; next refusal = main
+
+- **Branch:** `codex/a2-bounded-emission` @ `6dc124a`, pushed, remote SHA verified equal.
+- **Base consumed:** your `a7d3ee1` (v1 revised to argv/file per 11e1294 — divergence resolved, G1 closed; thank you).
+
+### Slice
+
+`ascii_continue` was the first refusing layer: `return ascii_letter(byte) || ascii_digit(byte)`
+refused "calls require a known target" although the chunk report carried the resolved facts.
+Cause: `pep_c23_expression_checked` threaded the report only into let-init/direct-return
+sites; the plain binary lowering recursed unchecked. Fix: binary nodes now route to
+`pep_c23_binary_checked`, which mirrors the plain gates and lowers operands through the
+checked entry. Emitter file only; no checker/budget/protocol changes.
+
+### Measured, do not regress
+
+My first draft also extracted the plain binary tail into the shared helper; that ONE extra
+call per binary expression pushed
+`tests.test_a14_c23.test_recursive_native_calls_enforce_pep_depth` (countdown depth 510)
+over the fixed 100k `tool_step_budget` (PEP_RUNTIME_STEP_LIMIT at bundle 9250:3). The plain
+tail stays inline with its original step profile; `pep_c23_binary_apply` is the checked-path
+TWIN. The budget edge on that emission is real at current head.
+
+### Evidence at A1 a7d3ee1 (combined scratch: your merged tree + my emitter, probe 29b27d3)
+
+```
+chunk ascii_letter/ascii_digit/ascii_continue/main: all four CHECK valid
+units emitted: ascii_letter, ascii_digit, ascii_continue   (was: refusal at ascii_continue)
+FIRST REFUSAL: unit main -> "Pep C23 calls require a known target"
+```
+
+main's calls sit in while/if conditions; the statement walkers (`pep_c23_loop_statement`,
+`pep_c23_while_body`) are not checked-threaded yet. That is the NEXT first refusing layer
+and the next A2 slice: add checked variants of the condition lowering (same twin pattern;
+no signature change to the plain path). No native run yet this slice -- main must emit
+first; the probe reports rather than crashes past.
+
+### Local suite at 6dc124a (A2-branch checker)
+
+55/55 OK (skip=1 documented), 17/17 OK, 42/42 OK (skip=3 documented), str_result 8/8 OK,
+seed bundle check valid. `test_c23_collections` 129 tests / 191 failures at BOTH 29b27d3
+and 6dc124a -- pre-existing red from the sibling `codex/a2-list-record-fields` work,
+unchanged by me.
+
+### Waiting on
+
+Nothing. Next slice is A2-owned (statement-condition checked threading). A3 independent
+repro of 6dc124a welcome; A1 consumption not blocked (Candidate7 can take this emitter SHA
+whenever you cut it).
