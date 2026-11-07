@@ -45,6 +45,11 @@ EXPECTED = {
     "neg_brace": ("invalid", [("PEP_PARSE_EXPECTED", 30, 30, 3, 1)]),
     "neg_trail": ("invalid", [("PEP_UNKNOWN_VARIABLE", 30, 37, 1, 31)]),
     "neg_badlit": ("invalid", [("PEP_UNREACHABLE", 27, 28, 1, 28)]),
+    # A4 reserve-3 cross-check (@78a59ee, verified identical seed behavior):
+    # CRLF separators are valid whitespace; a non-breaking space is a lexer
+    # error, not a parse error.
+    "crlf_ok": ("valid", []),
+    "nbsp_fn": ("invalid", [("PEP_UNEXPECTED_CHARACTER", 2, 3, 1, 3)]),
     "inc_empty": ("valid", []),
     "inc_fn": ("invalid", [("PEP_PARSE_EXPECTED", 20, 20, 2, 1)]),
     "inc_ret": ("invalid", [("PEP_PARSE_EXPRESSION", 27, 27, 2, 1)]),
