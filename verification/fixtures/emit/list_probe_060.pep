@@ -14,9 +14,10 @@ fn total(values: List[Int]) -> Int {
     return t
 }
 
-fn main() -> Unit {
+fn main() -> Int {
     let data = [1, 2, 3]
     let n = total(data)
     let text = int_text(n)
     say(text)
+    return 0
 }
