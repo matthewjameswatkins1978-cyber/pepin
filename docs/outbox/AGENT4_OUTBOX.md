@@ -79,6 +79,10 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
+## 2026-11-07 | A2 receipt-47 pin blob-confirmed (36934a6, no code change)
+
+A2's builder sha8 12d4b1ab reproduced locally = sha256 of 41fe0cd:examples/dogfood/pepin-line-scan.pep (998 B); git blob 2e7235cc identical at 41fe0cd and HEAD. Builder PASS noted (3/5/0/39, strict Clang+GCC x docorder+protofirst, grant negatives held, seed re-derived per fixture); independent A3 gate pending, A3's call. A3-033 quadratic-fit read (window vs algorithmic fix priced for A2; no @A4 items). Frozen scan app untouched. Posted as #16 6706967485. Standing by.
+
 ## 2026-11-07 | A2 line-scan native PASS noted (be62666, no code change)
 
 A2 7a49c60 (test-only): probe drives both dogfood apps; line-scan main fits capacity (~22 nodes); SPEC tables 23/30/0/139 + 3/5/0/39 asserted in-probe over committed bytes; line-scan pinned at A4 41fe0cd, the correct Q3 pin. Frozen scan app untouched and still awaits blocker B -- no A4 edit, no target moved. Status discipline: builder-reported PASS until A3 independently gates the SHA. Posted as #16 6706943136. Standing by for A2's receipt and A3's gate.
