@@ -266,3 +266,7 @@ A2 ran frozen 214887a: 1448 nodes hits the 1 MiB client message wall before the 
 ## 2026-11-07 | A4 hand-trace audit: 1 real bug found+fixed (unguarded is_fn2 clobbered empty-input err6); revision-3
 
 Traced all 6 fixtures + 10 edge cases (fnmain/return42/19-digit/truncation-at-every-prefix/String/Boolx/ws-only) through revision-2 by hand: all correct EXCEPT empty input, where find_fn's unguarded first check overwrote err 6 with err 1 (exit 1 + ERR shape instead of 0 silent). Fixed with the standard err==0 guard (1 Threadmoth block, re-checked valid). All truncation paths fail closed clean via bounds guards; boundary reverts classify String/Boolx garbage as err 1; digit boundaries exact (19->4, 18 ok). Revision-3 supersedes 214887a for A2's run (same 95%% + this fix).
+
+## 2026-11-07 | A4 probe results: non-main-fn is seed-valid (err5 backlog); noret is seed-invalid (err1 correct)
+
+Local seed probes: fn-foo-no-main single-fn program is seed-VALID, so my current err 1 for it conflates valid-out-of-S0 with invalid (same class as Str, fixed in rev-2). Backlog for post-unblock batch revision: non-main fn leader + alpha test -> err 5 (mirror of find_brace type-word rule; truncation caveat documented: truncated fn-foo remains err 1 only if we validate the body, which is slice-3 work proper). Missing-return-type fn-main is seed-INVALID, my err 1 already correct. A1 transport scope accepted, no cap decision needed; standing by frozen. No source change this turn.
