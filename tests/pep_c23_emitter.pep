@@ -3143,10 +3143,11 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     if node.text == "neg" {
       let lowered = pep_c23_expression(nodes, function, right.node)
       if lowered.status != "emitted" { return lowered } else {}
-      var parts: List[Str] = ["pep_neg("]
-      for part in lowered.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedNeg: List[Str] = []
+      reversedNeg = prepend(reversedNeg, "pep_neg(")
+      for part in lowered.sourceParts { reversedNeg = prepend(reversedNeg, part) }
+      reversedNeg = prepend(reversedNeg, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedNeg), diagnostic: "" }
     } else {}
     let loweredLeft = pep_c23_expression(nodes, function, left.node)
     let loweredRight = pep_c23_expression(nodes, function, right.node)
@@ -3160,22 +3161,25 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       }
     }
     if helper != "" {
-      var parts: List[Str] = [helper, "("]
-      for part in loweredLeft.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ", ")
-      for part in loweredRight.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedArith: List[Str] = []
+      reversedArith = prepend(reversedArith, helper)
+      reversedArith = prepend(reversedArith, "(")
+      for part in loweredLeft.sourceParts { reversedArith = prepend(reversedArith, part) }
+      reversedArith = prepend(reversedArith, ", ")
+      for part in loweredRight.sourceParts { reversedArith = prepend(reversedArith, part) }
+      reversedArith = prepend(reversedArith, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedArith), diagnostic: "" }
     } else {}
     if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
-      var parts: List[Str] = ["("]
-      for part in loweredLeft.sourceParts { parts = append(parts, part) }
-      parts = append(parts, " ")
-      parts = append(parts, node.text)
-      parts = append(parts, " ")
-      for part in loweredRight.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      var reversedCmp: List[Str] = []
+      reversedCmp = prepend(reversedCmp, "(")
+      for part in loweredLeft.sourceParts { reversedCmp = prepend(reversedCmp, part) }
+      reversedCmp = prepend(reversedCmp, " ")
+      reversedCmp = prepend(reversedCmp, node.text)
+      reversedCmp = prepend(reversedCmp, " ")
+      for part in loweredRight.sourceParts { reversedCmp = prepend(reversedCmp, part) }
+      reversedCmp = prepend(reversedCmp, ")")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedCmp), diagnostic: "" }
     } else {}
     return pep_c23_unsupported("Pep C23 binary operator is unsupported")
   } else {}
