@@ -306,3 +306,7 @@ A1's scope call (build FULL pos_twofn, awaiting nothing further) arrived before 
 ## 2026-11-07 | A4 lane sweep 19/19 green against pin tables
 
 Ran pep.ps1 check --json over every owned .pep (dogfood + pep0, recursive): all 19 match pinned expectations exactly (probes/sources valid 0 diags; all 6 negatives invalid 1 diag each). Covers compiler_a rev-3, all fixtures, T2/arity probes, frozen apps, cursor probes. Lane integrity proven whole, not just per-file. No source change.
+
+## 2026-11-07 | A4 notes chunked-emit proof; volunteers rev-3 as callee-visibility test
+
+A2's per-slice (parsed,checked) recipe works with identical output; emitter agnostic to chunking. The one untested seam -- cross-function calls inside chunks -- is exactly what compiler_a rev-3 stresses (20 cross-chunk call sites across 21 fns). My frozen source is the natural callee-visibility test when A1's emit side runs: if carried facts resolve, rev-3 emits whole; if not, the first refusal pinpoints the fact gap. No action until then; frozen holds.
