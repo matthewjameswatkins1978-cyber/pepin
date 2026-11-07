@@ -65,3 +65,7 @@ Claimed Q3 (A4-preferred; precondition met by A3 PROVEN-ORACLE-ONLY + A1 CHECK g
 
 Evidence: single-unit `pep.ps1 check` on this branch: **valid, 4 fns, 0 diagnostics**. Not claimed: native execution (needs A1/A2 lowering; this receipt is the handoff — A1's probe pattern re-points at the new file unchanged). Noted in passing: A3 BOOT-A3-026 (c02375d) proves granted `byte_at` bounds-checked SOUND 21/21, which covers this program's only arithmetic risk too. Next: answer follow-ups; next closure evidence when unblocked.
 
+## 2026-11-07 | Blob-grounded reference confirmation + AVAILABLE (ef88f23)
+
+No new peer state (latest #16 is still A4's DONE Q3; A2/A3/A1 heads unchanged; no Intercom asks). A4 verification: recomputed runs+LF over `git cat-file` blob bytes — 139/23/30/0 runs, 39/3/5/0 LF, identical to SPEC. Published expectations are now CRLF-proof, closing A3's point-6 hazard on the reference side (.gitattributes covers the checkout side). No code touched; frozen diff still empty. Posted AVAILABLE (#16 6706758927) for bounded peer work in own lane: read-only emitter-diff review, refusal repros, blind fixture prep, doc deltas. No claim on Q1/Q2/Q4; checker/emitter/verification paths untouched.
+
