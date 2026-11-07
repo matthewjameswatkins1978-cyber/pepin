@@ -518,3 +518,263 @@ Not built: conditioned on the grant handshake above.
   redesign.
 - **No next closure feature**, because the mission conditions it on the grant handshake.
 - **No checker edits** — read-only throughout, as the dispatch requires.
+
+## BOOT-A2-20261106-40 — A1 answered; ACK posted; one divergence open; WAITING_HANDOFF
+
+- **Branch:** `codex/a2-bounded-emission` @ `83351bb`, pushed, clean.
+- **A1 reply:** #16 6698137262 at `codex/a1-typed-bound-pipeline@0640bee` (grant v1).
+
+### ACKed
+
+A1 chose **(a) host-authoritative, realised as a DERIVED grant**: grant exists iff the
+checked entry declares a `SourceBytes` parameter **and** its name is in
+`semanticTarget.entryFunctions`. ACKed (#16 6698233817).
+
+Confirmed my probe is already v1-shaped: it passes `entryFunctions: ["main"]`
+(`probe_source_grant_entry.py:68`), re-verified PASS at `83351bb`.
+
+### Named my runtime-bytes mechanism, as A1 asked
+
+**argv/file**, not driver-defined — `tests/pep_c23_emitter.pep:4743-4767`:
+
+| line | mechanism |
+|---|---|
+| 4750 | `argc < 2` → `PEP_RUNTIME_SOURCE_CONTEXT`, fail closed **before** the entry runs |
+| 4752 | `fopen(argv[1], "rb")` |
+| 4758 | `malloc(len + 1)` |
+| 4760 | `fread` the whole file (1 MiB verified) |
+| 4765 | `pep_fn_main((pep_source_bytes){ .data, .length })` |
+| 4766 | `free` |
+
+Path → open → read once → bind → free. No cached global, no second read path. **But
+there is a path.**
+
+### The one open divergence
+
+v1 §6 says *"No path, no second read path, no cached global."* My wrapper reads a path,
+so under a strict reading my mechanism is non-conforming. Surfaced rather than letting
+the merged host test fail on a contract mismatch (#16 6698233817 §3).
+
+### Measured: option (ii) is not available in v1
+
+I tested whether bytes could be embedded at assembly time instead. They cannot:
+`emit_c23_checked(parsed: ParserProgress, checked: CheckerReport)` takes exactly two
+arguments, and a third yields `PEP_TOOL_ARGUMENT_COUNT` (#16 6698257092).
+
+So (ii) needs a signature change or a v2 wire field — both excluded by v1. The live
+choice is **(i) argv/file** (what I have) or **(iii) stdin**. Both delegate identity to
+the host; only a v2 field would make the "bytes are exactly the open_bytes payload"
+guarantee emitter-enforced.
+
+Also noted: even with a signature change, embedding is a poor fit — a 1 MiB source is
+~6 MiB of hex C, through the same 1 MiB JSONL transport that is fixed and unraisable.
+
+### WAITING_HANDOFF
+
+Blocking request sent to A1: **pick (i) or (iii)**. Settling here; no further A2 work
+until that lands, per the mission's item 4 (next closure feature is conditioned on the
+grant handshake being resolved). Per LUCY-007, not spinning.
+
+## BOOT-A2-20261106-41 — G1 A2 half DELIVERED: consumed A1's `emit_granted`, merged test PASSES
+
+- **Branch:** `codex/a2-bounded-emission` @ `50f7f04`, pushed, clean.
+- **A1's G1 host:** `codex/a1-typed-bound-pipeline@0866530` (merged my `935c331`, no conflicts).
+- **New probe:** `tests/probe_grant_host_merged.py`.
+
+### What was asked and what was done
+
+A1's NEEDS: *"consume emit_granted in your vertical (replace your probe's local emit
+helper at the merged SHA) and answer the runtime-bytes question so the merged
+integration test runs the actual file."*
+
+Done. `probe_grant_host_merged.py` calls `pep_c23.emit_granted` for the C, then builds with
+strict Clang **and** GCC and runs it over real files. Verified at `0866530` in a scratch
+worktree:
+
+```
+host emit_granted  status=emitted bytes=6942
+clang-ascii OK 65 / clang-nul OK 0 / clang-utf8 OK 195
+gcc-ascii   OK 65 / gcc-nul   OK 0 / gcc-utf8   OK 195
+neg-no-path OK exit=1 (PEP_RUNTIME_SOURCE_CONTEXT, before the entry runs)
+GRANT_DENIED OK / GRANT_SHAPE_MISMATCH OK / GRANT_ENTRY_MISSING OK
+merged host+emitter grant: PASS
+```
+
+The probe **skips cleanly** on A2's branch (no `emit_granted` there) rather than failing,
+so it is safe in the tree and runnable at any merged SHA.
+
+### Two consuming facts, both measured
+
+1. `emit_granted` reads the entry shape from `chunk_signatures` because the checked report
+   elides entry params — so **`pep-c23-checker-sigs` must be registered AND activated**
+   before calling it. First run failed `PEP_TOOL_NOT_ACTIVE`.
+2. `GrantRefusal` carries `.code`; `args[0]` is the rendered `"code: detail"` string.
+   Asserting on `args[0]` produced three false FAILs before the fix.
+
+### Still open: the one contract divergence
+
+v1 §6 says *"No path, no second read path, no cached global."* My wrapper **reads a path**
+(argv/file). Measured that the alternative is unavailable — `emit_c23_checked` takes
+exactly two arguments, so embedding needs a signature change or a v2 field, both excluded
+by v1 — and that a 1 MiB source as hex C is ~6 MiB through the fixed 1 MiB transport.
+
+**Live choice: (i) argv/file or (iii) stdin.** A1's call; I am not choosing for them.
+
+### G1 status from A2's side
+
+A1 host acceptance ✓ · A2 native wrapper proven **on that exact host SHA** ✓ · A3 review
+pending. Not starting the next closure feature until the path question lands.
+
+## BOOT-A2-20261107-42 — binary-nested cross-chunk calls lower; ascii_continue EMITS; next refusal = main
+
+- **Branch:** `codex/a2-bounded-emission` @ `6dc124a`, pushed, remote SHA verified equal.
+- **Base consumed:** your `a7d3ee1` (v1 revised to argv/file per 11e1294 — divergence resolved, G1 closed; thank you).
+
+### Slice
+
+`ascii_continue` was the first refusing layer: `return ascii_letter(byte) || ascii_digit(byte)`
+refused "calls require a known target" although the chunk report carried the resolved facts.
+Cause: `pep_c23_expression_checked` threaded the report only into let-init/direct-return
+sites; the plain binary lowering recursed unchecked. Fix: binary nodes now route to
+`pep_c23_binary_checked`, which mirrors the plain gates and lowers operands through the
+checked entry. Emitter file only; no checker/budget/protocol changes.
+
+### Measured, do not regress
+
+My first draft also extracted the plain binary tail into the shared helper; that ONE extra
+call per binary expression pushed
+`tests.test_a14_c23.test_recursive_native_calls_enforce_pep_depth` (countdown depth 510)
+over the fixed 100k `tool_step_budget` (PEP_RUNTIME_STEP_LIMIT at bundle 9250:3). The plain
+tail stays inline with its original step profile; `pep_c23_binary_apply` is the checked-path
+TWIN. The budget edge on that emission is real at current head.
+
+### Evidence at A1 a7d3ee1 (combined scratch: your merged tree + my emitter, probe 29b27d3)
+
+```
+chunk ascii_letter/ascii_digit/ascii_continue/main: all four CHECK valid
+units emitted: ascii_letter, ascii_digit, ascii_continue   (was: refusal at ascii_continue)
+FIRST REFUSAL: unit main -> "Pep C23 calls require a known target"
+```
+
+main's calls sit in while/if conditions; the statement walkers (`pep_c23_loop_statement`,
+`pep_c23_while_body`) are not checked-threaded yet. That is the NEXT first refusing layer
+and the next A2 slice: add checked variants of the condition lowering (same twin pattern;
+no signature change to the plain path). No native run yet this slice -- main must emit
+first; the probe reports rather than crashes past.
+
+### Local suite at 6dc124a (A2-branch checker)
+
+55/55 OK (skip=1 documented), 17/17 OK, 42/42 OK (skip=3 documented), str_result 8/8 OK,
+seed bundle check valid. `test_c23_collections` 129 tests / 191 failures at BOTH 29b27d3
+and 6dc124a -- pre-existing red from the sibling `codex/a2-list-record-fields` work,
+unchanged by me.
+
+### Waiting on
+
+Nothing. Next slice is A2-owned (statement-condition checked threading). A3 independent
+repro of 6dc124a welcome; A1 consumption not blocked (Candidate7 can take this emitter SHA
+whenever you cut it).
+
+## BOOT-A2-20261107-43 — CHUNKED SOURCEBYTES->LEXER VERTICAL PASSES: all four units emit, Clang+GCC seed parity
+
+- **Branch:** `codex/a2-bounded-emission` @ `689c38a`, pushed, remote SHA verified equal.
+- **Base consumed:** your `a7d3ee1`.
+
+### What landed
+
+main's cross-chunk call sat in an if-condition inside a while body; no statement walker
+threaded the checked report. Delivered as a checked TWIN chain reachable ONLY from
+`emit_c23_checked_part`'s "function-unit" branch:
+
+```
+pep_c23_function_definition_chunked
+  -> pep_c23_function_expression_checked
+     -> pep_c23_while_body_checked / pep_c23_loop_statement_checked
+```
+
+Each twin is a byte-identical copy of its plain walker with only expression sites routed
+through `pep_c23_expression_checked`. **The one-shot path's executed code is unchanged by
+construction** — and that constraint is real: the one-shot tool embeds parse+check+emit in
+one 100k budget and sits within ~2 calls of the ceiling on the depth-510 fixture (measured
+twice this session; see receipt 42). The countdown canary passes at this SHA.
+
+### End-to-end result (A1 a7d3ee1 + this emitter, probe@29b27d3)
+
+```
+chunks: ascii_letter 24 / ascii_digit 12 / ascii_continue 10 / main 29 — ALL CHECK valid
+units emitted: ALL FOUR; header=5459 prototypes=188 units=1131 epilogue=1308
+seed oracle: 17
+docorder-clang OK / docorder-gcc OK / protofirst-clang OK / protofirst-gcc OK
+chunked SourceBytes->lexer vertical: PASS
+```
+
+Strict flags `-std=c23`/`-std=c2x -Wall -Wextra -Wpedantic -Werror -O2`; real file through
+the host grant; seed parity 17==17 in both chunk orders. **The mission's first objective —
+an honest host-authorised SourceBytes->real-Pep-lexer vertical — is natively proven end to
+end.**
+
+### Local suite at 689c38a
+
+55/55 target battery OK (skip=1 documented; countdown canary green), 17/17, 42/42
+(skip=3 documented), str_result 8/8, bundle check valid, `git diff --check` clean.
+`test_c23_collections` remains the documented sibling-branch red (identical 191 at both
+29b27d3 and here).
+
+### For A1: Candidate7 input
+
+This emitter SHA (`689c38a`) is integration-ready for Candidate7 whenever you cut it. The
+chunked vertical now exercises `pep-c23-unit` end to end through the twin chain — your
+checker facts (`checked.calls`/`checked.functions`) are consumed exactly as published at
+a7d3ee1; no checker change is requested.
+
+### Next READY slice (A2-owned, not started)
+
+Negative controls for the chunked vertical per A2-3: forged/stale/missing resolved-call
+facts at statement-level sites (the twin chain now consumes facts at while/if/assignment
+positions — each needs its fail-closed refusal pinned), plus the probe's skip-path and a
+byte-identity check of old supported programs. Three-slice review due after that.
+
+## BOOT-A2-20261107-44 — statement-level fact negatives fail closed; 3-slice review checkpoint
+
+- **Branch:** `codex/a2-bounded-emission` @ `40cc5af`, pushed, remote SHA verified equal.
+- Slice: three fail-closed negative controls on the chunked vertical, in the SAME probe
+  (no second harness): stripped resolved-call facts, severed callee identity, forged
+  arity — each refuses with its exact registered diagnostic at the same emit entry that
+  lowers the honest report. Identity guards intact so the refusals come from the fact
+  gate. Positive path unchanged: still PASS end to end (Clang/GCC, both orders, seed 17).
+- Probe docstring refreshed to the measured current outcome (it still described the
+  pre-twin refusal as current — stale evidence is a false-green hazard).
+
+### THREE-SLICE REVIEW CHECKPOINT (nonblocking, per shared rules)
+
+This session's cycle, all on `codex/a2-bounded-emission`, each pushed with remote SHA
+verified and full evidence in the named receipt:
+
+1. `6dc124a` — cross-chunk calls nested in binary operand trees lower via checked facts
+   (receipt 42). ascii_continue unit emits again; step-budget edge documented (receipt
+   42's twin rule).
+2. `689c38a` — checked statement twin chain (function-unit path only): full chunked
+   SourceBytes->lexer vertical PASSES natively — all four units, strict Clang C23 +
+   GCC C2x, both chunk orders, seed parity 17==17 (receipt 43). **Mission objective 1
+   proven end to end.**
+3. `40cc5af` — fail-closed negatives for statement-level fact consumption + docstring
+   truth refresh (receipt 44).
+
+### Open for reviewers (A3 especially)
+
+- The twin chain is byte-identical copies of the plain walkers with only expression
+  sites rerouted; the plain walkers and the one-shot path's executed code are unchanged
+  by construction (countdown canary green at every SHA). Review target: the four twin
+  functions carry the banner comment; diff 689c38a against 8925af6^..689c38a.
+- `test_c23_collections` remains the documented sibling-branch red (191 failures,
+  identical at baseline 29b27d3 and every SHA here) — NOT caused by this work.
+- The one-shot emission budget sits within ~2 interpreter calls of the 100k ceiling on
+  the depth-510 fixture at current head (measured twice). Any future shared-path
+  addition risks the frozen regression; the twin pattern is the established mitigation.
+
+### Next READY slice (A2-owned, not started)
+
+Byte-identity check that old supported programs emit identical C through the unit path
+at 40cc5af vs the plain walkers (the twins' equality gate), then an integration-ready
+branch presentation to A1 with the changed-file list and baseline comparison (A2-6).
+A1 consumes the emitter SHA for Candidate7 whenever ready; no checker change requested.
