@@ -477,6 +477,7 @@ class ChunkPlan:
             "nodeCount": sum(len(ids) for ids in self.chunk_ids),
             "chunks": [list(ids) for ids in self.chunk_ids],
             "sharedRoots": list(self.shared_roots),
+            "sharedSpine": list(self.shared_spine),
             "signatures": sorted(self.signatures),
         }
 
@@ -493,14 +494,22 @@ def plan_chunks(index, chunk_roots, shared_roots=(), signatures=()):
     return _plan(index, chunk_ids, shared_roots, signatures)
 
 
-def plan_ids(index, chunk_ids, shared_roots=(), signatures=()):
-    """Plan explicit id lists (for dynamic or sub-function partitions later)."""
+def plan_ids(index, chunk_ids, shared_roots=(), signatures=(), shared_spine=()):
+    """Plan explicit id lists (for dynamic or sub-function partitions later).
+
+    ``shared_spine`` names ancestor-chain node ids that may appear in more
+    than one chunk (e.g. a return/record spine shared by field-subset
+    windows). Unlike shared roots, a spine id carries no subtree with it;
+    every window must still list the spine ids it uses, and all other
+    admission rules (ascending ids, parent-in-chunk, completeness,
+    revision binding) apply unchanged.
+    """
     if not chunk_ids:
         raise ContractRefusal("CHUNK_PLAN_EMPTY", "a plan needs at least one chunk")
-    return _plan(index, chunk_ids, shared_roots, signatures)
+    return _plan(index, chunk_ids, shared_roots, signatures, shared_spine)
 
 
-def _plan(index, chunk_ids, shared_roots, signatures):
+def _plan(index, chunk_ids, shared_roots, signatures, shared_spine=()):
     roots = tuple(_exact_int(root, "shared root") for root in shared_roots)
     for root in roots:
         if root not in index.parents:
@@ -509,6 +518,11 @@ def _plan(index, chunk_ids, shared_roots, signatures):
     shared_ids = set()
     for root in roots:
         shared_ids.update(index.subtree(root))
+    spine_ids = frozenset(_exact_int(value, "shared spine id") for value in shared_spine)
+    for value in spine_ids:
+        if value not in index.parents:
+            raise ContractRefusal("CHUNK_UNKNOWN_NODE",
+                                  f"shared spine names unknown node {value}")
 
     owned, ordered = {}, []
     for ids in chunk_ids:
@@ -527,10 +541,10 @@ def _plan(index, chunk_ids, shared_roots, signatures):
             if parent_id != -1 and parent_id not in set(chunk_values):
                 raise ContractRefusal("CHUNK_PLAN_OPEN_PARENT",
                                       f"planned node {node_id} needs parent {parent_id} in its chunk")
-            if node_id in owned and node_id not in shared_ids:
+            if node_id in owned and node_id not in shared_ids and node_id not in spine_ids:
                 raise ContractRefusal("CHUNK_PLAN_OVERLAP",
                                       f"node {node_id} is owned by more than one chunk "
-                                      f"and is not inside a declared shared root")
+                                      f"and is not inside a declared shared root or spine")
             if node_id in chunk_set:
                 raise ContractRefusal("CHUNK_PLAN_OVERLAP",
                                       f"node {node_id} appears twice in one chunk")
@@ -561,6 +575,7 @@ def _plan(index, chunk_ids, shared_roots, signatures):
     plan.document = index.document
     plan.revision = index.revision
     plan.shared_roots = roots
+    plan.shared_spine = tuple(sorted(spine_ids))
     plan.chunk_ids = tuple(ordered)
     plan.signatures = signature_ids
     plan._shared_ids = frozenset(shared_ids)
