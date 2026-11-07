@@ -176,5 +176,15 @@ resolution strategy for the future candidate integration:
   sectional driver + emit 8/8, `test_c23_cli` full, bounded-emission 19/19,
   A2's in-repo proofs, and the `compiler_a.pep` sectional check re-run
   against the merged tree (expect emit to advance past fix #1/#2).
+- MECHANICAL CHECK (no branch, no commit, worktree removed after): test-merge
+  of A1 `b449179` + A2 `bea071a` in a detached scratch worktree applies
+  CLEANLY with zero conflicts — both sides' content verified present in the
+  merged tree (sectional wiring + arena hunk + may_fail OR-rule + both test
+  families). The hand-merge items above remain judgment calls for content
+  correctness, but git mechanics are not a risk. Aborted immediately after
+  inspection; still gated on A3.
+  sectional driver + emit 8/8, `test_c23_cli` full, bounded-emission 19/19,
+  A2's in-repo proofs, and the `compiler_a.pep` sectional check re-run
+  against the merged tree (expect emit to advance past fix #1/#2).
 - A3 pass remains the entry condition per the dispatch. Re-diff at merge
   time regardless: both lanes are still moving.
