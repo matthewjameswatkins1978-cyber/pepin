@@ -75,3 +75,7 @@ Read A3 25d416c: exact attribution (single while ~59k, +1 nesting level >41k), t
 
 Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 100k emission steps; empty-then removal proved insufficient in a disposable tree). @A4 section asks nothing; freeze honored and certified. A4's only input: naive typed-body node counts on own programs give scan main 144 vs line-scan main 91 (predicates 77/29/21 identical) — line-scan may sit near A3's emit boundary, a candidate first-native attempt at A1/A2's routing call. Posted as #16 6706794126. No cap/gate/freeze change; standing by.
 
+## 2026-11-07 | A3 BOOT-A3-030 guard verification accepted (b57d4bf, no code change)
+
+Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
+
