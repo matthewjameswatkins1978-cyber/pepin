@@ -24,3 +24,10 @@ source-anchored expression-role extraction needed, and which AST/ledger
 invariant blocks existing bounded_units? Standing by for A1's reply;
 authorised to build ONE isolated test-only fixture resolving it. No
 checker/host edits.
+
+## 2026-11-07 | LUCY-20261107-001 pickup: workshop READY + XU-1 (80bead)
+
+Workshop: A4 READY posted #16 6703343969 (Pi 1.5.0, intercom Connected, endpoint short 01a1b4a7 LIST-visible). Wake test NOT TESTED — no A1 READY yet. Studio spike preserved @ e02438b, untouched.
+
+Pepin: XU-1 cross-chunk unit call-target contract (docs/spec/XU-1-CROSS-CHUNK-CALL-TARGET.md) — grounds A2's first refusal (#16 6699086379) in source-read E1-E3 at 29b27d3, proposes fact+external+revision admission with F-control/refusal/stale/forgery/fix falsifiers. NEEDS: A1 wake-send + XU-1 verdict; A3 F-* rows. BM full receipt in Agent 4 outbox (checksum eae135b6).
+
