@@ -1419,6 +1419,26 @@ fn parser_emit_item(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
   return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
 
+fn parser_error_roots(cursor: ParserCursor, extra: List[FlatAstNode],
+  endByte: Int) -> List[FlatAstNode] {
+  if !cursor.functionActive {
+    return extra
+  } else { }
+  let spanEnd = if cursor.functionStartByte <= endByte {
+    endByte
+  } else {
+    cursor.functionStartByte
+  }
+  let root = FlatAstNode {
+    id: cursor.functionRootId, parentId: -1,
+    childIndex: cursor.topLevelChildIndex, role: "top_level",
+    kind: "function", text: cursor.functionName, integerValue: 0,
+    booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
+    endByte: spanEnd, line: cursor.functionLine, column: cursor.functionColumn
+  }
+  return prepend(extra, root)
+}
+
 fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
   if !parsed.ok {
     let failed = ParserCursor {
@@ -1430,7 +1450,8 @@ fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
       functionChildIndex: cursor.functionChildIndex,
       topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames
     }
-    return parser_chunk(failed, parser_error_status(parsed), [], true,
+    return parser_chunk(failed, parser_error_status(parsed),
+      parser_error_roots(cursor, [], parsed.errorEnd), true,
       parsed.errorCode, parsed.message, parsed.errorStart, parsed.errorEnd,
       parsed.errorLine, parsed.errorColumn)
   } else { }
@@ -1568,7 +1589,8 @@ fn parser_match_error(cursor: ParserCursor, parsed: AstParse,
     functionChildIndex: cursor.functionChildIndex,
     topLevelChildIndex: cursor.topLevelChildIndex, frames: cursor.frames }
   return parser_chunk(failed, parser_error_status(parsed),
-    [returnRoot, matchRoot], true, parsed.errorCode, parsed.message,
+    parser_error_roots(cursor, [returnRoot, matchRoot], endByte), true,
+    parsed.errorCode, parsed.message,
     parsed.errorStart, parsed.errorEnd, parsed.errorLine, parsed.errorColumn)
 }
 
