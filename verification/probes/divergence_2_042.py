@@ -43,9 +43,11 @@ GEN_DIRECT = (
     '  return 0\n'
     '}\n'
 )
+# Ready-to-pass shape per BOOT-A3-053/054: say() accepts Str locals, so bind the slice to one.
+# The ONLY thing that should block this is the missing by-name utf8_slice lowering.
 GEN = (
     'fn main(source: SourceBytes) -> Int {\n'
-    '  var part = utf8_slice(source, 0, 3)\n'
+    '  let part = utf8_slice(source, 0, 3)\n'
     '  say("#include <stdio.h>")\n'
     '  say("int main(void){puts(")\n'
     '  say("\\"")\n'
