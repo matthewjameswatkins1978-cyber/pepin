@@ -7,9 +7,14 @@ be byte-identical to the one-shot `emit_c23_checked` output on the same
 input, proving the host assembly rule independently of A2's suite.
 """
 import pathlib
+import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 import unittest
+
+CLANG = pathlib.Path(r"C:\Users\Matmus\scoop\apps\llvm\current\bin\clang.exe")
 
 
 def _normalize_locals(text):
@@ -165,6 +170,27 @@ class SectionalDriverTests(unittest.TestCase):
                          _normalize_locals("".join(whole_parts)),
                          "sectional assembly must equal one-shot output "
                          "modulo per-slice local renumbering")
+
+
+    def test_emit_sectional_flag_matches_one_shot(self):
+        one = pep_c23.emit(SRC)
+        two = pep_c23.emit(SRC, sectional=True)
+        self.assertEqual(_normalize_locals(two), _normalize_locals(one))
+
+    @unittest.skipUnless(CLANG.is_file(), "Clang not installed at scoop path")
+    def test_cli_sectional_build_and_run(self):
+        with tempfile.TemporaryDirectory(prefix="pep-a1-sectional-") as tmp:
+            src = pathlib.Path(tmp) / "twofn.pep"
+            src.write_bytes(SRC)
+            exe = pathlib.Path(tmp) / "twofn.exe"
+            rc = pep_c23.main(["build-c23", str(src), "-o", str(exe),
+                               "--sectional", "--compiler", str(CLANG)])
+            self.assertEqual(rc, 0)
+            self.assertTrue(exe.is_file())
+            run = subprocess.run([str(exe)], capture_output=True, text=True,
+                                   check=False)
+            self.assertEqual(run.returncode, 0)
+            self.assertEqual(run.stdout, "42\n")
 
 
 if __name__ == "__main__":

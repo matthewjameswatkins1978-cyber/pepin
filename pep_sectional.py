@@ -295,3 +295,74 @@ def emit_section(session, sem, sl, report, part):
     fields = {item["name"]: item["value"] for item in resp["result"]["fields"]}
     parts = [p["value"] for p in fields["sourceParts"]["value"]]
     return (fields["status"]["value"], fields["diagnostic"]["value"], parts, steps)
+
+
+def _top_level_declarations(nodes):
+    return [n for n in nodes
+            if str(nval(n, "parentId")) == "-1" and nval(n, "kind") != "function"]
+
+
+def build_c23(session, sem, parsed, tool_revision, tool_doc, target, sample,
+              measurements):
+    """Full sectional build: check every function, emit sections, assemble.
+
+    Fail-closed: first invalid slice or first refused section raises
+    ValueError with the exact diagnostic (same channel as the one-shot path).
+    v1 scope: declaration-free programs (records/unions section separately);
+    programs with top-level non-function nodes refuse with a clear message.
+    Returns the assembled C text.
+    """
+    import pep_c23
+    from tests.test_chunk_typed import host_builtins
+    register_sectional_tools(session, tool_doc, tool_revision, sample, pep_c23)
+    nodes = fields_map(parsed)["nodes"]["value"]
+    decls = _top_level_declarations(nodes)
+    if decls:
+        raise ValueError(
+            "Pep C23 sectional build does not yet cover top-level declarations; "
+            f"found {len(decls)} declaration node(s)")
+    host = host_builtins(target["document"], target["revision"])
+    checked = check_program(session, sem, parsed, tool_revision, target, host)
+    if checked["failures"]:
+        name, pos, codes = checked["failures"][0]
+        raise ValueError(
+            f"Pep C23 sectional check failed in {name}: {codes}")
+    order, slices, reports = (checked["order"], checked["slices"],
+                              checked["reports"])
+    if "main" not in slices:
+        raise ValueError(
+            "Pep C23 emission requires a top-level function named main")
+    # Header comes from the first slice in source order so the assembled
+    # prototype block keeps source order (matching one-shot output); the
+    # remaining slices contribute their prototypes explicitly.
+    first = order[0]
+    status, diag, header, _ = emit_section(
+        session, sem, slices[first], reports[first], "header")
+    if status != "emitted":
+        raise ValueError(diag or "Pep C23 header section refused the program")
+    rebuilt = list(header)
+    for name in order[1:]:
+        status, diag, protos, _ = emit_section(
+            session, sem, slices[name], reports[name], "prototypes")
+        if status != "emitted":
+            raise ValueError(diag or f"Pep C23 prototypes refused {name}")
+        rebuilt.extend(protos)
+    for name in order:
+        status, diag, parts, _ = emit_unit(
+            session, sem, slices[name], reports[name], 0)
+        if status != "emitted":
+            raise ValueError(
+                diag or f"Pep C23 function unit refused {name}")
+        rebuilt.extend(parts)
+    status, diag, epilogue, _ = emit_section(
+        session, sem, slices["main"], reports["main"], "main")
+    if status != "emitted":
+        raise ValueError(diag or "Pep C23 main section refused the program")
+    rebuilt.extend(epilogue)
+    text = "".join(rebuilt)
+    if "pep_arena" in text and '#include "pep_arena.h"' not in text:
+        raise ValueError(
+            "Pep C23 sectional build hit mixed arena requirements across slices")
+    measurements["sectional_order"] = order
+    measurements["sectional_stats"] = checked["stats"]
+    return text
