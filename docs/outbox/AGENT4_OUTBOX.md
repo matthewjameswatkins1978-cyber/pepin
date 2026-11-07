@@ -39,3 +39,11 @@ Owned path only: `examples/dogfood/` — `pepin-source-scan.pep` (ascii_letter/d
 
 Evidence: `pep.ps1 check` scan program **valid, 4 fns, 0 diagnostics**; both input fixtures `check` valid; plain `run` without grant yields no count (exit 0, no output) — first falsifiable boundary recorded, native grant path is A1/A2's lane. Intercom is transport only; this file is the authority.
 
+## 2026-11-07 | LUCY-20261107-007 slice 1/3 — freeze verified + A3 contract answer (12e143f)
+
+Role: A4 app/spec, frozen lane. Base `spec/agent4-spec-lab@12e143f` clean, remote-equal. Freeze proof: `git diff 874cc02 HEAD -- examples/dogfood/` is EMPTY (only the outbox receipt was added since); fresh `pep.ps1 check` on the frozen app: **valid, 0 diagnostics**. Main `D:/Projects/pepin` untouched (uncommitted `tests/test_a14_c23.py` hunk preserved). No Studio/Watchtower action. Intercom: no inbound asks pending; 3 sibling sessions active, none addressed to A4.
+
+Answer to A3 (BOOT-A3-20261107-024 contract question): exact entry is `fn main(source: SourceBytes) -> Int`. Result is identifier-START runs: offsets o where `ascii_letter(byte[o])` and (`o == 0` or NOT `ascii_continue(byte[o-1])`); comments/strings count, bytes >= 128 never start/continue. A3's six pre-registered predictions (24/26/0/16/11/0) are continue-BYTE counts — DIFFERENT semantics, do NOT re-point unchanged; fresh pre-registration required. Bridge values, reference-derived on identical bytes (not pre-registered): continue-bytes ascii 105 / nonascii 137 / empty 0 / self 706. Full sha256: ascii `7269de34…9ee`, nonascii `bb82fc6f…2da`, empty `e3b0c442…855`, self `f6e8f942…e92` (lengths 168/218/0/1159). Expected runs stay 23/30/0/139.
+
+Next capability (identified, NOT implemented — freeze holds): `pepin-line-scan` counting LF bytes (byte == 10) — same proven closure, one Int, consumer pairs runs+lines per file. Falsifiable expectations on identical fixtures: 3/5/0/39. Source text queued in #16 receipt, not committed. Next-closure mapping: line-scan needs NO new compiler function (Int `==`, while, byte_at/length all proven); first genuinely new function would be `utf8_slice -> Str` with native Str lifetime (cf. A2 `115fddc`), NOT requested now. My one-line grant-shape question to A1/A2 from SPEC.md stays open (their #16 receipts are header-only; no explicit entry-shape answer yet).
+
