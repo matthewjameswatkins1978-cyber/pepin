@@ -778,3 +778,43 @@ Byte-identity check that old supported programs emit identical C through the uni
 at 40cc5af vs the plain walkers (the twins' equality gate), then an integration-ready
 branch presentation to A1 with the changed-file list and baseline comparison (A2-6).
 A1 consumes the emitter SHA for Candidate7 whenever ready; no checker change requested.
+
+## BOOT-A2-20261107-45 — twin-chain byte identity on statement shapes; dogfood relaunch re-pin
+
+- **Branch:** `codex/a2-bounded-emission` @ `40cc5af` parent, this slice on top; worktree
+  `D:\Projects\wt-a2-bounded`, session relaunch per LUCY-20261107-004 (#16 6706232555).
+  Main-checkout dirty `tests/test_a14_c23.py` preserved untouched. No Watchtower, no Studio.
+- Slice (the READY slice named in receipt 44): `tests/test_c23_twin_byte_identity.py`
+  (new, 2 tests / 8 subtests) proves the twins' equality gate on the surface the twin
+  chain actually added — while/if/for statement shapes absent from
+  `test_c23_section_identity.PROGRAMS`:
+  `while-countdown` (call in loop body), `if-branch-call` (assignment in both branches,
+  call in else), `for-accumulator` (for-in with calls + accumulator), `call-guard-loop`
+  (helper call IS the loop guard).
+- Gate: header + unit(0..n-1) + epilogue == one-shot `emit_c23_checked` BYTE for BYTE on
+  all four shapes; plus an anti-vacuous-pass test asserting both paths emit (`int main`,
+  per-unit `pep_fn_`, no `unsupported`).
+- Grammar facts discovered and pinned in the module docstring (checked via `pep.ps1 check`
+  before fixing shapes): bare `<`/`>` are `PEP_UNEXPECTED_CHARACTER`; `<=`/`!=` work;
+  statement-level `if` requires `else` (`PEP_PARSE_ELSE`). No emitter file changed.
+- MEASURED at this SHA (A2-branch checker, no chunk tooling):
+  `tests.test_a14_c23 + cli + bounded_emission + invariants + section_identity` 55/55
+  (skip=1 documented, countdown canary green) + `test_c23_real_lexer_stage +
+  emitter_sections` 17/17 + twin module 2/2 = 74 ran, OK, skipped=1.
+  `git diff --check` clean; `test_c23_collections` remains the documented sibling-branch
+  red, not re-run here (identical 191 at baseline 29b27d3 and every SHA of this line).
+- Deleted the session's temporary debug harness via Threadmoth lifecycle
+  (`_build/debug_twin_identity.py`, delete_file with expected-hash guard; certificate
+  committed_checked_lifecycle). Scratch `.pep` check files under ignored `_build/` left.
+- Dogfood mission status: A4's `examples/dogfood/` source-inspector does not exist yet at
+  any checked-out worktree. A2 stands ready: the bounded unit path is the transport for
+  per-chunk emission, its byte identity is now pinned across the statement shapes, and
+  the probe's positive + three negative fact refusals remain green. FIRST refusing layer
+  on receipt of A4's app will be recorded with exact diagnostics, unchanged rules.
+
+### Next READY slice (A2-owned)
+
+On A4 delivery: pin A4's source SHA + A1 checker pin, emit each checked chunk through
+`pep-c23-function-unit` (this module's container), strict Clang/GCC over >=3 genuinely
+different real files, report first refusal honestly. Until then: idle-but-pinned; no
+negative-tooling invention, no A1/A4 file touched.
