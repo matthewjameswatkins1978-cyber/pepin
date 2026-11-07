@@ -65,6 +65,27 @@ Current slice does NOT claim this command works; it defines the contract
 A1/A2 implement against (pinned source SHA + this SPEC). A3 pre-registers
 predictions from this file before seeing native outputs.
 
+## Line-scan (second program, LUCY-20261107-008 Q3)
+
+`pepin-line-scan.pep` counts LF bytes (value 10) over the same granted
+`SourceBytes` input and returns the count as `Int`. Same predicates, grant
+path and output contract as the runs program; `pepin-source-scan.pep` is
+untouched (still frozen at `874cc02`). Deliberate shape: filled `then`,
+empty `else` — the branch direction A3 proved builds (`empty_else.pep`
+exit 0); no empty-`then` idiom, so the known first emitter refusal should
+not fire on shape grounds (native proof still belongs to A1/A2).
+
+Falsifiable expectations on the identical fixtures (predictions until
+natively run): input_ascii 3, input_nonascii 5, input_empty 0, self 39.
+Consumer: pair identifier-runs + line count per file as one documented
+user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
+
+## Checkout guard
+
+`examples/dogfood/.gitattributes` pins `*.pep text eol=lf` so Windows
+checkouts measure the committed bytes (A3 BOOT-A3-025 point 6: 1198 vs
+1159 bytes). Scoped to this lane; no repo-wide attribute change.
+
 ## A4 handoff question for A1/A2 (one line)
 
 Is `fn main(source: SourceBytes) -> Int` plus `byte_at`/`byte_length`

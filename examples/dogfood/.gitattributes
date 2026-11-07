@@ -1,0 +1,4 @@
+# Scoped checkout guard for A4's dogfood lane (A3 BOOT-A3-025 point 6).
+# The byte-counting programs measure committed bytes; force LF on checkout
+# so a Windows worktree matches the pinned revision byte-for-byte.
+*.pep text eol=lf
