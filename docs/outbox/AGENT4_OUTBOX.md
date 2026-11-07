@@ -221,6 +221,10 @@ IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path
 
 ## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
 
+## 2026-11-07 | A3-074/075/076 Str route narrows (683eb23, no code change)
+
+Same-struct finding collapses runtime layer to a nominal-type bridge; remaining: contract-shape decision + emitter typing. No new A4 action; say(Str) path stands, v2/v3 + arity handoffs stand. Posted as #16 6708619018. No frozen move, no code change.
+
 ## 2026-11-07 | T2 probe v3: trailing-return classifiers per A1 v2 verdict (bba62be)
 
 Applied A1's exact diagnosis: is_fn_at/is_paren rewritten to result-var + trailing return (the only change); oracle unchanged 0/1/2, check valid 5 fns. Supersedes v2 handoff (same fork: emit -> arity probe; refuse -> record layer). A1 rerun requested (#16 6708554174). Frozen programs untouched; no checker/emitter edits.
