@@ -217,7 +217,8 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
          "value": {"type": "List[CheckDiagnostic]", "value": []}}]}
 
 
-def check_program(session, sem, parsed, tool_revision, target, host, sigs=None):
+def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
+                  force_chain=frozenset()):
     """Sectional check of every top-level function.
 
     Returns dict: order, slices {name: progress}, reports {name: raw report},
@@ -236,8 +237,9 @@ def check_program(session, sem, parsed, tool_revision, target, host, sigs=None):
         name = nval(fn, "text")
         ids = [int(nval(n, "id")) for n in slice_subtree(nodes, nval(fn, "id"))]
         sl = sliced(parsed, ids)
-        raw, codes, steps, nbytes = check_slice(
-            session, sem, parsed, index, sigs, host, ids, True, [], name)
+        raw, codes, steps, nbytes = ((None, [], None, None)
+                                     if name in force_chain else check_slice(
+            session, sem, parsed, index, sigs, host, ids, True, [], name))
         if raw is not None:
             slices[name], reports[name] = sl, raw
             stats[name] = {"steps": steps, "bytes": nbytes, "mode": "whole"}
