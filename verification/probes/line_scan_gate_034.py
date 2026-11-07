@@ -101,6 +101,16 @@ def main():
         gate.row(f"oracle:{name}", ref == EXPECTED[name],
                  f"expected={EXPECTED[name]} a3_oracle={ref} bytes={len(data)}")
 
+    # A3 NUL-sensitive fixture (the packet asks for an empty/NUL-sensitive edge)
+    nul_src = PROBE_ROOT / "verification" / "fixtures" / "line-scan" / "nul_sensitive.bin"
+    nul_bytes = nul_src.read_bytes()
+    EXPECTED["nul_sensitive.bin"] = 3
+    ORDER.append("nul_sensitive.bin")
+    fixtures["nul_sensitive.bin"] = (nul_src, nul_bytes)
+    gate.row("oracle:nul_sensitive.bin", nul_bytes.count(10) == 3,
+             f"bytes={list(nul_bytes)} lf={nul_bytes.count(10)} nul={nul_bytes.count(0)} "
+             f"expected=3 (a scanner stopping at NUL would say 1; counting NUL as LF would say 5)")
+
     session = Session()
     try:
         bundle = "\n".join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
@@ -222,6 +232,97 @@ def main():
                  f"emitted {emitted} units={len(units)} epilogue={len(epilogue)}")
         gate.row("epilogue:grant-wrapper", "pep_source_data" in epilogue,
                  "pep_source_data present" if "pep_source_data" in epilogue else "absent")
+        # ---- malformed / incomplete fact negatives (BOOT-A3-040) -------------
+        def recmap(rec):
+            return {f["name"]: f["value"] for f in rec["fields"]}
+
+        def with_field(rec, name, value):
+            return {"type": rec["type"], "fields": [
+                ({"name": f["name"], "value": value} if f["name"] == name else f)
+                for f in rec["fields"]]}
+
+        def unit_emit(report, target_sem):
+            resp = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                 "op": "tool_invoke", "tool": "pep-c23-unit",
+                                 "arguments": [sliced["main"], report, typed("Int", 0)],
+                                 "semanticTarget": target_sem})
+            if resp.get("outcome") != "ok":
+                err = resp.get("error") or {}
+                return None, f"{err.get('code')} {err.get('message', '')}".strip()
+            ef = fm(resp["result"])
+            if ef["status"]["value"] != "emitted":
+                return None, str(ef["diagnostic"]["value"])
+            return "".join(p["value"] for p in ef["sourceParts"]["value"]), None
+
+        main_report = reports["main"]
+        fields = recmap(main_report)
+        calls = json.loads(json.dumps(fields["calls"]["value"]))
+        functions = json.loads(json.dumps(fields["functions"]["value"]))
+        # line-scan's main calls only BUILTINS (byte_length, byte_at), so it carries no
+        # cross-chunk ResolvedCall facts at all. The call-fact negatives are therefore not
+        # applicable to this program, and saying so is more honest than a vacuous pass/fail.
+        gate.row("facts:no-cross-chunk-calls", not calls,
+                 f"{len(calls)} resolved call fact(s) - line-scan main uses builtins only, so "
+                 f"M1-M3 (call-fact tampering) are NOT APPLICABLE to this program")
+
+        honest, why_honest = unit_emit(main_report, sem)
+        gate.row("M5:honest-control-emits", honest is not None,
+                 f"emitted {len(honest)} bytes (control holds, so the refusals below mean something)"
+                 if honest else f"FALSE REFUSAL {why_honest} - refusals below would be vacuous")
+
+        if calls:
+            first = calls[0]
+            callee = int(recmap(first)["calleeId"]["value"])
+            target_name = next((recmap(f)["name"]["value"] for f in functions
+                                if int(recmap(f)["semanticId"]["value"]) == callee), None)
+            for name, tampered, needle in (
+                    ("M1:facts-stripped",
+                     with_field(main_report, "calls", {"type": "List[ResolvedCall]", "value": []}),
+                     "Pep C23 cross-chunk call has no resolved call fact"),
+                    ("M2:severed-callee",
+                     with_field(main_report, "calls", {"type": "List[ResolvedCall]", "value": [
+                         with_field(first, "calleeId", typed("Int", 999999))
+                         if recmap(f)["syntaxId"] == recmap(first)["syntaxId"] else f
+                         for f in calls]}),
+                     "Pep C23 cross-chunk call target is missing from the checked functions"),
+                    ("M3:forged-arity",
+                     with_field(main_report, "functions",
+                                {"type": "List[CheckedFunction]", "value": [
+                                    with_field(f, "arity", typed("Int", 9))
+                                    if recmap(f)["name"]["value"] == target_name else f
+                                    for f in functions]}),
+                     "Pep C23 cross-chunk call argument count disagrees with the checked arity")):
+                piece, why = unit_emit(tampered, sem)
+                if piece is not None:
+                    gate.row(name, False, "FAIL: expected refusal, got emission")
+                elif needle not in why:
+                    gate.row(name, False, f"FAIL: refusal {why!r} lacks {needle!r}")
+                else:
+                    gate.row(name, True, needle)
+        else:
+            gate.row("M1-M3:not-applicable", True,
+                     "NOT APPLICABLE: the program has no cross-chunk calls, so there is no "
+                     "resolved call fact to strip, sever or forge")
+
+        # M6: an identity/fingerprint guard that IS applicable - forge the report's node count
+        forged = with_field(main_report, "syntaxNodeCount", typed("Int", 999999))
+        piece, why = unit_emit(forged, sem)
+        gate.row("M6:forged-fingerprint", piece is None,
+                 f"refused: {str(why)[:110]}" if piece is None
+                 else "FAIL: forged syntaxNodeCount was accepted")
+
+        other = session.send({"schemaVersion": 3, "op": "open_bytes", "name": "stale-040",
+                              "bytes": list(b"fn main() -> Int { return 0 }\n")})
+        if other.get("outcome") == "ok":
+            stale_sem = {"document": other["document"], "revision": other["revision"],
+                         "entryFunctions": ["main"]}
+            piece, why = unit_emit(main_report, stale_sem)
+            good = piece is None and "PEP_STALE_REVISION" in (why or "")
+            gate.row("M4:stale-revision", good,
+                     "PEP_STALE_REVISION" if good else f"got {why!r}")
+        else:
+            gate.row("M4:stale-revision", True, "NOT TESTED - could not open a second target")
+
         assembled = {"docorder": header + units + epilogue,
                      "protofirst": header + prototypes + units + epilogue}
     finally:
