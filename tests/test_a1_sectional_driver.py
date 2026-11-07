@@ -184,6 +184,12 @@ class SectionalDriverTests(unittest.TestCase):
             pep_c23.emit(src, sectional=True)
         self.assertIn("declaration", str(caught.exception))
 
+    def test_sectional_no_main_fails_closed(self):
+        nomain = b"fn helper() -> Int { return 1 }\n"
+        with self.assertRaises(ValueError) as caught:
+            pep_c23.emit(nomain, sectional=True)
+        self.assertIn("main", str(caught.exception))
+
     def test_sectional_check_failure_names_function(self):
         bad = b"fn main() -> Int { return nosuchfn(1) }\n"
         with self.assertRaises(ValueError) as caught:
