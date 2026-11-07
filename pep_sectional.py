@@ -9,7 +9,9 @@ or tool change. Pure orchestration over existing sectional entries
 Layering debt (recorded, not hidden): slice construction reuses
 `tests.chunk_helper.remap_chunk` and host builtins come from
 `tests.test_chunk_typed.host_builtins`; both belong in product code
-(`pep_chunk_contract.py`) when this graduates. No `pep_c23.py` edits.
+(`pep_chunk_contract.py`) when this graduates. Entry point is
+`build_c23`, wired to `pep_c23.py` as opt-in `--sectional`
+(`emit(sectional=True)` keeps the one-shot path untouched by default).
 """
 import copy
 import json
