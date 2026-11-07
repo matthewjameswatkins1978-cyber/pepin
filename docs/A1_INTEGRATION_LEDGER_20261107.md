@@ -82,3 +82,36 @@ Accepted baseline (unchanged): A8 implementation `da244417`, acceptance `4132d3f
   `codex/a1-typed-bound-pipeline @ 544a0c0` (pushed) — checker-layer twin, no
   duplication with the tracked parser contract (still OK 3/3).
 - A1 RESULT: issue #16 comment `6711765350` (Slices 1+2).
+
+## Addendum — Slice-3 merge plan (prepared, NOT executed; still gated on A3 pass)
+
+Tip-vs-tip `544a0c0` (A1) .. `739befe` (A2) is 13 files, +522/-1049, verified
+this session. Everything else is byte-identical between the lanes. Per-file
+resolution strategy for the future candidate integration (re-diff at merge
+time: A2 Slice-2 refusal repair will move emitter + cli again):
+
+- `examples/pep_parser.pep` (371): **take A1 wholesale.** A2 never touched the
+  parser; A1's resumptions + error contracts parse A4's real `compiler_a.pep`
+  complete (1100 nodes, 428 steps, measured).
+- `tests/pep_c23_emitter.pep` (198): **take A2 wholesale.** Delta inspected
+  hunk-by-hunk: utf8_slice classification/emission, mutable-Str while-body
+  lowering, int_text/utf8_slice bump-pool runtimes, arena-gated assembly.
+  Lowering-only — no parser/chunk-contract interface drift.
+- `pep_c23.py` (11): **take A2's arena-relay hunk** (adds `-I runtime/pep_arena`
+  + `pep_arena.c` when the emit references `pep_arena.h`; strict flags
+  preserved). Verify A1 driver needs (SourceBytes grants) intact at merge.
+- `tests/test_c23_say.py` (30): **take A2's.** It documents the supersede of
+  the two A1-guarded refusal pins (say-int_text, say-in-while) with landing
+  SHAs; the old pins must not be re-added.
+- `tests/test_c23_cli.py` (87): **hand-merge only.** Keep A2's supersede notes
+  plus any A1-only cases; inspect hunks at merge time, never auto-resolve.
+- **Union, no conflict:** A1 side takes `tests/test_parser_error_contract.py`,
+  `tests/test_a1_record_construct_seam.py` + `mc_seam_*` + list-native
+  probe/fixture; A2 side takes `tests/test_c23_bump_pool_boundary.py`,
+  `tests/test_c23_compiler_a_backend.py`.
+- Post-merge gate before reporting: contract 3/3, seam 1/1, list-native PASS,
+  `test_c23_cli` full, A2's in-repo proofs, and the 428-step `compiler_a.pep`
+  chunk parse re-run against the merged parser.
+- A3 pass remains the entry condition per the dispatch; A4 revision and A2
+  refusal repair are expected to move `spec/agent4-spec-lab` and the emitter
+  side further before then.
