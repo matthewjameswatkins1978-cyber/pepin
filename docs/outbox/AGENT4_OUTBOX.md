@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | A1 AstValue finding absorbed (d7a1895, no code change)
+
+A1 measured the Pep parser cannot parse its own 40-variant AstValue union within budget (R critical path). Direct measured backing for D-A4's no-big-unions subset choice: S sidesteps this structurally. Position-reporting caveat noted. Posted as #16 6708008045. No new A4 action.
+
 ## 2026-11-07 | A3-060 absorbed: T2 symbol table is re-scan (3d990b6, SPEC only)
 
 A3-060: List ARGUMENTS cannot cross chunk boundaries -- token lists passed between chunks are structurally refused. Parallel-List[Int] table design parked behind List-arg support; working design is re-scan per query (no stored table, no cross-chunk List values), which is what the T2 probe already does. No-token verdict unchanged. SPEC corrected (T2 section). Posted as #16 6707870439. No frozen move, no code change.
