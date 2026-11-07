@@ -4375,6 +4375,768 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
   return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
 }
 
+// ---- Checked-path statement twins (chunked unit path ONLY). ----
+// The one-shot `pep-c23-emitter` tool invocation embeds parse + check + emit in ONE fixed
+// 100k tool_step_budget, measured to be within a few interpreter steps of the ceiling on the
+// depth-510 recursion fixture (a two-call-per-emission delta tipped it over on 2026-11-07).
+// These twins are byte-identical copies of the plain walkers with ONLY the expression sites
+// routed through pep_c23_expression_checked and recursion pointed at the twin chain, and they
+// are reachable ONLY from emit_c23_checked_part's "function-unit" branch. The one-shot path's
+// executed code, and therefore its step profile, is unchanged by construction. The twins MUST
+// stay behaviourally identical to the plain walkers for every previously supported program:
+// same gates, same refusal texts, same emitted bytes.
+fn pep_c23_loop_statement_checked(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int, localBindings: List[FlatAstNode], result: PepC23NodeLookup, checked: CheckerReport) -> PepC23Emission {
+  if depth == 8 { return pep_c23_unsupported("Pep C23 loop condition nesting exceeds the supported depth") } else {}
+  let indent = if depth == 0 { "    " } else { "      " }
+  if statement.kind == "return" {
+    let value = pep_c23_child(nodes, statement.id, "value", 0)
+    if !value.found || !result.found { return pep_c23_unsupported("Pep C23 loop return has no value or declared result type") } else {}
+    let scalarType = pep_c23_c_scalar_type(result.node)
+    let recordType = if result.node.kind == "type_named" {
+      pep_c23_record_declaration(nodes, result.node.text)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    var cTypeParts: List[Str] = []
+    if scalarType != "" {
+      cTypeParts = [scalarType]
+    } else {
+      if recordType.found {
+        cTypeParts = ["pep_record_", int_text(recordType.node.id)]
+      } else {
+        // Str results join this branch for GUARD-CHAIN returns (Campaign G G-A2-3): the real
+        // lexer's stdlib/scan.pep `lex_error_code` returns string literals from statement-level
+        // `if ... { return ... } else {}` guards plus a fallthrough return -- checker-valid and
+        // the measured blocker since BOOT-A2-20261104-019 item 5. The lowered value is a
+        // static-storage pep_str (F3 lifetime repair) so returning it past the frame is safe,
+        // and Str equality already lowers through pep_str_equal (measured before this change).
+        // Every other unsupported result keeps the exact same refusal.
+        if result.node.kind == "type_scalar" && result.node.text == "Str" {
+          cTypeParts = ["pep_str"]
+        } else {
+          return pep_c23_unsupported("Pep C23 conditional return requires a supported scalar or record result")
+        }
+      }
+    }
+    let lowered = pep_c23_expression_checked(nodes, function, value.node, checked)
+    if lowered.status != "emitted" { return lowered } else {}
+    var parts: List[Str] = [indent]
+    for part in cTypeParts { parts = append(parts, part) }
+    parts = append(parts, " pep_result_")
+    parts = append(parts, int_text(statement.id))
+    parts = append(parts, " = ")
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ";\n")
+    parts = append(parts, indent)
+    parts = append(parts, "pep_leave();\n")
+    parts = append(parts, indent)
+    parts = append(parts, "return pep_result_")
+    parts = append(parts, int_text(statement.id))
+    parts = append(parts, ";\n")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {}
+  if statement.kind == "assignment" {
+    let value = pep_c23_child(nodes, statement.id, "value", 0)
+    if !value.found { return pep_c23_unsupported("Pep C23 loop assignment has no value") } else {}
+    let lowered = pep_c23_expression_checked(nodes, function, value.node, checked)
+    if lowered.status != "emitted" { return lowered } else {}
+    var targetId = -1
+    var targetFound = false
+    for local in localBindings {
+      if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
+        targetId = local.id
+        targetFound = true
+      } else {}
+    }
+    if !targetFound { return pep_c23_unsupported("Pep C23 loop assignments must target a direct mutable local") } else {}
+    var parts: List[Str] = [indent, "pep_local_", int_text(targetId), " = "]
+    for part in lowered.sourceParts { parts = append(parts, part) }
+    parts = append(parts, ";\n")
+    return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+  } else {
+    if statement.kind == "if_statement" {
+      let condition = pep_c23_child(nodes, statement.id, "condition", 0)
+      if !condition.found { return pep_c23_unsupported("Pep C23 loop conditional has no condition") } else {}
+      let loweredCondition = pep_c23_expression_checked(nodes, function, condition.node, checked)
+      if loweredCondition.status != "emitted" { return loweredCondition } else {}
+      var thenParts: List[Str] = []
+      var elseParts: List[Str] = []
+      var foundThen = false
+      var foundElse = false
+      for branchStatement in nodes {
+        if branchStatement.parentId == statement.id && branchStatement.role == "then" {
+          foundThen = true
+          let loweredBranch = pep_c23_loop_statement_checked(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
+          if loweredBranch.status != "emitted" { return loweredBranch } else {}
+          for part in loweredBranch.sourceParts { thenParts = append(thenParts, part) }
+        } else {
+          if branchStatement.parentId == statement.id && branchStatement.role == "else" {
+            foundElse = true
+            let loweredBranch = pep_c23_loop_statement_checked(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
+            if loweredBranch.status != "emitted" { return loweredBranch } else {}
+            for part in loweredBranch.sourceParts { elseParts = append(elseParts, part) }
+          } else {}
+        }
+      }
+      if !foundThen { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
+      var parts: List[Str] = [indent, "if (!!("]
+      for part in loweredCondition.sourceParts { parts = append(parts, part) }
+      parts = append(parts, ")) {\n")
+      for part in thenParts { parts = append(parts, part) }
+      parts = append(parts, indent)
+      if foundElse {
+        parts = append(parts, "} else {\n")
+        for part in elseParts { parts = append(parts, part) }
+        parts = append(parts, indent)
+      } else {}
+      parts = append(parts, "}\n")
+      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+    } else { return pep_c23_unsupported("Pep C23 loop bodies support assignments, returns, and conditionals with assignment sequences") }
+  }
+}
+// Arena-backed update of a mutable Int or Bool list binding. Only the binding being assigned may
+// be prepended to or reversed, which keeps the source and destination element types identical and
+// keeps this path free of any element-type inference.
+
+fn pep_c23_while_body_checked(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode], result: PepC23NodeLookup, checked: CheckerReport) -> PepC23Emission {
+  let condition = pep_c23_child(nodes, loop.id, "condition", 0)
+  if !condition.found || pep_c23_count_children(nodes, loop.id, "body") == 0 {
+    return pep_c23_unsupported("Pep C23 while lowering requires a condition and a non-empty assignment body")
+  } else {}
+  let loweredCondition = pep_c23_expression_checked(nodes, function, condition.node, checked)
+  if loweredCondition.status != "emitted" { return loweredCondition } else {}
+  var parts: List[Str] = ["  while (!!("]
+  for part in loweredCondition.sourceParts { parts = append(parts, part) }
+  parts = append(parts, ")) {\n")
+  for statement in nodes {
+    if statement.parentId == loop.id && statement.role == "body" {
+      if statement.kind == "if_statement" || statement.kind == "return" || statement.kind == "let" {
+        if statement.kind == "let" {
+          let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+          if !initialValue.found || initialValue.node.kind != "call" ||
+             initialValue.node.text != "byte_at" {
+            return pep_c23_unsupported("Pep C23 while-local lets currently require a byte_at initializer")
+          } else {}
+          let loweredValue = pep_c23_expression_checked(nodes, function, initialValue.node, checked)
+          if loweredValue.status != "emitted" { return loweredValue } else {}
+          var bindingParts: List[Str] = ["    int64_t pep_local_", int_text(statement.id), " = "]
+          for part in loweredValue.sourceParts { bindingParts = append(bindingParts, part) }
+          bindingParts = append(bindingParts, ";\n")
+          for part in bindingParts { parts = append(parts, part) }
+        } else {
+          let loweredConditional = pep_c23_loop_statement_checked(nodes, function, statement, 0, localBindings, result, checked)
+          if loweredConditional.status != "emitted" { return loweredConditional } else {}
+          for part in loweredConditional.sourceParts { parts = append(parts, part) }
+        }
+      } else {
+        if statement.kind != "assignment" { return pep_c23_unsupported("Pep C23 while bodies support byte_at lets, assignments, returns, and conditionals") } else {}
+        let value = pep_c23_child(nodes, statement.id, "value", 0)
+        if !value.found { return pep_c23_unsupported("Pep C23 while assignment has no value") } else {}
+        // Only a list value, a name, or a prepend/reverse call can carry a list update, and this
+        // runs for every assignment in every loop body. Scanning the whole node list for the common
+        // scalar assignment was pure waste against a fixed step budget.
+        let listUpdateCandidate = value.node.kind == "list" || value.node.kind == "name" ||
+          (value.node.kind == "call" &&
+           (value.node.text == "prepend" || value.node.text == "reverse"))
+        let assignmentTargetList = if listUpdateCandidate {
+          pep_c23_mutable_list_binding(nodes, function, statement.text)
+        } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+        var listUpdateFound = false
+        var listUpdate = PepC23Emission { status: "unsupported", sourceParts: [], diagnostic: "" }
+        if assignmentTargetList.found && value.node.kind == "call" &&
+           (value.node.text == "prepend" || value.node.text == "reverse") {
+          listUpdate = pep_c23_mutable_list_update(nodes, function, value.node, assignmentTargetList.node)
+          listUpdateFound = true
+        } else {}
+        let loweredValue = if listUpdateFound { listUpdate } else { pep_c23_expression_checked(nodes, function, value.node, checked) }
+        if loweredValue.status != "emitted" { return loweredValue } else {}
+        var targetId = -1
+        var targetFound = false
+        for local in localBindings {
+          if local.parentId == function.id && local.role == "statement" && local.kind == "var" && local.text == statement.text {
+            targetId = local.id
+            targetFound = true
+          } else {}
+        }
+        if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
+        let targetList = assignmentTargetList
+        if targetList.found {
+          let targetKind = pep_c23_mutable_list_element_kind(nodes, targetList.node)
+          var sourceKind = if listUpdateFound { targetKind } else { "" }
+          if sourceKind == "" && value.node.kind == "name" {
+            let sourceList = pep_c23_mutable_list_binding(nodes, function, value.node.text)
+            let sourceIntParameter = pep_c23_int_list_parameter(nodes, function, value.node.text)
+            let sourceBoolParameter = pep_c23_bool_list_parameter(nodes, function, value.node.text)
+            if sourceList.found { sourceKind = pep_c23_mutable_list_element_kind(nodes, sourceList.node) } else {}
+            if sourceIntParameter.found { sourceKind = "integer" } else {}
+            if sourceBoolParameter.found { sourceKind = "boolean" } else {}
+          } else {}
+          if sourceKind != targetKind || (sourceKind != "integer" && sourceKind != "boolean" && sourceKind != "string" && sourceKind != "record") {
+            return pep_c23_unsupported("Pep C23 mutable list reassignment requires a matching typed list binding or parameter")
+          } else {}
+        } else {}
+        for part in ["    pep_local_", int_text(targetId), " = "] { parts = append(parts, part) }
+        for part in loweredValue.sourceParts { parts = append(parts, part) }
+        parts = append(parts, ";\n")
+      }
+    } else {}
+  }
+  parts = append(parts, "  }\n")
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+
+fn pep_c23_function_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, checked: CheckerReport) -> PepC23Emission {
+  let parameters = pep_c23_parameters(nodes, function)
+  let result = pep_c23_child(nodes, function.id, "return_type", 0)
+  let resultCType = if result.found { pep_c23_c_parameter_type(nodes, result.node) } else { "" }
+  var parameterProblem = false
+  for parameter in parameters {
+    let parameterType = pep_c23_child(nodes, parameter.id, "type", 0)
+    if !parameterType.found || pep_c23_c_parameter_type(nodes, parameterType.node) == "" {
+      parameterProblem = true
+    } else {}
+  }
+  // Entry-parameter SourceBytes grant (A1 docs/NATIVE_SOURCE_GRANT_CONTRACT_DRAFT.md
+  // @a802290, mode "entry-parameter"): the host's native main wrapper passes the
+  // opened target's OWN bytes as the entry's first SourceBytes parameter. This
+  // predicate admits exactly that one shape -- `fn main(<one SourceBytes parameter>)`
+  // -- and nothing else changes: source_bytes() as a CALL stays refused, no ambient
+  // authority is added, and every other parameterised main still refuses below.
+  // The bytes are the target's because the host wrapper is their only producer.
+  // COST DISCIPLINE: the parameter lookups run ONLY for a one-parameter main. Computing
+  // them unconditionally measured OVER the fixed 100k budget on the near-ceiling
+  // recursive-depth fixture, because pep_c23_child walks the node list.
+  var entrySourceOnly = false
+  if function.text == "main" && length(parameters) == 1 {
+    let entryParameter = pep_c23_child(nodes, function.id, "parameter", 0)
+    let entryParameterType = if entryParameter.found {
+      pep_c23_child(nodes, entryParameter.node.id, "type", 0)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    entrySourceOnly = entryParameterType.found &&
+      pep_c23_c_parameter_type(nodes, entryParameterType.node) == "pep_source_bytes"
+  } else {}
+  if parameterProblem || length(parameters) != pep_c23_count_children(nodes, function.id, "parameter") ||
+     (function.text == "main" && length(parameters) != 0 && !entrySourceOnly) ||
+     resultCType == "" ||
+     (function.text == "main" && result.node.text != "Int") {
+    // Str results are the one missing shape the real lexer blocks on: `lex_error_code`
+    // passes the checker and then hit this gate (measured, BOOT-A2-20261104-019 item 5).
+    // The body path already lowers every Str value position (say proves it) and the wrapper
+    // is ctype-generic (`<ctype> pep_result = <expr>`), so admitting Str here is the whole
+    // feature: conditional-return and say-classification boundaries stay exactly as pinned.
+    return pep_c23_unsupported("Pep C23 functions require supported parameters and Str, scalar or record results")
+  } else {}
+  var localBindings: List[FlatAstNode] = []
+  var localBindingsCollected = false
+  var returned = false
+  var statementCount = 0
+  var returnStatement = PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" {
+      statementCount = statementCount + 1
+      if (statement.kind == "let" || statement.kind == "var") && !returned {
+        let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+        if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
+        if statement.kind == "var" {
+          let stringLocalValue = pep_c23_str_expression(nodes, function, initialValue.node)
+          if stringLocalValue.found {
+            return pep_c23_unsupported("Pep C23 mutable Str local bindings are not yet lowered")
+          } else {}
+        } else {}
+        if initialValue.node.kind == "list" && (statement.kind == "let" || statement.kind == "var") {
+          let recursiveUnionList = if statement.kind == "let" {
+            pep_c23_union_list_local_declaration(nodes, function, statement.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          if recursiveUnionList.found {
+            if !pep_c23_local_recursive_union_list_is_iterated(nodes, function, statement.text) {
+              if pep_c23_count_children(nodes, initialValue.node.id, "element") == 0 {
+                return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
+              } else {}
+              for item in nodes {
+                if item.parentId == initialValue.node.id && item.role == "element" &&
+                   !pep_c23_union_list_element_supported(nodes, recursiveUnionList.node, item) {
+                  return pep_c23_unsupported("Pep C23 recursive union list locals require matching constructors with scalar literal payloads")
+                } else {}
+              }
+            } else {}
+          } else {
+            let recordList = pep_c23_record_list_declaration(nodes, initialValue.node)
+            var hasRecordElement = false
+            for item in nodes {
+              if item.parentId == initialValue.node.id && item.role == "element" && item.kind == "record" { hasRecordElement = true } else {}
+              if item.parentId == initialValue.node.id && item.role == "element" && item.kind != "integer" && item.kind != "boolean" && item.kind != "string" && !pep_c23_is_negative_int_literal(nodes, item) && (item.kind != "record" || statement.kind != "let") {
+                return pep_c23_unsupported("Pep C23 immutable collection bindings require Int, Bool, or supported record list literals")
+              } else {}
+            }
+            if hasRecordElement && !recordList.found {
+              return pep_c23_unsupported("Pep C23 immutable record list binding has no supported declared record type")
+            } else {}
+          }
+          // List descriptors have value semantics, so reassignment copies the descriptor.
+        } else {
+          let initial = pep_c23_expression_checked(nodes, function, initialValue.node, checked)
+          if initial.status != "emitted" { return initial } else {}
+        }
+      } else {
+        if statement.kind == "for_in" && !returned {
+          if !localBindingsCollected {
+            for local in nodes {
+              if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
+                localBindings = append(localBindings, local)
+              } else {}
+            }
+            localBindingsCollected = true
+          } else {}
+          for local in nodes {
+            if local.parentId == function.id && local.role == "statement" && local.id != statement.id && (local.kind == "let" || local.kind == "var" || local.kind == "for_in") && local.text == statement.text {
+              return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function locals or other loop bindings")
+            } else {}
+          }
+          var parameterShadow = false
+          for parameterNode in pep_c23_parameters(nodes, function) {
+            if parameterNode.text == statement.text { parameterShadow = true } else {}
+          }
+          if parameterShadow {
+            return pep_c23_unsupported("Pep C23 for-in bindings cannot shadow function parameters")
+          } else {}
+          let iterable = pep_c23_child(nodes, statement.id, "iterable", 0)
+          let iterableList = if iterable.found { pep_c23_list_literal(nodes, function, iterable.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(nodes, function, iterable.node.text) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_int_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_bool_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_record_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_union_list_parameter(nodes, function, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
+            if iterableBooleanParameter.found { iterableBooleanParameter } else {
+              if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
+            }
+          }
+          if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) || pep_c23_count_children(nodes, statement.id, "body") == 0 {
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a supported list literal or parameter and a non-empty supported body")
+          } else {}
+          if iterableList.found {
+            let recordLiteral = pep_c23_record_list_declaration(nodes, iterableList.node)
+            let recursiveUnionList = if iterableList.found && iterable.found && iterable.node.kind == "name" {
+              pep_c23_union_list_local_declaration(nodes, function, iterable.node.text)
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+            if recursiveUnionList.found &&
+               pep_c23_count_children(nodes, iterableList.node.id, "element") == 0 {
+              return pep_c23_unsupported("Pep C23 recursive union list local requires at least one constructor element")
+            } else {}
+            if !recursiveUnionList.found {
+              for item in nodes {
+                if item.parentId == iterableList.node.id && item.role == "element" {
+                  if recordLiteral.found {
+                    if item.kind != "record" { return pep_c23_unsupported("Pep C23 record list iteration requires record values") } else {}
+                  } else {
+                    if item.kind != "integer" && item.kind != "boolean" && !pep_c23_is_negative_int_literal(nodes, item) {
+                      return pep_c23_unsupported("Pep C23 for-in list literals currently require integer or Bool elements")
+                    } else {}
+                  }
+                } else {}
+              }
+            } else {}
+          } else {}
+          for bodyStatement in nodes {
+            if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
+              let loweredBody = pep_c23_loop_statement_checked(nodes, function, bodyStatement, 0, localBindings, result, checked)
+              if loweredBody.status != "emitted" { return loweredBody } else {}
+            } else {}
+          }
+        } else {
+          if (statement.kind == "while" || statement.kind == "if_statement") && !returned {
+            if !localBindingsCollected {
+              for local in nodes {
+                if local.parentId == function.id && local.role == "statement" && local.kind == "var" {
+                  localBindings = append(localBindings, local)
+                } else {}
+              }
+              localBindingsCollected = true
+            } else {}
+            let loweredControl = if statement.kind == "while" {
+              pep_c23_while_body_checked(nodes, function, statement, localBindings, result, checked)
+            } else { pep_c23_loop_statement_checked(nodes, function, statement, 0, localBindings, result, checked) }
+            if loweredControl.status != "emitted" { return loweredControl } else {}
+          } else {
+            if statement.kind == "return" && !returned {
+              returned = true
+              returnStatement = PepC23NodeLookup { found: true, node: statement }
+            } else {
+              if statement.kind == "expression_statement" {
+                // Validation gate: accept exactly the say(...) shape the assembly path lowers, so
+                // an unsupported expression statement still fails closed before any emission.
+                let sayCheck = pep_c23_say_statement(nodes, function, statement)
+                if sayCheck.status != "emitted" { return sayCheck } else {}
+              } else {
+                return pep_c23_unsupported("Pep C23 functions require local bindings and supported loops followed by one return")
+              }
+            }
+          }
+        }
+      }
+    } else {}
+  }
+  if statementCount == 0 || !returned { return pep_c23_unsupported("Pep C23 functions require a return statement") } else {}
+  let value = pep_c23_child(nodes, returnStatement.node.id, "value", 0)
+  if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
+  // `return [ ... ]` had no lowering at all, while `let xs = [ ... ]` then `return xs`
+  // emitted. That gap blocked 5 of the emitter's own 101 functions -- every one of them
+  // returns List[Str] -- so the emitter could not emit itself. Route a List[Str] return
+  // literal through the same argument builder the call path already uses.
+  if value.node.kind == "list" {
+    let returnType = pep_c23_child(nodes, function.id, "return_type", 0)
+    let elementType = if returnType.found {
+      pep_c23_child(nodes, returnType.node.id, "element_type", 0)
+    } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+    if elementType.found && elementType.node.text == "Str" {
+      return pep_c23_str_list_argument(nodes, function, value.node)
+    } else {}
+  } else {}
+  return pep_c23_expression_checked(nodes, function, value.node, checked)
+}
+
+fn pep_c23_function_definition_chunked(parsed: ParserProgress, node: FlatAstNode, requiresArena: Bool, checked: CheckerReport) -> PepC23Emission {
+  var reversed: List[Str] = []
+  if node.parentId == -1 && node.kind == "function" {
+    let conditionalBody = pep_c23_if_return_body(parsed.nodes, node)
+    let hasConditionalBody = conditionalBody.status == "emitted"
+    let lowered = if hasConditionalBody { conditionalBody } else { pep_c23_function_expression_checked(parsed.nodes, node, checked) }
+    if lowered.status != "emitted" { return lowered } else {}
+    let functionParameters = pep_c23_parameters(parsed.nodes, node)
+    let result = pep_c23_child(parsed.nodes, node.id, "return_type", 0)
+    var bodyParts: List[Str] = ["  pep_enter();\n"]
+    if requiresArena { bodyParts = append(bodyParts, "  (void)pep_arena;\n") } else {}
+    for parameterNode in functionParameters {
+      bodyParts = append(bodyParts, "  (void)pep_arg_")
+      bodyParts = append(bodyParts, int_text(parameterNode.id))
+      bodyParts = append(bodyParts, ";\n")
+    }
+    var localBindings: List[FlatAstNode] = []
+    var localBindingsCollected = false
+    for statement in parsed.nodes {
+      if statement.parentId == node.id && statement.role == "statement" && (statement.kind == "let" || statement.kind == "var") {
+        let initialValue = pep_c23_child(parsed.nodes, statement.id, "value", 0)
+        if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
+        if initialValue.node.kind == "list" && statement.kind == "let" {
+          // Immutable list literals are lowered at their direct length/for-in use sites.
+        } else {
+          if initialValue.node.kind == "list" && statement.kind == "var" {
+            let elementKind = pep_c23_mutable_list_element_kind(parsed.nodes, statement)
+            if elementKind != "boolean" && elementKind != "integer" && elementKind != "string" && elementKind != "record" {
+              return pep_c23_unsupported("Pep C23 mutable collection bindings require a typed Int, Bool, Str, or record list")
+            } else {}
+            var initial = pep_c23_int_list_argument(parsed.nodes, node, initialValue.node)
+            if elementKind == "boolean" {
+              initial = pep_c23_bool_list_argument(parsed.nodes, node, initialValue.node)
+            } else {}
+            if elementKind == "string" {
+              initial = pep_c23_str_list_argument(parsed.nodes, node, initialValue.node)
+            } else {}
+            if elementKind == "record" {
+              let annotation = pep_c23_child(parsed.nodes, statement.id, "annotation", 0)
+              initial = pep_c23_record_list_argument(parsed.nodes, node, initialValue.node, annotation)
+            } else {}
+            if initial.status != "emitted" { return initial } else {}
+            var cTypeParts: List[Str] = ["pep_list_int"]
+            if elementKind == "boolean" { cTypeParts = ["pep_list_bool"] } else {}
+            if elementKind == "string" { cTypeParts = ["pep_list_str"] } else {}
+            if elementKind == "record" {
+              let recordList = pep_c23_mutable_list_record_declaration(parsed.nodes, statement)
+              if !recordList.found {
+                return pep_c23_unsupported("Pep C23 mutable record list binding requires a declared record element type")
+              } else {}
+              cTypeParts = ["pep_list_record_", int_text(recordList.node.id)]
+            } else {}
+            for part in ["  "] { bodyParts = append(bodyParts, part) }
+            for part in cTypeParts { bodyParts = append(bodyParts, part) }
+            for part in [" pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+            for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+            bodyParts = append(bodyParts, ";\n")
+          } else {
+            let initial = pep_c23_expression_checked(parsed.nodes, node, initialValue.node, checked)
+            // A record or union value type can only be carried by these initialiser shapes, so do
+            // not pay two full node-list scans for a scalar literal. This runs for every local
+            // binding, and the per-statement step cost is what bounds real compiler bodies.
+            let possibleAggregate = initialValue.node.kind == "record" ||
+              initialValue.node.kind == "call" || initialValue.node.kind == "field_access" ||
+              initialValue.node.kind == "name"
+            let localRecord = if possibleAggregate {
+              pep_c23_record_value_type(parsed.nodes, node, initialValue.node)
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+            let localUnion = if possibleAggregate {
+              pep_c23_union_value_type(parsed.nodes, node, initialValue.node)
+            } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+            let localString = if initialValue.node.kind == "string" {
+              PepC23NodeLookup { found: true, node: initialValue.node }
+            } else {
+              if initialValue.node.kind == "name" {
+                pep_c23_str_parameter(parsed.nodes, node, initialValue.node.text)
+              } else {
+                if initialValue.node.kind == "field_access" {
+                  pep_c23_str_expression(parsed.nodes, node, initialValue.node)
+                } else {
+                  // Str local from a Str-returning call: without this the ladder fell through
+                  // to int64_t and emitted type-wrong C instead of refusing or getting it
+                  // right (measured during Campaign F F3).
+                  if initialValue.node.kind == "call" {
+                    pep_c23_str_typed_call(checked, initialValue.node)
+                  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+                }
+              }
+            }
+            if initialValue.node.kind == "record" && !localRecord.found {
+              return pep_c23_unsupported("Pep C23 record local has no declared record type")
+            } else {}
+            if localString.found {
+              for part in ["  ", "pep_str", " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+            } else {
+              if localRecord.found {
+                for part in ["  ", "pep_record_", int_text(localRecord.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+              } else {
+                if localUnion.found {
+                  if !pep_c23_union_supported_layout(parsed.nodes, localUnion.node) {
+                    return pep_c23_unsupported("Pep C23 tagged union has an unsupported layout")
+                  } else {}
+                  for part in ["  ", "pep_union_", int_text(localUnion.node.id), " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                } else {
+                  for part in ["  ", "int64_t", " pep_local_", int_text(statement.id), " = "] { bodyParts = append(bodyParts, part) }
+                }
+              }
+            }
+            for part in initial.sourceParts { bodyParts = append(bodyParts, part) }
+            bodyParts = append(bodyParts, ";\n  (void)pep_local_")
+            bodyParts = append(bodyParts, int_text(statement.id))
+            bodyParts = append(bodyParts, ";\n")
+          }
+        }
+      } else {
+        if statement.parentId == node.id && statement.role == "statement" && statement.kind == "for_in" {
+          if !localBindingsCollected {
+            for local in parsed.nodes {
+              if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
+                localBindings = append(localBindings, local)
+              } else {}
+            }
+            localBindingsCollected = true
+          } else {}
+          let iterable = pep_c23_child(parsed.nodes, statement.id, "iterable", 0)
+          let iterableList = if iterable.found { pep_c23_list_literal(parsed.nodes, node, iterable.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableRecordLiteral = if iterableList.found {
+            pep_c23_record_list_declaration(parsed.nodes, iterableList.node)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableUnionLiteral = if iterableList.found && iterable.found && iterable.node.kind == "name" {
+            pep_c23_union_list_local_declaration(parsed.nodes, node, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableLocal = if iterable.found && iterable.node.kind == "name" { pep_c23_mutable_list_binding(parsed.nodes, node, iterable.node.text) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableIntegerParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_int_list_parameter(parsed.nodes, node, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableBooleanParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_bool_list_parameter(parsed.nodes, node, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableRecordParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_record_list_parameter(parsed.nodes, node, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableUnionParameter = if iterable.found && iterable.node.kind == "name" {
+            pep_c23_union_list_parameter(parsed.nodes, node, iterable.node.text)
+          } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+          let iterableParameter = if iterableIntegerParameter.found { iterableIntegerParameter } else {
+            if iterableBooleanParameter.found { iterableBooleanParameter } else {
+              if iterableRecordParameter.found { iterableRecordParameter } else { iterableUnionParameter }
+            }
+          }
+          if !iterable.found || (!iterableList.found && !iterableParameter.found && !iterableLocal.found) {
+            return pep_c23_unsupported("Pep C23 for-in lowering requires a list literal, immutable literal binding, or supported list parameter")
+          } else {}
+          var elementCount = 0
+          if iterableList.found {
+            for element in parsed.nodes {
+              if element.parentId == iterableList.node.id && element.role == "element" {
+                if iterableUnionLiteral.found {
+                  let actual = pep_c23_union_value_type(parsed.nodes, node, element)
+                  if !actual.found || actual.node.id != iterableUnionLiteral.node.id ||
+                     !pep_c23_union_list_element_supported(parsed.nodes, iterableUnionLiteral.node, element) {
+                    return pep_c23_unsupported("Pep C23 recursive union list literals require matching constructors with scalar literal payloads")
+                  } else {}
+                } else {
+                  if element.kind != "integer" && element.kind != "boolean" && !pep_c23_is_negative_int_literal(parsed.nodes, element) && (!iterableRecordLiteral.found || element.kind != "record") { return pep_c23_unsupported("Pep C23 for-in list literals currently require integer, Bool, or supported record elements") } else {}
+                }
+                elementCount = elementCount + 1
+              } else {}
+            }
+          } else {}
+          var arrayDeclaration: List[Str] = []
+          if iterableParameter.found {
+            if iterableRecordParameter.found {
+              let recordParameterType = pep_c23_child(parsed.nodes, iterableRecordParameter.node.id, "type", 0)
+              let record = if recordParameterType.found { pep_c23_record_list_declaration(parsed.nodes, recordParameterType.node) } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+              if !record.found { return pep_c23_unsupported("Pep C23 record list parameter has no declared record type") } else {}
+              for part in ["  if (pep_arg_", int_text(iterableRecordParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableRecordParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableRecordParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    pep_record_", int_text(record.node.id), " pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableRecordParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+                arrayDeclaration = append(arrayDeclaration, part)
+              }
+            } else {}
+            if iterableUnionParameter.found {
+              let unionParameterType = pep_c23_child(parsed.nodes, iterableUnionParameter.node.id, "type", 0)
+              let unionType = if unionParameterType.found {
+                pep_c23_union_list_declaration(parsed.nodes, unionParameterType.node)
+              } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+              if !unionType.found || !pep_c23_union_supported_layout(parsed.nodes, unionType.node) {
+                return pep_c23_unsupported("Pep C23 recursive union list parameter has an unsupported layout")
+              } else {}
+              for part in ["  if (pep_arg_", int_text(iterableUnionParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableUnionParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableUnionParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    pep_union_", int_text(unionType.node.id), " pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableUnionParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+                arrayDeclaration = append(arrayDeclaration, part)
+              }
+            } else {}
+            if !iterableRecordParameter.found && !iterableUnionParameter.found {
+              for part in ["  if (pep_arg_", int_text(iterableParameter.node.id), ".length != 0 && pep_arg_", int_text(iterableParameter.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_arg_", int_text(iterableParameter.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = pep_arg_", int_text(iterableParameter.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+              arrayDeclaration = append(arrayDeclaration, part)
+              }
+            } else {}
+          } else {
+            if iterableLocal.found {
+              let localList = pep_c23_child(parsed.nodes, iterableLocal.node.id, "value", 0)
+              if !localList.found || localList.node.kind != "list" {
+                return pep_c23_unsupported("Pep C23 runtime list iteration requires a mutable list literal binding")
+              } else {}
+              for part in ["  if (pep_local_", int_text(iterableLocal.node.id), ".length != 0 && pep_local_", int_text(iterableLocal.node.id), ".data == NULL) { fputs(\"PEP_RUNTIME_INVALID_LIST\\n\", stderr); exit(1); }\n  for (size_t pep_index_", int_text(statement.id), " = 0; pep_index_", int_text(statement.id), " < pep_local_", int_text(iterableLocal.node.id), ".length; ++pep_index_", int_text(statement.id), ") {\n    int64_t pep_local_", int_text(statement.id), " = (int64_t)pep_local_", int_text(iterableLocal.node.id), ".data[pep_index_", int_text(statement.id), "];\n"] {
+                arrayDeclaration = append(arrayDeclaration, part)
+              }
+            } else {
+              if elementCount == 0 {
+                for part in ["  if (0) {\n    int64_t pep_local_", int_text(statement.id), " = 0;\n"] {
+                  arrayDeclaration = append(arrayDeclaration, part)
+                }
+              } else {
+                if iterableUnionLiteral.found {
+                  arrayDeclaration = ["  pep_union_", int_text(iterableUnionLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
+                } else {
+                  if iterableRecordLiteral.found {
+                    arrayDeclaration = ["  pep_record_", int_text(iterableRecordLiteral.node.id), " pep_iter_", int_text(statement.id), "[] = {"]
+                  } else {
+                    arrayDeclaration = ["  int64_t pep_iter_", int_text(statement.id), "[] = {"]
+                  }
+                }
+                for element in parsed.nodes {
+                  if element.parentId == iterableList.node.id && element.role == "element" {
+                    if element.kind == "boolean" {
+                      arrayDeclaration = append(arrayDeclaration, if element.booleanValue { "1" } else { "0" })
+                    } else {
+                      let lowered = pep_c23_expression(parsed.nodes, node, element)
+                      if lowered.status != "emitted" { return lowered } else {}
+                      for part in lowered.sourceParts { arrayDeclaration = append(arrayDeclaration, part) }
+                    }
+                    arrayDeclaration = append(arrayDeclaration, ", ")
+                  } else {}
+                }
+                arrayDeclaration = append(arrayDeclaration, "};\n  for (size_t pep_index_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, " = 0; pep_index_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, " < ")
+                arrayDeclaration = append(arrayDeclaration, int_text(elementCount))
+                arrayDeclaration = append(arrayDeclaration, "; ++pep_index_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, ") {\n    ")
+                if iterableUnionLiteral.found {
+                  arrayDeclaration = append(arrayDeclaration, "pep_union_")
+                  arrayDeclaration = append(arrayDeclaration, int_text(iterableUnionLiteral.node.id))
+                } else {
+                  if iterableRecordLiteral.found {
+                    arrayDeclaration = append(arrayDeclaration, "pep_record_")
+                    arrayDeclaration = append(arrayDeclaration, int_text(iterableRecordLiteral.node.id))
+                  } else { arrayDeclaration = append(arrayDeclaration, "int64_t") }
+                }
+                arrayDeclaration = append(arrayDeclaration, " pep_local_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, " = pep_iter_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, "[pep_index_")
+                arrayDeclaration = append(arrayDeclaration, int_text(statement.id))
+                arrayDeclaration = append(arrayDeclaration, "];\n")
+              }
+            }
+          }
+          for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
+          for loopStatement in parsed.nodes {
+            if loopStatement.parentId == statement.id && loopStatement.role == "body" {
+              let loweredBody = pep_c23_loop_statement_checked(parsed.nodes, node, loopStatement, 0, localBindings, result, checked)
+              if loweredBody.status != "emitted" { return loweredBody } else {}
+              for part in loweredBody.sourceParts { bodyParts = append(bodyParts, part) }
+            } else {}
+          }
+          bodyParts = append(bodyParts, "  }\n")
+        } else {
+          if statement.parentId == node.id && statement.role == "statement" &&
+             (statement.kind == "while" || (statement.kind == "if_statement" && !hasConditionalBody)) {
+            if !localBindingsCollected {
+              for local in parsed.nodes {
+                if local.parentId == node.id && local.role == "statement" && local.kind == "var" {
+                  localBindings = append(localBindings, local)
+                } else {}
+              }
+              localBindingsCollected = true
+            } else {}
+            let loweredControl = if statement.kind == "while" {
+              pep_c23_while_body_checked(parsed.nodes, node, statement, localBindings, result, checked)
+            } else { pep_c23_loop_statement_checked(parsed.nodes, node, statement, 0, localBindings, result, checked) }
+            if loweredControl.status != "emitted" { return loweredControl } else {}
+            for part in loweredControl.sourceParts { bodyParts = append(bodyParts, part) }
+          } else {
+            if statement.parentId == node.id && statement.role == "statement" &&
+               statement.kind == "expression_statement" {
+              let loweredSay = pep_c23_say_statement(parsed.nodes, node, statement)
+              if loweredSay.status != "emitted" { return loweredSay } else {}
+              for part in loweredSay.sourceParts { bodyParts = append(bodyParts, part) }
+            } else {}
+          }
+        }
+      }
+    }
+
+    if hasConditionalBody {
+      for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
+    } else {
+      bodyParts = append(bodyParts, "  ")
+      for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { bodyParts = append(bodyParts, resultPart) }
+      bodyParts = append(bodyParts, " pep_result = ")
+      for part in lowered.sourceParts { bodyParts = append(bodyParts, part) }
+      bodyParts = append(bodyParts, ";\n  pep_leave();\n  return pep_result;\n")
+    }
+    for resultPart in pep_c23_c_parameter_type_parts(parsed.nodes, result.node) { reversed = prepend(reversed, resultPart) }
+    reversed = prepend(reversed, " pep_fn_")
+    reversed = prepend(reversed, node.text)
+    if length(functionParameters) == 0 {
+      if requiresArena { reversed = prepend(reversed, " (pep_arena_t *pep_arena) {\n") } else {
+        reversed = prepend(reversed, " (void) {\n")
+      }
+    } else {
+      reversed = prepend(reversed, "(")
+      var signatureIndex = 0
+      for parameterNode in functionParameters {
+        let parameterType = pep_c23_child(parsed.nodes, parameterNode.id, "type", 0)
+        if signatureIndex != 0 { reversed = prepend(reversed, ", ") } else {}
+        for typePart in pep_c23_c_parameter_type_parts(parsed.nodes, parameterType.node) { reversed = prepend(reversed, typePart) }
+        reversed = prepend(reversed, " pep_arg_")
+        reversed = prepend(reversed, int_text(parameterNode.id))
+        signatureIndex = signatureIndex + 1
+      }
+      if requiresArena {
+        reversed = prepend(reversed, ", ")
+        reversed = prepend(reversed, "pep_arena_t *pep_arena")
+        reversed = prepend(reversed, ") {\n")
+      } else { reversed = prepend(reversed, ") {\n") }
+    }
+    for part in bodyParts { reversed = prepend(reversed, part) }
+    reversed = prepend(reversed, "}\n")
+  } else {}
+  return PepC23Emission { status: "emitted", sourceParts: reverse(reversed), diagnostic: "" }
+}
 fn pep_c23_declaration_definitions(parsed: ParserProgress, requiresArena: Bool, wantedId: Int) -> PepC23Emission {
   var reversed: List[Str] = []
 
@@ -4625,7 +5387,11 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
         return pep_c23_unsupported("Pep C23 main function must return Int")
       } else {}
     } else {}
-    return pep_c23_function_definition(parsed, selected.node, requiresArena, checked)
+    // Chunked unit: the twin chain routes statement-level expression sites through the
+    // checked report, so a cross-chunk call nested in a while/if condition or a loop
+    // assignment/return lowers from resolved facts. The one-shot path below never runs
+    // this branch, so its frozen step profile is untouched.
+    return pep_c23_function_definition_chunked(parsed, selected.node, requiresArena, checked)
   } else {}
   var reversed: List[Str] = []
   reversed = prepend(reversed, "#include <stddef.h>\n")
