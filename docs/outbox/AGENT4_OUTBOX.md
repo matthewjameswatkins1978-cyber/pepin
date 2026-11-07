@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | A1 Finding 2 union cap adopted (6986172, SPEC only)
+
+A1: flat AND recursive union ladders refuse at k=20 (164 steps at k=10); unions >=~15 variants unparseable; R-spike = repair union-declaration parse. S side: Pep-0 carries no large recursive unions by design -- now a MEASURED constraint (<10 variants), recorded in SPEC. Subset stands, no repair needed. Posted as #16 6708031081. No frozen move, no code change.
+
 ## 2026-11-07 | A1 AstValue finding absorbed (d7a1895, no code change)
 
 A1 measured the Pep parser cannot parse its own 40-variant AstValue union within budget (R critical path). Direct measured backing for D-A4's no-big-unions subset choice: S sidesteps this structurally. Position-reporting caveat noted. Posted as #16 6708008045. No new A4 action.
