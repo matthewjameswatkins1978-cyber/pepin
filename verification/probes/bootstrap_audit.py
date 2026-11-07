@@ -83,6 +83,30 @@ print('"' + head + '"')
 print(');return 0;}')
 '''
 
+# A NATIVE-EXE cheat: the only kind that can exercise A5. Script controls cannot, because Windows
+# CreateProcess searches the application directory and the launcher IS the interpreter. This exe
+# shells out to `python` BY NAME and embeds whether it succeeded into the emitted C, so stripping
+# PATH must change its output.
+CONTROL_CHEAT_EXE_C = r"""
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+  int ok = 0;
+  int rc = system("python -c \"open('cheat_marker.txt','w').write('ok')\"");
+  FILE *m = fopen("cheat_marker.txt", "r");
+  if (m != NULL) { ok = 1; fclose(m); remove("cheat_marker.txt"); }
+  char buf[4] = {0, 0, 0, 0};
+  if (argc > 1) {
+    FILE *f = fopen(argv[1], "rb");
+    if (f != NULL) { size_t n = fread(buf, 1, 3, f); (void)n; fclose(f); }
+  }
+  printf("#include <stdio.h>\nint main(void){puts(\"%s\");return 0;}\n", buf);
+  printf("/* interpreter_ok=%d */\n", ok);
+  (void)rc;
+  return 0;
+}
+"""
+
 
 def run(cmd, env=None, timeout=120):
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
@@ -158,6 +182,16 @@ def build_controls():
     for name, body in (("fixed.py", CONTROL_FIXED), ("good.py", CONTROL_GOOD),
                        ("cheat.py", CONTROL_CHEAT), ("cheat_abs.py", CONTROL_CHEAT_ABS)):
         write(BUILD / name, body)
+    # compile the native-exe cheat (the only control that can exercise A5)
+    c_path = BUILD / "cheat_exe.c"
+    write(c_path, CONTROL_CHEAT_EXE_C)
+    clang = shutil.which("clang")
+    exe_ok = False
+    if clang:
+        cc = run([clang, "-std=c23", "-O1", str(c_path), "-o", str(BUILD / "cheat_exe.exe")])
+        exe_ok = cc.returncode == 0
+    if not exe_ok:
+        print("WARN: could not build the native cheat exe; A5 stays unproven")
     inputs = {
         "valid_a": "abc\n",
         "valid_b": "xyz\n",
@@ -193,9 +227,15 @@ def main():
         py = sys.executable
         expected = {"a": "abc", "b": "xyz"}
         verdicts = {}
-        for name, must_pass in (("fixed", False), ("good", True), ("cheat", False),
-                                ("cheat_abs", None)):
-            rows = audit([py, str(BUILD / f"{name}.py")], paths, expected, clang, gcc, name)
+        controls = [("fixed", [py, str(BUILD / "fixed.py")]),
+                    ("good", [py, str(BUILD / "good.py")]),
+                    ("cheat", [py, str(BUILD / "cheat.py")]),
+                    ("cheat_abs", [py, str(BUILD / "cheat_abs.py")])]
+        if (BUILD / "cheat_exe.exe").is_file():
+            controls.append(("cheat_exe", [str(BUILD / "cheat_exe.exe")]))
+        for name, cmd_prefix in controls:
+            must_pass = {"fixed": False, "good": True}.get(name)
+            rows = audit(cmd_prefix, paths, expected, clang, gcc, name)
             by = {r[0]: r[1] for r in rows}
             failed = [r[0] for r in rows if not r[1]]
             verdicts[name] = (rows, failed)
@@ -207,15 +247,15 @@ def main():
         ok_good = not verdicts["good"][1]
         # A5 cannot be exercised by a script-based control: Windows CreateProcess searches the
         # APPLICATION directory first, so `python` is found beside the launcher whatever PATH says.
-        ok_cheat = "A5:no-forbidden-subprocess" in verdicts["cheat"][1]
+        ok_cheat = ("cheat_exe" in verdicts
+                    and "A5:no-forbidden-subprocess" in verdicts["cheat_exe"][1])
         # A5's documented blind spot: an absolute interpreter path never needs PATH.
         blind_spot_confirmed = "A5:no-forbidden-subprocess" not in verdicts["cheat_abs"][1]
         print("\n--- auditor non-vacuity ---")
         print(f"{'PASS' if ok_fixed else 'FAIL'}  P1 fixed-C control rejected (A1)")
         print(f"{'PASS' if ok_good else 'FAIL'}  P2 good control accepted (all six)")
-        print(f"{'UNPROVEN' if not ok_cheat else 'PASS'}  P3 PATH-dependent cheat caught by A5 "
-              f"(script controls cannot exercise A5: CreateProcess searches the application "
-              f"directory, so the interpreter is found beside the launcher regardless of PATH)")
+        print(f"{'PASS' if ok_cheat else 'FAIL'}  P3 native-exe cheat caught by A5 "
+              f"(shells out to `python` by name; with PATH stripped its emitted C changes)")
         print(f"{'CONFIRMED' if blind_spot_confirmed else 'UNEXPECTED'}  P4 documented A5 blind "
               f"spot: an ABSOLUTE-interpreter-path cheat is NOT caught (expected)")
         # Non-vacuity rests on what was actually demonstrated: A1 catches fixed C, the good
@@ -223,10 +263,11 @@ def main():
         # UNPROVEN and is flagged as such rather than counted as working.
         core = ok_fixed and ok_good
         print(f"\nauditor core criteria:", "VALIDATED" if core else "BROKEN")
-        print("A5 status: IMPLEMENTED but UNPROVEN. It cannot be exercised with a script-based")
-        print("  control on Windows (CreateProcess searches the application directory first), and")
-        print("  PATH stripping is not a sandbox anyway. Treat A5 as advisory until a native-exe")
-        print("  cheat control proves it catches a real shell-out.")
+        print("A5 status: PROVEN for a native exe that shells out BY NAME - the cheat control that")
+        print("  calls `python` from PATH has its output changed once PATH is stripped, and A5 fails")
+        print("  it. Still NOT a sandbox: an absolute interpreter path evades it (P4), and a")
+        print("  script-based control can never exercise it (CreateProcess searches the application")
+        print("  directory). Report A5 as 'no PATH-dependent helper', never as 'no subprocess'.")
         return 0 if core else 1
 
     if not args.compiler or not args.fixtures:
