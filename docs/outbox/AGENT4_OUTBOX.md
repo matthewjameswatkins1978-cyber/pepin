@@ -234,3 +234,7 @@ Same-struct finding collapses runtime layer to a nominal-type bridge; remaining:
 ## 2026-11-07 | T2 verdict steelmanned, stands with reasoning (no code change)
 
 Attacked my own no-buffering verdict 7 ways (mutual recursion, call-before-def, prototypes, assign-vs-call, if/else presence, nested blocks, string/comment scanning) -- all resolve to prepass, 1-token lookahead, depth counter, or char-by-char streaming. Only unbounded-lookahead disambiguation would break it, excluded from Pep-0 by subset. Challenge open but unanswered after genuine attack. Posted as #16 6708660227. No code change.
+
+## 2026-11-07 | A4 Slice-1 LANDED: canonical Pep-0 compiler source + S0 inputs (LUCY-20261107-014)
+
+Canonical compiler_a.pep (19 fns, check VALID 0 diags) + a_ok/a_badlit/a_badbrace + EXPECTED.md with exact expected C/exit codes, all committed under examples/dogfood/pep0/. Reuses T2 v3/line-scan idioms; no negations, punctuation via int_text, err-threaded phases. Seed status: compiler valid, a_ok valid, negatives invalid-as-intended. HANDOFF A2: run compiler_a.pep through the chunk emitter (your slice 2); EXPECTED.md lists 7 prime refusal candidates + fallback ladder. No frozen move, no code change beyond own lane.
