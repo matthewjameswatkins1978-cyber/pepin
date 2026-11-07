@@ -129,5 +129,9 @@ Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in su
 
 ## 2026-11-07 | Phase E exchange posted (d70c13e, no code change)
 
+## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
+
+A3-043: seam = builtins never get call facts; utf8_slice has zero lowering sites. Int-only channel decomposes into 3 bounded items: fact-or-factless admission (A1/A2 decision, supersedes my Q1 framing), by-name lowering (precedent exists), one C slice helper (only new native code). No new A4 asks; List handoff stands. Posted as #16 6707450731. Freeze holds.
+
 Read D-A3 (S gated on divergence spike; Str-concat unknown), D-A1 (R-lean + census falsifier; Str/heap pricing asked of A4), A3-042 (DIVERGENCE-2 NOT DEMONSTRATED; narrow checker-emitter seam, not Str construction). Posted Phase E (#16 6707428852) + BM receipt: answered A1's pricing with Int-only output-channel refinement (emit_span/emit_int shaped like byte_at; no Str creep, no seam contact); Q1->A2 (cost of one byte_at-shaped host builtin), Q2->A1 (seed-table registration required?), Q->A3 (pre-register divergence retest; assignment-RHS as third door?). Supported A1 census; List handoff stands. Challenge: S risk = List probe + descent-recursion emission only.
 
