@@ -1419,10 +1419,57 @@ fn parser_emit_item(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
   return parser_chunk(next, "continuing", nodes, false, "", "", 0, 0, 0, 0)
 }
 
+fn parser_frame_root_kind(frame: ParserFrame) -> Str {
+  if frame.kind == "while" {
+    return "while"
+  } else { }
+  if frame.kind == "for_in" {
+    return "for_in"
+  } else { }
+  if frame.kind == "block" {
+    return "block"
+  } else { }
+  return "if_statement"
+}
+
+fn parser_frame_root_node(frame: ParserFrame, endByte: Int) -> FlatAstNode {
+  let spanEnd = if frame.startByte <= endByte {
+    endByte
+  } else {
+    frame.startByte
+  }
+  return FlatAstNode {
+    id: frame.nodeId, parentId: frame.parentId,
+    childIndex: frame.rootChildIndex, role: frame.rootRole,
+    kind: parser_frame_root_kind(frame), text: frame.text,
+    integerValue: 0, booleanValue: false, stringParts: [],
+    startByte: frame.startByte, endByte: spanEnd,
+    line: frame.line, column: frame.column
+  }
+}
+
+fn parser_roots_contain(nodes: List[FlatAstNode], id: Int) -> Bool {
+  var found = false
+  for node in nodes {
+    if node.id == id { found = true } else { }
+  }
+  return found
+}
+
 fn parser_error_roots(cursor: ParserCursor, extra: List[FlatAstNode],
   endByte: Int) -> List[FlatAstNode] {
+  var out = extra
+  for frame in cursor.frames {
+    let frameRoot = parser_frame_root_node(frame, endByte)
+    if !parser_roots_contain(out, frame.nodeId) {
+      out = prepend(out, frameRoot)
+    } else { }
+  }
   if !cursor.functionActive {
-    return extra
+    return out
+  } else { }
+  if parser_roots_contain(out, cursor.functionRootId) {
+    return out
   } else { }
   let spanEnd = if cursor.functionStartByte <= endByte {
     endByte
@@ -1436,7 +1483,7 @@ fn parser_error_roots(cursor: ParserCursor, extra: List[FlatAstNode],
     booleanValue: false, stringParts: [], startByte: cursor.functionStartByte,
     endByte: spanEnd, line: cursor.functionLine, column: cursor.functionColumn
   }
-  return prepend(extra, root)
+  return prepend(out, root)
 }
 
 fn parser_finish_step(cursor: ParserCursor, parsed: AstParse) -> ParserChunk {
