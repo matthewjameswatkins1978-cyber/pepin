@@ -6,7 +6,7 @@
 **Pre-registration:** `2f5f9f6`
 (`verification/acceptance/PRE-REGISTRATION-A3-022-NESTED-RECORD.md`), committed before
 measurement. **Driver:** `verification/probes/partial_record_nested.py` (reuses the A3-021
-driver; measured runtime ~5 s).
+driver; measured runtime 6.5 s).
 
 ## Headline
 
