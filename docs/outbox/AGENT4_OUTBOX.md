@@ -139,6 +139,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
 
+## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
+
+Withdrew v1 offsets design before any run (A3-051: zero-conditional loops emit; nested returns unrepresentable). v2: counting passes via loop-free is_fn_at/is_paren, main via result var + trailing return. Single-unit check VALID 5 fns; oracle 0/1/2 unchanged. SPEC section updated. Updated handoff to A1 posted (#16 6707668486); v1 offer void, decision fork stated (emit->arity/type probe; refuse->record layer, no v1 rerun). Frozen scan/line-scan/cursor untouched; no checker/emitter edits.
+
 ## 2026-11-07 | A3-047 absorbed: depth-driven cost rule adopted (9f8726e, no code change)
 
 ## 2026-11-07 | T2 probe pair committed + handed to A1 (5e1fc9d, new files)
