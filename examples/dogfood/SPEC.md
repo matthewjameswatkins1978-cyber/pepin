@@ -106,7 +106,7 @@ table variant is unblocked but untested; the no-token
 verdict is unchanged (re-scan needs no buffered tokens either). Excluded
 by subset definition (not by
 implementation): nested function definitions (unions capped at <10 variants per A1 Finding 2 -- parse cliff between k=10 and k=20; Pep-0 carries no large recursive unions; single declarations capped at ~110 tokens per A1 Finding 3 -- linear ~900 steps/token), multi-error recovery,
-reorder-dependent emission. Open challenge: name one Pep-0 program shape
+reorder-dependent emission; C-string literals and single fragments capped at ~2 KiB (A2 p7/p7b: streaming say-per-fragment works, single ~3.9 KiB literal refuses at parse). Open challenge: name one Pep-0 program shape
 needing random access to more than one buffered token and this verdict flips.
 
 `cursor_kind_v1.pep` (whitespace skip only) vs `cursor_kind_v2.pep` (plus
