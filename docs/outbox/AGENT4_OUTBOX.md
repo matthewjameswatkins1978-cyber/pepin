@@ -350,3 +350,7 @@ A1 verified my exact bytes (78a59ee): 4/4 match, oracle extended to 16 shapes wi
 ## 2026-11-07 | A4 existence-proof: all cited SHAs resolve on remote (no phantoms)
 
 Verified d78735e/6ac7e09/c6c3227/78a59ee/4dab1e8 via API (remote) + cat-file (local): all exist. Applying the workshop's phantom-SHA lesson to my own receipts. Lane integrity airtight; frozen holds.
+
+## 2026-11-07 | A4 notes fix #1 (may_fail OR-rule); 2 repairs remain
+
+A2 landed b758c91: arithmetic may_fail = OR(operands), literal /0 stays fallible, tests 75 green, supersession honestly scoped (1/1 correction + 2 documented parity edges). My parse_value multiply covered by the same rule; no division in my source, unaffected. 11 of my 21 fns theoretically unblocked; handed to A1 for sectional re-run. Remaining: var-init/condition threading + main emit budget. Frozen holds.
