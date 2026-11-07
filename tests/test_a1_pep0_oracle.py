@@ -1,0 +1,96 @@
+"""A1 semantic oracle for the Pep-0 tiny subset (LUCY-20261107-014 Slice 2).
+
+Executable pin of SEED-checker behavior (`pep.ps1 check --json`) that native
+compiler-A must mirror within the shared subset. Each case asserts the exact
+whole-file status, the first diagnostic code, and its span. Expectations were
+observed from the seed on 2026-11-07 and any mismatch is a finding, not an
+oracle edit.
+
+Subset rules pinned here:
+- `fn main() -> Int { return DECIMAL }`, whitespace-insensitive: valid.
+- Two-function declaration + call: valid (seed; forward order untested here).
+- Unknown callee -> PEP_UNKNOWN_FUNCTION; arity -> PEP_ARGUMENT_COUNT;
+  return-type -> PEP_TYPE_MISMATCH.
+- Truncation/malformed input -> *invalid* (PEP_PARSE_EXPECTED/EXPRESSION):
+  whole-file `check` does not return `incomplete`; that status belongs to the
+  chunk protocol only. Empty file -> valid (vacuous program).
+- Trailing junk after the function lexes as a following statement, hence
+  PEP_UNKNOWN_VARIABLE — the seed has no dedicated trailing-junk code.
+- `return 4x` parses the `4`, then flags `x` PEP_UNREACHABLE (unreachable
+  statement after the return expression). Pinned as observed; odd but stable.
+- `return match` with integer-literal patterns is seed-INVALID
+  (PEP_PARSE_PATTERN): natively refusing it mirrors the seed, no special
+  unsupported rule needed.
+- `fn main() -> Str` is seed-VALID but outside the Pep-0 subset: native A
+  must refuse it as *unsupported* with a distinct diagnostic, never report
+  it as *invalid*. This is the unsupported-vs-invalid distinction.
+"""
+import json
+import pathlib
+import re
+import subprocess
+import unittest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+FIX = ROOT / "tests" / "fixtures" / "pep0_oracle"
+
+# name -> (status, [(code, start_offset, end_offset, line, column)])
+EXPECTED = {
+    "pos_42": ("valid", []),
+    "pos_ws": ("valid", []),
+    "pos_twofn": ("valid", []),
+    "neg_unknown": ("invalid", [("PEP_UNKNOWN_FUNCTION", 26, 37, 1, 27)]),
+    "neg_arity": ("invalid", [("PEP_ARGUMENT_COUNT", 74, 80, 2, 27)]),
+    "neg_rettype": ("invalid", [("PEP_TYPE_MISMATCH", 26, 30, 1, 27)]),
+    "neg_brace": ("invalid", [("PEP_PARSE_EXPECTED", 30, 30, 3, 1)]),
+    "neg_trail": ("invalid", [("PEP_UNKNOWN_VARIABLE", 30, 37, 1, 31)]),
+    "neg_badlit": ("invalid", [("PEP_UNREACHABLE", 27, 28, 1, 28)]),
+    "inc_empty": ("valid", []),
+    "inc_fn": ("invalid", [("PEP_PARSE_EXPECTED", 20, 20, 2, 1)]),
+    "inc_ret": ("invalid", [("PEP_PARSE_EXPRESSION", 27, 27, 2, 1)]),
+    "out_match": ("invalid", [("PEP_PARSE_PATTERN", 42, 43, 3, 5)]),
+    # Seed-valid but OUTSIDE the Pep-0 subset: native A must refuse as
+    # unsupported, never as invalid. The seed side of that rule is pinned here.
+    "out_str": ("valid", []),
+}
+
+
+def check_shape(name):
+    target = FIX / (name + ".pep")
+    proc = subprocess.run(
+        ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"),
+         "check", str(target), "--json"],
+        cwd=ROOT, text=True, capture_output=True, check=False)
+    text = proc.stdout.strip()
+    text = text.lstrip("\ufeff")
+    text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    text = text[text.find("{"):] if "{" in text else text
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return ("DRIVER-ERROR", [(proc.stderr or proc.stdout)[:200]])
+    diags = []
+    for diag in data.get("diagnostics", []):
+        span = diag.get("span", {})
+        start = span.get("start", {})
+        diags.append((diag.get("code"), start.get("offset"),
+                      span.get("endOffset"), start.get("line"),
+                      start.get("column")))
+    return (data.get("status"), diags)
+
+
+class Pep0OracleTest(unittest.TestCase):
+    def test_oracle_shapes(self):
+        failures = []
+        for name, (want_status, want_diags) in EXPECTED.items():
+            got_status, got_diags = check_shape(name)
+            with self.subTest(shape=name):
+                if got_status != want_status or got_diags[:1] != want_diags[:1]:
+                    failures.append(
+                        f"{name}: want {(want_status, want_diags[:1])} "
+                        f"got {(got_status, got_diags[:1])}")
+        self.assertEqual(failures, [], "oracle drift:\n" + "\n".join(failures))
+
+
+if __name__ == "__main__":
+    unittest.main()
