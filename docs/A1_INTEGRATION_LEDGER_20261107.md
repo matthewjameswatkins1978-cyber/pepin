@@ -69,3 +69,16 @@ Accepted baseline (unchanged): A8 implementation `da244417`, acceptance `4132d3f
 - A1 CLAIM: issue #16 comment `6711724928`.
 - Ledger branch: `codex/a1-integration-ledger-20261107` (this commit).
 - A1 lane: `d8a4b6b` pushed; scratch `57c5291` pushed (stale, recorded as such).
+
+## Addendum — A2 proofs head `83995e4` (same session)
+
+- A2 pushed `83995e4` ("in-repo compiler-A backend proofs for 1885566, Slice 1")
+  on `codex/a2-divergence-spike`: one commit on top of `1885566`, implementation
+  pin unchanged per A2's RESULT. Characterization above still holds (shared
+  merge-base `ed4d6cb`, real merge needed, same divergent-content zone); the A2
+  head reference advances `1885566` -> `83995e4` (content + proofs).
+- A1 reserve taken this session (Slice 3 still gated on A3 verdict + A4 source):
+  committed `tests/test_a1_record_construct_seam.py` + `mc_seam_*` fixtures on
+  `codex/a1-typed-bound-pipeline @ 544a0c0` (pushed) — checker-layer twin, no
+  duplication with the tracked parser contract (still OK 3/3).
+- A1 RESULT: issue #16 comment `6711765350` (Slices 1+2).
