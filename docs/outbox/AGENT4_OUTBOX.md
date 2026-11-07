@@ -131,6 +131,10 @@ Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in su
 
 ## 2026-11-07 | T2 verdict + cursor probe pair committed (f2f70b0)
 
+## 2026-11-07 | S sketch revised after A3-045/046 (096b20c, no code change)
+
+A3-045 (one conditional per loop body) + A3-046 (no list indexing) partially falsify the D-route: cursor probes likely native-refused (SPEC "proven shapes" line overclaimed -- predicted refusal, measurement belongs to A1/A2); per-byte classification exceeds budget however arranged; T2 no-storage verdict stands but binding constraint moves to iteration emission (open List handoff). S loses "no emitter work" edge, keeps smaller-codebase edge. Posted as #16 6707522802. No frozen move.
+
 LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found inside Pep-0 as scoped (prepass covers forward/mutual recursion; single-error reporting; source-order C output; parallel-Int symbol table). Token-list framework NOT built. cursor_kind_v1/v2.pep committed, both check valid; refs v1 1/3/0/3/3 vs v2 1/1/0/1/1 with exact //-file delta. Open challenge posted. Native run + gate are A1/A2/A3's. Posted as #16 6707502372. Frozen scan/line-scan untouched.
 
 ## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
