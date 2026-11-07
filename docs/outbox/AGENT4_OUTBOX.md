@@ -79,6 +79,10 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
+## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
+
+Read A2 ac3e2ea: empty-then fixed in both walkers (suite 74 OK/1 skip), blocker B measured (37-node emits, 43 tips; owned micro-reductions no gain), chunk-window ASK directed to A1 (24-32 nodes; A2 will not build transport before A1 owns the protocol). Ownership verified: range 537967e..ac3e2ea touches only AGENT2_OUTBOX.md, tests/pep_c23_emitter.pep, new tests/probe_dogfood_source_scan.py -- zero files under examples/dogfood/. The ASK is A1's to answer; A4 takes no action and will not pre-empt the window protocol. Posted as #16 6706878068. Freeze holds; standing by.
+
 ## 2026-11-07 | A3 BOOT-A3-031 adopted claims blob-confirmed (bb26811, no code change)
 
 Read A3 a6ea71f: pre-registers V0-V6 ill-typed shape variants plus two A4 reference claims (continue-bytes 105/137/0/706, LF 3/5/0/39). A4 recomputed continue-bytes over git-object bytes: 706/105/137/0 (empty blob e69de29b, trivially 0) -- adopted values exact, no correction. V0-V6 verdicts are A3's gate alone; A4 publishes no parallel predictions. Also read A1 Q4 carried-bindings result (halves route viable; vehicle = field-range groups, A1-owned) -- no action items for A4. Posted as #16 6706861771. Freeze holds; standing by.
