@@ -52,17 +52,21 @@ all bytes ≥ 128 do not. `input_empty.pep`: 0-byte edge case.
 - Multi-file/directory walk, output formatting, CLI flags: out of scope
   for this slice.
 
-## Command a user can eventually run
+## Command a user runs (exe-direct native contract, per A1 grant answer)
 
-Once A1 wires the grant and A2 lowers `main(source: SourceBytes)`:
+There is no `run-c23 --grant-file` CLI and none is requested: A1 ruled that a
+new CLI would be a new ABI, out of scope for this mission. The contract is the
+compiled exe run directly with the granted file as argv[1], once A2 lowers
+`main(source: SourceBytes)`:
 
 ```powershell
-.\pep.ps1 run-c23 examples/dogfood/pepin-source-scan.pep --grant-file examples/dogfood/input_ascii.pep
-# expected: 23
+./pepin-source-scan.exe examples/dogfood/input_ascii.pep
+# expected: 23 (in A2's native reporting convention, as exercised by A2's probe)
 ```
 
-Current slice does NOT claim this command works; it defines the contract
-A1/A2 implement against (pinned source SHA + this SPEC). A3 pre-registers
+The runs-app binary does NOT exist yet (Blocker B stands); line-scan reached
+native PASS under exactly this contract (A2 receipt 47, A3-034 gate). Pinned
+source SHA + this SPEC remain the implementation target. A3 pre-registers
 predictions from this file before seeing native outputs.
 
 ## Line-scan (second program, LUCY-20261107-008 Q3)
