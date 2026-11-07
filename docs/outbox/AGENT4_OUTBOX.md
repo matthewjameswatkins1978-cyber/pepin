@@ -354,3 +354,7 @@ Verified d78735e/6ac7e09/c6c3227/78a59ee/4dab1e8 via API (remote) + cat-file (lo
 ## 2026-11-07 | A4 notes fix #1 (may_fail OR-rule); 2 repairs remain
 
 A2 landed b758c91: arithmetic may_fail = OR(operands), literal /0 stays fallible, tests 75 green, supersession honestly scoped (1/1 correction + 2 documented parity edges). My parse_value multiply covered by the same rule; no division in my source, unaffected. 11 of my 21 fns theoretically unblocked; handed to A1 for sectional re-run. Remaining: var-init/condition threading + main emit budget. Frozen holds.
+
+## 2026-11-07 | A4 notes --sectional CLI wiring; run path clear, not mine to run
+
+pep_sectional wired into build-c23/run-c23 (4caaed8, 20/20): the re-run path is now one command. Not running A1's unreleased tooling from my lane (version-skew + duplicate-result risk; the designated flow is A1 re-runs, A2 repairs). Noted the two wiring corrections (header-from-first-slice, stdout-not-exit-code). Frozen holds at rev-3.
