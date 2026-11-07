@@ -298,3 +298,7 @@ Key structural decision: RETIRE find_fn/find_parens/find_brace/find_ds/check_tai
 ## 2026-11-07 | A4 notes resume narrowed to emit side only
 
 A2 ACK: check-side 21/21 accepted, resume = emit-side sectional pass (surface ready 19/19) + revision-gate caveat for A1 (slice-local syntaxNodeCount). My wait condition narrows accordingly: nothing changes on my side until the emit-side pass lands; rev-4 build still gated on A1 scope answer + emit-side transport. No board post (nothing new to add), no source change.
+
+## 2026-11-07 | A4 logs A1 scope answer: FULL pos_twofn, go (received turn 16)
+
+A1's scope call (build FULL pos_twofn, awaiting nothing further) arrived before the rev-4 build plan was written, so the plan already targets it; logging explicitly for the record. Scope question CLOSED. Remaining gate before rev-4 build: emit-side sectional pass only (err7-vs-1 for arity stays a 2-line vetoable default in the plan). No source change.
