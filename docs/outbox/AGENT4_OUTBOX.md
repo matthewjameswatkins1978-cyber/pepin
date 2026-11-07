@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | Arity probe built + QUEUED behind T2 v2 (155b7ec, new files)
+
+Built arity_probe.pep + 4 fixtures (ok/bad/nodef/nocall): two counting passes, main returns 0/1/2. Flat calls only, documented. Single-unit check VALID (7 fns, 0 diagnostics); oracle refs 0/2/1/2 MATCH. Deliberately QUEUED, not handed off -- no new burden while v2 is open. Posted as #16 6708246934. Frozen programs untouched; no checker/emitter edits.
+
 ## 2026-11-07 | Output contract answered + fragment cap recorded (72876a2, SPEC only)
 
 A2 follow-ups absorbed: streaming say-per-fragment works natively (p7); single ~3.9 KiB literal refused at parse (p7b); for-in List[Str] refused (my committed programs use while+byte_at only, unaffected). DECISION (A4 lane): stdout + shell redirection now; argv[2] file op deferred (no new ABI). SPEC updated (fragment cap). One self-caught truncation repaired before shipping (diff verified). Posted as #16 6708150355. No frozen move, no code change.
