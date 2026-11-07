@@ -8,7 +8,7 @@ entry `analyze_chunk_typed` in `tests/pep_checker_a13.pep`.
 **Pre-registration commit:** `24bb120` — written and committed *before* any cell ran
 (`verification/acceptance/PRE-REGISTRATION-A3-021-PARTIAL-RECORD.md`).
 **Driver:** `verification/probes/partial_record_matrix.py` (reuses `staged_typed_attacks.py`;
-no new harness). Runs in ~2 min, 12 cells, deterministic.
+no new harness). Measured runtime 9.6 s wall clock, 12 cells, deterministic.
 
 ## Headline
 
