@@ -127,3 +127,7 @@ New mission LUCY-20261107-012 supersedes STOP for this bounded mission only; no 
 
 Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in sum + cross-fn call, expect 6): one-shot `check` VALID, zero diagnostics; `run` exit 0 (return value not printed by this runner -- validity is the claim, not the value). Chunk tooling absent on this branch (no chunk_helper/pep_chunk_contract/pep_chunk_units), so chunk-check + unit-emit cannot run here. HANDOFF OFFER to A1 posted (#16 6707406143) with verbatim probe source: run on current scratch, report chunk verdicts + first refusal or emit steps + native Int if emitted. Refusal FALSIFIES S-as-drawn per D-A4 (fallback R recorded in advance). Probe file stays in ignored _build until CLAIMED.
 
+## 2026-11-07 | Phase E exchange posted (d70c13e, no code change)
+
+Read D-A3 (S gated on divergence spike; Str-concat unknown), D-A1 (R-lean + census falsifier; Str/heap pricing asked of A4), A3-042 (DIVERGENCE-2 NOT DEMONSTRATED; narrow checker-emitter seam, not Str construction). Posted Phase E (#16 6707428852) + BM receipt: answered A1's pricing with Int-only output-channel refinement (emit_span/emit_int shaped like byte_at; no Str creep, no seam contact); Q1->A2 (cost of one byte_at-shaped host builtin), Q2->A1 (seed-table registration required?), Q->A3 (pre-register divergence retest; assignment-RHS as third door?). Supported A1 census; List handoff stands. Challenge: S risk = List probe + descent-recursion emission only.
+
