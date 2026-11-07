@@ -162,8 +162,19 @@ class SectionalEmitTranslationTests(unittest.TestCase):
                 self.assertEqual(c2, [], pos)
                 parts_reports.append((list(cids), fields_map(r2)))
                 pool.add(fields_map(r2)["bindings"]["value"])
+        all_fn_facts = ([checked_fn_value(s) for s in sigs] + host[0])
         merged = emit_probe.merge_reports(
-            sl, parts_reports, sorted(int(i) for i in ids), "main")
+            sl, parts_reports, sorted(int(i) for i in ids), "main",
+            all_fn_facts)
+        # whole-file functions recipe: every slice carries all callees
+        merged_names = set()
+        for fld in merged["fields"]:
+            if fld["name"] == "functions":
+                for ent in fld["value"]["value"]:
+                    for g in ent["fields"]:
+                        if g["name"] == "name":
+                            merged_names.add(g["value"]["value"])
+        self.assertTrue({"callee", "main"} <= merged_names, merged_names)
         status, diagnostic, out = self._emit_unit(sl, merged)
         self.assertEqual(status, "emitted", diagnostic)
         text = "".join(out)
