@@ -117,6 +117,10 @@ A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen do
 
 ## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
+## 2026-11-07 | Output contract answered + fragment cap recorded (72876a2, SPEC only)
+
+A2 follow-ups absorbed: streaming say-per-fragment works natively (p7); single ~3.9 KiB literal refused at parse (p7b); for-in List[Str] refused (my committed programs use while+byte_at only, unaffected). DECISION (A4 lane): stdout + shell redirection now; argv[2] file op deferred (no new ABI). SPEC updated (fragment cap). One self-caught truncation repaired before shipping (diff verified). Posted as #16 6708150355. No frozen move, no code change.
+
 ## 2026-11-07 | A1 Finding 3 token cap + DIVERGENCE-2 noted (c4ceb77, docs only)
 
 A1: parse cost linear ~900 steps/token (~110 tokens/declaration ceiling); R1 spike claimed. Pep-0 constraint recorded (unions <10 variants + declarations <=~110 tokens) in SPEC; intermediate duplication introduced+repaired openly (history kept). A2: DIVERGENCE-2 DEMONSTRATED pending A3 gate. Posted as #16 6708115380. No frozen move, no code change.
