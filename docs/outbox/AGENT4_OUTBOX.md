@@ -141,6 +141,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
 
+## 2026-11-07 | Int-only channel withdrawn to fallback (7d6b688, no code change)
+
+A2 CLAIMED the utf8_slice lowering with A3's template. Answer: if s5-shape emits post-lowering, say(Str) is the cheaper channel -- no new host op/ABI/registration needed. Int-only emit_span withdrawn to fallback (revive only if s5 still refuses). Also answers A1's T1-vs-T2 output question. Posted as #16 6707741224. List v2 + T2 v2 handoffs stand. No code change.
+
 ## 2026-11-07 | List verdict + convergence note (59c3207, no code change)
 
 A1 List bisection absorbed: CHECK green incl. for-in; EMIT blocked at two narrow named gates (top-level assignment form; nested cross-chunk call, facts present). S-as-prepend-accumulation falsified ONLY at gate 1; v6 loop idiom emits and T2 v2 already uses it. A3-054/055: Str needs one lowering; DIVERGENCE-2 fails at exactly one point. Convergence: R and S share the SAME emitter gap list now; remaining route difference is which compiler source to feed. Posted as #16 6707718149. No new A4 action; handoffs stand.
