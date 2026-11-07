@@ -105,7 +105,8 @@ no stored table, hence no cross-chunk List values. A parallel-`List[Int]`
 table variant is unblocked but untested; the no-token
 verdict is unchanged (re-scan needs no buffered tokens either). Excluded
 by subset definition (not by
-implementation): nested function definitions (unions capped at <10 variants per A1 Finding 2 -- parse cliff between k=10 and k=20; Pep-0 carries no large recursive unions), multi-error recovery,
+implementation): nested function definitions (unions capped at <10 variants per A1 Finding 2 -- parse cliff between k=10 and k=20; Pep-0 carries no large recursive unions; single declarations capped at ~110 tokens per A1 Finding 3 -- linear ~900 steps/token),
+ between k=10 and k=20; Pep-0 carries no large recursive unions), multi-error recovery,
 reorder-dependent emission. Open challenge: name one Pep-0 program shape
 needing random access to more than one buffered token and this verdict flips.
 
