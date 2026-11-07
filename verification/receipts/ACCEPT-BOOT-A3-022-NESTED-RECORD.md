@@ -71,6 +71,31 @@ a producer-derived fact carries real spans.)
 Controls that stayed green: N0 (honest nested facts), N4 (honest nested type check catches a
 wrong inner value), N3″ (absent outer declaration refused), N2 (renamed field refused).
 
+## Scope of G1, measured (so the finding is not overstated)
+
+The shipped name closure does **not** currently drop `Inner` for this shape. Measured on the
+same source with the chunk = `make_outer` subtree:
+
+```
+chunk node texts    : ['', 'Inner', 'Int', 'Outer', 'Str', 'inner', 'make_outer', 'n', 'tag']
+fact_closure(names) : ['Inner', 'Outer', 'make_outer']
+```
+
+`Inner` is kept because the nested literal's type name is itself a node text inside the chunk,
+and `DocumentIndex.fact_closure` over-approximates by node text. So G1 is **not reachable
+through today's host on this shape**. It is reachable by any of:
+
+- a host that supplies only the types named in *type annotations* (here just `Outer`) instead
+  of every node text;
+- a producer that emits declarations per bounded unit rather than per document;
+- a fact cache or pool keyed on carried bindings/signatures rather than on all node texts;
+- any future tightening of the closure to save bytes — which is exactly the direction the
+  100k ceiling pushes.
+
+That is the reason to close it now rather than when a cheaper closure lands: the checker's
+behaviour when a nested declaration is missing is currently "valid, no diagnostics", so the
+cost of a later closure change would be silent, not loud.
+
 ## What A1 can do with this
 
 - **Cheapest sound fix for G1:** make the literal branch fail closed the way the outer path
