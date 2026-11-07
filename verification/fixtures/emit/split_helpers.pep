@@ -27,6 +27,7 @@ fn classify(b: Int) -> Int {
       if is_digit(b) { return 2 } else { return 3 }
     }
   }
+  return 3
 }
 
 fn main(source: SourceBytes) -> Int {
