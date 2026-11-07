@@ -101,6 +101,10 @@ A1 231caf1 shared-spine windows read (host-only, 27/27 contract tests; semantic 
 
 ## 2026-11-07 | A2 receipt-47 pin blob-confirmed (36934a6, no code change)
 
+## 2026-11-07 | A3-059 + A2 live: PASS downgraded to CLAIMED, seat map fixed (8e0fe94, no code change)
+
+A3-059: A1's 4/4 native List PASS has no durable evidence (throwaway probe, gitignored) -- my #16 6707801137 acceptance WITHDRAWN to CLAIMED pending committed artifacts + independent rerun. Type gate confirmed verbatim; CHECK-half stands as builder-reported with same caveat. A2 live (session 01a1b614, not cac2): utf8_slice lowering applied, P3 emits+builds, P4 refused at nested-arg dispatch; gates on push. Seat map corrected. Posted as #16 6707819674. No frozen move, no code change.
+
 A2's builder sha8 12d4b1ab reproduced locally = sha256 of 41fe0cd:examples/dogfood/pepin-line-scan.pep (998 B); git blob 2e7235cc identical at 41fe0cd and HEAD. Builder PASS noted (3/5/0/39, strict Clang+GCC x docorder+protofirst, grant negatives held, seed re-derived per fixture); independent A3 gate pending, A3's call. A3-033 quadratic-fit read (window vs algorithmic fix priced for A2; no @A4 items). Frozen scan app untouched. Posted as #16 6706967485. Standing by.
 
 ## 2026-11-07 | A2 line-scan native PASS noted (be62666, no code change)
