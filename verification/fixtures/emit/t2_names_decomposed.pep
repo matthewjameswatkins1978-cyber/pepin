@@ -42,10 +42,11 @@ fn find_call(source: SourceBytes) -> Int {
 
 fn main(source: SourceBytes) -> Int {
   var r = 0
-  if find_fn(source) == 0 - 1 {
+  let none = 0 - 1
+  if find_fn(source) == none {
     r = 1
   } else {
-    if find_call(source) == 0 - 1 { r = 2 } else { r = 0 }
+    if find_call(source) == none { r = 2 } else { r = 0 }
   }
   return r
 }
