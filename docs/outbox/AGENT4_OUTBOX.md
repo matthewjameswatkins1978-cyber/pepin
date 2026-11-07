@@ -79,93 +79,45 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
-## 2026-11-07 | A3-040 six-file gate recorded (0d9909b, SPEC only)
+## 2026-11-07 | A3 BOOT-A3-031 adopted claims blob-confirmed (bb26811, no code change)
 
-A3-040 (A3 caa7255): line-scan PROVEN 49/49 — NUL edge (9 B, 2 NULs -> 3), fact gates M4/M5/M6, honest M1-M3 N/A (zero cross-chunk call facts). SPEC table extended to the six gated files; scan-app expectations unchanged and still unused natively. Posted as #16 6707181779. No code change; freeze holds.
+Read A3 a6ea71f: pre-registers V0-V6 ill-typed shape variants plus two A4 reference claims (continue-bytes 105/137/0/706, LF 3/5/0/39). A4 recomputed continue-bytes over git-object bytes: 706/105/137/0 (empty blob e69de29b, trivially 0) -- adopted values exact, no correction. V0-V6 verdicts are A3's gate alone; A4 publishes no parallel predictions. Also read A1 Q4 carried-bindings result (halves route viable; vehicle = field-range groups, A1-owned) -- no action items for A4. Posted as #16 6706861771. Freeze holds; standing by.
 
-## 2026-11-07 | A3-038 window-route closure absorbed (b914c10, no code change)
+## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
 
-A3 3bdff26: dependency-closed windows emit but cannot shrink the scan app (20-id base + 24-id if = whole 44; only separable statement is the cheap one). Window route closed for this app; cost-per-node (quadratic term) is the only measured lever. My invariance note stands but has no useful split to govern here. Line-scan remains the sole native proof; scan app frozen awaiting cheaper lowering. Posted as #16 6707113263. Standing by.
-
-## 2026-11-07 | Split-invariance requirement for windowed emission (c03d4f6, no code change)
-
-New approach this turn (not another re-poll): proactive A4-lane answer to the open consuming-side question (A3-036) insofar as it touches app semantics. For pepin-source-scan ONLY, any node-partition preserves the result iff byte-classification sites execute exactly once in order (pure function of granted bytes; o-1 lookback needs no cross-window state), carried bindings n/o thread with no duplication or loss (the only cross-statement state), and loop trip count is unchanged. Corollary: duplicating a classifying/incrementing spine node double-counts; structural-ancestor duplication harmless only if bodies execute once. Requirement on the consumer design, not an implementation claim; does not answer enforcement. Read A1 linearization scoping (windows primary; no @A4 items) and A3-036 (15/15 spine sound; no @A4 items). Posted as #16 6707041975. Freeze holds; standing by.
-
-## 2026-11-07 | A3-035 independent line-scan gate noted (82b63aa, no code change)
-
-A3 b674232..11fe7aa gated 86ff953 cold: line_scan_gate_034.py 39/39 PROVEN (five real files, Clang+GCC both orders, metamorphic, path negatives); idruns FAIL at identical 5342:10; window protocol groundwork-not-fix. With A2 builder PASS + A1 integrator repro, line-scan is builder-proven, integrator-reproduced, independently gated. A1 line-scan repro + A2 cross-verification read (no @A4 items). Frozen scan app + line-scan source unchanged throughout; no target moved. Posted as #16 6707015469. Standing by for windowed/linearized source-scan route.
-
-## 2026-11-07 | A1 window protocol + fourth-tree verify (31e1d3b, no code change)
-
-A1 231caf1 shared-spine windows read (host-only, 27/27 contract tests; semantic half specified-not-built). Fourth tree scratch/a1-dogfood-scan@725754e verified: all four frozen blobs identical. A1 range touches zero dogfood files. No @A4 items; windowed twin emission unblocked at protocol level for A2. Posted as #16 6706979889. Freeze holds; standing by.
-
-## 2026-11-07 | A2 receipt-47 pin blob-confirmed (36934a6, no code change)
-
-## 2026-11-07 | A3-059 + A2 live: PASS downgraded to CLAIMED, seat map fixed (8e0fe94, no code change)
-
-A3-059: A1's 4/4 native List PASS has no durable evidence (throwaway probe, gitignored) -- my #16 6707801137 acceptance WITHDRAWN to CLAIMED pending committed artifacts + independent rerun. Type gate confirmed verbatim; CHECK-half stands as builder-reported with same caveat. A2 live (session 01a1b614, not cac2): utf8_slice lowering applied, P3 emits+builds, P4 refused at nested-arg dispatch; gates on push. Seat map corrected. Posted as #16 6707819674. No frozen move, no code change.
-
-A2's builder sha8 12d4b1ab reproduced locally = sha256 of 41fe0cd:examples/dogfood/pepin-line-scan.pep (998 B); git blob 2e7235cc identical at 41fe0cd and HEAD. Builder PASS noted (3/5/0/39, strict Clang+GCC x docorder+protofirst, grant negatives held, seed re-derived per fixture); independent A3 gate pending, A3's call. A3-033 quadratic-fit read (window vs algorithmic fix priced for A2; no @A4 items). Frozen scan app untouched. Posted as #16 6706967485. Standing by.
-
-## 2026-11-07 | A2 line-scan native PASS noted (be62666, no code change)
-
-A2 7a49c60 (test-only): probe drives both dogfood apps; line-scan main fits capacity (~22 nodes); SPEC tables 23/30/0/139 + 3/5/0/39 asserted in-probe over committed bytes; line-scan pinned at A4 41fe0cd, the correct Q3 pin. Frozen scan app untouched and still awaits blocker B -- no A4 edit, no target moved. Status discipline: builder-reported PASS until A3 independently gates the SHA. Posted as #16 6706943136. Standing by for A2's receipt and A3's gate.
+Read A2 ac3e2ea: empty-then fixed in both walkers (suite 74 OK/1 skip), blocker B measured (37-node emits, 43 tips; owned micro-reductions no gain), chunk-window ASK directed to A1 (24-32 nodes; A2 will not build transport before A1 owns the protocol). Ownership verified: range 537967e..ac3e2ea touches only AGENT2_OUTBOX.md, tests/pep_c23_emitter.pep, new tests/probe_dogfood_source_scan.py -- zero files under examples/dogfood/. The ASK is A1's to answer; A4 takes no action and will not pre-empt the window protocol. Posted as #16 6706878068. Freeze holds; standing by.
 
 ## 2026-11-07 | Third-tree byte-identity + A3-031 wording correction (0c73f99, no code change)
 
 A1 re-pointed scratch 4e325e0 (prior candidate + A2 ac3e2ea): all four frozen dogfood blobs verified identical (scan 4a44dd65, ascii 0672d956, nonascii abd108d4, empty e69de29bb2d1d6434b8b29ae775ad8c2e48c5391). Line-scan absent there as expected (predates 41fe0cd; separate handoff, already routed). A3-031 accepted: zero ACCEPTING-INVALID 18/18; open_bytes whole-program-analysis correction to check-valid wording noted (host validates, Pep checker re-checks chunks); A3's 8-value confirmation matches A4 blob records. A1's window-protocol ACK is A1-owned; A2 micro-reductions no-gain accepted. Posted as #16 6706901719. Freeze holds; standing by.
 
-## 2026-11-07 | A2 receipt 46 absorbed (16f253e, no code change)
+## 2026-11-07 | A2 line-scan native PASS noted (be62666, no code change)
 
-## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
+A2 7a49c60 (test-only): probe drives both dogfood apps; line-scan main fits capacity (~22 nodes); SPEC tables 23/30/0/139 + 3/5/0/39 asserted in-probe over committed bytes; line-scan pinned at A4 41fe0cd, the correct Q3 pin. Frozen scan app untouched and still awaits blocker B -- no A4 edit, no target moved. Status discipline: builder-reported PASS until A3 independently gates the SHA. Posted as #16 6706943136. Standing by for A2's receipt and A3's gate.
 
-A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
+## 2026-11-07 | A2 receipt-47 pin blob-confirmed (36934a6, no code change)
 
-## 2026-11-07 | Conditional route-selection input (297d4fd, no code change)
+A2's builder sha8 12d4b1ab reproduced locally = sha256 of 41fe0cd:examples/dogfood/pepin-line-scan.pep (998 B); git blob 2e7235cc identical at 41fe0cd and HEAD. Builder PASS noted (3/5/0/39, strict Clang+GCC x docorder+protofirst, grant negatives held, seed re-derived per fixture); independent A3 gate pending, A3's call. A3-033 quadratic-fit read (window vs algorithmic fix priced for A2; no @A4 items). Frozen scan app untouched. Posted as #16 6706967485. Standing by.
 
-IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path is fully unblocked with zero new ABI/host changes; remaining S work is authoring the Pep-0 source. R still needs ingestion + quadratic fixes. So S is the quicker credible route CONTINGENT on the lowering; if it fails, both stall at the same output wall and the choice reopens. Decision belongs to A1's collation + Matthew/Lucy. Posted as #16 6708276780.
+## 2026-11-07 | A1 window protocol + fourth-tree verify (31e1d3b, no code change)
 
-## 2026-11-07 | Arity probe built + QUEUED behind T2 v2 (155b7ec, new files)
+A1 231caf1 shared-spine windows read (host-only, 27/27 contract tests; semantic half specified-not-built). Fourth tree scratch/a1-dogfood-scan@725754e verified: all four frozen blobs identical. A1 range touches zero dogfood files. No @A4 items; windowed twin emission unblocked at protocol level for A2. Posted as #16 6706979889. Freeze holds; standing by.
 
-Built arity_probe.pep + 4 fixtures (ok/bad/nodef/nocall): two counting passes, main returns 0/1/2. Flat calls only, documented. Single-unit check VALID (7 fns, 0 diagnostics); oracle refs 0/2/1/2 MATCH. Deliberately QUEUED, not handed off -- no new burden while v2 is open. Posted as #16 6708246934. Frozen programs untouched; no checker/emitter edits.
+## 2026-11-07 | A3-035 independent line-scan gate noted (82b63aa, no code change)
 
-## 2026-11-07 | Output contract answered + fragment cap recorded (72876a2, SPEC only)
+A3 b674232..11fe7aa gated 86ff953 cold: line_scan_gate_034.py 39/39 PROVEN (five real files, Clang+GCC both orders, metamorphic, path negatives); idruns FAIL at identical 5342:10; window protocol groundwork-not-fix. With A2 builder PASS + A1 integrator repro, line-scan is builder-proven, integrator-reproduced, independently gated. A1 line-scan repro + A2 cross-verification read (no @A4 items). Frozen scan app + line-scan source unchanged throughout; no target moved. Posted as #16 6707015469. Standing by for windowed/linearized source-scan route.
 
-A2 follow-ups absorbed: streaming say-per-fragment works natively (p7); single ~3.9 KiB literal refused at parse (p7b); for-in List[Str] refused (my committed programs use while+byte_at only, unaffected). DECISION (A4 lane): stdout + shell redirection now; argv[2] file op deferred (no new ABI). SPEC updated (fragment cap). One self-caught truncation repaired before shipping (diff verified). Posted as #16 6708150355. No frozen move, no code change.
+## 2026-11-07 | Split-invariance requirement for windowed emission (c03d4f6, no code change)
 
-## 2026-11-07 | A1 Finding 3 token cap + DIVERGENCE-2 noted (c4ceb77, docs only)
+New approach this turn (not another re-poll): proactive A4-lane answer to the open consuming-side question (A3-036) insofar as it touches app semantics. For pepin-source-scan ONLY, any node-partition preserves the result iff byte-classification sites execute exactly once in order (pure function of granted bytes; o-1 lookback needs no cross-window state), carried bindings n/o thread with no duplication or loss (the only cross-statement state), and loop trip count is unchanged. Corollary: duplicating a classifying/incrementing spine node double-counts; structural-ancestor duplication harmless only if bodies execute once. Requirement on the consumer design, not an implementation claim; does not answer enforcement. Read A1 linearization scoping (windows primary; no @A4 items) and A3-036 (15/15 spine sound; no @A4 items). Posted as #16 6707041975. Freeze holds; standing by.
 
-A1: parse cost linear ~900 steps/token (~110 tokens/declaration ceiling); R1 spike claimed. Pep-0 constraint recorded (unions <10 variants + declarations <=~110 tokens) in SPEC; intermediate duplication introduced+repaired openly (history kept). A2: DIVERGENCE-2 DEMONSTRATED pending A3 gate. Posted as #16 6708115380. No frozen move, no code change.
+## 2026-11-07 | A3-038 window-route closure absorbed (b914c10, no code change)
 
-## 2026-11-07 | A1 Finding 2 union cap adopted (6986172, SPEC only)
+A3 3bdff26: dependency-closed windows emit but cannot shrink the scan app (20-id base + 24-id if = whole 44; only separable statement is the cheap one). Window route closed for this app; cost-per-node (quadratic term) is the only measured lever. My invariance note stands but has no useful split to govern here. Line-scan remains the sole native proof; scan app frozen awaiting cheaper lowering. Posted as #16 6707113263. Standing by.
 
-A1: flat AND recursive union ladders refuse at k=20 (164 steps at k=10); unions >=~15 variants unparseable; R-spike = repair union-declaration parse. S side: Pep-0 carries no large recursive unions by design -- now a MEASURED constraint (<10 variants), recorded in SPEC. Subset stands, no repair needed. Posted as #16 6708031081. No frozen move, no code change.
+## 2026-11-07 | A3-040 six-file gate recorded (0d9909b, SPEC only)
 
-## 2026-11-07 | A1 AstValue finding absorbed (d7a1895, no code change)
-
-A1 measured the Pep parser cannot parse its own 40-variant AstValue union within budget (R critical path). Direct measured backing for D-A4's no-big-unions subset choice: S sidesteps this structurally. Position-reporting caveat noted. Posted as #16 6708008045. No new A4 action.
-
-## 2026-11-07 | A3-060 absorbed: T2 symbol table is re-scan (3d990b6, SPEC only)
-
-A3-060: List ARGUMENTS cannot cross chunk boundaries -- token lists passed between chunks are structurally refused. Parallel-List[Int] table design parked behind List-arg support; working design is re-scan per query (no stored table, no cross-chunk List values), which is what the T2 probe already does. No-token verdict unchanged. SPEC corrected (T2 section). Posted as #16 6707870439. No frozen move, no code change.
-
-Read A2 ac3e2ea: empty-then fixed in both walkers (suite 74 OK/1 skip), blocker B measured (37-node emits, 43 tips; owned micro-reductions no gain), chunk-window ASK directed to A1 (24-32 nodes; A2 will not build transport before A1 owns the protocol). Ownership verified: range 537967e..ac3e2ea touches only AGENT2_OUTBOX.md, tests/pep_c23_emitter.pep, new tests/probe_dogfood_source_scan.py -- zero files under examples/dogfood/. The ASK is A1's to answer; A4 takes no action and will not pre-empt the window protocol. Posted as #16 6706878068. Freeze holds; standing by.
-
-## 2026-11-07 | A3 BOOT-A3-031 adopted claims blob-confirmed (bb26811, no code change)
-
-## 2026-11-07 | AVAILABLE for bounded mission-012 work (3311da1, no code change)
-
-## 2026-11-07 | D-A4 falsifier loop closed on measured record (f4a8343, no code change)
-
-Original falsifier adjudicated without new runs: prepend-accumulation form DEAD as predicted; loop-hoisted + re-scan forms emit (A1 v6, A3 checks). S narrowed, not killed; R fallback not needed on this axis. Posted as #16 6707985122. Handoffs fulfilled by evidence where run; v2 native run still open.
-
-Queue empty (v2 handoffs stand unclaimed; Phase E answered; Int-only withdrawn). Offering on own lane/bench: independent oracle re-derivation for new fixtures; single-unit check-valid pre-screen (<=35 nodes); SPEC cross-check of dogfood-touching claims. Posted as #16 6707958572. No new-feature builds, no checker/emitter edits, no acceptance writes.
-
-## 2026-11-07 | A3-061 retraction absorbed, SPEC premise corrected (e0ba545, no code change)
-
-A3-061: List-arg gate was A3's confound (int_text the real blocker). Corrected SPEC: re-scan stands as implemented; parallel-List UNBLOCKED-but-untested (was: parked). Absorbed A3-064 (S dispatch runs natively) + A1 output-path (return-Int needs no say/int_text). Posted as #16 6707927630. No frozen move, no code change.
-
-Read A3 a6ea71f: pre-registers V0-V6 ill-typed shape variants plus two A4 reference claims (continue-bytes 105/137/0/706, LF 3/5/0/39). A4 recomputed continue-bytes over git-object bytes: 706/105/137/0 (empty blob e69de29b, trivially 0) -- adopted values exact, no correction. V0-V6 verdicts are A3's gate alone; A4 publishes no parallel predictions. Also read A1 Q4 carried-bindings result (halves route viable; vehicle = field-range groups, A1-owned) -- no action items for A4. Posted as #16 6706861771. Freeze holds; standing by.
+A3-040 (A3 caa7255): line-scan PROVEN 49/49 — NUL edge (9 B, 2 NULs -> 3), fact gates M4/M5/M6, honest M1-M3 N/A (zero cross-chunk call facts). SPEC table extended to the six gated files; scan-app expectations unchanged and still unused natively. Posted as #16 6707181779. No code change; freeze holds.
 
 ## 2026-11-07 | D-A4 ROUTE posted, S-first (new mission 012, Phase D)
 
@@ -177,49 +129,97 @@ Probe `_build/falsifier_list.pep` (List[Int] ascription + prepend x3 + for-in su
 
 ## 2026-11-07 | Phase E exchange posted (d70c13e, no code change)
 
+Read D-A3 (S gated on divergence spike; Str-concat unknown), D-A1 (R-lean + census falsifier; Str/heap pricing asked of A4), A3-042 (DIVERGENCE-2 NOT DEMONSTRATED; narrow checker-emitter seam, not Str construction). Posted Phase E (#16 6707428852) + BM receipt: answered A1's pricing with Int-only output-channel refinement (emit_span/emit_int shaped like byte_at; no Str creep, no seam contact); Q1->A2 (cost of one byte_at-shaped host builtin), Q2->A1 (seed-table registration required?), Q->A3 (pre-register divergence retest; assignment-RHS as third door?). Supported A1 census; List handoff stands. Challenge: S risk = List probe + descent-recursion emission only.
+
+## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
+
+A3-043: seam = builtins never get call facts; utf8_slice has zero lowering sites. Int-only channel decomposes into 3 bounded items: fact-or-factless admission (A1/A2 decision, supersedes my Q1 framing), by-name lowering (precedent exists), one C slice helper (only new native code). No new A4 asks; List handoff stands. Posted as #16 6707450731. Freeze holds.
+
 ## 2026-11-07 | T2 verdict + cursor probe pair committed (f2f70b0)
+
+LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found inside Pep-0 as scoped (prepass covers forward/mutual recursion; single-error reporting; source-order C output; parallel-Int symbol table). Token-list framework NOT built. cursor_kind_v1/v2.pep committed, both check valid; refs v1 1/3/0/3/3 vs v2 1/1/0/1/1 with exact //-file delta. Open challenge posted. Native run + gate are A1/A2/A3's. Posted as #16 6707502372. Frozen scan/line-scan untouched.
 
 ## 2026-11-07 | S sketch revised after A3-045/046 (096b20c, no code change)
 
 A3-045 (one conditional per loop body) + A3-046 (no list indexing) partially falsify the D-route: cursor probes likely native-refused (SPEC "proven shapes" line overclaimed -- predicted refusal, measurement belongs to A1/A2); per-byte classification exceeds budget however arranged; T2 no-storage verdict stands but binding constraint moves to iteration emission (open List handoff). S loses "no emitter work" edge, keeps smaller-codebase edge. Posted as #16 6707522802. No frozen move.
 
-LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found inside Pep-0 as scoped (prepass covers forward/mutual recursion; single-error reporting; source-order C output; parallel-Int symbol table). Token-list framework NOT built. cursor_kind_v1/v2.pep committed, both check valid; refs v1 1/3/0/3/3 vs v2 1/1/0/1/1 with exact //-file delta. Open challenge posted. Native run + gate are A1/A2/A3's. Posted as #16 6707502372. Frozen scan/line-scan untouched.
-
-## 2026-11-07 | A3-043 absorbed, S channel parts list (newest, no code change)
-
-## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
-
-## 2026-11-07 | A1 List PASS accepted, S token path alive (19b46f7, no code change)
-
-A1 ran the List handoff: full native PASS (literal construction + hoisted call, Clang+GCC x2 orders, rc 0). Falsifier scope narrowed honestly: only top-level-statement accumulation refused; v6 loop idiom emits and T2 v2 already uses it. Remaining S risks: say(Str) output (pending A2 lowering), arity/type checking, actual build-out. Seat map noted (A2 = cac2 by elimination, unconfirmed); no direct message needed. Posted as #16 6707801137. No frozen move, no code change.
-
-## 2026-11-07 | Int-only channel withdrawn to fallback (7d6b688, no code change)
-
-A2 CLAIMED the utf8_slice lowering with A3's template. Answer: if s5-shape emits post-lowering, say(Str) is the cheaper channel -- no new host op/ABI/registration needed. Int-only emit_span withdrawn to fallback (revive only if s5 still refuses). Also answers A1's T1-vs-T2 output question. Posted as #16 6707741224. List v2 + T2 v2 handoffs stand. No code change.
-
-## 2026-11-07 | List verdict + convergence note (59c3207, no code change)
-
-A1 List bisection absorbed: CHECK green incl. for-in; EMIT blocked at two narrow named gates (top-level assignment form; nested cross-chunk call, facts present). S-as-prepend-accumulation falsified ONLY at gate 1; v6 loop idiom emits and T2 v2 already uses it. A3-054/055: Str needs one lowering; DIVERGENCE-2 fails at exactly one point. Convergence: R and S share the SAME emitter gap list now; remaining route difference is which compiler source to feed. Posted as #16 6707718149. No new A4 action; handoffs stand.
-
-Withdrew v1 offsets design before any run (A3-051: zero-conditional loops emit; nested returns unrepresentable). v2: counting passes via loop-free is_fn_at/is_paren, main via result var + trailing return. Single-unit check VALID 5 fns; oracle 0/1/2 unchanged. SPEC section updated. Updated handoff to A1 posted (#16 6707668486); v1 offer void, decision fork stated (emit->arity/type probe; refuse->record layer, no v1 rerun). Frozen scan/line-scan/cursor untouched; no checker/emitter edits.
-
 ## 2026-11-07 | A3-047 absorbed: depth-driven cost rule adopted (9f8726e, no code change)
 
-## 2026-11-07 | T2 probe pair committed + handed to A1 (5e1fc9d, new files)
-
-Built t2_names_probe.pep + 3 fixtures (valid/nodef/nocall) + SPEC section: two-pass def/use scan, main returns 0/1/2; single-unit check VALID, oracle refs 0/1/2. Unknown-symbol coverage only; arity/type need a bigger probe later. HANDOFF to A1 posted (#16 6707623950, same claim pattern as List probe). Frozen scan/line-scan/cursor untouched.
+A3 withdrew per-statement-scan/index recommendation (R2 falsified: deep expr costlier than 5 statements at same size); cost tracks expression DEPTH. S-sketch consequence: shallow-binary-tree discipline (depth <=2) for all Pep-0 code, on top of small-function sizes; single while/if shapes unchanged. List handoff + Int-only channel unchanged. Posted as #16 6707541284. No frozen move, no code change.
 
 ## 2026-11-07 | A1 ingestion question answered + A3-048 absorbed (23e0314, no code change)
+
+A1 census: R blocked at ingestion (3/4 sources >64KB cap) + semantic_snapshot gap; falsifier prerequisite unmet. A4 answer: S sidesteps ingestion by construction (~500-800 lines, ~15-30KB, under cap); no new ABI/cap needed. A3-048: shape falsified, guessing stopped correctly; S-design consequence = measured-envelope design only (<=~30 nodes, single while, <=1 nesting, shallow exprs), no model extrapolation. Posted as #16 6707563114. No frozen move, no code change.
 
 ## 2026-11-07 | A3-049 cursor verdict accepted, SPEC corrected (4bae1fe, SPEC only)
 
 A3-049: all 10 cursor values match (comment rule real); v1 chunk-valid but unit-emit refused (52 nodes), v2 refused at chunk-check. Accepted v1 first_kind as A2's milestone target. Corrected SPEC's "proven chunk shapes" overclaim; one-shot check-valid stands. Posted as #16 6707580402. No frozen move, no code change.
 
-A1 census: R blocked at ingestion (3/4 sources >64KB cap) + semantic_snapshot gap; falsifier prerequisite unmet. A4 answer: S sidesteps ingestion by construction (~500-800 lines, ~15-30KB, under cap); no new ABI/cap needed. A3-048: shape falsified, guessing stopped correctly; S-design consequence = measured-envelope design only (<=~30 nodes, single while, <=1 nesting, shallow exprs), no model extrapolation. Posted as #16 6707563114. No frozen move, no code change.
+## 2026-11-07 | T2 probe pair committed + handed to A1 (5e1fc9d, new files)
 
-A3 withdrew per-statement-scan/index recommendation (R2 falsified: deep expr costlier than 5 statements at same size); cost tracks expression DEPTH. S-sketch consequence: shallow-binary-tree discipline (depth <=2) for all Pep-0 code, on top of small-function sizes; single while/if shapes unchanged. List handoff + Int-only channel unchanged. Posted as #16 6707541284. No frozen move, no code change.
+Built t2_names_probe.pep + 3 fixtures (valid/nodef/nocall) + SPEC section: two-pass def/use scan, main returns 0/1/2; single-unit check VALID, oracle refs 0/1/2. Unknown-symbol coverage only; arity/type need a bigger probe later. HANDOFF to A1 posted (#16 6707623950, same claim pattern as List probe). Frozen scan/line-scan/cursor untouched.
 
-A3-043: seam = builtins never get call facts; utf8_slice has zero lowering sites. Int-only channel decomposes into 3 bounded items: fact-or-factless admission (A1/A2 decision, supersedes my Q1 framing), by-name lowering (precedent exists), one C slice helper (only new native code). No new A4 asks; List handoff stands. Posted as #16 6707450731. Freeze holds.
+## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
 
-Read D-A3 (S gated on divergence spike; Str-concat unknown), D-A1 (R-lean + census falsifier; Str/heap pricing asked of A4), A3-042 (DIVERGENCE-2 NOT DEMONSTRATED; narrow checker-emitter seam, not Str construction). Posted Phase E (#16 6707428852) + BM receipt: answered A1's pricing with Int-only output-channel refinement (emit_span/emit_int shaped like byte_at; no Str creep, no seam contact); Q1->A2 (cost of one byte_at-shaped host builtin), Q2->A1 (seed-table registration required?), Q->A3 (pre-register divergence retest; assignment-RHS as third door?). Supported A1 census; List handoff stands. Challenge: S risk = List probe + descent-recursion emission only.
+Withdrew v1 offsets design before any run (A3-051: zero-conditional loops emit; nested returns unrepresentable). v2: counting passes via loop-free is_fn_at/is_paren, main via result var + trailing return. Single-unit check VALID 5 fns; oracle 0/1/2 unchanged. SPEC section updated. Updated handoff to A1 posted (#16 6707668486); v1 offer void, decision fork stated (emit->arity/type probe; refuse->record layer, no v1 rerun). Frozen scan/line-scan/cursor untouched; no checker/emitter edits.
+
+## 2026-11-07 | List verdict + convergence note (59c3207, no code change)
+
+A1 List bisection absorbed: CHECK green incl. for-in; EMIT blocked at two narrow named gates (top-level assignment form; nested cross-chunk call, facts present). S-as-prepend-accumulation falsified ONLY at gate 1; v6 loop idiom emits and T2 v2 already uses it. A3-054/055: Str needs one lowering; DIVERGENCE-2 fails at exactly one point. Convergence: R and S share the SAME emitter gap list now; remaining route difference is which compiler source to feed. Posted as #16 6707718149. No new A4 action; handoffs stand.
+
+## 2026-11-07 | Int-only channel withdrawn to fallback (7d6b688, no code change)
+
+A2 CLAIMED the utf8_slice lowering with A3's template. Answer: if s5-shape emits post-lowering, say(Str) is the cheaper channel -- no new host op/ABI/registration needed. Int-only emit_span withdrawn to fallback (revive only if s5 still refuses). Also answers A1's T1-vs-T2 output question. Posted as #16 6707741224. List v2 + T2 v2 handoffs stand. No code change.
+
+## 2026-11-07 | A1 List PASS accepted, S token path alive (19b46f7, no code change)
+
+A1 ran the List handoff: full native PASS (literal construction + hoisted call, Clang+GCC x2 orders, rc 0). Falsifier scope narrowed honestly: only top-level-statement accumulation refused; v6 loop idiom emits and T2 v2 already uses it. Remaining S risks: say(Str) output (pending A2 lowering), arity/type checking, actual build-out. Seat map noted (A2 = cac2 by elimination, unconfirmed); no direct message needed. Posted as #16 6707801137. No frozen move, no code change.
+
+## 2026-11-07 | A3-059 + A2 live: PASS downgraded to CLAIMED, seat map fixed (8e0fe94, no code change)
+
+A3-059: A1's 4/4 native List PASS has no durable evidence (throwaway probe, gitignored) -- my #16 6707801137 acceptance WITHDRAWN to CLAIMED pending committed artifacts + independent rerun. Type gate confirmed verbatim; CHECK-half stands as builder-reported with same caveat. A2 live (session 01a1b614, not cac2): utf8_slice lowering applied, P3 emits+builds, P4 refused at nested-arg dispatch; gates on push. Seat map corrected. Posted as #16 6707819674. No frozen move, no code change.
+
+## 2026-11-07 | A3-060 absorbed: T2 symbol table is re-scan (3d990b6, SPEC only)
+
+A3-060: List ARGUMENTS cannot cross chunk boundaries -- token lists passed between chunks are structurally refused. Parallel-List[Int] table design parked behind List-arg support; working design is re-scan per query (no stored table, no cross-chunk List values), which is what the T2 probe already does. No-token verdict unchanged. SPEC corrected (T2 section). Posted as #16 6707870439. No frozen move, no code change.
+
+## 2026-11-07 | A3-061 retraction absorbed, SPEC premise corrected (e0ba545, no code change)
+
+A3-061: List-arg gate was A3's confound (int_text the real blocker). Corrected SPEC: re-scan stands as implemented; parallel-List UNBLOCKED-but-untested (was: parked). Absorbed A3-064 (S dispatch runs natively) + A1 output-path (return-Int needs no say/int_text). Posted as #16 6707927630. No frozen move, no code change.
+
+## 2026-11-07 | AVAILABLE for bounded mission-012 work (3311da1, no code change)
+
+Queue empty (v2 handoffs stand unclaimed; Phase E answered; Int-only withdrawn). Offering on own lane/bench: independent oracle re-derivation for new fixtures; single-unit check-valid pre-screen (<=35 nodes); SPEC cross-check of dogfood-touching claims. Posted as #16 6707958572. No new-feature builds, no checker/emitter edits, no acceptance writes.
+
+## 2026-11-07 | D-A4 falsifier loop closed on measured record (f4a8343, no code change)
+
+Original falsifier adjudicated without new runs: prepend-accumulation form DEAD as predicted; loop-hoisted + re-scan forms emit (A1 v6, A3 checks). S narrowed, not killed; R fallback not needed on this axis. Posted as #16 6707985122. Handoffs fulfilled by evidence where run; v2 native run still open.
+
+## 2026-11-07 | A1 AstValue finding absorbed (d7a1895, no code change)
+
+A1 measured the Pep parser cannot parse its own 40-variant AstValue union within budget (R critical path). Direct measured backing for D-A4's no-big-unions subset choice: S sidesteps this structurally. Position-reporting caveat noted. Posted as #16 6708008045. No new A4 action.
+
+## 2026-11-07 | A1 Finding 2 union cap adopted (6986172, SPEC only)
+
+A1: flat AND recursive union ladders refuse at k=20 (164 steps at k=10); unions >=~15 variants unparseable; R-spike = repair union-declaration parse. S side: Pep-0 carries no large recursive unions by design -- now a MEASURED constraint (<10 variants), recorded in SPEC. Subset stands, no repair needed. Posted as #16 6708031081. No frozen move, no code change.
+
+## 2026-11-07 | A1 Finding 3 token cap + DIVERGENCE-2 noted (c4ceb77, docs only)
+
+A1: parse cost linear ~900 steps/token (~110 tokens/declaration ceiling); R1 spike claimed. Pep-0 constraint recorded (unions <10 variants + declarations <=~110 tokens) in SPEC; intermediate duplication introduced+repaired openly (history kept). A2: DIVERGENCE-2 DEMONSTRATED pending A3 gate. Posted as #16 6708115380. No frozen move, no code change.
+
+## 2026-11-07 | Output contract answered + fragment cap recorded (72876a2, SPEC only)
+
+A2 follow-ups absorbed: streaming say-per-fragment works natively (p7); single ~3.9 KiB literal refused at parse (p7b); for-in List[Str] refused (my committed programs use while+byte_at only, unaffected). DECISION (A4 lane): stdout + shell redirection now; argv[2] file op deferred (no new ABI). SPEC updated (fragment cap). One self-caught truncation repaired before shipping (diff verified). Posted as #16 6708150355. No frozen move, no code change.
+
+## 2026-11-07 | Arity probe built + QUEUED behind T2 v2 (155b7ec, new files)
+
+Built arity_probe.pep + 4 fixtures (ok/bad/nodef/nocall): two counting passes, main returns 0/1/2. Flat calls only, documented. Single-unit check VALID (7 fns, 0 diagnostics); oracle refs 0/2/1/2 MATCH. Deliberately QUEUED, not handed off -- no new burden while v2 is open. Posted as #16 6708246934. Frozen programs untouched; no checker/emitter edits.
+
+## 2026-11-07 | Conditional route-selection input (297d4fd, no code change)
+
+IF A2's say(Str)+utf8_slice lowering lands and gates green, THEN S's output path is fully unblocked with zero new ABI/host changes; remaining S work is authoring the Pep-0 source. R still needs ingestion + quadratic fixes. So S is the quicker credible route CONTINGENT on the lowering; if it fails, both stall at the same output wall and the choice reopens. Decision belongs to A1's collation + Matthew/Lucy. Posted as #16 6708276780.
+
+## 2026-11-07 | R1 GREEN + DIVERGENCE-2 pinned, position updated (ef23164, no code change)
+
+A1 R1: incremental union parse GREEN (k=40 flat+recursive, AstValue payload parses). A2 3ad2bff: in-repo DIVERGENCE-2 test pinned, stdout contract test-pinned (acknowledged, consistent). Updated score: S needs lowering gate (pending A3); R needs ingestion + emitter-budget fixes with R1 done. Race tightened; no A4 action. Posted as #16 6708306877.
 
