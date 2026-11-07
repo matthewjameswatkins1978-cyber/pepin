@@ -45,14 +45,16 @@ GEN_DIRECT = (
 )
 # Ready-to-pass shape per BOOT-A3-053/054: say() accepts Str locals, so bind the slice to one.
 # The ONLY thing that should block this is the missing by-name utf8_slice lowering.
+# FIXED (BOOT-A3-070): say() appends a newline, so a C line must be built as ONE Str
+# and said once. The previous version split one line across five say() calls, which
+# produced a string literal spanning physical lines and could never compile.
 GEN = (
     'fn main(source: SourceBytes) -> Int {\n'
-    '  let part = utf8_slice(source, 0, 3)\n'
+    '  let part = utf8_slice(source, 0, 22)\n'
     '  say("#include <stdio.h>")\n'
     '  say("int main(void){puts(")\n'
-    '  say("\\"")\n'
     '  say(part)\n'
-    '  say("\\");return 0;}")\n'
+    '  say(");return 0;}")\n'
     '  return 0\n'
     '}\n'
 )
