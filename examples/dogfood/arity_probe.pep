@@ -7,11 +7,12 @@
 // Expected: arity_ok 0, arity_bad 2, arity_nodef 1, arity_nocall 2.
 
 fn is_fn_at(source: SourceBytes, o: Int) -> Int {
+  var r = 0
   if byte_at(source, o) == 102 && byte_at(source, o + 1) == 110 && byte_at(source, o + 2) == 32 {
-    return 1
+    r = 1
   } else {
-    return 0
   }
+  return r
 }
 
 fn count_fn(source: SourceBytes) -> Int {
