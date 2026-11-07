@@ -818,3 +818,50 @@ On A4 delivery: pin A4's source SHA + A1 checker pin, emit each checked chunk th
 `pep-c23-function-unit` (this module's container), strict Clang/GCC over >=3 genuinely
 different real files, report first refusal honestly. Until then: idle-but-pinned; no
 negative-tooling invention, no A1/A4 file touched.
+
+## BOOT-A2-20261107-46 — A4 dogfood app: first refusal fixed; capacity blocker measured; chunk-window ask to A1
+
+- **Branch:** `codex/a2-bounded-emission` @ **288662f** (537967e + this slice), pushed, remote-verified equal.
+  Worktree `D:\Projects\wt-a2-bounded` clean; main-checkout dirty `tests/test_a14_c23.py` untouched.
+- **CONSUMED:** LUCY-20261107-007 (#16 6706612083) A2 items 1-2. A4's ACTUAL app at
+  `spec/agent4-spec-lab@12e143f`: `examples/dogfood/pepin-source-scan.pep` (1159B, sha8
+  f6e8f942 asserted in-probe; read-only from A4's pinned worktree) + three fixtures
+  (168B/7269de34, 218B/bb82fc6f, 0B/e3b0c442) + self-scan, SPEC reference results 23/30/0/139.
+- **Runharness:** `tests/probe_dogfood_source_scan.py` (new, slice commit): app bytes through
+  chunk check -> four unit emissions -> one translation unit -> strict Clang C23 / GCC C2x
+  (-Wall -Wextra -Wpedantic -Werror -O2) x BOTH assembly orders x FOUR committed real files;
+  expected counts re-derived per run from A4's own predicates as a literal-Int-list seed oracle
+  (authority boundary as receipts 42/43; SPEC table never asserted directly); independent Python
+  reference printed but labelled builder-side, NOT an A3 gate. Negatives: no-fact /
+  missing-target / forged-arity fact refusals at the same emit entry; native no-argv ->
+  PEP_RUNTIME_SOURCE_CONTEXT rc=1 and missing-file -> PEP_RUNTIME_SOURCE_OPEN rc=1 (the
+  registered grant contract). Probe SKIPS without A1 chunk tooling.
+- **FIRST REFUSAL — FIXED.** unit main -> `Pep C23 conditional lowering requires a non-empty
+  then branch` on A4's nested `if ascii_continue(byte_at(source, o - 1)) {} else { n = n + 1 }`
+  (empty THEN, non-empty else). Checker had accepted the chunk (44 nodes, valid, zero
+  diagnostics): the refusal was the emitter. Fix: if_statement refuses only when BOTH branches
+  are empty/no-else; empty-then + non-empty else lowers with zero emitted-shape change for all
+  previously supported programs. Applied to BOTH the plain and the twin walker (exact-count 2,
+  byte-equal text). Suite: 74 ran OK / 1 documented skip (battery 55 with countdown canary
+  green, stage ledger 17, twin byte-identity 2) at 288662f. Collections stays the sibling red.
+- **SECOND REFUSAL — MEASURED, OPEN, cross-lane ask.** The real main chunk is 44 nodes; the
+  twin unit emit exceeds the fixed 100k tool_step_budget (`PEP_RUNTIME_STEP_LIMIT`). Boundary
+  by construct pad ladder: a 37-node chunk (A4 main minus the inner empty-then if) EMITS;
+  +1 statement (43 nodes) TIPS. Requirement ~ mid-40s nodes; measured per-node cost order
+  ~2-3k interpreter steps matches the sibling lane's converged constant. Both candidate
+  micro-reductions I own — (a) hoist+memoise `requires_arena` across cross-chunk calls,
+  (b) fact-first call routing with plain fallback — measured NO GAIN alone or combined on the
+  44-node shape (scratch trials, reverted; emitter file untouched by the trials).
+- **ASK TO A1 (transport contract, LUCY-20261107-007 item 3):** sub-function chunk windows.
+  Concrete from today's measurement: emitter twin-chain capacity ≈ 41 nodes per invocation;
+  checker-side published ceiling ≈ 6 functions/~34 nodes pass, 8/~44 stop. A window of
+  **24-32 checked nodes against a pinned document+revision, fail-closed on any missing node**
+  fits both. My half is ready to build on ACK: windowed emission inside
+  `pep_c23_function_definition_chunked` with per-window byte-identity vs the today's-window
+  concatenation, the same registered refusals, and no change to the one-shot path's executed
+  code. I will not build the transport myself before A1 owns the window protocol.
+- **Stated for A3:** the 23/30/0 fixture expectations are A4's table; nothing native is
+  certified yet. My probe's native stage is UNRUN (blocked at second refusal). Do not cite the
+  four-function 67/67 or receipts 42-44 vertical as this app's evidence.
+- **Next READY slice (A2, on A1's window ACK):** windowed twin emission + rerun; then Clang/GCC
+  x both orders x 4 files with the independent counts, and the four fact/grant negatives native.
