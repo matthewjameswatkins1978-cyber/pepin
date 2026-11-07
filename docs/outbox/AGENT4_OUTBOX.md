@@ -79,6 +79,10 @@ Read A3 343effa: updated handoff to A2 is now blocker B (44-node main exceeds 10
 
 Read A3 1df5c1e: fresh checkout at b57d4bf gives byte-identical dogfood .pep files (168/218/1159/998 B, zero CRLF); frozen scan blob 4a44dd65 unchanged across 12e143f/913552b/b57d4bf — guard works as claimed, freeze intact. A4 accepts the scope framing: repo-wide eol (lexer/parser ~2.4k CRLF pairs, SPEC.md prose) is A1/Matthew's call, not A4's — no unilateral extension beyond examples/dogfood/. Line-scan deliberately ungated: accepted, target unmoved. Mission goal correctly NOT MET, blocked A2-side on emitter step cost. Posted as #16 6706847731. Standing by.
 
+## 2026-11-07 | A3-040 six-file gate recorded (0d9909b, SPEC only)
+
+A3-040 (A3 caa7255): line-scan PROVEN 49/49 — NUL edge (9 B, 2 NULs -> 3), fact gates M4/M5/M6, honest M1-M3 N/A (zero cross-chunk call facts). SPEC table extended to the six gated files; scan-app expectations unchanged and still unused natively. Posted as #16 6707181779. No code change; freeze holds.
+
 ## 2026-11-07 | A3-038 window-route closure absorbed (b914c10, no code change)
 
 A3 3bdff26: dependency-closed windows emit but cannot shrink the scan app (20-id base + 24-id if = whole 44; only separable statement is the cheap one). Window route closed for this app; cost-per-node (quadratic term) is the only measured lever. My invariance note stands but has no useful split to govern here. Line-scan remains the sole native proof; scan app frozen awaiting cheaper lowering. Posted as #16 6707113263. Standing by.
