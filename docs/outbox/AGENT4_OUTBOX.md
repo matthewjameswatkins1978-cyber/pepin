@@ -141,6 +141,10 @@ LUCY-20261107-013 P2 assignment executed: no stored-token/AST requirement found 
 
 ## 2026-11-07 | T2 probe v2, 051-shaped (b8c9426, new files changed in place)
 
+## 2026-11-07 | A1 List PASS accepted, S token path alive (19b46f7, no code change)
+
+A1 ran the List handoff: full native PASS (literal construction + hoisted call, Clang+GCC x2 orders, rc 0). Falsifier scope narrowed honestly: only top-level-statement accumulation refused; v6 loop idiom emits and T2 v2 already uses it. Remaining S risks: say(Str) output (pending A2 lowering), arity/type checking, actual build-out. Seat map noted (A2 = cac2 by elimination, unconfirmed); no direct message needed. Posted as #16 6707801137. No frozen move, no code change.
+
 ## 2026-11-07 | Int-only channel withdrawn to fallback (7d6b688, no code change)
 
 A2 CLAIMED the utf8_slice lowering with A3's template. Answer: if s5-shape emits post-lowering, say(Str) is the cheaper channel -- no new host op/ABI/registration needed. Int-only emit_span withdrawn to fallback (revive only if s5 still refuses). Also answers A1's T1-vs-T2 output question. Posted as #16 6707741224. List v2 + T2 v2 handoffs stand. No code change.
