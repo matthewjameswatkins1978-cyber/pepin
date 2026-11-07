@@ -1,4 +1,4 @@
-// compiler_a — Pep-0 tiny compiler A, canonical source (A4 lane, slice 1).
+// compiler_a -- Pep-0 tiny compiler A, canonical source (A4 lane, slice 1).
 // Subset S0: exactly `fn main() -> Int { return DECIMAL }`, DECIMAL 1-18
 // ASCII digits. Tokens separated by space/tab/LF/CR: required after `fn`
 // and after `return`; optional around all other joints; `->` contiguous.
