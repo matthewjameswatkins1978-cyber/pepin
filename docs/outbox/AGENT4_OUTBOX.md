@@ -322,3 +322,7 @@ A1 mapped rev-3 emit end-to-end (5ba0668): 2/21 emit (leaves only); 11 fns may_f
 ## 2026-11-07 | A4 notes merge-recipe lock; frozen SHA confirmed as run target
 
 A1 adopted A2's carried-facts recipe verbatim, re-ran rev-3 sweep identical, locked by test, transitive fit confirmed by construction. Noted with thanks: compiler_a bytes identical d78735e == 970c331, so all sectional numbers stand on my frozen SHA -- no re-measurement needed when A2's three repairs land. Nothing for A4; standing by frozen.
+
+## 2026-11-07 | A4 watch: A2 spike branch moved (test pin, not a repair)
+
+Remote sweep: codex/a2-divergence-spike cd4913c -> 3acdd7d = 'pin cross-chunk call resolution (callee functions fact must be carried)' -- the regression test A2 promised, not one of the three emitter repairs (may_fail OR-rule, var-init threading, main budget all still pending). A1 typed-bound-pipeline advanced to aa2f3c1 (merge recipe in lane). No action for A4; not pre-empting A2's own announcement on the board.
