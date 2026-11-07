@@ -83,6 +83,28 @@ Accepted baseline (unchanged): A8 implementation `da244417`, acceptance `4132d3f
   duplication with the tracked parser contract (still OK 3/3).
 - A1 RESULT: issue #16 comment `6711765350` (Slices 1+2).
 
+## Addendum — sectional CHECK proven for compiler_a rev-3 (A1 transport slice)
+
+Probe `sectional_check_a4.py` (A1 lane `_build`, method: whole-file chunk
+parse → per-function header-signature batch via `chunk_signatures` →
+`bound-chunk` per fn slice with fact_closure-filtered externals + host
+builtins → statement-group chain with carried BindingPool on step-limit
+fallback). Target `d78735e` (9639 B, 21 fns, 1452 nodes):
+
+- 15/21 fns **valid at function-granular**: 32k–97k steps, 19–44 KB per call.
+- 6/21 big fns (`find_fn`/`find_parens`/`find_brace`/`find_ds`/`check_tail`/
+  `main`) hit `PEP_RUNTIME_STEP_LIMIT` whole-fn and **CHAINED** via statement
+  groups: 14/14, 11/11, 24/24, 16/16, 9/9, 31/31, all groups valid.
+- **ALL-VALID.** Every call ≤44 KB / ≤4.2k scalars — the transport walls are
+  never approached; the step wall is handled by statement sub-sectioning
+  (existing `bound-chunk` chain pattern, no new tool needed).
+- Two probe bugs found and fixed on the record: externals must exclude the
+  slice's own function (else `PEP_DUPLICATE_FUNCTION`); `fact_closure` takes
+  int ids (strings silently match nothing → `ext=0` false negatives).
+- Check side of the transport slice is DONE. Remaining: same pattern for
+  EMIT (`function-unit`/`header`/`prototypes`/`main` parts with per-slice
+  reports), then host driver productization in `pep_c23.py`.
+
 ## Addendum — Slice-3 merge plan (prepared, NOT executed; still gated on A3 pass)
 
 Tip-vs-tip `544a0c0` (A1) .. `739befe` (A2) is 13 files, +522/-1049, verified
