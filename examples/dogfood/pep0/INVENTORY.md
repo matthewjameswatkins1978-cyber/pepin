@@ -36,10 +36,11 @@ AST via seed `inspect --json`.
 `if_statement` 84, `var` 55, `Int` 25, `function` 21, `return` 21,
 `SourceBytes` 19, `expression` 14, `string` 8, `while` 3.
 
-Type-mention rule: `Int` 25 / `SourceBytes` 19 count parameter
-annotations only (25+19=44 params); including the 21 `Int` returns,
-all mentions are Int 46, SourceBytes 19. Total reconciles as
-1343 kind-nodes + 44 param-type annotations = 1387.
+Type-mention rule: `Int` 25 / `SourceBytes` 19 count parameter nodes
+(every parameter has exactly one type, so `44 parameters` =
+`44 parameter types`); including the 21 `Int` returns, all mentions
+are Int 46, SourceBytes 19. Total reconciles as 1343 kind-nodes
++ 44 parameter nodes = 1387.
 
 Counting rule: keyed walk (dicts carrying a type/kind/node string
 field); raw dict count is 4161. A1's sectional parse counts 1452 (every
