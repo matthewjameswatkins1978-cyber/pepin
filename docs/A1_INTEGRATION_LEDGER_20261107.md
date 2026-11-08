@@ -188,3 +188,29 @@ resolution strategy for the future candidate integration:
   against the merged tree (expect emit to advance past fix #1/#2).
 - A3 pass remains the entry condition per the dispatch. Re-diff at merge
   time regardless: both lanes are still moving.
+
+## 2026-11-08 — LUCY-20261108-015 startup + A1-S1 baseline + A1-S2 dry-run (R1 refresh)
+
+- New programme replaces the 014 queue; pins verified live: A1 pipeline
+  `12dbf1a`, ledger `f5bbf8b` (this branch), A2 `bea071a`, A3 `c7786f1`,
+  A4 `5f62e4b` at dispatch time.
+- A1-S1 baseline re-run (unchanged `sectional_emit_a4` sweep, host A1,
+  sources A2 `bea071a`): **9/21 emit confirmed** — 8 known-target refusals
+  (A2-S1 scope) + 4 emitter STEP_LIMIT (A2-S2 scope). Full per-function
+  table on board `6724175304`; log + repro in main-checkout `_build/`.
+- A1-S2 dry-run (test-only, no product change): `main` 31 groups tile
+  cleanly, 0 dominance violations, carried pool 2→14 bindings; greedy
+  30k-budget → 21 fragments. Hot spot: group 23, single 37-node `if`
+  with 15 `say`/`int_text` calls at 63,020 check steps — unsplittable at
+  statement granularity. Contract proposal (host-supplied vs three
+  emitter-defined fields: temp counter, scope frames, failure index)
+  on board `6724206010`.
+- Peer movement same day: A2 CLAIMED A2-S1 (expression-position
+  cross-chunk calls, no host injection; movement table staged on its
+  pin); A4 published own-source census at `02b7ebe` (OWN_SOURCE.md,
+  21/21 fail S0, first self-input failure hand-traced) and S1 boundary
+  battery; **A3 signed on** (`371c048b`, BOOT-A3-077 presence/restart
+  claim, A3-S1 order opens with differential emission audit
+  `bea071a` vs `1885566`) — the 014 "silent" flag is superseded.
+- Merge plan above still current (lanes unchanged at refresh time);
+  re-diff at merge time regardless.
