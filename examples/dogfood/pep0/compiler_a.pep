@@ -524,6 +524,14 @@ fn scan_name(source: SourceBytes, o: Int) -> Int {
     out = e
   } else {
   }
+  var olen = out - o
+  if olen == 1 {
+    if byte_at(source, o) == 95 {
+      out = o
+    } else {
+    }
+  } else {
+  }
   return out
 }
 
