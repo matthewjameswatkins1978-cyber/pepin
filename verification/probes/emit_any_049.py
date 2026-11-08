@@ -128,7 +128,10 @@ def main():
                                               {"type": "Bool", "value": True}],
                                 "semanticTarget": sem})
             if chk.get("outcome") != "ok":
-                print(f"  chunk {label:<16} ERROR {(chk.get('error') or {}).get('code')}")
+                # Node count still matters on refusal: it is the shape the
+                # statement-chain path has to cover, so report it here too.
+                print(f"  chunk {label:<16} nodes={len(chunk_nodes):<3} ERROR "
+                      f"{(chk.get('error') or {}).get('code')}")
                 continue
             rpt = fm(chk["result"])
             dcodes = [fm(x).get("code", {}).get("value")
