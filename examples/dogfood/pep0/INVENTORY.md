@@ -1,0 +1,49 @@
+# Own-source static inventory (A4 lane, R3 — description only, no claim)
+
+Source: `compiler_a.pep` rev-3 (`d78735e`). Counts scripted
+(`_build/r2/inventory.py`, `_build/r2/astc.py`; scratch, not committed);
+AST via seed `inspect --json`.
+
+## File totals
+
+511 lines (477 code, 12 comment, rest blank), 9639 bytes, 21 functions,
+44 parameters, 55 `var`, 21 `return` sites (AST).
+
+## Source-measured construct counts
+
+| construct | count | note |
+|---|---|---|
+| `==` | 139 | dominant predicate |
+| function/builtin calls | 112 (AST) | `byte_at` 31, `byte_length` 14, `say` 14, `skip_ws` 12, `expect_byte` 10 |
+| `if` / `if_statement` | 84 | filled-then + empty-else idiom |
+| `&&` | 67 | matchers + guards |
+| `+` | 52 | offsets, accumulators |
+| assignments | 87 (AST) | incl. `var` initializers |
+| `<=` | 18 | bound guards |
+| `-` (binary) | 17 | sentinels (`0 - 1`), offsets |
+| `\|\|` | 3 | `is_ws`, `is_digit` only |
+| `while` | 3 | `skip_ws`, `scan_digits`, `parse_value` |
+| `*` | 1 | `parse_value` (`v * 10`) |
+| `/` (division) | 0 | none in source |
+| string literals | 8 | all in `say` args (`main` + finders) |
+| integer literals | 293 (AST) | mostly byte codes + small consts |
+
+## AST node census (seed, 1387 nodes)
+
+`name` 348, `binary` 297, `int` 293, `call` 112, `assignment` 87,
+`if_statement` 84, `var` 55, `Int` 25, `function` 21, `return` 21,
+`SourceBytes` 19, `expression` 14, `string` 8, `while` 3.
+
+## S0-gap ordered by frequency (extension economics, not a proposal)
+
+`==`/calls/`if`/`&&`/`var`/params first; `while` (3), `*` (1),
+strings (8) last. Full own-source needs all rows — consistent with the
+OWN_SOURCE.md ladder R1–R7.
+
+## Cross-checks absorbed this turn
+
+- A3 BOOT-A3-078: `/`-divisor narrowing hazard needs a `/` in source;
+  count is **0**, so no EXPECTED pin changes. Prepend/byte-identity
+  results do not touch A4 artifacts.
+- A1 subset cross-check: AGREEMENT with PEP0_SUBSET.md, no correction.
+- A1 oracle ingest: R1 fixtures absorbed, 18/18 green.
