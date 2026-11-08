@@ -8,12 +8,17 @@ oracle edit.
 
 Subset rules pinned here:
 - `fn main() -> Int { return DECIMAL }`, whitespace-insensitive: valid.
+- 0-byte input and whitespace-only input -> valid (vacuous programs).
+  `empty_zero` (0 bytes) and `inc_ws` (lone newline) pin the two apart:
+  a compiler A that requires at least one byte would pass `inc_ws`
+  and fail `empty_zero`.
 - Two-function declaration + call: valid (seed; forward order untested here).
 - Unknown callee -> PEP_UNKNOWN_FUNCTION; arity -> PEP_ARGUMENT_COUNT;
   return-type -> PEP_TYPE_MISMATCH.
 - Truncation/malformed input -> *invalid* (PEP_PARSE_EXPECTED/EXPRESSION):
   whole-file `check` does not return `incomplete`; that status belongs to the
-  chunk protocol only. Empty file -> valid (vacuous program).
+  chunk protocol only (`empty_zero`/`inc_ws` above are the valid
+  vacuous cases).
 - Trailing junk after the function lexes as a following statement, hence
   PEP_UNKNOWN_VARIABLE — the seed has no dedicated trailing-junk code.
 - `return 4x` parses the `4`, then flags `x` PEP_UNREACHABLE (unreachable
@@ -42,7 +47,7 @@ EXPECTED = {
     "neg_unknown": ("invalid", [("PEP_UNKNOWN_FUNCTION", 26, 37, 1, 27)]),
     "neg_arity": ("invalid", [("PEP_ARGUMENT_COUNT", 74, 80, 2, 27)]),
     "neg_rettype": ("invalid", [("PEP_TYPE_MISMATCH", 26, 30, 1, 27)]),
-    "neg_brace": ("invalid", [("PEP_PARSE_EXPECTED", 30, 30, 3, 1)]),
+    "neg_brace": ("invalid", [("PEP_PARSE_EXPECTED", 28, 28, 2, 1)]),
     "neg_trail": ("invalid", [("PEP_UNKNOWN_VARIABLE", 30, 37, 1, 31)]),
     "neg_badlit": ("invalid", [("PEP_UNREACHABLE", 27, 28, 1, 28)]),
     # A4 reserve-3 cross-check (@78a59ee, verified identical seed behavior):
@@ -50,7 +55,8 @@ EXPECTED = {
     # error, not a parse error.
     "crlf_ok": ("valid", []),
     "nbsp_fn": ("invalid", [("PEP_UNEXPECTED_CHARACTER", 2, 3, 1, 3)]),
-    "inc_empty": ("valid", []),
+    "inc_ws": ("valid", []),
+    "empty_zero": ("valid", []),
     "inc_fn": ("invalid", [("PEP_PARSE_EXPECTED", 20, 20, 2, 1)]),
     "inc_ret": ("invalid", [("PEP_PARSE_EXPRESSION", 27, 27, 2, 1)]),
     "out_match": ("invalid", [("PEP_PARSE_PATTERN", 42, 43, 3, 5)]),
