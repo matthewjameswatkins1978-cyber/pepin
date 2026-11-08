@@ -171,6 +171,13 @@ def main():
                 return 1
         print("\nRESULT: FULLY EMITTED - every function lowered")
 
+        # A3-S1: persist the emitted C so a differential audit can compare bytes
+        # instead of trusting printed logs. Inactive unless PEPIN_C_OUT is set.
+        c_out = os.environ.get("PEPIN_C_OUT")
+        if c_out:
+            pathlib.Path(c_out).write_text("".join(pieces), encoding="utf-8", newline="\n")
+            print(f"  wrote {c_out} ({len(''.join(pieces))} bytes)")
+
         # optional native stage: PEPIN_RUN_FIXTURES = semicolon-separated input paths
         runs = [p for p in (os.environ.get("PEPIN_RUN_FIXTURES") or "").split(";") if p.strip()]
         if runs:
