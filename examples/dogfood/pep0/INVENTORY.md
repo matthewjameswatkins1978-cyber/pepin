@@ -84,3 +84,9 @@ Step cost (A3-099, measured): ~2,100 steps/node, tightly linear
 (1,927–2,189); budget binds at ~47 nodes, 41 nodes leaves ~6 nodes
 margin. Fragments must be sized by node count (~30 for headroom),
 not by statement count.
+
+Emission qualification (A3-100, measured): emit cost/node spans
+1,047–2,204 (2.1×) vs check's tight band — node count is an unsafe
+sizing key for emission; size fragments by measured emit steps.
+Check (87,055) + emit (90,354) at 41 nodes sum to ~177k over separate
+invocations: never fuse them into one tool call.
