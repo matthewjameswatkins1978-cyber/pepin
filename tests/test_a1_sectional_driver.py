@@ -38,6 +38,7 @@ sys.path.insert(0, str(ROOT))
 import pep_c23
 import pep_sectional
 from pep_c23 import Session, parse_target
+from pep_c23 import typed as _typed_value
 from tests.chunk_helper import fields_map
 from tests.test_chunk_typed import host_builtins
 
@@ -210,6 +211,41 @@ class SectionalDriverTests(unittest.TestCase):
                                    check=False)
             self.assertEqual(run.returncode, 0)
             self.assertEqual(run.stdout, "42\n")
+
+    def test_chained_merge_carries_translated_bindings(self):
+        """Host side of the A2 fragment contract: merged reports carry
+        rank-space bindings (translated per group, deduped by pool identity)
+        so the emitter can resolve carried names and assignment targets."""
+        from tests.chunk_helper import fetch_all_sigs, fields_map, nval
+        parsed = parse_target(self.session, SRC, self.target,
+                              self.tool_revision)
+        host = host_builtins(self.target["document"], self.target["revision"])
+        checked = pep_sectional.check_program(
+            self.session, self.sem, parsed, self.tool_revision,
+            self.target, host, force_chain=frozenset({"main"}))
+        self.assertEqual(checked["failures"], [])
+        rep = fields_map(checked["reports"]["main"])
+        bindings = rep["bindings"]["value"]
+        self.assertTrue(len(bindings) > 0,
+                        "chained merge must carry bindings for fragments")
+        by_name = {}
+        for b in bindings:
+            f = {x["name"]: x["value"] for x in b["fields"]}
+            nm = f["name"]
+            nm = nm["value"] if isinstance(nm, dict) else nm
+            sid = f["syntaxId"]
+            sid = sid["value"] if isinstance(sid, dict) else sid
+            by_name[nm] = (sid, f)
+        # 'x' is declared by the first statement: its carried syntaxId
+        # must be rank-space (inside the merged slice), not chunk-local.
+        self.assertIn("x", by_name)
+        nodelist = fields_map(checked["slices"]["main"])["nodes"]["value"]
+        top = max(int(nval(n, "id")) for n in nodelist)
+        sid = int(by_name["x"][0])
+        self.assertTrue(0 <= sid <= top,
+                        f"carried binding outside merged slice span: {sid}")
+        # the whole slice still checks valid with bindings carried
+        self.assertEqual(rep["status"]["value"], "valid")
 
 
 if __name__ == "__main__":
