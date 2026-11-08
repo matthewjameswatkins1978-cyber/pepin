@@ -32,7 +32,7 @@ main           1       x       x    -      x   x       x      x      x
 ```
 
 Totals: params 21/21, `var` 21/21, non-literal `return` 21/21, `if`
-21/21 (20 with `&&`/`||`), SourceBytes-typed 19/21, arithmetic 19/21,
+21/21 (18 with `&&`/`||`; the three without are the loop fns), SourceBytes-typed 19/21, arithmetic 19/21,
 cross-fn/builtin calls 19/21, `while` 3/21, string literal 1/21 (main).
 
 ## First self-input failure (hand-trace, to confirm natively in S2)
@@ -42,6 +42,11 @@ then `is_main4` fails on the first definition (`is_ws`) → err 1 →
 **exit 1 `ERR shape`**. The program never reaches a second gate. This
 is the M-2 attempt oracle: input = canonical source, expected first
 observable = exit 1 shape.
+
+Native confirmation gated on statement-granular emission: the trace
+depends on `is_main4` (49 nodes) and `main` (222), both step-limited
+(BOOT-A3-092). Do not attempt M-2 before that lands, and do not mistake
+the cost wall for a semantic failure.
 
 ## Extension ladder (minimal rung first; each unlocks the next failure)
 
