@@ -734,11 +734,42 @@ fn pep_c23_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, n
                               checked: CheckerReport) -> PepC23Emission {
   let plain = pep_c23_expression(nodes, function, node)
   if plain.status == "emitted" { return plain } else {}
-  if plain.diagnostic != "Pep C23 calls require a known target" { return plain } else {}
-  if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
-  if node.kind == "binary" { return pep_c23_binary_expression_checked(nodes, function, node, checked) } else {}
-  if node.kind == "unary" { return pep_c23_unary_expression_checked(nodes, function, node, checked) } else {}
+  let crossChunk = plain.diagnostic == "Pep C23 calls require a known target"
+  let carriedName = plain.diagnostic == "Pep C23 name lowering requires a direct immutable local let or scalar parameter"
+  if crossChunk {
+    if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
+    if node.kind == "binary" { return pep_c23_binary_expression_checked(nodes, function, node, checked) } else {}
+    if node.kind == "unary" { return pep_c23_unary_expression_checked(nodes, function, node, checked) } else {}
+  } else {}
+  if carriedName {
+    if node.kind == "name" { return pep_c23_carried_binding(nodes, node, checked) } else {}
+    if node.kind == "binary" { return pep_c23_binary_expression_checked(nodes, function, node, checked) } else {}
+    if node.kind == "unary" { return pep_c23_unary_expression_checked(nodes, function, node, checked) } else {}
+  } else {}
   return plain
+}
+// Name resolution for a statement fragment whose plain path refused "name lowering requires a
+// direct immutable local let or scalar parameter": the binding lives in an earlier fragment, so
+// its node is absent from this fragment's nodes but present in the whole-function checked
+// bindings. Resolve by name ONLY from the carried facts and emit the binding's stable
+// pep_local_<syntaxId> symbol (the prologue fragment declares it once). Missing or ambiguous
+// carried facts refuse fail-closed.
+fn pep_c23_carried_binding(nodes: List[FlatAstNode], node: FlatAstNode, checked: CheckerReport) -> PepC23Emission {
+  var matches = 0
+  var bindingId = -1
+  for binding in checked.bindings {
+    if binding.name == node.text {
+      matches = matches + 1
+      bindingId = binding.syntaxId
+    } else {}
+  }
+  if matches == 0 {
+    return pep_c23_unsupported("Pep C23 name lowering has no carried binding fact")
+  } else {}
+  if !(matches <= 1) {
+    return pep_c23_unsupported("Pep C23 name lowering has ambiguous carried binding facts")
+  } else {}
+  return PepC23Emission { status: "emitted", sourceParts: ["pep_local_", int_text(bindingId)], diagnostic: "" }
 }
 // Checked-aware re-lowering of a binary expression whose plain path refused on a cross-chunk
 // callee. Mirrors pep_c23_expression's binary branch (Str probe, fallible guard, neg, arithmetic
