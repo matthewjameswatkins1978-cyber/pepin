@@ -38,6 +38,11 @@ GATES = [
     # Needs both a seed (to evaluate) and a gate (whose emitter lowers the C).
     ("Seed vs emitted differential",      "seed_differential_106.py", [], {"PEPIN_SEED_ROOT": "seed",
                                                                     "PEPIN_GATE_ROOT": "a2"}, ("seed", "a2")),
+    # The NEGATIVE oracle M-1's pins structurally cannot provide: does compiler A tell
+    # "valid Pep I do not support" (exit 5) from "not Pep" (1/2/3)? PEP0_SUBSET.md names
+    # nine class-(ii) shapes; A3-153 found seven misclassified. Builds the committed
+    # product-path C, so it always runs. Set PEPIN_CA_EXE to test a tracked build.
+    ("Compiler A contract (14 cases)",   "contract_c7_162.py",   [], {}, ()),
 ]
 
 # NOT in this list, by design: the A2 prepend+reverse differential. It compares emitted
