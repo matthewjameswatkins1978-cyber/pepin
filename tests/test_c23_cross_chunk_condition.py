@@ -194,6 +194,37 @@ class CrossChunkExpressionPositionTests(unittest.TestCase):
     def test_cross_chunk_call_in_var_initialiser(self):
         self._assert_condition_position(VAR_INIT_SOURCE)
 
+    def test_cross_chunk_call_as_assignment_rhs(self):
+        # A3-122: a cross-chunk call as an assignment RHS inside an if body is a third
+        # position (beyond conditions and var initialisers) and must resolve.
+        src = ("fn helper() -> Int { return 4 }\n"
+               "fn main() -> Int {\n"
+               "  var e = 0\n"
+               "  if 1 == 1 { e = helper() } else { e = 0 }\n"
+               "  return e\n"
+               "}\n").encode()
+        parsed, checked, semantic = self._prepare(src)
+        whole_status, _, whole_parts = self._emit_unit(parsed, checked, semantic, 1)
+        self.assertEqual(whole_status, "emitted")
+        chunk_parsed, chunk_checked = self._slice_to_root(parsed, checked, 1, carry_functions=True)
+        status, diagnostic, parts = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
+        self.assertEqual(status, "emitted", diagnostic)
+        self.assertEqual(parts, whole_parts)
+
+    def test_three_param_cross_chunk_call(self):
+        # A3-122 statement #20: parse_value(source, ds, e) is a 3-argument cross-chunk call.
+        # The cross-chunk path has no arity cap; it must resolve the 3-arg call.
+        src = ("fn take3(a: Int, b: Int, c: Int) -> Int { return a }\n"
+               "fn main() -> Int {\n"
+               "  var e = 0\n"
+               "  if 1 == 1 { e = take3(1, 2, 3) } else { e = 0 }\n"
+               "  return e\n"
+               "}\n").encode()
+        parsed, checked, semantic = self._prepare(src)
+        chunk_parsed, chunk_checked = self._slice_to_root(parsed, checked, 1, carry_functions=True)
+        status, diagnostic, _ = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
+        self.assertEqual(status, "emitted", diagnostic)
+
     def test_transitive_chain(self):
         # main -> helper -> helper2: emitting main's slice needs helper's fact (and only
         # helper's, transitively carried by the host closure filter); helper's own body

@@ -3494,7 +3494,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
   if statement.kind == "assignment" {
     let value = pep_c23_child(nodes, statement.id, "value", 0)
     if !value.found { return pep_c23_unsupported("Pep C23 loop assignment has no value") } else {}
-    let lowered = pep_c23_expression(nodes, function, value.node)
+    let lowered = pep_c23_expression_checked(nodes, function, value.node, checked)
     if lowered.status != "emitted" { return lowered } else {}
     var targetId = -1
     var targetFound = false
@@ -3712,7 +3712,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
           listUpdate = pep_c23_mutable_list_update(nodes, function, value.node, assignmentTargetList.node)
           listUpdateFound = true
         } else {}
-        let loweredValue = if listUpdateFound { listUpdate } else { pep_c23_expression(nodes, function, value.node) }
+        let loweredValue = if listUpdateFound { listUpdate } else { pep_c23_expression_checked(nodes, function, value.node, checked) }
         if loweredValue.status != "emitted" { return loweredValue } else {}
         var targetId = -1
         var targetFound = false
