@@ -41,8 +41,10 @@ that says "verified against the seed" without a blob is ambiguous — see `FINDI
 | Both semantic oracles reproduce | A4's 13 pins + 17 boundary probes; A1's 23-case span-exact oracle | A3-086/088/094 |
 | A4's own-source census is exact | 189/189 table cells; totals reconcile 1343 + 44 + 65 = 1452 | A3-087, A3-092 |
 | M-1 gate is calibrated | Python stubs **and** a native compiled binary; partial implementations score partially | A3-081, A3-132 |
-| **M-1 passes on a modelled build** | full gate 15/15 with three modelled fixes in other lanes | A3-150 |
-| **main emits 31/31, find_brace 21/24** | per-statement node narrowing; the residual three are 5-conjunct conditions | A3-146, A3-147, A3-148 |
+| **M-1 passes on a modelled build** | full gate 15/15, three fixes modelled in other lanes | A3-150 |
+| **A1's parser guard is output-neutral** | d_a/d_b/d_c byte-identical, 7 gates green | A3-152 |
+| **Gate is narrower than the contract** | 7 of 9 class-(ii) shapes misclassified, exit 1/2/3 not 5 | A3-153 |
+| **build_c23 has no fragment path** | refuses `PEP_RUNTIME_STEP_LIMIT` on the M-1 source | A3-151 |
 
 ## What is NOT verified — the honest gaps
 
