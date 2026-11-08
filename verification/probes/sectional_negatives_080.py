@@ -48,12 +48,22 @@ def _report(doc="doc1", rev="7", holes=None, calls=None, etypes=None, fns=None):
     }
 
 
-def _call(syntax_id, callee=None):
-    fields = [{"name": "syntaxId", "value": {"type": "Int", "value": str(syntax_id)}}]
-    if callee is not None:
-        fields.append({"name": "calleeSemanticId",
-                       "value": {"type": "Str", "value": callee}})
-    return {"fields": fields}
+def _call(syntax_id, caller="1", callee="1"):
+    """A realistic ResolvedCall.
+
+    CORRECTED (BOOT-A3-090): the real record is
+    `type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int,
+    endByte: Int }` (tests/pep_checker_a13.pep:4). My first version emitted only
+    `syntaxId`, which is not a valid ResolvedCall at all - so A1's new call-anchoring
+    check correctly refused it. The instrument was wrong, not the code under audit.
+    """
+    return {"fields": [
+        {"name": "callerId", "value": {"type": "Int", "value": str(caller)}},
+        {"name": "calleeId", "value": {"type": "Int", "value": str(callee)}},
+        {"name": "syntaxId", "value": {"type": "Int", "value": str(syntax_id)}},
+        {"name": "startByte", "value": {"type": "Int", "value": "0"}},
+        {"name": "endByte", "value": {"type": "Int", "value": "1"}},
+    ]}
 
 
 def _fn(name, semantic_id):
@@ -115,14 +125,25 @@ def main():
           lambda: merge([([1], _report(holes=[{"hole": True}]))], [1]))
     probe("out-of-span call fact", "refuse",
           lambda: merge([([5], _report(calls=[_call(99)]))], [5]))
-    probe("valid control", "adopt",
-          lambda: (merge([([1, 2], _report(calls=[_call(0)])),
-                          ([3], _report(calls=[_call(0)]))], [1, 2, 3]),
+    # Realistic control: the merged function set must contain the caller and callee
+    # semanticIds, because A1 anchors every call in it (BOOT-A3-080 item).
+    # NOTE (BOOT-A3-090): merge_reports copies only the ENTRY function fact from the
+    # group reports; every other function fact must arrive via all_fn_facts (the
+    # whole-file signature list). So the callee has to be supplied there, not in the
+    # group report, or its semanticId is not in the anchored set.
+    probe("valid control (anchored call)", "adopt",
+          lambda: (merge([([1, 2], _report(fns=[_fn("main", "1")],
+                                            calls=[_call(0, caller="1", callee="2")])),
+                          ([3], _report(calls=[_call(0, caller="1", callee="2")]))],
+                         [1, 2, 3], extra=[_fn("helper", "2")]),
                    "ok")[1])
 
     print("\n--- identity channels A1's tests do not cover ---")
-    # Wrong document version is refused, but is a wrong SEMANTIC ID refused?
-    probe("forged semanticId on entry function fact", "refuse",
+    # A1's stated boundary (9bf18699): a single group that is internally consistent
+    # cannot be told apart from truth at merge level, so it is accepted and left to
+    # the emitter. This is now an intentional boundary, not an open gap - recorded as
+    # expect="adopt" so the probe tracks the decision rather than flagging it forever.
+    probe("single-group self-consistent entry fact (accepted by design)", "adopt",
           lambda: merged_names_dummy(
               merge([([1], _report(fns=[_fn("main", "forged-sem")]))], [1])))
     # Two facts claiming the entry name with different ids: silent duplication?
