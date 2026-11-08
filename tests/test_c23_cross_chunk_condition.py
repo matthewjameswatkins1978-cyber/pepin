@@ -18,6 +18,7 @@ fail-closed; a slice that carries it emits byte-identically to the whole file.
 
 import pathlib
 import sys
+import copy
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -219,6 +220,31 @@ class CrossChunkExpressionPositionTests(unittest.TestCase):
         status, diagnostic, _ = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
         self.assertEqual(status, "unsupported")
         self.assertEqual(diagnostic, "Pep C23 cross-chunk call has no resolved call fact")
+
+    def _duplicate_field_value(self, checked, name):
+        for item in checked["fields"]:
+            if item["name"] == name:
+                vals = item["value"].get("value") or []
+                if not vals:
+                    return
+                item["value"]["value"] = vals + [copy.deepcopy(vals[0])]
+                return
+
+    def test_ambiguous_call_fact_refuses(self):
+        parsed, checked, semantic = self._prepare(CONDITION_SOURCE)
+        chunk_parsed, chunk_checked = self._slice_to_root(parsed, checked, 1, carry_functions=True)
+        self._duplicate_field_value(chunk_checked, "calls")
+        status, diagnostic, _ = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(diagnostic, "Pep C23 cross-chunk call has ambiguous resolved call facts")
+
+    def test_ambiguous_callee_fact_refuses(self):
+        parsed, checked, semantic = self._prepare(CONDITION_SOURCE)
+        chunk_parsed, chunk_checked = self._slice_to_root(parsed, checked, 1, carry_functions=True)
+        self._duplicate_field_value(chunk_checked, "functions")
+        status, diagnostic, _ = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(diagnostic, "Pep C23 cross-chunk call target is ambiguous in the checked functions")
 
 
 if __name__ == "__main__":
