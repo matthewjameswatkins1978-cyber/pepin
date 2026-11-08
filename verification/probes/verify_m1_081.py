@@ -29,7 +29,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-REV = os.environ.get("PEPIN_ORACLE_REV", "5f62e4b")
+REV = os.environ.get("PEPIN_ORACLE_REV", "afd2d7e2")
 SUB = "examples/dogfood/pep0"
 
 # A4's nine-line C form for `return DECIMAL`, built with say() so punctuation
@@ -48,6 +48,14 @@ PINNED = [
     ("a_empty.pep",   b"",                                           0, ""),
     ("a_crlf.pep",    b"fn main() -> Int {\r\n  return 42\r\n}\r\n", 0, nine_lines(42)),
     ("a_u8.pep",      b"fn\xc2\xa0main() -> Int { return 42 }\n",     1, "ERR shape"),
+    # A4 R1/R2 additions @ afd2d7e2. Expected exit codes and stdout are A4's
+    # hand-traced contract, still awaiting native confirmation from S2.
+    ("a_nul.pep",     b"\x00fn main()->Int{return 42}\n",              1, "ERR shape"),
+    ("a_big19.pep",   b"fn main()->Int{return 1000000000000000000}\n",  4, "ERR longlit"),
+    ("a_foo.pep",     b"fn foo()->Int{return 1}\n",                     1, "ERR shape"),
+    ("a_dup.pep",     b"fn main()->Int{return 1}\nfn main()->Int{return 2}\n", 3, "ERR junk"),
+    ("a_gfn.pep",     b"fnmain()->Int{return 42}\n",                    1, "ERR shape"),
+    ("a_grt.pep",     b"fn main()->Int{return42}\n",                    2, "ERR literal"),
 ]
 
 # UNSEEN by A4's pinned set. S0 allows space/tab/LF/CR separators, optional

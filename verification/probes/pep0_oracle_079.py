@@ -28,7 +28,7 @@ import subprocess
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
-REV = os.environ.get("PEPIN_ORACLE_REV", "5f62e4b")
+REV = os.environ.get("PEPIN_ORACLE_REV", "afd2d7e2")
 SEED = pathlib.Path(os.environ.get("PEPIN_SEED_ROOT") or REPO).resolve()
 SUB = "examples/dogfood/pep0"
 
@@ -43,6 +43,19 @@ SPEC = {
     "a_crlf.pep": (b"fn main() -> Int {\r\n  return 42\r\n}\r\n", "valid"),
     # NBSP U+00A0 between fn and main; the oracle calls this seed-INVALID.
     "a_u8.pep": (b"fn\xc2\xa0main() -> Int { return 42 }\n", "invalid"),
+    # --- A4 R1 R2 additions (EXPECTED.md @ afd2d7e2), all verified 2026-11-08 ---
+    # Leading NUL byte. Oracle: seed-INVALID PEP_UNEXPECTED_CHARACTER.
+    "a_nul.pep": (b"\x00fn main()->Int{return 42}\n", "invalid"),
+    # 19 digits, value fits Int64, so seed-VALID but outside S0's 18-digit cap.
+    "a_big19.pep": (b"fn main()->Int{return 1000000000000000000}\n", "valid"),
+    # No main entrypoint. Oracle: seed-VALID (defined but unused).
+    "a_foo.pep": (b"fn foo()->Int{return 1}\n", "valid"),
+    # Duplicate top-level main. Oracle: seed-INVALID PEP_DUPLICATE_FUNCTION.
+    "a_dup.pep": (b"fn main()->Int{return 1}\nfn main()->Int{return 2}\n", "invalid"),
+    # Glued `fn` keyword. Oracle: seed-INVALID PEP_PARSE_EXPRESSION.
+    "a_gfn.pep": (b"fnmain()->Int{return 42}\n", "invalid"),
+    # Glued `return` literal. Oracle: seed-INVALID PEP_UNKNOWN_VARIABLE.
+    "a_grt.pep": (b"fn main()->Int{return42}\n", "invalid"),
 }
 
 # Exit codes the oracle pins. Not checkable until compiler A runs; listed so the
@@ -55,6 +68,12 @@ PENDING_EXITS = {
     "a_empty.pep": (0, "no output"),
     "a_crlf.pep": (0, "same 9-line C as a_ok"),
     "a_u8.pep": (1, "ERR shape"),
+    "a_nul.pep": (1, "ERR shape"),
+    "a_big19.pep": (4, "ERR longlit"),
+    "a_foo.pep": (1, "ERR shape"),
+    "a_dup.pep": (3, "ERR junk"),
+    "a_gfn.pep": (1, "ERR shape"),
+    "a_grt.pep": (2, "ERR literal"),
 }
 
 
