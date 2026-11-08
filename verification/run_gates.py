@@ -36,7 +36,7 @@ GATES = [
     ("M-1 gate calibration",             "verify_m1_081.py",     ["--selftest"], {}, ()),
     # Differential against an independent implementation: the seed's own evaluator.
     # Needs both a seed (to evaluate) and a gate (whose emitter lowers the C).
-    ("Seed vs emitted differential (4)",  "seed_differential_106.py", [], {"PEPIN_SEED_ROOT": "seed",
+    ("Seed vs emitted differential",      "seed_differential_106.py", [], {"PEPIN_SEED_ROOT": "seed",
                                                                     "PEPIN_GATE_ROOT": "a2"}, ("seed", "a2")),
 ]
 
