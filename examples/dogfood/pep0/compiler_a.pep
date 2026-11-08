@@ -4,8 +4,8 @@
 // and after `return`; optional around all other joints; `->` contiguous.
 // Glued forms (`fnmain`, `return42`) are rejected, not misread.
 // Input: granted file bytes via main(source). Output: C23 fragments via
-// say, one per line (newlines are insignificant in C; punctuation is
-// emitted via int_text so literals stay alphanumeric+space).
+// say, one per line (newlines are insignificant in C; punctuation via
+// say-string literals, int_text only for the parsed value).
 // Exit codes: 0 ok (empty input also exits 0 silent, mirroring seed-valid),
 // 1 bad shape, 2 bad literal, 3 trailing junk, 4 literal too long,
 // 5 unsupported (seed-valid but out-of-subset, e.g. `-> Str`).
@@ -472,14 +472,14 @@ fn main(source: SourceBytes) -> Int {
   }
   if err == 0 {
     say("int main")
-    say(int_text(40))
+    say("(")
     say("void")
-    say(int_text(41))
-    say(int_text(123))
+    say(")")
+    say("{")
     say("return")
     say(int_text(v))
-    say(int_text(59))
-    say(int_text(125))
+    say(";")
+    say("}")
   } else {
   }
   if err == 1 {
