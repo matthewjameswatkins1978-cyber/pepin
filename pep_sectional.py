@@ -161,7 +161,21 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
     stay empty (holes must be absent); calls, functions and expressionTypes
     are the emitter's only inputs. Functions follow the carried-facts recipe:
     local minted fact plus the whole-file functions list.
+
+    Fail-closed (R3): every group report must carry the same document and
+    revision (no stale/foreign facts), the group list must be non-empty,
+    and every translated syntaxId must land inside the slice span.
+    Violations raise ValueError — never silent adoption, never KeyError.
     """
+    if not groups:
+        raise ValueError("sectional merge: empty group list")
+    want_doc = groups[0][1]["document"]
+    want_rev = groups[0][1]["revision"]
+    for _, rep in groups:
+        if rep["document"] != want_doc:
+            raise ValueError("sectional merge: foreign document in group")
+        if rep["revision"] != want_rev:
+            raise ValueError("sectional merge: stale revision in group")
     fields = fields_map(sliced_progress)
     nodes = fields["nodes"]["value"]
     rank = {str(doc): str(i) for i, doc in enumerate(full_sorted)}
@@ -188,6 +202,11 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
     for cids, rep in groups:
         ordered = sorted(int(c) for c in cids)
         g2s = {str(g): rank[str(doc)] for g, doc in enumerate(ordered)}
+        for e in rep["calls"]["value"] + rep["expressionTypes"]["value"]:
+            key = str(int(_fval(e, "syntaxId")))
+            if key not in g2s:
+                raise ValueError(
+                    "sectional merge: group fact outside slice span")
         for e in rep["calls"]["value"]:
             c = copy.deepcopy(e)
             _fset(c, "syntaxId", g2s[str(int(_fval(e, "syntaxId")))])
