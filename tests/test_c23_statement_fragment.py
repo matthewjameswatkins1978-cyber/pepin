@@ -144,11 +144,10 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
         self.assertEqual(status, "unsupported")
         self.assertEqual(diag, "Pep C23 statement fragment range is out of bounds")
 
-    def test_trimmed_parsed_with_full_syntax_node_count(self):
-        # A3-115: the host passes a trimmed parsed (target function's subtree) alongside a
-        # whole-program checked report whose syntaxNodeCount is the FULL program count. The
-        # fragment entry's authority guard must accept this (document/revision identity only,
-        # no node-count consistency clause).
+    def test_mismatched_syntax_node_count_refuses(self):
+        # A3-117: the entry's guard refuses a parsed whose node count does not match the
+        # report's syntaxNodeCount (a document-id-trimmed parsed fed to rank-space facts is
+        # exactly this mismatch and must fail closed).
         parsed, checked, semantic = self._prepare()
         full_count = None
         for f in checked["fields"]:
@@ -160,7 +159,8 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
             if f["name"] == "syntaxNodeCount":
                 f["value"]["value"] = full_count
         status, diag, _ = self._emit_fragment(chunk_parsed, chunk_checked, semantic, 0, 0, 1)
-        self.assertEqual(status, "emitted", diag)
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(diag, "Pep C23 emission inputs do not match the authorised source revision")
 
     def _prepare(self):
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
