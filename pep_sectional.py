@@ -152,15 +152,43 @@ def check_slice(session, sem, parsed, index, sigs, host, chunk_ids,
     return resp["result"], [], steps, nbytes
 
 
-def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts):
+def _carry_binding(pool, binding, g2s):
+    """Admit one reported binding into a rank-space pool.
+
+    New facts are translated from their chunk-local id to rank space via
+    this group's g2s mapping (fail-closed on out-of-span), then pooled
+    (dedupe + attestation by the pool). Echoes of already-admitted
+    identities are verified against the pool's canonical payload and
+    otherwise ignored: the pool's copy (rank space) is authoritative and
+    echo field values are never adopted.
+    """
+    fields = {f["name"]: f["value"] for f in binding["fields"]}
+    key, payload = contract.BindingPool._canonical(fields)
+    if key in pool._seen:
+        if pool._seen[key] != payload:
+            raise ValueError(
+                "sectional merge: conflicting carried binding")
+        return
+    b2 = copy.deepcopy(binding)
+    skey = str(int(_fval(b2, "syntaxId")))
+    if skey not in g2s:
+        raise ValueError("sectional merge: binding outside slice span")
+    _fset(b2, "syntaxId", g2s[skey])
+    pool.add([b2])
+
+
+def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts,
+                  bindings=()):
     """Host-side union of per-group reports into one slice report.
 
     Group chunks are remapped independently, so syntaxIds are translated to
-    the full-slice space by doc-id rank. Binding id spaces collide across
-    groups and the emitter never reads bindings/references/holes, so those
-    stay empty (holes must be absent); calls, functions and expressionTypes
-    are the emitter's only inputs. Functions follow the carried-facts recipe:
-    local minted fact plus the whole-file functions list.
+    the full-slice space by doc-id rank. References stay empty and holes
+    must be absent; calls, functions, expressionTypes AND the carried
+    bindings are the emitter's inputs (bindings feed A2's fragment entry:
+    carried-name and assignment-target resolution). Functions follow the
+    carried-facts recipe: local minted fact plus the whole-file functions
+    list. Callers pass pool facts already translated to rank space; the
+    merge re-checks every binding syntaxId against the rank span.
 
     Fail-closed (R3): every group report must carry the same document and
     revision (no stale/foreign facts), the group list must be non-empty,
@@ -240,6 +268,12 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
                 str(_fval(c, "calleeId")) not in allowed_ids:
             raise ValueError(
                 "sectional merge: call to unknown function fact")
+    rank_values = set(rank.values())
+    for b in bindings:
+        key = str(int(_fval(b, "syntaxId")))
+        if key not in rank_values:
+            raise ValueError(
+                "sectional merge: binding outside slice span")
     first = groups[0][1]
     return {"type": "CheckerReport", "fields": [
         {"name": "document", "value": first["document"]},
@@ -250,7 +284,8 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
         {"name": "functions",
          "value": {"type": "List[CheckedFunction]", "value": fns}},
         {"name": "bindings",
-         "value": {"type": "List[BindingFact]", "value": []}},
+         "value": {"type": "List[BindingFact]",
+                   "value": [copy.deepcopy(b) for b in bindings]}},
         {"name": "references",
          "value": {"type": "List[ResolvedName]", "value": []}},
         {"name": "calls",
@@ -313,9 +348,15 @@ def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
             slices[name], reports[name] = sl, raw
             stats[name] = {"steps": steps, "bytes": nbytes, "mode": "whole"}
             continue
-        # statement-group chain with carried bindings
+        # statement-group chain with carried bindings. Binding syntaxIds
+        # are chunk-local per group report, so translate each group's facts
+        # to rank space (same g2s mapping as calls/types) BEFORE pooling:
+        # the pool dedupes by source-anchored identity and the emitter
+        # reads pep_local_<rank-space syntaxId> from the merged report.
         pool = contract.BindingPool(target["document"], target["revision"])
         parts, ok = [], True
+        full_sorted = sorted(int(i) for i in ids)
+        rank = {str(doc): str(i) for i, doc in enumerate(full_sorted)}
         positions = index.statement_children(int(nval(fn, "id")))
         for pos in range(len(positions)):
             for label, cids, terminal in index.bounded_units(
@@ -330,14 +371,17 @@ def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
                     failures.append((name, pos, c2))
                     break
                 parts.append((list(cids), fields_map(r2)))
-                pool.add(fields_map(r2)["bindings"]["value"])
+                g2s = {str(g): rank[str(doc)]
+                       for g, doc in enumerate(sorted(int(c) for c in cids))}
+                for b in fields_map(r2)["bindings"]["value"]:
+                    _carry_binding(pool, b, g2s)
             if not ok:
                 break
         if not ok or len(parts) != len(positions):
             failures.append((name, "chain-incomplete", []))
             break
-        full_sorted = sorted(int(i) for i in ids)
-        reports[name] = merge_reports(sl, parts, full_sorted, name, all_fn_facts)
+        reports[name] = merge_reports(sl, parts, full_sorted, name, all_fn_facts,
+                                      bindings=pool.facts())
         slices[name] = sl
         stats[name] = {"steps": None, "bytes": None, "mode": f"chain-{len(parts)}"}
     return {"order": order, "slices": slices, "reports": reports,
