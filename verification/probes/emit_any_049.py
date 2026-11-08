@@ -48,6 +48,24 @@ def main():
         print(f"FAIL: cannot read {APP_REV}:{APP_REL}")
         return 2
     print(f"app: {APP_REL} @ {APP_REV}  {len(app)} bytes")
+    # AUTHORITATIVE VERDICT: the product path, run exactly as a user would (A3-156).
+    # Everything below this block drives the legacy `pep-c23-checker-chunk` tool with empty
+    # bindings. A1's sectional driver has superseded it with `bound-chunk` carrying bindings,
+    # expect_returns and a fact_closure-restricted external set, and the two disagree: this
+    # probe reported "REFUSED BY THE CHECKER" on find_brace while the product path reached
+    # emission. So the per-function status below is a DIAGNOSTIC. Never quote it as evidence
+    # about check or build status - quote this line instead.
+    pdir = ROOT / "_build" / "_a3_emitany"
+    pdir.mkdir(parents=True, exist_ok=True)
+    psrc = pdir / "app.pep"
+    psrc.write_bytes(app)
+    prod = subprocess.run(
+        [sys.executable, str(ROOT / "pep_c23.py"), "build-c23", str(psrc),
+         "--sectional", "--output", str(pdir / "app.exe")],
+        capture_output=True, text=True, timeout=6000)
+    ptxt = (prod.stderr or prod.stdout or "").strip().splitlines()
+    print(f"PRODUCT PATH (authoritative): rc={prod.returncode} "
+          f"{(ptxt[-1] if ptxt else '(silent)')}")
 
     session = Session()
     try:
