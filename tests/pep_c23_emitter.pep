@@ -3504,6 +3504,19 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
         targetFound = true
       } else {}
     }
+    if !targetFound {
+      var carriedMatches = 0
+      for binding in checked.bindings {
+        if binding.name == statement.text && binding.mutable {
+          carriedMatches = carriedMatches + 1
+          targetId = binding.syntaxId
+          targetFound = true
+        } else {}
+      }
+      if !(carriedMatches <= 1) {
+        return pep_c23_unsupported("Pep C23 assignment target is ambiguous in the carried bindings")
+      } else {}
+    } else {}
     if !targetFound { return pep_c23_unsupported("Pep C23 loop assignments must target a direct mutable local") } else {}
     var parts: List[Str] = [indent, "pep_local_", int_text(targetId), " = "]
     for part in lowered.sourceParts { parts = append(parts, part) }
@@ -3705,6 +3718,19 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
             targetFound = true
           } else {}
         }
+        if !targetFound {
+          var carriedMatches = 0
+          for binding in checked.bindings {
+            if binding.name == statement.text && binding.mutable {
+              carriedMatches = carriedMatches + 1
+              targetId = binding.syntaxId
+              targetFound = true
+            } else {}
+          }
+          if !(carriedMatches <= 1) {
+            return pep_c23_unsupported("Pep C23 assignment target is ambiguous in the carried bindings")
+          } else {}
+        } else {}
         if !targetFound { return pep_c23_unsupported("Pep C23 while assignments must target direct mutable locals") } else {}
         let targetList = assignmentTargetList
         if targetList.found {

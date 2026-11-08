@@ -30,6 +30,12 @@ SOURCE = ("fn main() -> Int {\n"
           "  return r\n"
           "}\n").encode()
 
+ASSIGN_SOURCE = ("fn main() -> Int {\n"
+                 "  var r = 0\n"
+                 "  if 1 == 1 { r = 1 } else { r = 2 }\n"
+                 "  return r\n"
+                 "}\n").encode()
+
 
 def _fields_map(value):
     return {item["name"]: item["value"] for item in value["fields"]}
@@ -195,6 +201,37 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
         status, diagnostic, _ = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
         self.assertEqual(status, "unsupported")
         self.assertEqual(diagnostic, "Pep C23 name lowering has no carried binding fact")
+
+    def test_carried_assignment_target_resolves(self):
+        # var r = 0 dropped; the if-body assignment `r = 1` and the trailing `return r`
+        # both resolve `r` from the carried mutable binding (pep_local_<id>), no re-decl.
+        parsed, checked, semantic = self._prepare_assign()
+        binding_sid = None
+        for f in checked["fields"]:
+            if f["name"] == "bindings":
+                for b in (f["value"].get("value") or []):
+                    bm = _fields_map(b)
+                    if bm.get("name", {}).get("value") == "r":
+                        binding_sid = bm.get("syntaxId", {}).get("value")
+        self.assertIsNotNone(binding_sid)
+        chunk_parsed, chunk_checked = self._drop_statement(parsed, checked, 0, 0, carry_bindings=True)
+        status, diagnostic, parts = self._emit_unit(chunk_parsed, chunk_checked, semantic, 0)
+        self.assertEqual(status, "emitted", diagnostic)
+        joined = "".join(parts)
+        self.assertIn("pep_local_" + binding_sid, joined)
+        self.assertNotIn("int64_t pep_local_" + binding_sid, joined)
+
+    def _prepare_assign(self):
+        target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
+                                    "name": "cb-assign-target", "bytes": list(ASSIGN_SOURCE)})
+        semantic = {"document": target["document"], "revision": target["revision"],
+                    "entryFunctions": []}
+        parsed = parse_target(self.session, ASSIGN_SOURCE, target, self.tool_revision)
+        checked = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                                     "op": "tool_invoke", "tool": "pep-c23-checker",
+                                     "arguments": [parsed], "semanticTarget": semantic})
+        require(checked, "outcome", "ok", "check target")
+        return parsed, checked["result"], semantic
 
 
 if __name__ == "__main__":
