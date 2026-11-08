@@ -2015,16 +2015,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           var fieldDiagnosticNode = empty_node()
           var unknownFieldFound = false
           var unknownFieldNode = empty_node()
-          for field in nodes {
-            if field.parentId == node.id && field.kind == "record_field" {
-              if !duplicateFound && is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
+          for field in taRecordFields {
+            if field.parentId == node.id {
+              if !duplicateFound && is_first_duplicate_occurrence(taRecordFields, node.id, "record_field", field.text, field.id) {
                 duplicateFound = true
                 duplicateNode = field
               } else {}
               if !unknownFieldFound {
-                let knownFieldType = record_field_type(nodes, node.text, field.text)
-                let knownFieldShape = record_field_shape(nodes, node.text, field.text)
-                if knownFieldType == "" && knownFieldShape.kind == "" {
+                let unknownResolved = if declaration.found { resolved_field_facts(resolvedRecords, recordKeyId, field.text) } else { resolved_field_facts(externalRecords, recordKeyId, field.text) }
+                if unknownResolved.name == "" && unknownResolved.shape.kind == "" {
                   unknownFieldFound = true
                   unknownFieldNode = field
                 } else {}
@@ -2098,8 +2097,8 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Record literal names a field absent from its declaration", unknownFieldNode))
               } else {
                 if fieldDiagnosticFound {
-                  let fieldDiagnosticMessage = if fieldDiagnosticCode == "PEP_UNKNOWN_FIELD" { "Record literal names a field absent from its declaration" } else { "Record field value type does not match its declaration" }
-                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldDiagnosticCode, fieldDiagnosticMessage, fieldDiagnosticNode))
+                let fieldDiagnosticMessage = if fieldDiagnosticCode == "PEP_UNKNOWN_FIELD" { "Record literal names a field absent from its declaration" } else { "Record field value type does not match its declaration" }
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldDiagnosticCode, fieldDiagnosticMessage, fieldDiagnosticNode))
                 } else {}
               }
             }
@@ -2134,6 +2133,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let value = child_at(nodes, node.id, "value", 0)
         let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
         let receiverRecord = record_declaration(nodes, receiverType)
+        let fieldKnownByExternal = value.found && receiverType != "" && (record_field_type_ext(nodes, externalRecords, receiverType, node.text) != "" || record_field_shape_ext(nodes, externalRecords, receiverType, node.text).kind != "")
         let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
         let receiverUnknownField = value.found && receiverRecord.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
         let receiverMayHaveFieldError = receiverType != "" && !receiverRecord.found || receiverUnknownField
@@ -2141,10 +2141,10 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
         } else {
-          if value.found && receiverType != "" && !receiverRecord.found && !receiverIfMismatch {
+          if value.found && receiverType != "" && !receiverRecord.found && !receiverIfMismatch && !fieldKnownByExternal {
             reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_NON_RECORD", "Field selection requires a record value", node))
           } else {
-            if receiverUnknownField && !receiverIfMismatch {
+            if receiverUnknownField && !receiverIfMismatch && !fieldKnownByExternal {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
             } else {}
           }
