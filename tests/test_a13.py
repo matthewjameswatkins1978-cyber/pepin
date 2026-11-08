@@ -508,6 +508,37 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual((scalar(diagnostic["startByte"]), scalar(diagnostic["endByte"])),
                          (len(source[:start].encode()), len(source[:start + len("id()")].encode())))
 
+    def test_unknown_constructor_span_after_utf8_prefix_matches_reference(self):
+        source = "// 🐇\n type M=A(Int)|B() fn f()->M{return C(1)}"
+        reference = self._reference_check("unknown-constructor-unicode-prefix", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "invalid", reference)
+        diagnostic = fields(report["diagnostics"]["value"][0])
+        self.assertEqual(scalar(diagnostic["code"]), "PEP_UNKNOWN_CONSTRUCTOR")
+        start = source.index("C(1)")
+        expected_span = (len(source[:start].encode("utf-8")),
+                         len(source[:start + len("C(1)")].encode("utf-8")))
+        expected = reference["diagnostics"][0]
+        self.assertEqual((expected["span"]["start"]["offset"], expected["span"]["endOffset"]),
+                         expected_span)
+        self.assertEqual((scalar(diagnostic["startByte"]), scalar(diagnostic["endByte"])),
+                         expected_span)
+
+    def test_declared_uppercase_function_is_resolved_before_constructor_classification(self):
+        source = "fn Missing(value: Int)->Int{return value} fn f()->Int{return Missing(7)}"
+        reference = self._reference_check("declared-uppercase-function", source)
+        _, report = self._analyze(source)
+        self.assertEqual(reference["status"], "valid", reference)
+        self.assertEqual(scalar(report["status"]), "valid", report)
+        self.assertEqual(report["diagnostics"]["value"], [], report)
+        call = fields(report["calls"]["value"][0])
+        self.assertEqual(scalar(call["callerId"]), 100001)
+        self.assertEqual(scalar(call["calleeId"]), 100000)
+        start = source.index("Missing(7)")
+        self.assertEqual((scalar(call["startByte"]), scalar(call["endByte"])),
+                         (len(source[:start].encode("utf-8")),
+                          len(source[:start + len("Missing(7)")].encode("utf-8"))))
+
     def test_nested_block_shadowing_and_unknown_binding(self):
         source = "fn main(x: Int) -> Int { let y = x; { let x = y; return x } }"
         _, report = self._analyze(source)
@@ -605,6 +636,33 @@ class A13FunctionResolutionTests(unittest.TestCase):
         codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
         self.assertIn("PEP_TYPE_MISMATCH", codes)
 
+    def test_equality_left_operand_diagnostics_match_ocaml(self):
+        cases = [
+            ("hole", "fn f() -> Bool { return ?lhs == 1 }", "PEP_EQUALITY_UNTYPED"),
+            ("hole-not-equal", "fn f() -> Bool { return ?lhs != 1 }", "PEP_EQUALITY_UNTYPED"),
+            ("hole-before-unknown-right", "fn f() -> Bool { return ?lhs == missing }", "PEP_EQUALITY_UNTYPED"),
+            ("all-hole-if", "fn f(flag: Bool) -> Bool { return (if flag { ?a } else { ?b }) == true }", "PEP_EQUALITY_UNTYPED"),
+            ("unknown-if-condition", "fn f() -> Bool { return (if missing { ?a } else { ?b }) == true }", "PEP_UNKNOWN_VARIABLE"),
+            ("unknown-name", "fn f() -> Bool { return missing == 1 }", "PEP_UNKNOWN_VARIABLE"),
+            ("empty-list", "fn f() -> Bool { return [] == [1] }", "PEP_EMPTY_LIST_NEEDS_TYPE"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("equality-left-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
     def test_return_mismatch_diagnostics_match_ocaml(self):
         cases = [
             ("scalar", "fn wrong(x: Bool) -> Int { return x }"),
@@ -662,16 +720,28 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(types_by_start[source.index(call)], expected_type)
 
         cases = [
-            ("fn main() -> Unit { return say() }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Unit { return say(1) }", "PEP_ARGUMENT_TYPE"),
-            ("fn main() -> Str { return int_text() }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Str { return int_text(true) }", "PEP_ARGUMENT_TYPE"),
+            ("say-wrong-arity", "fn main() -> Unit { return say() }", "PEP_ARGUMENT_COUNT"),
+            ("say-wrong-type", "fn main() -> Unit { return say(1) }", "PEP_TYPE_MISMATCH"),
+            ("int-text-wrong-arity", "fn main() -> Str { return int_text() }", "PEP_ARGUMENT_COUNT"),
+            ("int-text-wrong-type", "fn main() -> Str { return int_text(true) }", "PEP_TYPE_MISMATCH"),
+            ("byte-length-wrong-type", "fn main() -> Int { return byte_length(1) }", "PEP_TYPE_MISMATCH"),
+            ("utf8-slice-wrong-type", "fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_TYPE_MISMATCH"),
+            ("multiple-wrong-builtin-types", "fn main() -> Int { let a = int_text(true); let b = byte_length(1); return 0 }", "PEP_TYPE_MISMATCH"),
         ]
-        for source, expected_code in cases:
+        for name, source, expected_code in cases:
+            reference = self._reference_check("builtin-argument-" + name, source)
             _, report = self._analyze(source)
-            self.assertEqual(scalar(report["status"]), "invalid", report)
-            codes = [scalar(fields(item)["code"]) for item in report["diagnostics"]["value"]]
-            self.assertIn(expected_code, codes)
+            self.assertEqual(reference["status"], "invalid", reference)
+            expected = [
+                (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                for item in reference["diagnostics"]
+            ]
+            actual = [
+                (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                for item in report["diagnostics"]["value"]
+            ]
+            self.assertEqual(actual, expected, (name, expected, actual, report))
+            self.assertIn(expected_code, [item[0] for item in actual])
 
     def test_statement_conditions_are_typed_and_holes_keep_boolean_expectations(self):
         _, report = self._analyze("fn main() -> Unit { if true {} else {} while false {} }")
@@ -844,10 +914,10 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
         cases = [
             ("fn main() -> SourceBytes { return source_bytes(1) }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Int { return byte_length(1) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Int { return byte_length(1) }", "PEP_TYPE_MISMATCH"),
             ("fn main() -> Int { return byte_at(source_bytes()) }", "PEP_ARGUMENT_COUNT"),
             ("fn main() -> SourceBytes { return byte_slice(source_bytes(), 0) }", "PEP_ARGUMENT_COUNT"),
-            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_ARGUMENT_TYPE"),
+            ("fn main() -> Str { return utf8_slice(source_bytes(), 0, true) }", "PEP_TYPE_MISMATCH"),
         ]
         for source, expected_code in cases:
             _, report = self._analyze(source)
@@ -1130,10 +1200,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
              "fn f() -> Int { let p = P { b: 1, a: true }; return 0 }", "1"),
             ("unknown-only", "type P { a: Int }" + NL +
              "fn f() -> Int { let p = P { a: 1, extra: 2 }; return 0 }", "extra: 2"),
+            ("unknown-precedes-earlier-type", "type P { x: Int }" + NL +
+             "fn f() -> Int { let p = P { x: true, y: 1 }; return 0 }", "y: 1"),
         ]
         expected_codes = [
             "PEP_MISSING_FIELD", "PEP_MISSING_FIELD", "PEP_MISSING_FIELD",
             "PEP_DUPLICATE_FIELD", "PEP_TYPE_MISMATCH", "PEP_UNKNOWN_FIELD",
+            "PEP_UNKNOWN_FIELD",
         ]
         for (name, source, marker), expected_code in zip(cases, expected_codes):
             with self.subTest(name=name):
@@ -1150,6 +1223,40 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     for item in report["diagnostics"]["value"]
                 ]
                 self.assertEqual(expected, [(expected_code, source.index(marker), source.index(marker) + len(marker))])
+                self.assertEqual(actual, expected, report)
+
+    def test_field_access_diagnostics_match_ocaml(self):
+        cases = [
+            ("primitive-receiver", "fn f(x: Int) -> Int { return x.y }", "PEP_FIELD_ON_NON_RECORD", "x.y"),
+            ("unknown-record-field", "type Point { x: Int }" + NL + "fn f(point: Point) -> Int { return point.missing }", "PEP_UNKNOWN_FIELD", "point.missing"),
+            ("untyped-hole-receiver", "fn f() -> Int { return ?.x }", "PEP_FIELD_ON_UNTYPED_VALUE", "?.x"),
+            ("untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { ?b }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { ?b }).x"),
+            ("nested-untyped-if-receiver", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if flag { ?b } else { ?c } }).x }", "PEP_FIELD_ON_UNTYPED_VALUE", "(if flag { ?a } else { if flag { ?b } else { ?c } }).x"),
+            ("if-hole-unknown", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { missing }).x }", "PEP_UNKNOWN_VARIABLE", "missing"),
+            ("if-hole-scalar", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { 1 }).x }", "PEP_FIELD_ON_NON_RECORD", "(if flag { ?a } else { 1 }).x"),
+            ("if-branch-record-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { 1 } else { Point { x: 1 } }).x }", "PEP_TYPE_MISMATCH", "Point { x: 1 }"),
+            ("if-branch-scalar-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { Point { x: 5 } } else { 2 }).x }", "PEP_TYPE_MISMATCH", "2"),
+            ("nested-if-branch-mismatch", "type Point { x: Int }" + NL + "fn f(flag: Bool) -> Int { return (if flag { 1 } else { if flag { Point { x: 1 } } else { 2 } }).x }", "PEP_TYPE_MISMATCH", "Point { x: 1 }"),
+            ("nested-if-bad-condition", "fn f(flag: Bool) -> Int { return (if flag { ?a } else { if 1 { ?b } else { ?c } }).x }", "PEP_TYPE_MISMATCH", "1"),
+            ("unknown-variable-receiver", "fn f() -> Int { return missing.x }", "PEP_UNKNOWN_VARIABLE", "missing"),
+        ]
+        for name, source, expected_code, marker in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("field-access-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                marker_start = len(source[:source.index(marker)].encode("utf-8"))
+                marker_end = marker_start + len(marker.encode("utf-8"))
+                self.assertEqual(expected, [(expected_code, marker_start, marker_end)])
                 self.assertEqual(actual, expected, report)
 
     def test_record_field_duplicates_report_only_the_first_repetition(self):
@@ -1347,6 +1454,14 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("call-before-type", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = g(); return true }"),
             ("type-before-call", "fn g(x: Int) -> Int { return x } fn f() -> Int { let x: Int = true; return g() }"),
             ("unknown-call-before-type", "fn f() -> Int { let x: Int = missing(); return true }"),
+            ("unknown-constructor-call", "type M=A(Int)|B() fn f()->M{return C(1)}"),
+            ("unknown-constructor-call-multiple-functions", "type M=A(Int)|B() fn helper()->Int{return 0} fn f()->M{return C(1)}"),
+            ("multiple-unknown-constructor-calls", "fn f()->Bool{return C()==D()}"),
+            ("multiple-list-expected-errors", "fn f()->Int{let a=length(1);let b=length(true);return 0}"),
+            ("multiple-empty-list-needs-type-errors", "fn f()->Int{let a=length([]);let b=length([]);return 0}"),
+            ("multiple-nonexhaustive-match-errors", "type M=A()|B() fn f(x:M)->Int{let a=match x{A()=>1};let b=match x{B()=>2};return 0}"),
+            ("unknown-constructor-before-type", "type M=A(Int)|B() fn f()->Int{let x:Int=true; return C(1)}"),
+            ("constructor-nested-list-payload", "type M=A(List[Int])|B() fn f()->M{return A([1,true])}"),
             ("mixed-unlisted-missing-field", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; let bad: Int = true; return missing }"),
             ("missing-field-before-unknown-name", "type P { x: Int } fn f() -> Int { let p = P { other: 2 }; return missing }"),
             ("unknown-name-before-missing-field", "type P { x: Int } fn f() -> Int { let x = missing; let p = P { other: 2 }; return 0 }"),
@@ -1358,6 +1473,11 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("unknown-type-before-unknown-field", "type P{x:Int} fn f()->Int{let p=P{bogus:1,x:2};return 0} type R{x:Missing}"),
             ("unknown-type-before-duplicate-field", "type P{x:Int} fn f()->Int{let p=P{x:1,x:2};return 0} type R{x:Missing}"),
             ("unknown-type-before-duplicate-function", "fn f() -> Int { return 0 } fn f() -> Int { return 0 } type R { x: Missing } fn g() -> Int { let bad: Int = true; return 0 }"),
+            ("duplicate-type-before-unknown-type", "type P{x:Int} type P{y:Bool} type R{x:Missing}"),
+            ("duplicate-type-after-unknown-type", "type R{x:Missing} type P{x:Int} type P{y:Bool}"),
+            ("reserved-type-before-unknown-type", "type Int{x:Int} type R{x:Missing}"),
+            ("duplicate-declared-field-before-unknown-type", "type P{x:Int,x:Bool} type R{x:Missing}"),
+            ("duplicate-constructor-before-unknown-type", "type M=A()|B() type N=A()|C() type R{x:Missing}"),
         ]
         for name, source in cases:
             with self.subTest(name=name):
@@ -1442,6 +1562,102 @@ class A13FunctionResolutionTests(unittest.TestCase):
             self.assertEqual(scalar(report["status"]), "invalid", report)
             self.assertIn("PEP_EQUALITY_UNSUPPORTED", codes)
 
+    def test_deep_list_equality_is_rejected_like_ocaml(self):
+        source = "fn same(a: List[List[List[Int]]], b: List[List[List[Bool]]]) -> Bool { return a == b }"
+        reference = self._reference_check("deep-list-equality", source)
+        _, report = self._analyze(source)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (reference, report))
+        self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
+    def test_deep_list_literal_equality_is_rejected_like_ocaml(self):
+        source = "fn same() -> Bool { return [[[1]]] == [[[2]]] }"
+        reference = self._reference_check("deep-list-literal-equality", source)
+        _, report = self._analyze(source)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (reference, report))
+        self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
+    def test_deep_list_builtin_call_equality_is_rejected_like_ocaml(self):
+        source = "fn same() -> Bool { return reverse([[[1]]]) == [[[2]]] }"
+        reference = self._reference_check("deep-list-builtin-call-equality", source)
+        _, report = self._analyze(source)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (reference, report))
+        self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
+    def test_match_deep_list_result_equality_is_rejected_like_ocaml(self):
+        source = "type Flag = On()\nfn same(flag: Flag, values: List[List[List[Int]]]) -> Bool { return match flag { On() => values } == values }"
+        reference = self._reference_check("match-result-deep-list-equality", source)
+        _, report = self._analyze(source)
+        expected = [
+            (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+            for item in reference["diagnostics"]
+        ]
+        actual = [
+            (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+            for item in report["diagnostics"]["value"]
+        ]
+        self.assertEqual(reference["status"], "invalid", reference)
+        self.assertEqual(scalar(report["status"]), reference["status"], report)
+        self.assertEqual(actual, expected, (reference, report))
+        self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
+    def test_deep_list_match_and_function_call_equality_match_ocaml(self):
+        cases = [
+            (
+                "match-not-equal",
+                "type Flag = On()" + NL + "fn same(flag: Flag, values: List[List[List[Int]]]) -> Bool { return match flag { On() => values } != values }",
+            ),
+            (
+                "deep-identity-call",
+                "fn id(x: List[List[List[Int]]]) -> List[List[List[Int]]] { return x }" + NL + "fn same(x: List[List[List[Int]]]) -> Bool { return id(x) == x }",
+            ),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("deep-list-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), reference["status"], report)
+                self.assertEqual(actual, expected, (reference, report))
+                self.assertEqual([item[0] for item in actual], ["PEP_EQUALITY_UNSUPPORTED"])
+
     def test_match_bindings_are_arm_local_and_union_coverage_is_checked(self):
         source = (
             "type Maybe = None() | Some(Int)" + NL
@@ -1492,6 +1708,127 @@ class A13FunctionResolutionTests(unittest.TestCase):
         self.assertEqual(actual, expected, report)
         self.assertEqual(len(actual), 1)
         self.assertEqual(actual[0][0], "PEP_UNKNOWN_VARIABLE")
+
+    def test_duplicate_pattern_binding_diagnostic_matches_ocaml(self):
+        cases = [
+            ("pattern", "type Pair = P(Int, Int) | N()" + NL + "fn f(x: Pair) -> Int { return match x { P(a, a) => a N() => 0 } }", "PEP_DUPLICATE_PATTERN_BINDING"),
+            ("local-binding", "fn f() -> Int { let a = 1; let a = 2; return a }", "PEP_DUPLICATE_BINDING"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("duplicate-binding-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
+    def test_match_subject_diagnostics_match_ocaml(self):
+        cases = [
+            ("integer-literal", "fn f() -> Int { return match 1 { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("string-literal", "fn f() -> Int { return match \"x\" { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("list-literal", "fn f() -> Int { return match [1] { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("binary-expression", "fn f() -> Int { return match (1 + 2) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("binary-error", "fn f() -> Int { return match (1 + true) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("unary-error", "fn f() -> Int { return match !1 { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("call-argument-error", "fn g(x: Int) -> Int { return x }" + NL + "fn f() -> Int { return match g(true) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("call-list-argument-error", "fn g(xs: List[List[Int]]) -> Int { return 0 }" + NL + "fn f() -> Int { return match g([[true]]) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("equality-unsupported", "fn f() -> Int { return match ([1] == [2]) { _ => 0 } }", "PEP_EQUALITY_UNSUPPORTED"),
+            ("if-expression", "fn f(flag: Bool) -> Int { return match (if flag { 1 } else { 2 }) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("if-branch-error", "fn f(flag: Bool) -> Int { return match (if flag { 1 } else { true }) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("if-condition-error", "fn f() -> Int { return match (if missing { 1 } else { 2 }) { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("if-unknown-arm", "fn f(flag: Bool) -> Int { return match (if flag { missing } else { 1 }) { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("binary-unknown-name", "fn f() -> Int { return match (missing + 1) { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("call-unknown-argument", "fn g(x: Int) -> Int { return x }" + NL + "fn f() -> Int { return match g(missing) { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("builtin-result", "fn f() -> Int { return match length([1]) { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("builtin-list-expected-error", "fn f() -> Int { return match length(1) { _ => 0 } }", "PEP_LIST_EXPECTED"),
+            ("builtin-arity-error", "fn f() -> Int { return match source_bytes(1) { _ => 0 } }", "PEP_ARGUMENT_COUNT"),
+            ("builtin-type-error", "fn f() -> Int { return match byte_at(source_bytes(), true) { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("builtin-empty-list", "fn f() -> Int { return match length([]) { _ => 0 } }", "PEP_EMPTY_LIST_NEEDS_TYPE"),
+            ("builtin-element-type-error", "fn f() -> Int { return match append([1], \"text\") { _ => 0 } }", "PEP_TYPE_MISMATCH"),
+            ("field-result", "type Point { x: Int }" + NL + "fn f(p: Point) -> Int { return match p.x { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("typed-name", "fn f(value: Int) -> Int { return match value { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("typed-call", "fn value() -> Int { return 1 }" + NL + "fn f() -> Int { return match value() { _ => 0 } }", "PEP_MATCH_NON_UNION"),
+            ("unknown-name", "fn f() -> Int { return match missing { _ => 0 } }", "PEP_UNKNOWN_VARIABLE"),
+            ("unknown-function", "fn f() -> Int { return match missing_fn() { _ => 0 } }", "PEP_UNKNOWN_FUNCTION"),
+            ("unknown-constructor", "fn f() -> Int { return match Missing() { _ => 0 } }", "PEP_UNKNOWN_CONSTRUCTOR"),
+            ("unknown-field", "type Point { x: Int }" + NL + "fn f(p: Point) -> Int { return match p.missing { _ => 0 } }", "PEP_UNKNOWN_FIELD"),
+            ("untyped-field-receiver", "fn f() -> Int { return match ?.x { _ => 0 } }", "PEP_FIELD_ON_UNTYPED_VALUE"),
+            ("non-record-field-receiver", "fn f() -> Int { return match 1.x { _ => 0 } }", "PEP_FIELD_ON_NON_RECORD"),
+            ("wrong-call-arity", "fn value() -> Int { return 1 }" + NL + "fn f() -> Int { return match value(2) { _ => 0 } }", "PEP_ARGUMENT_COUNT"),
+            ("hole", "fn f() -> Int { return match ?subject { _ => 0 } }", "PEP_MATCH_UNTYPED"),
+        ]
+        for name, source, expected_code in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("match-subject-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], [expected_code])
+
+    def test_builtin_match_subject_holes_preserve_reference_status(self):
+        cases = [
+            ("length-hole", "length(?items)"),
+            ("reverse-hole", "reverse(?items)"),
+            ("append-hole", "append(?items, 1)"),
+            ("prepend-hole", "prepend(?items, 1)"),
+            ("contains-hole", "contains(?items, 1)"),
+        ]
+        for name, call in cases:
+            with self.subTest(name=name):
+                source = "fn f() -> Int { return match " + call + " { _ => 0 } }"
+                reference = self._reference_check("match-builtin-hole-" + name, source)
+                _, report = self._analyze(source)
+                self.assertEqual(scalar(report["status"]), reference["status"], (reference, report))
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(actual, expected, (reference, report))
+
+    def test_empty_match_diagnostics_match_ocaml(self):
+        cases = [
+            ("union-subject", "type Maybe = A(Int) | B()" + NL + "fn f(x: Maybe) -> Int { return match x {} }"),
+            ("scalar-subject", "fn f() -> Int { return match 1 {} }"),
+            ("unknown-subject", "fn f() -> Int { return match missing {} }"),
+        ]
+        for name, source in cases:
+            with self.subTest(name=name):
+                reference = self._reference_check("empty-match-" + name, source)
+                _, report = self._analyze(source)
+                expected = [
+                    (item["code"], item["span"]["start"]["offset"], item["span"]["endOffset"])
+                    for item in reference["diagnostics"]
+                ]
+                actual = [
+                    (scalar(fields(item)["code"]), scalar(fields(item)["startByte"]), scalar(fields(item)["endByte"]))
+                    for item in report["diagnostics"]["value"]
+                ]
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(scalar(report["status"]), "invalid", report)
+                self.assertEqual(actual, expected, (name, expected, actual, report))
+                self.assertEqual([item[0] for item in actual], ["PEP_EMPTY_MATCH"])
 
     def test_nested_single_variant_constructor_patterns_match_ocaml(self):
         cases = [
@@ -1816,6 +2153,13 @@ class A13FunctionResolutionTests(unittest.TestCase):
             ("context-last-mismatch", "fn f(flag: Bool) -> Int { return if flag { 0 } else { true } }", "invalid", {}),
             ("context-both-mismatch", "fn f(flag: Bool) -> Int { return if flag { true } else { false } }", "invalid", {}),
             ("uncontextual-mismatch", "fn f(flag: Bool) -> Int { let value = if flag { 0 } else { true }; return 1 }", "invalid", {}),
+            ("nested-context-branch", "fn f(flag: Bool) -> Int { return if flag { if flag { true } else { 0 } } else { 0 } }", "invalid", {}),
+            ("nested-condition-type", "fn f(flag: Bool) -> Int { return if flag { if 1 { 1 } else { 2 } } else { 3 } }", "invalid", {}),
+            ("nested-condition-unresolved", "fn f(flag: Bool) -> Int { return if flag { if missing { 1 } else { 2 } } else { 3 } }", "invalid", {}),
+            ("nested-list-then-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { if flag { [[1]] } else { [[true]] } } else { [[2]] } }", "invalid", {}),
+            ("nested-list-else-leaf", "fn f(flag: Bool) -> List[List[Int]] { return if flag { if flag { [[true]] } else { [[1]] } } else { [[2]] } }", "invalid", {}),
+            ("nested-call-unknown", "fn f(flag: Bool) -> Int { return if flag { if flag { missing() } else { 0 } } else { 1 } }", "invalid", {}),
+            ("nested-hole-context", "fn f(flag: Bool) -> Int { return if flag { if flag { ?one } else { 0 } } else { 1 } }", "incomplete", {"one": "Int"}),
         ]
         for name, source, expected_status, expected_holes in cases:
             with self.subTest(name=name):

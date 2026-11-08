@@ -3,6 +3,7 @@ type ExpressionTypeAndShape { typeName: Str, shape: PepTypeShape }
 type CheckedFunction { semanticId: Int, syntaxId: Int, name: Str, arity: Int, returnType: Str, returnShape: PepTypeShape, startByte: Int, endByte: Int, document: Str, revision: Str }
 type ResolvedCall { callerId: Int, calleeId: Int, syntaxId: Int, startByte: Int, endByte: Int }
 type CheckDiagnostic { code: Str, message: Str, syntaxId: Int, startByte: Int, endByte: Int }
+type DiagnosticLookup { found: Bool, diagnostic: CheckDiagnostic }
 type BindingFact { semanticId: Int, syntaxId: Int, name: Str, ownerFunctionId: Int, scopeId: Int, visibleFrom: Int, mutable: Bool, typeName: Str, typeShape: PepTypeShape, document: Str, revision: Str }
 type ResolvedName { syntaxId: Int, bindingId: Int, name: Str, startByte: Int, endByte: Int }
 type ExpressionTypeFact { syntaxId: Int, typeName: Str, typeShape: PepTypeShape, startByte: Int, endByte: Int }
@@ -72,6 +73,27 @@ fn empty_node() -> FlatAstNode {
 fn lookup_node(nodes: List[FlatAstNode], id: Int) -> NodeLookup {
   for node in nodes { if node.id == id { return NodeLookup { found: true, node: node } } else {} }
   return NodeLookup { found: false, node: empty_node() }
+}
+fn is_type_table_diagnostic(nodes: List[FlatAstNode], candidate: CheckDiagnostic) -> Bool {
+  if candidate.code == "PEP_DUPLICATE_TYPE" || candidate.code == "PEP_DUPLICATE_CONSTRUCTOR" || candidate.code == "PEP_RESERVED_CONSTRUCTOR" {
+    return true
+  } else {}
+  if candidate.code == "PEP_DUPLICATE_FIELD" {
+    let field = lookup_node(nodes, candidate.syntaxId)
+    return field.found && field.node.kind == "field_declaration"
+  } else {}
+  return false
+}
+fn first_type_table_diagnostic(nodes: List[FlatAstNode], diagnostics: List[CheckDiagnostic]) -> DiagnosticLookup {
+  var found = false
+  var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
+  for candidate in diagnostics {
+    if is_type_table_diagnostic(nodes, candidate) && (!found || candidate.startByte + 1 <= first.startByte) {
+      found = true
+      first = candidate
+    } else {}
+  }
+  return DiagnosticLookup { found: found, diagnostic: first }
 }
 fn count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
   var count = 0
@@ -496,7 +518,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction], 
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == activeFunctionId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
         let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: activeFunctionId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) }, document: document, revision: revision }
-        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
+        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
       } else {}
@@ -514,7 +536,7 @@ fn collect_bindings(nodes: List[FlatAstNode], functions: List[CheckedFunction], 
         var duplicate = false
         for prior in reversed { if prior.ownerFunctionId == function.semanticId && prior.scopeId == scope && prior.name == node.text { duplicate = true } else {} }
         let binding = BindingFact { semanticId: 2000000 + ordinal, syntaxId: node.id, name: node.text, ownerFunctionId: function.semanticId, scopeId: scope, visibleFrom: visible, mutable: node.kind == "var", typeName: if node.kind == "binding_pattern" { "" } else { declared_binding_type(nodes, node) }, typeShape: if node.kind == "binding_pattern" { empty_type_shape() } else { declared_binding_shape(nodes, node) }, document: document, revision: revision }
-        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { "PEP_DUPLICATE_BINDING" }, "Binding name is declared more than once in this scope", node)) } else {}
+        if duplicate { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(if parameter { "PEP_DUPLICATE_PARAMETER" } else { if node.kind == "binding_pattern" { "PEP_DUPLICATE_PATTERN_BINDING" } else { "PEP_DUPLICATE_BINDING" } }, "Binding name is declared more than once in this scope", node)) } else {}
         reversed = prepend(reversed, binding)
         ordinal = ordinal + 1
       } else {}
@@ -755,6 +777,20 @@ fn infer_expression_type(nodes: List[FlatAstNode], id: Int, functions: List[Chec
   if !found.found { return "" } else {}
   return infer_expression_type_at(nodes, found.node, functions, bindings, references)
 }
+fn is_all_hole_if_expression(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let found = lookup_node(nodes, id)
+  if !found.found { return false } else {}
+  if found.node.kind == "hole" { return true } else {}
+  if found.node.kind != "if_expression" { return false } else {}
+  let condition = child_at(nodes, found.node.id, "condition", 0)
+  let thenValue = child_at(nodes, found.node.id, "then", 1)
+  let elseValue = child_at(nodes, found.node.id, "else", 2)
+  if !condition.found || !thenValue.found || !elseValue.found { return false } else {}
+  if infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" { return false } else {}
+  return is_all_hole_if_expression(nodes, thenValue.node.id, functions, bindings, references) &&
+    is_all_hole_if_expression(nodes, elseValue.node.id, functions, bindings, references)
+}
+}
 fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let found = lookup_node(nodes, id)
   if !found.found { return empty_type_shape() } else {}
@@ -768,6 +804,19 @@ fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[Chec
     let thenShape = expression_type_shape(nodes, thenValue.node.id, functions, bindings, references)
     let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
     if thenShape.kind != "" && same_type_shape(thenShape, elseShape) { return thenShape } else {}
+    return empty_type_shape()
+  } else {}
+  if found.node.kind == "match" {
+    let parent = lookup_node(nodes, found.node.parentId)
+    if !parent.found || parent.node.kind != "binary" || (parent.node.text != "==" && parent.node.text != "!=") || found.node.role != "left" { return empty_type_shape() } else {}
+    if count_children(nodes, found.node.id, "arm") == 1 {
+      for arm in nodes {
+        if arm.parentId == found.node.id && arm.kind == "match_arm" {
+          let result = child_at(nodes, arm.id, "result", 1)
+          if result.found { return expression_type_shape(nodes, result.node.id, functions, bindings, references) } else { return empty_type_shape() }
+        } else {}
+      }
+    } else {}
     return empty_type_shape()
   } else {}
   if found.node.kind == "record" { return PepTypeShape { kind: "nominal", name: found.node.text, listDepth: 0 } } else {}
@@ -1500,6 +1549,9 @@ fn unsupported_type_code(nodes: List[FlatAstNode], id: Int, knownName: Str) -> S
 fn equality_supported_type(typeName: Str) -> Bool {
   return typeName == "Int" || typeName == "Bool" || typeName == "Str" || typeName == "Unit"
 }
+fn equality_supported_shape(shape: PepTypeShape) -> Bool {
+  return shape.kind == "builtin" && shape.listDepth == 0 && equality_supported_type(shape.name)
+}
 fn expected_hole_type(nodes: List[FlatAstNode], hole: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Str {
   let parent = lookup_node(nodes, hole.parentId)
   if !parent.found { return "" } else {}
@@ -1619,6 +1671,40 @@ fn fixed_builtin_parameter_type(name: Str, index: Int) -> Str {
   if name == "str_concat" && (index == 0 || index == 1) { return "Str" } else {}
   return ""
 }
+fn builtin_call_has_primary_failure(nodes: List[FlatAstNode], call: FlatAstNode, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let requiredArity = fixed_builtin_arity(call.text)
+  if requiredArity != -1 && count_children(nodes, call.id, "argument") != requiredArity { return true } else {}
+  var index = 0
+  for argument in nodes {
+    if argument.parentId == call.id && argument.role == "argument" {
+      let expected = fixed_builtin_parameter_type(call.text, index)
+      let actual = infer_expression_type(nodes, argument.id, functions, bindings, references)
+      if expected != "" && actual != "" && expected != actual { return true } else {}
+      index = index + 1
+    } else {}
+  }
+  if call.text == "length" || call.text == "reverse" || call.text == "append" || call.text == "prepend" || call.text == "contains" {
+    let collection = child_at(nodes, call.id, "argument", 0)
+    if collection.found {
+      let shape = expression_type_shape(nodes, collection.node.id, functions, bindings, references)
+      if shape.listDepth == 0 { return true } else {}
+      if call.text == "append" || call.text == "prepend" || call.text == "contains" {
+        let value = child_at(nodes, call.id, "argument", 1)
+        if value.found && value.node.kind != "hole" {
+          let actualValue = infer_expression_type(nodes, value.node.id, functions, bindings, references)
+          let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+          let elementShape = without_one_list(shape)
+          let elementType = legacy_type_name(elementShape)
+          let contextualExtraList = call.text == "append" && value.node.kind == "list" && actualValue == elementType && has_extra_list_depth(actualShape, elementShape)
+          let structuralMismatch = elementShape.kind != "" && actualShape.kind != "" && !same_type_shape(elementShape, actualShape) && !contextualExtraList
+          if elementType != "" && actualValue != "" && actualValue != elementType || structuralMismatch { return true } else {}
+        } else {}
+        if call.text == "contains" && shape.listDepth != 0 && !equality_supported_type(legacy_type_name(without_one_list(shape))) { return true } else {}
+      } else {}
+    } else { return true }
+  } else {}
+  return false
+}
 fn branch_always_returns(nodes: List[FlatAstNode], parentId: Int, role: Str) -> Bool {
   var covered = false
   for statement in nodes {
@@ -1648,6 +1734,24 @@ fn if_expression_branch_mismatch(nodes: List[FlatAstNode], id: Int, expectedType
   let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
   if expectedShape.kind != "" && ((thenShape.kind != "" && !same_type_shape(expectedShape, thenShape)) || (elseShape.kind != "" && !same_type_shape(expectedShape, elseShape))) { return true } else {}
   if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
+  return false
+}
+fn if_expression_tree_has_primary_failure(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> Bool {
+  let expression = lookup_node(nodes, id)
+  if !expression.found || expression.node.kind != "if_expression" { return false } else {}
+  let condition = child_at(nodes, id, "condition", 0)
+  if condition.found && condition.node.kind != "hole" && infer_expression_type(nodes, condition.node.id, functions, bindings, references) != "Bool" { return true } else {}
+  let thenValue = child_at(nodes, id, "then", 1)
+  let elseValue = child_at(nodes, id, "else", 2)
+  if !thenValue.found || !elseValue.found { return false } else {}
+  let thenType = infer_expression_type(nodes, thenValue.node.id, functions, bindings, references)
+  let elseType = infer_expression_type(nodes, elseValue.node.id, functions, bindings, references)
+  if thenType != "" && elseType != "" && thenType != elseType { return true } else {}
+  let thenShape = expression_type_shape(nodes, thenValue.node.id, functions, bindings, references)
+  let elseShape = expression_type_shape(nodes, elseValue.node.id, functions, bindings, references)
+  if (thenType == "" || elseType == "") && thenShape.kind != "" && elseShape.kind != "" && !same_type_shape(thenShape, elseShape) { return true } else {}
+  if thenValue.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, thenValue.node.id, functions, bindings, references) { return true } else {}
+  if elseValue.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, elseValue.node.id, functions, bindings, references) { return true } else {}
   return false
 }
 
@@ -1888,7 +1992,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             }
             if !listHasAnnotation { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_LIST_NEEDS_TYPE", "An empty list needs a concrete list type from context", node)) } else {}
           } else {
-            if node.kind != "name" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
+            if node.kind != "name" && node.kind != "if_expression" && node.kind != "field_access" && shape.kind == "" { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "This expression form has no type rule in the current checker slice", node)) } else {}
           }
         }
         }
@@ -1910,11 +2014,21 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
           var fieldDiagnosticFound = false
           var fieldDiagnosticCode = ""
           var fieldDiagnosticNode = empty_node()
-          for field in taRecordFields {
-            if field.parentId == node.id {
-              if !duplicateFound && is_first_duplicate_occurrence(taRecordFields, node.id, "record_field", field.text, field.id) {
+          var unknownFieldFound = false
+          var unknownFieldNode = empty_node()
+          for field in nodes {
+            if field.parentId == node.id && field.kind == "record_field" {
+              if !duplicateFound && is_first_duplicate_occurrence(nodes, node.id, "record_field", field.text, field.id) {
                 duplicateFound = true
                 duplicateNode = field
+              } else {}
+              if !unknownFieldFound {
+                let knownFieldType = record_field_type(nodes, node.text, field.text)
+                let knownFieldShape = record_field_shape(nodes, node.text, field.text)
+                if knownFieldType == "" && knownFieldShape.kind == "" {
+                  unknownFieldFound = true
+                  unknownFieldNode = field
+                } else {}
               } else {}
               if !fieldDiagnosticFound {
                 let resolvedFacts = if declaration.found { resolved_field_facts(resolvedRecords, recordKeyId, field.text) } else { resolved_field_facts(externalRecords, recordKeyId, field.text) }
@@ -1981,10 +2095,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             if missingFound {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_MISSING_FIELD", "Record literal omits a declared field", missingNode))
             } else {
-              if fieldDiagnosticFound {
-                let fieldDiagnosticMessage = if fieldDiagnosticCode == "PEP_UNKNOWN_FIELD" { "Record literal names a field absent from its declaration" } else { "Record field value type does not match its declaration" }
-                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldDiagnosticCode, fieldDiagnosticMessage, fieldDiagnosticNode))
-              } else {}
+              if unknownFieldFound {
+                reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Record literal names a field absent from its declaration", unknownFieldNode))
+              } else {
+                if fieldDiagnosticFound {
+                  let fieldDiagnosticMessage = if fieldDiagnosticCode == "PEP_UNKNOWN_FIELD" { "Record literal names a field absent from its declaration" } else { "Record field value type does not match its declaration" }
+                  reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(fieldDiagnosticCode, fieldDiagnosticMessage, fieldDiagnosticNode))
+                } else {}
+              }
             }
           }
         } else {}
@@ -2015,20 +2133,109 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
       } else {}
       if node.kind == "field_access" {
         let value = child_at(nodes, node.id, "value", 0)
-        let fieldUnknownByNode = infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
-        let fieldBase = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
-        let fieldKnownByExternal = value.found && fieldBase != "" && (record_field_type_ext(nodes, externalRecords, fieldBase, node.text) != "" || record_field_shape_ext(nodes, externalRecords, fieldBase, node.text).kind != "")
-        if value.found && fieldUnknownByNode && !fieldKnownByExternal {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
-        } else {}
+        let receiverType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+        let receiverRecord = record_declaration(nodes, receiverType)
+        let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
+        let receiverUnknownField = value.found && receiverRecord.found && infer_expression_type(nodes, node.id, functions, bindings, references) == "" && expression_type_shape(nodes, node.id, functions, bindings, references).kind == ""
+        let receiverMayHaveFieldError = receiverType != "" && !receiverRecord.found || receiverUnknownField
+        let receiverIfMismatch = value.found && value.node.kind == "if_expression" && receiverMayHaveFieldError && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
+        if value.found && (value.node.kind == "hole" || receiverIfUntyped) {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_UNTYPED_VALUE", "Field selection receiver has no known type", node))
+        } else {
+          if value.found && receiverType != "" && !receiverRecord.found && !receiverIfMismatch {
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_FIELD_ON_NON_RECORD", "Field selection requires a record value", node))
+          } else {
+            if receiverUnknownField && !receiverIfMismatch {
+              reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FIELD", "Field selection does not name a declared field of the record", node))
+            } else {}
+          }
+        }
       } else {}
       if node.kind == "match" {
+        let matchArmCount = count_children(nodes, node.id, "arm")
+        if matchArmCount == 0 {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EMPTY_MATCH", "A match expression must have at least one arm", node))
+        } else {}
         let subject = child_at(nodes, node.id, "value", 0)
         let subjectType = if subject.found { infer_expression_type(nodes, subject.node.id, functions, bindings, references) } else { "" }
         let union = union_declaration(nodes, subjectType)
-        if !union.found {
+        var subjectHasPrimaryError = false
+        if subject.found && subject.node.kind == "name" {
+          let reference = find_reference(references, subject.node.id)
+          if !reference.found { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind == "binary" {
+          let left = child_at(nodes, subject.node.id, "left", 0)
+          let right = child_at(nodes, subject.node.id, "right", 1)
+          let leftType = if left.found { infer_expression_type(nodes, left.node.id, functions, bindings, references) } else { "" }
+          let rightType = if right.found { infer_expression_type(nodes, right.node.id, functions, bindings, references) } else { "" }
+          let expected = if subject.node.text == "&&" || subject.node.text == "||" { "Bool" } else { if subject.node.text == "==" || subject.node.text == "!=" { leftType } else { "Int" } }
+          let equalityUnsupported = (subject.node.text == "==" || subject.node.text == "!=") && leftType != "" && !equality_supported_type(leftType)
+          let untypedEqualityLeft = left.found && leftType == "" && (left.node.kind == "hole" || left.node.kind == "if_expression" && is_all_hole_if_expression(nodes, left.node.id, functions, bindings, references))
+          let operandMismatch = expected != "" && (leftType != "" && leftType != expected || rightType != "" && rightType != expected)
+          if equalityUnsupported || untypedEqualityLeft || operandMismatch { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind == "unary" {
+          let operand = child_at(nodes, subject.node.id, "operand", 0)
+          let expected = if subject.node.text == "!" { "Bool" } else { "Int" }
+          let operandType = if operand.found { infer_expression_type(nodes, operand.node.id, functions, bindings, references) } else { "" }
+          if operand.found && operand.node.kind != "hole" && operandType != expected { subjectHasPrimaryError = true } else {}
+        } else {}
+        if subject.found && subject.node.kind != "name" {
+          for nested in nodes {
+            if nested.kind == "name" && subject.node.startByte <= nested.startByte && nested.endByte <= subject.node.endByte {
+              let reference = find_reference(references, nested.id)
+              if !reference.found { subjectHasPrimaryError = true } else {}
+            } else {}
+          }
+        } else {}
+        if subject.found && subject.node.kind == "call" {
+          let target = find_function(functions, subject.node.text)
+          if !target.found && !is_constructor(nodes, subject.node.text) && !known_builtin(subject.node.text) { subjectHasPrimaryError = true } else {}
+          if target.found && count_children(nodes, subject.node.id, "argument") != target.function.arity { subjectHasPrimaryError = true } else {}
+          if target.found {
+            var argumentIndex = 0
+            for argument in nodes {
+              if argument.parentId == subject.node.id && argument.role == "argument" {
+                let expectedArgument = function_parameter_type(nodes, target.function.syntaxId, argumentIndex)
+                let actualArgument = infer_expression_type(nodes, argument.id, functions, bindings, references)
+                let needsExpectedShape = expectedArgument == "" || actualArgument == "" || argument.kind == "list"
+                let expectedShape = if needsExpectedShape { function_parameter_shape(nodes, target.function.syntaxId, argumentIndex) } else { empty_type_shape() }
+                let needsStructuralCheck = expectedArgument == "" || actualArgument == ""
+                let actualShape = if needsStructuralCheck { expression_type_shape(nodes, argument.id, functions, bindings, references) } else { empty_type_shape() }
+                let shapeMismatch = needsStructuralCheck && expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+                let needsNestedListCheck = expectedShape.listDepth != 0 && (expectedArgument == "" || actualArgument == "" || expectedArgument != actualArgument || argument.kind == "list")
+                let listMismatch = if needsNestedListCheck { list_mismatch_node(nodes, argument.id, expectedShape, functions, bindings, references) } else { NodeLookup { found: false, node: empty_node() } }
+                if expectedArgument != "" && actualArgument != "" && expectedArgument != actualArgument || shapeMismatch || listMismatch.found { subjectHasPrimaryError = true } else {}
+                argumentIndex = argumentIndex + 1
+              } else {}
+            }
+          } else {
+            if known_builtin(subject.node.text) {
+              if builtin_call_has_primary_failure(nodes, subject.node, functions, bindings, references) { subjectHasPrimaryError = true } else {}
+            } else {}
+          }
+        } else {}
+        if subject.found && subject.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, subject.node.id, functions, bindings, references) { subjectHasPrimaryError = true } else {}
+        if subject.found && subject.node.kind == "field_access" {
+          let value = child_at(nodes, subject.node.id, "value", 0)
+          let valueType = if value.found { infer_expression_type(nodes, value.node.id, functions, bindings, references) } else { "" }
+          let record = record_declaration(nodes, valueType)
+          let receiverIfUntyped = value.found && value.node.kind == "if_expression" && is_all_hole_if_expression(nodes, value.node.id, functions, bindings, references)
+          let receiverIfFailure = value.found && value.node.kind == "if_expression" && if_expression_tree_has_primary_failure(nodes, value.node.id, functions, bindings, references)
+          let receiverUntyped = value.found && (value.node.kind == "hole" || receiverIfUntyped)
+          let receiverNonRecord = valueType != "" && !record.found
+          let receiverHasPrimaryFailure = receiverIfFailure || receiverUntyped || receiverNonRecord
+          let fieldUnknown = record.found && record_field_type(nodes, valueType, subject.node.text) == ""
+          if receiverHasPrimaryFailure || fieldUnknown { subjectHasPrimaryError = true } else {}
+        } else {}
+        if !union.found && matchArmCount != 0 {
           let code = if subjectType == "" { "PEP_MATCH_UNTYPED" } else { "PEP_MATCH_NON_UNION" }
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", node))
+          if subjectHasPrimaryError {
+          } else {
+            let diagnosticNode = if subject.found { subject.node } else { node }
+            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic(code, "Match subject must have a supported tagged-union type", diagnosticNode))
+          }
         } else {}
         var catchAll = false
         var invalidPattern = false
@@ -2148,9 +2355,9 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
             } else {}
           } else {}
         }
-        if union.found && !catchAll && !invalidPattern {
-          for variant in taVariants {
-            if variant.parentId == union.node.id && !contains(seenConstructors, variant.text) {
+        if union.found && matchArmCount != 0 && !catchAll && !invalidPattern {
+          for variant in nodes {
+            if variant.parentId == union.node.id && variant.kind == "variant_declaration" && !contains(seenConstructors, variant.text) {
               reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_NON_EXHAUSTIVE_MATCH", "Match does not cover every constructor", node))
             } else {}
           }
@@ -2162,8 +2369,15 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
         let leftType = if left.found { infer_expression_type_at(nodes, left.node, functions, bindings, references) } else { "" }
         let rightType = if right.found { infer_expression_type_at(nodes, right.node, functions, bindings, references) } else { "" }
         let expected = if node.text == "&&" || node.text == "||" { "Bool" } else { if node.text == "==" || node.text == "!=" { leftType } else { "Int" } }
-        if (node.text == "==" || node.text == "!=") && leftType != "" && !equality_supported_type(leftType) && left.found {
+        let leftShape = if (node.text == "==" || node.text == "!=") && left.found && leftType == "" && left.node.kind != "hole" { expression_type_shape(nodes, left.node.id, functions, bindings, references) } else { empty_type_shape() }
+        let unsupportedEqualityType = leftType != "" && !equality_supported_type(leftType) ||
+          leftShape.kind != "" && !equality_supported_shape(leftShape)
+        if (node.text == "==" || node.text == "!=") && unsupportedEqualityType && left.found {
           reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNSUPPORTED", "Equality is not defined for this value type", left.node))
+        } else {}
+        let untypedEqualityLeft = left.found && leftType == "" && (left.node.kind == "hole" || left.node.kind == "if_expression" && is_all_hole_if_expression(nodes, left.node.id, functions, bindings, references))
+        if (node.text == "==" || node.text == "!=") && untypedEqualityLeft {
+          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_EQUALITY_UNTYPED", "Equality requires a typed left operand", left.node))
         } else {}
         if expected != "" && leftType != "" && leftType != expected && left.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", left.node)) } else {}
         if expected != "" && rightType != "" && rightType != expected && right.found { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Binary operator operand has an incompatible type", right.node)) } else {}
@@ -2216,7 +2430,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
                 if expected != "" {
                   let actualArgument = infer_expression_type_at(nodes, argument, functions, bindings, references)
                   if actualArgument != "" && expected != actualArgument {
-                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_TYPE", "Built-in argument type does not match its signature", argument))
+                    reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_TYPE_MISMATCH", "Built-in argument type does not match its signature", argument))
                   } else {}
                 } else {}
                 index = index + 1
@@ -2426,6 +2640,14 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
 }
 fn diagnostic(code: Str, message: Str, node: FlatAstNode) -> CheckDiagnostic {
   return CheckDiagnostic { code: code, message: message, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte }
+}
+fn unknown_call_diagnostic(node: FlatAstNode) -> CheckDiagnostic {
+  let initialByte = byte_at(source_bytes(), node.startByte)
+  if contains([65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90], initialByte) {
+    return diagnostic("PEP_UNKNOWN_CONSTRUCTOR", "No declared constructor has this name", node)
+  } else {
+    return diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node)
+  }
 }
 fn invalid_report(document: Str, revision: Str, count: Int, code: Str, message: Str, node: FlatAstNode) -> CheckerReport {
   return CheckerReport { document: document, revision: revision, status: "invalid", syntaxNodeCount: count, functions: [], bindings: [], references: [], calls: [], expressionTypes: [], holes: [], diagnostics: [diagnostic(code, message, node)] }
@@ -2863,7 +3085,7 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
               reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: function.semanticId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
             } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
           } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-            reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
+            reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
           } }
         } else {}
       }
@@ -2889,7 +3111,7 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
             reversedCalls = prepend(reversedCalls, ResolvedCall { callerId: currentCallerId, calleeId: target.function.semanticId, syntaxId: node.id, startByte: node.startByte, endByte: node.endByte })
           } else { reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_ARGUMENT_COUNT", "Function call argument count does not match the resolved declaration", node)) }
         } else { if is_constructor(nodes, node.text) || known_builtin(node.text) { } else {
-          reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_UNKNOWN_FUNCTION", "No function or declared constructor has this name", node))
+          reversedDiagnostics = prepend(reversedDiagnostics, unknown_call_diagnostic(node))
         } }
       } else {}
     }
@@ -2903,6 +3125,10 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
   let calls = reverse(reversedCalls)
   let collectedDiagnostics = reverse(reversedDiagnostics)
   var diagnostics = collectedDiagnostics
+  let typeTableDiagnostic = first_type_table_diagnostic(nodes, collectedDiagnostics)
+  if typeTableDiagnostic.found {
+    diagnostics = [typeTableDiagnostic.diagnostic]
+  } else {
   if typeResult.unreachable.found {
     var earlierFound = false
     var earlier = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
@@ -2922,17 +3148,11 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
     } else {
       var firstFound = false
       var unknownTypeFound = false
-      var candidateCount = 0
       var first = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       var firstOrderByte = 0
       var unknownType = CheckDiagnostic { code: "", message: "", syntaxId: -1, startByte: 0, endByte: 0 }
       for candidate in collectedDiagnostics {
         let orderByte = diagnostic_order_byte(nodes, candidate)
-        if candidate.code == "PEP_TYPE_MISMATCH" || candidate.code == "PEP_MATCH_ARM_TYPE_MISMATCH" ||
-            candidate.code == "PEP_UNKNOWN_VARIABLE" || candidate.code == "PEP_UNKNOWN_FUNCTION" ||
-            candidate.code == "PEP_ARGUMENT_COUNT" || candidate.code == "PEP_UNKNOWN_TYPE" {
-          candidateCount = candidateCount + 1
-        } else {}
         if candidate.code == "PEP_UNKNOWN_TYPE" {
           if !unknownTypeFound || candidate.startByte + 1 <= unknownType.startByte {
             unknownTypeFound = true
@@ -2950,11 +3170,9 @@ fn analyze_chunk_inner_bound(parsed: ParserProgress, externalFunctions: List[Che
           } else {}
         }
       }
-      if candidateCount == 0 {
-      } else {
-        if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
-      }
+      if unknownTypeFound { diagnostics = [unknownType] } else { if firstFound { diagnostics = [first] } else {} }
     }
+  }
   }
   let status = if length(diagnostics) != 0 { "invalid" } else { if length(holes) != 0 { "incomplete" } else { "valid" } }
   return CheckerReport { document: authority.document, revision: authority.revision, status: status, syntaxNodeCount: length(nodes), functions: functions, bindings: typedBindings, references: nameResult.references, calls: calls, expressionTypes: typeResult.expressionTypes, holes: holes, diagnostics: diagnostics }

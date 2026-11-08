@@ -1,0 +1,173 @@
+# pepin-source-scan — A4 SPEC (dogfood application, grammar-truth lane)
+
+Owner: A4. Exclusive path: `examples/dogfood/`. No checker, emitter,
+protocol, budget, CURRENT, manifest, master, Studio, or Watchtower changes.
+
+## Program
+
+`pepin-source-scan.pep` counts **identifier-start runs** in the granted
+`SourceBytes` document and returns the count as `Int`.
+
+- Identifier-start := single byte where `ascii_letter(byte)` is true.
+  Predicates are verbatim from `examples/pep_lexer.pep`:
+  `ascii_letter` = `A-Z / a-z / _`; `ascii_digit` = `0-9`;
+  `ascii_continue` = letter or digit.
+- New run := start byte at offset 0, or previous byte is NOT
+  `ascii_continue`. No tokenizer state beyond `(n, o)`; no heap, no FFI.
+- Non-ASCII bytes (e.g. UTF-8 continuation/emoji) never start or continue
+  a run. Empty input returns 0.
+
+`check` on `spec/agent4-spec-lab@712e549` base: **valid, 4 functions,
+zero diagnostics** (ascii_letter:0, ascii_digit:1, ascii_continue:2,
+main:3). Plain `run` without a host grant produces no count (exit 0, no
+output) — the granted `SourceBytes` entry needs the A1 host grant / A2
+native build, which is outside the A4 lane. This byte-count/scan distinction
+is Dimensional: this program reports run counts, not a token stream; do not
+cite it as a full lexer.
+
+## Fixtures (real files on disk, independent Python reference)
+
+Reference: byte-identical predicates over `read_bytes()` (see receipt).
+Provenance: size in bytes + sha256-8 below, at the committed revision.
+
+| file | bytes | sha8 | expected runs |
+|---|---|---|---|
+| `examples/dogfood/input_ascii.pep` | 168 | 7269de34 | 23 |
+| `examples/dogfood/input_nonascii.pep` | 218 | bb82fc6f | 30 |
+| `examples/dogfood/input_empty.pep` | 0 | e3b0c442 | 0 |
+| `examples/dogfood/pepin-source-scan.pep` (self) | 1159 | f6e8f942 | 139 |
+
+`input_ascii.pep`: ordinary ASCII Pep (identity/negate/main → 42).
+`input_nonascii.pep`: comment + string with `Grüße`, `héllo`, `🎉`
+(2-byte, 4-byte sequences); letter bytes inside identifiers still count,
+all bytes ≥ 128 do not. `input_empty.pep`: 0-byte edge case.
+
+## Explicitly unsupported
+
+- Token text/kinds/positions: not returned (Int-only output contract).
+- Keywords vs names, strings/comments skipped, digit-start runs: NOT
+  distinguished — every `ascii_letter` start counts, including inside
+  comments and string literals.
+- NUL bytes: no special rule; `byte_at` value 0 is simply not a letter.
+- Multi-file/directory walk, output formatting, CLI flags: out of scope
+  for this slice.
+
+## Command a user runs (exe-direct native contract, per A1 grant answer)
+
+There is no `run-c23 --grant-file` CLI and none is requested: A1 ruled that a
+new CLI would be a new ABI, out of scope for this mission. The contract is the
+compiled exe run directly with the granted file as argv[1], once A2 lowers
+`main(source: SourceBytes)`:
+
+```powershell
+./pepin-source-scan.exe examples/dogfood/input_ascii.pep
+# expected: 23 (in A2's native reporting convention, as exercised by A2's probe)
+```
+
+The runs-app binary does NOT exist yet (Blocker B stands); line-scan reached
+native PASS under exactly this contract (A2 receipt 47, A3-034 gate). Pinned
+source SHA + this SPEC remain the implementation target. A3 pre-registers
+predictions from this file before seeing native outputs.
+
+## Line-scan (second program, LUCY-20261107-008 Q3)
+
+`pepin-line-scan.pep` counts LF bytes (value 10) over the same granted
+`SourceBytes` input and returns the count as `Int`. Same predicates, grant
+path and output contract as the runs program; `pepin-source-scan.pep` is
+untouched (still frozen at `874cc02`). Deliberate shape: filled `then`,
+empty `else` — the branch direction A3 proved builds (`empty_else.pep`
+exit 0); no empty-`then` idiom. Native proof now exists: A2 receipt 47
+FULL NATIVE VERTICAL PASS, A1 integrator repro on 86ff953, A3-034 gate
+39/39 PROVEN (five real files, strict Clang+GCC, both assembly orders).
+
+Confirmed native results on the identical fixtures: input_ascii 3,
+input_nonascii 5, input_empty 0, self 39 (line_scan_gate_034.py, A3-034).
+A3-040 extended the gate to 49/49: line-scan self (998 B -> 32) and a
+NUL-sensitive edge (9 B, 2 NULs -> 3 LFs), plus fact gates M4/M5/M6
+(M1-M3 N/A: line-scan carries zero cross-chunk call facts). Six files,
+both compilers, both assembly orders, independent oracle.
+Consumer: pair identifier-runs + line count per file as one documented
+user task. Single-unit `check`: valid, 4 fns, 0 diagnostics (this branch).
+
+## T2 cursor probe, no token framework (LUCY-20261107-013 P2)
+
+Verdict: no stored-token/AST requirement found inside Pep-0 as scoped, so
+the token-list framework is NOT built. Forward/mutual recursion is handled
+by a signature prepass over raw bytes (scan for `fn`, record name-span and
+arity); single-error reporting (first-error exit) satisfies every A3
+invalid-input case; C output order matches source order for structured
+code (headers/footers known a priori); the symbol table was sketched as parallel
+`List[Int]` triples (name-hash, start, length) with byte-compare on hash
+match -- no Str keys, no AST. Per A3-060/061
+(List-argument gate proposed then retracted as a confound), the working
+table is a re-scan per query over granted bytes:
+no stored table, hence no cross-chunk List values. A parallel-`List[Int]`
+table variant is unblocked but untested; the no-token
+verdict is unchanged (re-scan needs no buffered tokens either). Excluded
+by subset definition (not by
+implementation): nested function definitions (unions capped at <10 variants per A1 Finding 2 -- parse cliff between k=10 and k=20; Pep-0 carries no large recursive unions; single declarations capped at ~110 tokens per A1 Finding 3 -- linear ~900 steps/token), multi-error recovery,
+reorder-dependent emission; C-string literals and single fragments capped at ~2 KiB (A2 p7/p7b: streaming say-per-fragment works, single ~3.9 KiB literal refuses at parse). Open challenge: name one Pep-0 program shape
+needing random access to more than one buffered token and this verdict flips.
+
+`cursor_kind_v1.pep` (whitespace skip only) vs `cursor_kind_v2.pep` (plus
+`//`-comment skip): first significant byte -> 1 name-start, 2
+digit-start, 3 other, 0 end. Both single-unit `check` valid, 0
+diagnostics. Reference values over committed bytes:
+
+| fixture | v1 | v2 |
+|---|---|---|
+| input_ascii (168 B, `fn`...) | 1 | 1 |
+| input_nonascii (218 B, `//`...) | 3 | 1 |
+| input_empty (0 B) | 0 | 0 |
+| pepin-source-scan (1159 B) | 3 | 1 |
+| pepin-line-scan (998 B) | 3 | 1 |
+
+The v1->v2 delta (3->1 exactly on `//`-leading files, controls unchanged)
+is the comment rule's signature. Status update (A3-049): semantics PROVEN
+10/10 by independent oracle; native BLOCKED -- v1 chunk-checks valid (52
+nodes) but unit-emit refuses STEP_LIMIT, v2 refused at chunk-check.
+Single-unit one-shot `check` remains valid for both. v1 `first_kind` is
+A3's nominated acceptance target for A2's emitter work.
+
+## T2 self-check probe (A1 handoff, same claim pattern as List probe)
+
+`t2_names_probe.pep` v3 (051-shaped; v2 rewritten per A1 v2 verdict so the two
+loop-free classifiers also use result-var + trailing return): two counting
+passes — pass 1 counts `fn ` occurrences, pass 2 counts `(` bytes;
+`main` returns 0/1/2 via a result variable + trailing return (assign-in-branch
+idiom, no in-branch returns). Loops contain zero
+conditionals (classification in loop-free `is_fn_at`/`is_paren`); user
+calls cross chunks (twins cover conditions, assignment-RHS now tested by
+this probe). Single-unit `check`: valid, 5 fns, 0 diagnostics (this
+branch). Reference over committed bytes unchanged: t2_valid 0, t2_nodef
+1, t2_nocall 2. Covers unknown-symbol; arity/type need a bigger probe
+later. Chunk-check + unit-emit belong to A1 (updated handoff supersedes
+the v1 offer); a PASS feeds the T2 prepass design, a refusal extends the
+A3-051 emit corpus.
+
+## Arity follow-up probe (queued behind T2 v2, same lane)
+
+`arity_probe.pep`: two counting passes — pass 1 counts `fn ` occurrences,
+pass 2 counts `(` / `)` spans; arity = commas+1 per span (0 when empty).
+`main` returns 0 = agree, 1 = no definition, 2 = mismatch (covers no-call:
+args 0 vs params N). Flat calls only (documented limitation); same
+051-shaped idioms as T2 v2 (zero-conditional loops, hoisted calls,
+trailing return). Single-unit `check`: valid, 7 fns, 0 diagnostics.
+Reference over committed bytes: arity_ok 0, arity_bad 2, arity_nodef 1,
+arity_nocall 2 (independently recomputed). QUEUED, not handed off: will
+offer to A1 when the T2 v2 fork resolves, so as not to stack untested
+probes on a busy lane.
+
+## Checkout guard
+
+`examples/dogfood/.gitattributes` pins `*.pep text eol=lf` so Windows
+checkouts measure the committed bytes (A3 BOOT-A3-025 point 6: 1198 vs
+1159 bytes). Scoped to this lane; no repo-wide attribute change.
+
+## A4 grant question — ANSWERED by A1 (no action open)
+
+A1's explicit grant answer: host entry is `open_bytes(name, bytes)` with
+`entryFunctions: ["main"]`; native entry is the `pep_source_data` grant
+wrapper with the exe run direct on the granted file path.
+`fn main(source: SourceBytes) -> Int` plus `byte_at`/`byte_length` stands
+as the lowered entry; no narrower request shape needed, no new CLI/ABI.
