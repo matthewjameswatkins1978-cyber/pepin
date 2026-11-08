@@ -46,12 +46,15 @@ that says "verified against the seed" without a blob is ambiguous — see `FINDI
 
 1. **No compiler A exists.** `main` and `find_brace` cannot be assembled, so nothing reads Pep input or emits C for an unseen
    source. **No M-1 claim is made anywhere in this lane.**
-2. **Two functions blocked on one change.** `find_brace` loses 7 statements, `main` loses #23. Every failure is in a large
-   function: a **13-node** statement exceeds the budget in the 288-node `find_brace`, which proves statement size is not the
-   driver and no per-statement threshold can substitute for the `parentId` index. See A3-137.
-3. **The child-lookup early exit is correct but cannot help.** Zero differences across 63,954 queries, but it only fires for
-   early-positioned parents: −18,131 steps for an early statement, **+11,149** for a late one. `main`'s #23 is the 24th of 31.
-   See A3-126, A3-135, A3-131.
+2. **`find_brace` loses 3 statements, not 7.** The lever was never an emitter optimisation or a `parentId` index — it is the
+   size of the node list the host passes. Narrowing per fragment to *function node + parameter subtrees + var/let declaration
+   subtrees + target statement* makes **`main` emit 31/31** (#23 at 61,572 steps on 85 nodes instead of 100,001 on 222) and
+   `find_brace` 21/24. The three remaining are **5-conjunct `&&` conditions**, while 2- and 3-conjunct ones in the same
+   function emit at 25,126 and 36,634 steps — exactly the limit A4's `EXPECTED.md` predicted, whose stated remedy is to
+   split long conjunctions. See A3-146, A3-147. **A3-131's 'only the index can help' and A3-137's recommendation are
+   superseded**; note Pep has no list indexing, so an index may be inexpressible anyway.
+3. **The child-lookup early exit is correct but cannot help a late statement.** Zero differences across 63,954 queries, but it
+   only fires for early-positioned parents: −18,131 steps for an early statement, **+11,149** for a late one. See A3-126, A3-135.
 4. **19 of 21 functions have only a source-derived oracle.** The seed cannot execute them because `source_bytes()` is host-gated
    in run mode (`PEP_RUNTIME_SOURCE_CONTEXT`). This is the input-access wall (A3-073/074) reaching into verification: it bounds
    how exhaustively the compiler can be checked, not just what it can do.
