@@ -62,6 +62,14 @@ EXPECTED = {
     # expected to refuse it separately with exit 4 longlit, outside S0).
     "a_nul": ("invalid", [("PEP_UNEXPECTED_CHARACTER", 0, 1, 1, 1)]),
     "a_big19": ("valid", []),
+    # A4 R2 feed (@b555a54, blob-verified 24B/50B/25B/25B): entrypoint,
+    # duplicate-function and glued-form negatives. Seed verdicts measured
+    # on A4's exact bytes (a_foo is seed-valid; the native exit codes
+    # 1/3/1/2 are A4-compiler-side, correctly absent from this seed oracle).
+    "a_foo": ("valid", []),
+    "a_dup": ("invalid", [("PEP_DUPLICATE_FUNCTION", 25, 49, 2, 1)]),
+    "a_gfn": ("invalid", [("PEP_PARSE_EXPRESSION", 8, 10, 1, 9)]),
+    "a_grt": ("invalid", [("PEP_UNKNOWN_VARIABLE", 15, 23, 1, 16)]),
 }
 
 

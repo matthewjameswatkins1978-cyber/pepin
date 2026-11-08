@@ -1,3 +1,7 @@
 crlf_ok.pep -text
 a_nul.pep -text
 a_big19.pep -text
+a_foo.pep -text
+a_dup.pep -text
+a_gfn.pep -text
+a_grt.pep -text
