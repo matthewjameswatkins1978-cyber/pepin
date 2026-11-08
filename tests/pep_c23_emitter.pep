@@ -4775,6 +4775,91 @@ fn emit_c23_section(parsed: ParserProgress, checked: CheckerReport, part: Str) -
 fn emit_c23_function_unit(parsed: ParserProgress, checked: CheckerReport, index: Int) -> PepC23Emission {
   return emit_c23_checked_part(parsed, checked, "function-unit", index)
 }
+// A2-S2 field 1: statement-fragment emission. Lowers statements [firstStatement,
+// firstStatement + statementCount) of the named function as a C body fragment -- no function
+// signature, no parameter prologue, no return requirement. The host emits the function wrapper,
+// the parameter (void) markers, the full local-declaration prologue, each body fragment, and the
+// epilogue return, concatenated in source order. Carried bindings resolve through the
+// whole-function checked.bindings fallbacks (name + assignment target); conditions and returns
+// reuse the checked-aware paths. Scalar Int local declarations are the supported prologue shape
+// (the compiler-A consumers use only Int locals); unsupported statement kinds refuse fail-closed.
+fn emit_c23_statement_fragment(parsed: ParserProgress, checked: CheckerReport, functionIndex: Int, firstStatement: Int, statementCount: Int) -> PepC23Emission {
+  let authority = semantic_snapshot()
+  if parsed.document != authority.document || parsed.revision != authority.revision ||
+     checked.document != authority.document || checked.revision != authority.revision ||
+     checked.syntaxNodeCount != length(parsed.nodes) {
+    return pep_c23_unsupported("Pep C23 emission inputs do not match the authorised source revision")
+  } else {}
+  if parsed.status != "complete" || checked.status != "valid" {
+    return pep_c23_unsupported("Pep C23 emission requires a valid Pep checker report")
+  } else {}
+  var selected = pep_c23_empty_ast_node()
+  var found = false
+  var seen = 0
+  for node in parsed.nodes {
+    if node.parentId == -1 && node.kind == "function" {
+      if seen == functionIndex { selected = node; found = true } else {}
+      seen = seen + 1
+    } else {}
+  }
+  if !found {
+    return pep_c23_unsupported("Pep C23 function unit index is out of range")
+  } else {}
+  return pep_c23_statement_fragment_lower(parsed.nodes, selected, checked, firstStatement, statementCount)
+}
+fn pep_c23_statement_fragment_lower(nodes: List[FlatAstNode], function: FlatAstNode, checked: CheckerReport, firstStatement: Int, statementCount: Int) -> PepC23Emission {
+  var statements: List[FlatAstNode] = []
+  for statement in nodes {
+    if statement.parentId == function.id && statement.role == "statement" {
+      statements = append(statements, statement)
+    } else {}
+  }
+  if !(0 <= firstStatement) || !(0 <= statementCount) || !(firstStatement + statementCount <= length(statements)) {
+    return pep_c23_unsupported("Pep C23 statement fragment range is out of bounds")
+  } else {}
+  var parts: List[Str] = []
+  var wanted = 0
+  for statement in statements {
+    if firstStatement <= wanted && !(firstStatement + statementCount <= wanted) {
+      let lowered = pep_c23_statement_fragment_statement(nodes, function, statement, checked)
+      if lowered.status != "emitted" { return lowered } else {}
+      for part in lowered.sourceParts { parts = append(parts, part) }
+    } else {}
+    wanted = wanted + 1
+  }
+  return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+}
+fn pep_c23_statement_fragment_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, checked: CheckerReport) -> PepC23Emission {
+  if statement.kind == "let" || statement.kind == "var" {
+    let initialValue = pep_c23_child(nodes, statement.id, "value", 0)
+    if !initialValue.found { return pep_c23_unsupported("Pep C23 local binding has no value") } else {}
+    let initial = pep_c23_expression_checked(nodes, function, initialValue.node, checked)
+    if initial.status != "emitted" { return initial } else {}
+    var decl: List[Str] = ["  int64_t pep_local_", int_text(statement.id), " = "]
+    for part in initial.sourceParts { decl = append(decl, part) }
+    decl = append(decl, ";\n")
+    return PepC23Emission { status: "emitted", sourceParts: decl, diagnostic: "" }
+  } else {}
+  if statement.kind == "if_statement" || statement.kind == "while" {
+    let result = pep_c23_child(nodes, function.id, "return_type", 0)
+    var noLocals: List[FlatAstNode] = []
+    if statement.kind == "while" {
+      return pep_c23_while_body(nodes, function, statement, noLocals, result, checked)
+    } else {}
+    return pep_c23_loop_statement(nodes, function, statement, 0, noLocals, result, checked)
+  } else {}
+  if statement.kind == "return" {
+    let value = pep_c23_child(nodes, statement.id, "value", 0)
+    if !value.found { return pep_c23_unsupported("Pep C23 return statement has no value") } else {}
+    let lowered = pep_c23_expression_checked(nodes, function, value.node, checked)
+    if lowered.status != "emitted" { return lowered } else {}
+    var ret: List[Str] = ["  int64_t pep_result = "]
+    for part in lowered.sourceParts { ret = append(ret, part) }
+    ret = append(ret, ";\n  pep_leave();\n  return pep_result;\n")
+    return PepC23Emission { status: "emitted", sourceParts: ret, diagnostic: "" }
+  } else {}
+  return pep_c23_unsupported("Pep C23 statement fragment does not support this statement kind")
+}
 fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: Str, index: Int) -> PepC23Emission {
   let authority = semantic_snapshot()
   if parsed.document != authority.document || parsed.revision != authority.revision ||

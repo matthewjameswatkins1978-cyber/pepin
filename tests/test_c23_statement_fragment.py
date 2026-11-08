@@ -81,10 +81,53 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
             cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                               "op": "tool_activate", "tool": tool,
                               "document": cls.tool_document, "revision": cls.tool_revision})
+        # Fragment entry (A2-S2 field 1).
+        cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                          "op": "tool_register", "tool": "pep-c23-fragment",
+                          "document": cls.tool_document, "revision": cls.tool_revision,
+                          "function": "emit_c23_statement_fragment"})
+        cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                          "op": "tool_validate", "tool": "pep-c23-fragment",
+                          "document": cls.tool_document, "revision": cls.tool_revision,
+                          "testVectors": [{"arguments": [empty_parsed, empty_checked,
+                                                         typed("Int", 0), typed("Int", 0),
+                                                         typed("Int", 0)],
+                                           "expect": pep_c23.typed_record(
+                                               "unsupported", (),
+                                               "Pep C23 function unit index is out of range"),
+                                           "semanticTarget": cls.target_spec}]})
+        cls.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                          "op": "tool_activate", "tool": "pep-c23-fragment",
+                          "document": cls.tool_document, "revision": cls.tool_revision})
 
     @classmethod
     def tearDownClass(cls):
         cls.session.close()
+
+    def _emit_fragment(self, parsed, checked, semantic, function_index, first, count):
+        r = self.session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
+                               "op": "tool_invoke", "tool": "pep-c23-fragment",
+                               "arguments": [parsed, checked, typed("Int", function_index),
+                                             typed("Int", first), typed("Int", count)],
+                               "semanticTarget": semantic})
+        require(r, "outcome", "ok", "emit fragment")
+        f = _fields_map(r["result"])
+        return f["status"]["value"], f["diagnostic"]["value"], \
+            [p["value"] for p in f["sourceParts"]["value"]]
+
+    def test_statement_fragment_lowering(self):
+        parsed, checked, semantic = self._prepare()
+        # whole-file: var r = 0; return r. Fragment [0,1) = var decl, [1,2) = return.
+        status, diag, parts = self._emit_fragment(parsed, checked, semantic, 0, 0, 1)
+        self.assertEqual(status, "emitted", diag)
+        joined = "".join(parts)
+        self.assertIn("int64_t pep_local_", joined)
+        self.assertIn(" = 0;", joined)
+        status2, diag2, parts2 = self._emit_fragment(parsed, checked, semantic, 0, 1, 1)
+        self.assertEqual(status2, "emitted", diag2)
+        joined2 = "".join(parts2)
+        self.assertIn("pep_result =", joined2)
+        self.assertIn("return pep_result;", joined2)
 
     def _prepare(self):
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
