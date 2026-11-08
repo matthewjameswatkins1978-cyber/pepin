@@ -129,6 +129,21 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
         self.assertIn("pep_result =", joined2)
         self.assertIn("return pep_result;", joined2)
 
+    def test_multi_statement_fragment(self):
+        # statementCount > 1: fragment [0,2) emits both the var decl and the return.
+        parsed, checked, semantic = self._prepare()
+        status, diag, parts = self._emit_fragment(parsed, checked, semantic, 0, 0, 2)
+        self.assertEqual(status, "emitted", diag)
+        joined = "".join(parts)
+        self.assertIn("int64_t pep_local_", joined)
+        self.assertIn("return pep_result;", joined)
+
+    def test_fragment_range_out_of_bounds(self):
+        parsed, checked, semantic = self._prepare()
+        status, diag, _ = self._emit_fragment(parsed, checked, semantic, 0, 0, 3)
+        self.assertEqual(status, "unsupported")
+        self.assertEqual(diag, "Pep C23 statement fragment range is out of bounds")
+
     def _prepare(self):
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                     "name": "cb-target", "bytes": list(SOURCE)})
