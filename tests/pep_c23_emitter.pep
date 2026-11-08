@@ -3528,8 +3528,8 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       if !condition.found { return pep_c23_unsupported("Pep C23 loop conditional has no condition") } else {}
       let loweredCondition = pep_c23_expression_checked(nodes, function, condition.node, checked)
       if loweredCondition.status != "emitted" { return loweredCondition } else {}
-      var thenParts: List[Str] = []
-      var elseParts: List[Str] = []
+      var thenReversed: List[Str] = []
+      var elseReversed: List[Str] = []
       var foundThen = false
       var foundElse = false
       for branchStatement in nodes {
@@ -3537,29 +3537,33 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
           foundThen = true
           let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
           if loweredBranch.status != "emitted" { return loweredBranch } else {}
-          for part in loweredBranch.sourceParts { thenParts = append(thenParts, part) }
+          for part in loweredBranch.sourceParts { thenReversed = prepend(thenReversed, part) }
         } else {
           if branchStatement.parentId == statement.id && branchStatement.role == "else" {
             foundElse = true
             let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
             if loweredBranch.status != "emitted" { return loweredBranch } else {}
-            for part in loweredBranch.sourceParts { elseParts = append(elseParts, part) }
+            for part in loweredBranch.sourceParts { elseReversed = prepend(elseReversed, part) }
           } else {}
         }
       }
       if !foundThen { return pep_c23_unsupported("Pep C23 conditional lowering requires a non-empty then branch") } else {}
-      var parts: List[Str] = [indent, "if (!!("]
-      for part in loweredCondition.sourceParts { parts = append(parts, part) }
-      parts = append(parts, ")) {\n")
-      for part in thenParts { parts = append(parts, part) }
-      parts = append(parts, indent)
+      let thenParts = reverse(thenReversed)
+      let elseParts = reverse(elseReversed)
+      var reversedParts: List[Str] = []
+      reversedParts = prepend(reversedParts, indent)
+      reversedParts = prepend(reversedParts, "if (!!(")
+      for part in loweredCondition.sourceParts { reversedParts = prepend(reversedParts, part) }
+      reversedParts = prepend(reversedParts, ")) {\n")
+      for part in thenParts { reversedParts = prepend(reversedParts, part) }
+      reversedParts = prepend(reversedParts, indent)
       if foundElse {
-        parts = append(parts, "} else {\n")
-        for part in elseParts { parts = append(parts, part) }
-        parts = append(parts, indent)
+        reversedParts = prepend(reversedParts, "} else {\n")
+        for part in elseParts { reversedParts = prepend(reversedParts, part) }
+        reversedParts = prepend(reversedParts, indent)
       } else {}
-      parts = append(parts, "}\n")
-      return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
+      reversedParts = prepend(reversedParts, "}\n")
+      return PepC23Emission { status: "emitted", sourceParts: reverse(reversedParts), diagnostic: "" }
     } else {
       if statement.kind == "expression_statement" {
         let loweredSay = pep_c23_say_statement(nodes, function, statement)
