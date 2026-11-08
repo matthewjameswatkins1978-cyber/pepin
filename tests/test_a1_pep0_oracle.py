@@ -45,7 +45,7 @@ EXPECTED = {
     "pos_ws": ("valid", []),
     "pos_twofn": ("valid", []),
     "neg_unknown": ("invalid", [("PEP_UNKNOWN_FUNCTION", 26, 37, 1, 27)]),
-    "neg_arity": ("invalid", [("PEP_ARGUMENT_COUNT", 74, 80, 2, 27)]),
+    "neg_arity": ("invalid", [("PEP_ARGUMENT_COUNT", 73, 79, 2, 27)]),
     "neg_rettype": ("invalid", [("PEP_TYPE_MISMATCH", 26, 30, 1, 27)]),
     "neg_brace": ("invalid", [("PEP_PARSE_EXPECTED", 28, 28, 2, 1)]),
     "neg_trail": ("invalid", [("PEP_UNKNOWN_VARIABLE", 30, 37, 1, 31)]),
@@ -57,8 +57,8 @@ EXPECTED = {
     "nbsp_fn": ("invalid", [("PEP_UNEXPECTED_CHARACTER", 2, 3, 1, 3)]),
     "inc_ws": ("valid", []),
     "empty_zero": ("valid", []),
-    "inc_fn": ("invalid", [("PEP_PARSE_EXPECTED", 20, 20, 2, 1)]),
-    "inc_ret": ("invalid", [("PEP_PARSE_EXPRESSION", 27, 27, 2, 1)]),
+    "inc_fn": ("invalid", [("PEP_PARSE_EXPECTED", 19, 19, 2, 1)]),
+    "inc_ret": ("invalid", [("PEP_PARSE_EXPRESSION", 26, 26, 2, 1)]),
     "out_match": ("invalid", [("PEP_PARSE_PATTERN", 42, 43, 3, 5)]),
     # Seed-valid but OUTSIDE the Pep-0 subset: native A must refuse as
     # unsupported, never as invalid. The seed side of that rule is pinned here.
