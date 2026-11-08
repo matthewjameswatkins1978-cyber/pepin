@@ -360,7 +360,7 @@ def checker_report(document, revision):
     return typed_record_value("CheckerReport", fields)
 
 
-def emit(source_bytes, measurements=None):
+def emit(source_bytes, measurements=None, sectional=False):
     measurements = measurements if measurements is not None else {}
     emit_started = time.perf_counter_ns()
     try:
@@ -458,6 +458,11 @@ def emit(source_bytes, measurements=None):
         semantic_target = {"document": target["document"], "revision": target["revision"], "entryFunctions": []}
         parsed_value = parse_target(session, source_bytes, target, tool_revision)
         measurements.update(session.parser_measurements)
+        if sectional:
+            import pep_sectional
+            return pep_sectional.build_c23(
+                session, semantic_target, parsed_value, tool_revision,
+                tool_document, target, sample, measurements)
         checker_started = time.perf_counter_ns()
         checked = session.send({"schemaVersion": 3, "toolProtocolVersion": 2,
                                 "op": "tool_invoke", "tool": "pep-c23-checker",
@@ -518,6 +523,9 @@ def parser():
     result.add_argument("--compiler", help="Clang executable path (defaults to Clang on PATH)")
     result.add_argument("--emit-c", type=pathlib.Path,
                         help="generated C23 source path (defaults beside the executable)")
+    result.add_argument("--sectional", action="store_true",
+                        help="check and emit function-by-function through bounded "
+                             "tool calls instead of one whole-program call")
     return result
 
 
@@ -539,7 +547,7 @@ def main(argv=None):
         if source_path == output or source_path == c_path or output == c_path:
             raise ValueError("Pep source, generated C, and executable paths must be distinct")
         compiler = compiler_path(args.compiler)
-        source = emit(source_bytes)
+        source = emit(source_bytes, sectional=args.sectional)
         c_path.parent.mkdir(parents=True, exist_ok=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         c_path.write_text(source, encoding="utf-8", newline="\n")
