@@ -60,6 +60,31 @@ CASES = [
      'say(str_concat("ab", "cd"))\n',
      'fn main() -> Int {\n  say(str_concat("ab", "cd"))\n  return 0\n}\n',
      ""),
+    ("comparison through a helper",
+     HELPERS + 'fn a3_le(a: Int, b: Int) -> Int {\n  if a <= b {\n    return 1\n  } else {\n  }\n  return 0\n}\n'
+     'say(int_text(a3_le(1, 2)))\nsay(int_text(a3_le(3, 2)))\n',
+     HELPERS + 'fn a3_le(a: Int, b: Int) -> Int {\n  if a <= b {\n    return 1\n  } else {\n  }\n  return 0\n}\n'
+     'fn main() -> Int {\n  let t = a3_le(1, 2)\n  say(int_text(t))\n  let f = a3_le(3, 2)\n  say(int_text(f))\n  return 0\n}\n',
+     "emitted side hoists both cross-chunk calls"),
+    ("top-level conditional",
+     'if 1 <= 2 {\n  say("T")\n} else {\n  say("F")\n}\n',
+     'fn main() -> Int {\n  if 1 <= 2 {\n    say("T")\n  } else {\n    say("F")\n  }\n  return 0\n}\n',
+     ""),
+    ("short-circuit conjunction",
+     'if 1 <= 2 && 3 <= 4 {\n  say("AND")\n} else {\n  say("NO")\n}\n',
+     'fn main() -> Int {\n  let c = 1 <= 2 && 3 <= 4\n  if c {\n    say("AND")\n  } else {\n    say("NO")\n  }\n  return 0\n}\n',
+     "emitted side binds the conjunction to a let"),
+    ("builtin composition",
+     'say(str_concat("n=", int_text(7)))\n',
+     'fn main() -> Int {\n  say(str_concat("n=", int_text(7)))\n  return 0\n}\n',
+     ""),
+    # The sharpest case: the right operand would abort with PEP_RUNTIME_DIVISION_BY_ZERO
+    # if it were evaluated. Passing output proves && short-circuits rather than
+    # lowering to a non-short-circuiting expansion.
+    ("short-circuit avoids the right operand",
+     'let z = 0\nif 1 <= 0 && 1 / z == 1 {\n  say("BAD")\n} else {\n  say("SAFE")\n}\n',
+     'fn main() -> Int {\n  let z = 0\n  let c = 1 <= 0 && 1 / z == 1\n  if c {\n    say("BAD")\n  } else {\n    say("SAFE")\n  }\n  return 0\n}\n',
+     "right operand divides by a zero variable; SAFE means && did not evaluate it"),
 ]
 
 
@@ -212,6 +237,12 @@ def main():
         print(f"seed: {SEED}\ngate: {GATE}\n")
         for name, seed_src, emit_src, note in CASES:
             seed_out, code, err = seed_run(seed_src)
+            if code != 0:
+                # A seed error is not a semantic disagreement; say so rather than
+                # comparing against an empty string and calling it a drift.
+                bad += 1
+                print(f"FAIL {name:<34} SEED ERROR exit={code} {err[:100]}")
+                continue
             outputs, why, _ = emit_run(session, emit_src, work, revision)
             if outputs is None:
                 bad += 1
