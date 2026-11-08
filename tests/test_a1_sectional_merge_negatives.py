@@ -41,6 +41,13 @@ def _call2(caller_id, callee_id, syntax_id):
          "value": {"type": "Int", "value": str(syntax_id)}}]}
 
 
+def _bind(syntax_id, name="x"):
+    return {"fields": [
+        {"name": "name", "value": {"type": "Str", "value": name}},
+        {"name": "syntaxId",
+         "value": {"type": "Int", "value": str(syntax_id)}}]}
+
+
 def _fn(name, semantic_id):
     return {"fields": [
         {"name": "name", "value": {"type": "Str", "value": name}},
@@ -137,6 +144,81 @@ class MergeNegativesTest(unittest.TestCase):
                                              "main", [])
         fields = {f["name"]: f["value"] for f in merged["fields"]}
         self.assertEqual(fields["status"]["value"], "valid")
+
+    def test_carried_bindings_pass_through(self):
+        rep = _report()
+        rep["functions"]["value"].append(_fn("main", 100000))
+        groups = [([5], rep)]
+        merged = pep_sectional.merge_reports(
+            _sliced(), groups, [5], "main", [],
+            bindings=[_bind(0)])
+        fields = {f["name"]: f["value"] for f in merged["fields"]}
+        got = [(e["fields"][0]["value"]["value"],
+                e["fields"][1]["value"]["value"])
+               for e in fields["bindings"]["value"]]
+        self.assertEqual(got, [("x", "0")])
+        self.assertEqual(fields["status"]["value"], "valid")
+
+    def test_out_of_span_binding_refused(self):
+        rep = _report()
+        rep["functions"]["value"].append(_fn("main", 100000))
+        groups = [([5], rep)]
+        with self.assertRaisesRegex(ValueError, "outside slice span"):
+            pep_sectional.merge_reports(
+                _sliced(), groups, [5], "main", [],
+                bindings=[_bind(99)])
+
+
+def _pbind(name, syntax_id, doc="doc-1", rev="7"):
+    return {"fields": [
+        {"name": "name", "value": {"type": "Str", "value": name}},
+        {"name": "syntaxId",
+         "value": {"type": "Int", "value": str(syntax_id)}},
+        {"name": "semanticId", "value": {"type": "Int", "value": "2000000"}},
+        {"name": "ownerFunctionId", "value": {"type": "Str", "value": "main"}},
+        {"name": "scopeId", "value": {"type": "Str", "value": "100000"}},
+        {"name": "visibleFrom", "value": {"type": "Int", "value": "0"}},
+        {"name": "mutable", "value": {"type": "Bool", "value": True}},
+        {"name": "typeName", "value": {"type": "Str", "value": "Int"}},
+        {"name": "typeShape",
+         "value": {"type": "PepTypeShape", "value": {"kind": "", "name": "", "listDepth": 0}}},
+        {"name": "document", "value": {"type": "Str", "value": doc}},
+        {"name": "revision", "value": {"type": "Str", "value": rev}}]}
+
+
+class CarryBindingTest(unittest.TestCase):
+    def _pool(self):
+        import pep_chunk_contract as contract
+        return contract.BindingPool("doc-1", "7")
+
+    def test_new_binding_translated_and_pooled(self):
+        pool = self._pool()
+        pep_sectional._carry_binding(pool, _pbind("x", 2), {"2": "9"})
+        self.assertEqual(len(pool.facts()), 1)
+        got = {f["name"]: f["value"] for f in pool.facts()[0]["fields"]}
+        self.assertEqual(got["syntaxId"]["value"], "9")
+
+    def test_echo_accepted_without_retranslation(self):
+        pool = self._pool()
+        pep_sectional._carry_binding(pool, _pbind("x", 2), {"2": "9"})
+        echo = _pbind("x", 9)
+        pep_sectional._carry_binding(pool, echo, {"0": "0", "1": "1"})
+        self.assertEqual(len(pool.facts()), 1)
+
+    def test_conflicting_echo_refused(self):
+        pool = self._pool()
+        pep_sectional._carry_binding(pool, _pbind("x", 2), {"2": "9"})
+        bad = _pbind("x", 9)
+        for f in bad["fields"]:
+            if f["name"] == "typeName":
+                f["value"] = {"type": "Str", "value": "Bool"}
+        with self.assertRaisesRegex(ValueError, "conflicting carried"):
+            pep_sectional._carry_binding(pool, bad, {})
+
+    def test_out_of_span_new_binding_refused(self):
+        pool = self._pool()
+        with self.assertRaisesRegex(ValueError, "outside slice span"):
+            pep_sectional._carry_binding(pool, _pbind("x", 5), {"2": "9"})
 
 
 if __name__ == "__main__":
