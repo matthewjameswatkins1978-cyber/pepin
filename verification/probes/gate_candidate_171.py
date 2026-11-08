@@ -112,8 +112,11 @@ def main():
     rb = run([sys.executable, str(root / "pep_c23.py"), "build-c23", str(bad),
               "--sectional", "--output", str(tmp / "bad.exe"), "--emit-c", str(cbad)],
              cwd=str(root))
-    section("no-C-on-failure", rb.returncode != 0 and not cbad.is_file(),
-            f"rc={rb.returncode} wrote_c={cbad.is_file()}")
+    # CALIBRATION (A3-172): a stub compiler A passes this section, because it measures the
+    # HOST's fail-closed behaviour on an invalid compiler-A source, not compiler A's quality.
+    # Named accordingly so no reader treats it as compiler-A evidence.
+    section("build fails closed", rb.returncode != 0 and not cbad.is_file(),
+            f"host refusal, compiler-A-independent: rc={rb.returncode} wrote_c={cbad.is_file()}")
 
     # -- second toolchain from the same C ---------------------------------
     gcc = shutil.which("gcc")
