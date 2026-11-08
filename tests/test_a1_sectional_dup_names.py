@@ -36,6 +36,21 @@ class DupNamesTest(unittest.TestCase):
                  _node("function", "9", "main")]
         self.assertEqual(pep_sectional._duplicate_top_level_functions(nodes), [])
 
+    def test_check_program_dup_path_shape(self):
+        # A3-082 note 1: the refusal dict carries sigs=[] (never None)
+        # and the seed code, with no session use on this path.
+        nodes = [_node("function", "-1", "main"),
+                 _node("function", "-1", "main")]
+        parsed = {"fields": [
+            {"name": "nodes",
+             "value": {"type": "List[FlatAstNode]", "value": nodes}}]}
+        out = pep_sectional.check_program(None, None, parsed, None, None,
+                                          None)
+        self.assertEqual(out["failures"],
+                         [("main", "duplicate-function",
+                           ["PEP_DUPLICATE_FUNCTION"])])
+        self.assertEqual(out["sigs"], [])
+
     def test_non_function_kinds_ignored(self):
         nodes = [_node("record", "-1", "P"),
                  _node("record", "-1", "P")]

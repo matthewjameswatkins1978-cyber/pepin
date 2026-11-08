@@ -287,10 +287,13 @@ def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
     nodes = fields_map(parsed)["nodes"]["value"]
     dupes = _duplicate_top_level_functions(nodes)
     if dupes:
+        # A3-082 note 1: no caller reads sigs on the refusal path
+        # (build_c23 raises on failures first), but return [] rather
+        # than None so every return shape carries a list.
         return {"order": [], "slices": {}, "reports": {}, "stats": {},
                 "failures": [(name, "duplicate-function",
                               ["PEP_DUPLICATE_FUNCTION"]) for name in dupes],
-                "sigs": sigs}
+                "sigs": []}
     if sigs is None:
         sigs = fetch_all_sigs(session, parsed, tool_revision, sem)
     index = contract.DocumentIndex.from_parsed(parsed)
