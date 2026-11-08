@@ -144,6 +144,24 @@ class CarriedBindingNameResolutionTests(unittest.TestCase):
         self.assertEqual(status, "unsupported")
         self.assertEqual(diag, "Pep C23 statement fragment range is out of bounds")
 
+    def test_trimmed_parsed_with_full_syntax_node_count(self):
+        # A3-115: the host passes a trimmed parsed (target function's subtree) alongside a
+        # whole-program checked report whose syntaxNodeCount is the FULL program count. The
+        # fragment entry's authority guard must accept this (document/revision identity only,
+        # no node-count consistency clause).
+        parsed, checked, semantic = self._prepare()
+        full_count = None
+        for f in checked["fields"]:
+            if f["name"] == "syntaxNodeCount":
+                full_count = f["value"]["value"]
+        self.assertIsNotNone(full_count)
+        chunk_parsed, chunk_checked = self._drop_statement(parsed, checked, 0, 0, carry_bindings=True)
+        for f in chunk_checked["fields"]:
+            if f["name"] == "syntaxNodeCount":
+                f["value"]["value"] = full_count
+        status, diag, _ = self._emit_fragment(chunk_parsed, chunk_checked, semantic, 0, 0, 1)
+        self.assertEqual(status, "emitted", diag)
+
     def _prepare(self):
         target = self.session.send({"schemaVersion": 3, "op": "open_bytes",
                                     "name": "cb-target", "bytes": list(SOURCE)})

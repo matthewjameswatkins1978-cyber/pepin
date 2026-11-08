@@ -4785,9 +4785,12 @@ fn emit_c23_function_unit(parsed: ParserProgress, checked: CheckerReport, index:
 // (the compiler-A consumers use only Int locals); unsupported statement kinds refuse fail-closed.
 fn emit_c23_statement_fragment(parsed: ParserProgress, checked: CheckerReport, functionIndex: Int, firstStatement: Int, statementCount: Int) -> PepC23Emission {
   let authority = semantic_snapshot()
+  // The fragment entry receives a TRIMMED parsed (the target function's subtree, document ids
+  // intact) alongside a whole-program checked report, so checked.syntaxNodeCount intentionally
+  // does NOT equal length(parsed.nodes) here. Document/revision identity is the stale/foreign
+  // guard; the node-count consistency clause is omitted by design (A3-115).
   if parsed.document != authority.document || parsed.revision != authority.revision ||
-     checked.document != authority.document || checked.revision != authority.revision ||
-     checked.syntaxNodeCount != length(parsed.nodes) {
+     checked.document != authority.document || checked.revision != authority.revision {
     return pep_c23_unsupported("Pep C23 emission inputs do not match the authorised source revision")
   } else {}
   if parsed.status != "complete" || checked.status != "valid" {
