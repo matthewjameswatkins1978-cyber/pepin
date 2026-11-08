@@ -80,6 +80,26 @@ ERROR_SHAPES = {
                             "  }\n"
                             "}\n",
                             "invalid", "PEP_PARSE_PATTERN"),
+    # Resumed match followed by a binary operator or field access: the
+    # resumption emits the match with fixed ids, so no fresh parent can
+    # be created for a continued expression. Refuse loudly with a
+    # dedicated diagnostic instead of silently dropping the rest (the
+    # old whole-expression path parses these shapes fine, so this is a
+    # resumption-only boundary, not a grammar rule).
+    "return_match_trailing_binary": (OPT + "fn f(o: Opt) -> Int {\n"
+                                      "  return match o {\n"
+                                      "    Some(x) => x\n"
+                                      "    None() => 0\n"
+                                      "  } != 0\n"
+                                      "}\n",
+                                      "invalid", "PEP_PARSE_EXPRESSION"),
+    "return_match_trailing_field": ("type P { x: Int }\n"
+                                    "fn f(p: P) -> Int {\n"
+                                    "  return match p {\n"
+                                    "    _ => 1\n"
+                                    "  }.x\n"
+                                    "}\n",
+                                    "invalid", "PEP_PARSE_EXPRESSION"),
     # Frame-reserving constructs: PEP_PARSE_ELSE / PEP_PARSE_EXPECTED are
     # *inside* an open if/while frame, so the error chunk must also emit the
     # in-flight frame roots. Before 752667e these shapes left interior holes
