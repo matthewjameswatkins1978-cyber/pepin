@@ -14,17 +14,31 @@ fn pep_c23_empty_ast_node() -> FlatAstNode {
 }
 
 fn pep_c23_count_children(nodes: List[FlatAstNode], parent: Int, role: Str) -> Int {
+  // Preorder-contiguity early exit: the parser sorts nodes by id in preorder, so a node's
+  // descendants occupy a contiguous range and the first node with parentId < parent is past the
+  // subtree. Once past, no further child can match, so return the count instead of scanning the
+  // whole function (A3-126: the O(function-nodes) child lookup was the expensive-function wall).
   var count = 0
   for node in nodes {
-    if node.parentId == parent && node.role == role { count = count + 1 } else {}
+    if !(node.id <= parent) {
+      if !(parent <= node.parentId) { return count } else {
+        if node.parentId == parent && node.role == role { count = count + 1 } else {}
+      }
+    } else {}
   }
   return count
 }
 
 fn pep_c23_child(nodes: List[FlatAstNode], parentId: Int, role: Str, wantedIndex: Int) -> PepC23NodeLookup {
   for node in nodes {
-    if node.parentId == parentId && node.role == role && node.childIndex == wantedIndex {
-      return PepC23NodeLookup { found: true, node: node }
+    if !(node.id <= parentId) {
+      if !(parentId <= node.parentId) {
+        return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+      } else {
+        if node.parentId == parentId && node.role == role && node.childIndex == wantedIndex {
+          return PepC23NodeLookup { found: true, node: node }
+        } else {}
+      }
     } else {}
   }
   return PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
@@ -604,21 +618,15 @@ fn pep_c23_say_statement(nodes: List[FlatAstNode], function: FlatAstNode, statem
   if !value.found || value.node.kind != "call" || value.node.text != "say" {
     return pep_c23_unsupported("Pep C23 expression statements currently support only say(...)")
   } else {}
-  var argumentCount = 0
-  var argumentNode = pep_c23_empty_ast_node()
-  for candidate in nodes {
-    if candidate.parentId == value.node.id && candidate.role == "argument" {
-      argumentCount = argumentCount + 1
-      if candidate.childIndex == 0 { argumentNode = candidate } else {}
-    } else {}
-  }
-  if argumentCount != 1 {
+  let argument = pep_c23_child(nodes, value.node.id, "argument", 0)
+  let extraArgument = pep_c23_child(nodes, value.node.id, "argument", 1)
+  if !argument.found || extraArgument.found {
     return pep_c23_unsupported("Pep C23 say requires exactly one argument")
   } else {}
-  if !pep_c23_str_expression(nodes, function, argumentNode).found {
+  if !pep_c23_str_expression(nodes, function, argument.node).found {
     return pep_c23_unsupported("Pep C23 say lowers only string literals, Str parameters, Str locals and Str fields")
   } else {}
-  let lowered = pep_c23_expression(nodes, function, argumentNode)
+  let lowered = pep_c23_expression(nodes, function, argument.node)
   if lowered.status != "emitted" { return lowered } else {}
   var parts: List[Str] = ["  pep_say("]
   for part in lowered.sourceParts { parts = append(parts, part) }
@@ -2768,46 +2776,15 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
       let variant = pep_c23_union_variant(nodes, node.text)
       if variant.found { return pep_c23_union_constructor(nodes, function, node, variant.node) } else {}
     } else {}
-    var argumentFound = false
-    var argumentNode = pep_c23_empty_ast_node()
-    var secondArgumentFound = false
-    var secondArgumentNode = pep_c23_empty_ast_node()
-    var thirdArgumentFound = false
-    var thirdArgumentNode = pep_c23_empty_ast_node()
-    var extraArgumentFound = false
-    var extraArgumentNode = pep_c23_empty_ast_node()
-    var targetFound = false
-    var targetNode = pep_c23_empty_ast_node()
-    for candidate in nodes {
-      if candidate.parentId == node.id && candidate.role == "argument" {
-        if candidate.childIndex == 0 && !argumentFound {
-          argumentFound = true
-          argumentNode = candidate
-        } else {}
-        if candidate.childIndex == 1 && !secondArgumentFound {
-          secondArgumentFound = true
-          secondArgumentNode = candidate
-        } else {}
-        if candidate.childIndex == 2 && !thirdArgumentFound {
-          thirdArgumentFound = true
-          thirdArgumentNode = candidate
-        } else {}
-        if candidate.childIndex == 3 && !extraArgumentFound {
-          extraArgumentFound = true
-          extraArgumentNode = candidate
-        } else {}
-      } else {}
-      if candidate.parentId == -1 && candidate.kind == "function" &&
-         candidate.text == node.text && !targetFound {
-        targetFound = true
-        targetNode = candidate
-      } else {}
+    let argument = pep_c23_child(nodes, node.id, "argument", 0)
+    let secondArgument = pep_c23_child(nodes, node.id, "argument", 1)
+    let thirdArgument = pep_c23_child(nodes, node.id, "argument", 2)
+    let extraArgument = pep_c23_child(nodes, node.id, "argument", 3)
+    let target = if builtinCall {
+      PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() }
+    } else {
+      pep_c23_function(nodes, node.text)
     }
-    let argument = PepC23NodeLookup { found: argumentFound, node: argumentNode }
-    let secondArgument = PepC23NodeLookup { found: secondArgumentFound, node: secondArgumentNode }
-    let thirdArgument = PepC23NodeLookup { found: thirdArgumentFound, node: thirdArgumentNode }
-    let extraArgument = PepC23NodeLookup { found: extraArgumentFound, node: extraArgumentNode }
-    let target = PepC23NodeLookup { found: targetFound, node: targetNode }
     if node.text == "byte_length" {
       if !argument.found || secondArgument.found || thirdArgument.found || extraArgument.found {
         return pep_c23_unsupported("Pep C23 byte_length requires one SourceBytes parameter")
