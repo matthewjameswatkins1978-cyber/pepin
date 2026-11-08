@@ -73,6 +73,11 @@ def main():
     ap.add_argument("--root", required=True, help="candidate worktree")
     ap.add_argument("--expect-sha", default=None)
     ap.add_argument("--source", default=SOURCE_REL)
+    ap.add_argument("--contract", choices=("published", "narrow"), default="published",
+                    help="published: all ten class-(ii) shapes must exit 5 (PEP0_SUBSET.md "
+                         "as written). narrow: only the three return types the compiler "
+                         "actually classifies - measures A3-155 option (b) without "
+                         "pretending the published promise is met.")
     a = ap.parse_args()
     root = pathlib.Path(a.root).resolve()
     if not (root / "pep_c23.py").is_file():
@@ -157,15 +162,19 @@ def main():
     section("positive output", posok, " ".join(posdetail))
 
     # -- class (ii): the seven, plus the three that already work -----------
+    ii_cases = CLASS_II
+    if a.contract == "narrow":
+        ii_cases = [c for c in CLASS_II if c[0] in ("str", "bool", "unit")]
     ii_bad = []
-    for name, src, want in CLASS_II:
+    for name, src, want in ii_cases:
         p = tmp / f"ii_{name}.pep"
         p.write_bytes(src)
         rr = run([str(exe), str(p)])
         if rr.returncode != want:
             ii_bad.append(f"{name}={rr.returncode}/{want}")
-    section("class (ii) codes", not ii_bad,
-            "all 10 exit 5" if not ii_bad else f"{len(ii_bad)} wrong: {', '.join(ii_bad[:5])}")
+    section(f"class (ii) codes [{a.contract}]", not ii_bad,
+            f"{len(ii_cases)}/{len(ii_cases)} exit 5" if not ii_bad
+            else f"{len(ii_bad)} of {len(ii_cases)} wrong: {', '.join(ii_bad[:5])}")
 
     # -- malformed --------------------------------------------------------
     mal_bad = []
