@@ -141,7 +141,7 @@ def main():
                 reports[label] = chk["result"]
                 sliced[label] = sl
 
-        if len(reports) != len(labels):
+        if len(reports) != len(labels) and os.environ.get("PEPIN_UNITS_ONLY") != "1":
             print("\nRESULT: REFUSED BY THE CHECKER - not an emitter question")
             return 1
 
@@ -156,6 +156,30 @@ def main():
             if ef["status"]["value"] != "emitted":
                 raise RuntimeError(f"{what}: {ef['diagnostic']['value'][:200]}")
             return "".join(p["value"] for p in ef["sourceParts"]["value"])
+
+        # A3-S1/S2: PEPIN_UNITS_ONLY=1 measures per-function EMISSION even when some
+        # chunks refused the initial check, so the emit side can be reported
+        # independently of the check side. Off by default: a full build still
+        # requires every function.
+        if os.environ.get("PEPIN_UNITS_ONLY") == "1":
+            valid = [l for l in labels if l in reports]
+            print(f"\npartial mode: {len(valid)}/{len(labels)} checked valid; "
+                  f"measuring emission for those only")
+            emitted, refused = 0, []
+            for label in valid:
+                try:
+                    out = invoke("pep-c23-unit",
+                                 [sliced[label], reports[label], typed("Int", 0)],
+                                 f"unit {label}")
+                    emitted += 1
+                    print(f"  unit {label:<16} EMITTED ({len(out)} bytes)")
+                except RuntimeError as error:
+                    refused.append(label)
+                    print(f"  unit {label:<16} FIRST REFUSAL: {error}")
+            print(f"\nPARTIAL RESULT: {emitted}/{len(valid)} check-valid functions emit")
+            if refused:
+                print(f"  refused: {', '.join(refused)}")
+            return 0
 
         pieces = []
         first_label = labels[0]
