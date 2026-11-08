@@ -790,7 +790,6 @@ fn is_all_hole_if_expression(nodes: List[FlatAstNode], id: Int, functions: List[
   return is_all_hole_if_expression(nodes, thenValue.node.id, functions, bindings, references) &&
     is_all_hole_if_expression(nodes, elseValue.node.id, functions, bindings, references)
 }
-}
 fn expression_type_shape(nodes: List[FlatAstNode], id: Int, functions: List[CheckedFunction], bindings: List[BindingFact], references: List[ResolvedName]) -> PepTypeShape {
   let found = lookup_node(nodes, id)
   if !found.found { return empty_type_shape() } else {}
