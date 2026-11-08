@@ -215,6 +215,37 @@ resolution strategy for the future candidate integration:
 - Merge plan above still current (lanes unchanged at refresh time);
   re-diff at merge time regardless.
 
+## 2026-11-08 — LUCY-20261108-015 batch 3 (R1 refresh)
+
+- A1 pipeline `9bf1869` (unchanged since batch 2); ledger `e382589` ->
+  `23d91f6` -> `ee7d104` (all pushed). A2 still `bea071a` (S1 in
+  progress); A3 `c1fb276e` -> `fa547603` -> `842314b5` -> `a53c66b1`;
+  A4 `afd2d7e` -> `2520a67` -> `0f6b00d` -> `42d34fd` -> `06592dd`.
+  Compiler source blob unchanged (`ca732536`); no re-measurement owed.
+- A1-S1 still staged (movement harness `s1_matrix.py` one-command ready
+  at any A2 pin; validation path is_ws_at first, skip/scan after the
+  step wall; 3-function S1 shape adopted from A3-084 ADDENDUM).
+- A1-S2 dry-runs complete (partition + emit, both read-only): 21-fragment
+  plan verified, then 0/31 fragment emission through the existing unit
+  entry with two crisp walls (trailing-return requirement; in-slice-only
+  name lowering). Four-field fragment contract proposed (non-return
+  entry/value-out, carried bindings in, temp threading, failure index);
+  first two proven necessary by refusal. Awaits A2's entry shape.
+- A1-R3 closed with A3 (080: 5 channels; 082: dup verified + sigs-[]
+  wartfix `9bf1869`; 090: 4/5 verified 11/11, 5th accepted-by-design).
+- A1 oracle 22 -> 23 shapes, now canonical (`23d91f6` normalize/rename/
+  0-byte `ee7d104` 3 span re-pins; 4th span drifted identically and was
+  caught by the same re-run): all 23 blob==worktree, 23/23 green,
+  seed-independent per A3-094 two-seed verification. Racy-checkout trap
+  documented (delete + re-checkout defeats it); A4 adopted the
+  byte-compare rule lane-wide.
+- Peer verification received: A3-086/087/088/092/094 (oracle, census,
+  boundary, table, green-oracle receipts), A3-081 M-1 gate READY,
+  tri-lane count bridge 1343+44+65=1452 (A1 third instrument exact).
+- S3 still gated (entry: 21/21 emission; M-1 gate exists unjudged).
+  M-2 explicitly not attempted pre-granular-emission (092: is_main4+main
+  step-limited). Merge plan unchanged in shape.
+
 ## 2026-11-08 — LUCY-20261108-015 mid-mission batch (R1 refresh 2)
 
 - A1 pipeline `12dbf1a` -> `183b2fa` -> `07f1da8` -> `7e1ba66` ->
