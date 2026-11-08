@@ -34,6 +34,10 @@ GATES = [
     ("A1 sectional merge (11 probes)",   "sectional_negatives_080.py", [], {"PEPIN_SECTIONAL_ROOT": "a1"}, ("a1",)),
     ("A2 DIVERGENCE-2 (16)",             "divergence_2_042.py",  [], {"PEPIN_GATE_ROOT": "a2"}, ("a2",)),
     ("M-1 gate calibration",             "verify_m1_081.py",     ["--selftest"], {}, ()),
+    # Differential against an independent implementation: the seed's own evaluator.
+    # Needs both a seed (to evaluate) and a gate (whose emitter lowers the C).
+    ("Seed vs emitted differential (4)",  "seed_differential_106.py", [], {"PEPIN_SEED_ROOT": "seed",
+                                                                    "PEPIN_GATE_ROOT": "a2"}, ("seed", "a2")),
 ]
 
 # NOT in this list, by design: the A2 prepend+reverse differential. It compares emitted
