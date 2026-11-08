@@ -79,3 +79,8 @@ find_parens 82, find_fn 101, find_ds 122, find_brace 288, main 222.
 Stage note: whole-chunk CHECK differs from A1's chain path (21/21)
 and from sectional EMIT (9/21) — three stages, three numbers, no
 conflict. Binding constraint per A3: the 100k-step budget.
+
+Step cost (A3-099, measured): ~2,100 steps/node, tightly linear
+(1,927–2,189); budget binds at ~47 nodes, 41 nodes leaves ~6 nodes
+margin. Fragments must be sized by node count (~30 for headroom),
+not by statement count.
