@@ -48,6 +48,10 @@ field); raw dict count is 4161. A1's sectional parse counts 1452 (every
 288, find_fn 101, find_ds 122, find_parens 82, check_tail 66). Cite
 per-function counts when precision matters.
 
+Tri-lane bridge (A1 corroboration): 1343 kind-nodes + 44 `parameter`
+nodes + 65 `type_scalar` nodes = 1452; the 65 are exactly the 65 type
+mentions (46 `Int` + 19 `SourceBytes`).
+
 ## S0-gap ordered by frequency (extension economics, not a proposal)
 
 `==`/calls/`if`/`&&`/`var`/params first; `while` (3), `*` (1),

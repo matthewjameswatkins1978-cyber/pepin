@@ -3,6 +3,7 @@
 Status: NORMATIVE for compiler-A acceptance. Grammar changes require a
 Matthew-level accepted-language decision. Implementation coverage is
 rev-3 (`d78735e`); implementation pins live in `EXPECTED.md`.
+Boundary evidence replayed 17/17 from prose by A3 (BOOT-A3-088).
 
 ## Class (iii) — Pep-0-valid (the subset S0, exact)
 
@@ -33,7 +34,8 @@ rev-3 (`d78735e`); implementation pins live in `EXPECTED.md`.
 
 ## Class (i) — seed-invalid (rejected by the seed; never reach subset)
 
-- Lexer: NUL (`\000`), BOM (`\239` first byte), VTAB (`\011`), NBSP —
+- Lexer: NUL (`\000`), 3-byte UTF-8 BOM (`EF BB BF`; lone first byte
+  untested), VTAB (`\011`), NBSP —
   all `PEP_UNEXPECTED_CHARACTER`. (My `is_ws` matches the seed set
   exactly: 32/9/10/13 only.)
 - Parse: uppercase `FN` (`PEP_PARSE_EXPRESSION`), missing/mismatched
