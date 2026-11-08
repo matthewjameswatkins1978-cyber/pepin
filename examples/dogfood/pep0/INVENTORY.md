@@ -47,3 +47,16 @@ OWN_SOURCE.md ladder R1–R7.
   results do not touch A4 artifacts.
 - A1 subset cross-check: AGREEMENT with PEP0_SUBSET.md, no correction.
 - A1 oracle ingest: R1 fixtures absorbed, 18/18 green.
+
+## Whole-chunk checkability (measured by A3, BOOT-A3-083)
+
+Independent whole-chunk CHECK on rev-3 source (blob `ca732536`):
+10/21 valid (all <=41 nodes), 11 step-limited (all >=48). Sharp
+boundary between 41 and 48 nodes; identical at `1885566`/`bea071a`.
+Node counts per fn: is_digit 18, is_ws 26, is_ws_at 26, expect_byte 27,
+is_fn2 33, parse_value 34, is_int3/is_ret3/is_str3/is_urn3 41,
+skip_ws/scan_digits 48, is_main4/is_bool4/is_unit4 49, check_tail 66,
+find_parens 82, find_fn 101, find_ds 122, find_brace 288, main 222.
+Stage note: whole-chunk CHECK differs from A1's chain path (21/21)
+and from sectional EMIT (9/21) — three stages, three numbers, no
+conflict. Binding constraint per A3: the 100k-step budget.
