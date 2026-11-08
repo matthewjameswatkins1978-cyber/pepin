@@ -40,6 +40,22 @@ from pep_c23 import Session, require, parse_target, typed  # noqa: E402
 
 HELPERS = "fn a3_double(n: Int) -> Int {\n  return n * 2\n}\n"
 
+# Two seed blobs are in play and they differ by exactly one builtin (BOOT-A3-110).
+# A case the seed cannot evaluate is NOT APPLICABLE, not a disagreement -- but only for
+# a genuinely missing builtin; any other seed error stays a failure.
+KNOWN_BUILTINS = ("str_concat", "int_text", "length", "append", "prepend", "reverse",
+                  "contains", "utf8_slice", "byte_slice", "byte_at", "byte_length",
+                  "source_bytes", "say")
+
+
+def seed_blob():
+    try:
+        out = subprocess.run(["git", "-C", str(SEED), "rev-parse", "HEAD:pep_ocaml.ml"],
+                             capture_output=True, text=True, check=False)
+        return out.stdout.strip()[:10] or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
 # (name, seed_source, emit_source, note)
 # The emitted epilogue echoes main's return value as a final line; that line is
 # stripped and ASSERTED to equal 0 so a change in epilogue shape fails loudly.
@@ -197,6 +213,7 @@ def main():
     work = pathlib.Path(tempfile.mkdtemp(prefix="a3-r3-"))
     session = Session()
     bad = 0
+    skipped = 0
     try:
         bundle = "\n".join(p.read_text(encoding="utf-8") for p in pep_c23.SOURCES)
         opened = session.send({"schemaVersion": 3, "op": "open", "source": bundle,
@@ -234,12 +251,18 @@ def main():
                                      **extra})
                 require(resp, "status", want, f"{op} {tool}")
 
-        print(f"seed: {SEED}\ngate: {GATE}\n")
+        print(f"seed: {SEED}  (pep_ocaml.ml blob {seed_blob()})\ngate: {GATE}\n")
         for name, seed_src, emit_src, note in CASES:
             seed_out, code, err = seed_run(seed_src)
             if code != 0:
-                # A seed error is not a semantic disagreement; say so rather than
-                # comparing against an empty string and calling it a drift.
+                # A seed error is not a semantic disagreement. An older seed that
+                # predates a builtin makes the case NOT APPLICABLE; anything else is
+                # a real failure. Never let "this seed is older" hide a defect.
+                missing = next((b for b in KNOWN_BUILTINS if f"'{b}'" in err), None)
+                if missing and "PEP_UNKNOWN_FUNCTION" in err:
+                    skipped += 1
+                    print(f"N/A  {name:<34} seed lacks builtin '{missing}' (not an emitter finding)")
+                    continue
                 bad += 1
                 print(f"FAIL {name:<34} SEED ERROR exit={code} {err[:100]}")
                 continue
@@ -263,8 +286,16 @@ def main():
             else:
                 print(f"PASS {name:<24} both print {seed_out!r}"
                       + (f"  [{note}]" if note else ""))
-        print(f"\n{len(CASES)} cases, {bad} disagreeing")
-        print("SEED vs EMITTED: " + ("AGREE" if bad == 0 else "DISAGREE"))
+        applicable = len(CASES) - skipped
+        print(f"\n{len(CASES)} cases: {applicable} applicable, {skipped} not applicable "
+              f"on this seed, {bad} disagreeing")
+        if bad:
+            verdict = "DISAGREE"
+        elif skipped:
+            verdict = f"AGREE on {applicable}/{len(CASES)} (rest need a newer seed)"
+        else:
+            verdict = "AGREE on all"
+        print(f"SEED vs EMITTED: {verdict}  [seed {seed_blob()}]")
         return 0 if bad == 0 else 1
     finally:
         session.close()
