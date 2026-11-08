@@ -4,3 +4,4 @@
 *.pep text eol=lf
 # pep0 CRLF acceptance fixture must keep its bytes to test CR handling.
 a_crlf.pep -text
+a_nul.pep -text

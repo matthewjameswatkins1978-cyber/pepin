@@ -57,15 +57,27 @@ Expected exit **0**, same 9-line C as `a_ok.pep`.
 Bytes: `fn\u00a0main() -> Int { return 42 }\n` (NBSP U+00A0; seed-invalid).
 Expected exit **1**, stdout exactly: `ERR shape`
 
+### `a_nul.pep` — negative, leading NUL byte
+Bytes: `\x00fn main() -> Int { return 42 }\n` (leading NUL; seed-invalid
+`PEP_UNEXPECTED_CHARACTER`; stored `-text` to keep the byte exact).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: `find_fn`
+fails on byte 0; native confirmation pending S2).
+
+### `a_big19.pep` — negative, 19-digit in-range literal
+Bytes: `fn main() -> Int { return 1000000000000000000 }\n` (19 digits,
+value fits Int64; seed-VALID, subset caps at 18).
+Expected exit **4**, stdout exactly: `ERR longlit` (hand-traced:
+`19 <= e - ds` gate; native confirmation pending S2).
+
 ## Exit-code table
 
 | code | meaning | example |
 |---|---|---|
 | 0 | ok, valid C on stdout — or empty input, silent | `a_ok.pep`, `a_empty.pep` |
-| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `fn foo...`, `fnmain...` |
+| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `fn foo...`, `fnmain...`, `a_nul.pep` |
 | 2 | bad literal (no digits, or glued `return42`) | `a_badlit.pep` |
 | 3 | trailing junk after valid form | `...} extra` |
-| 4 | literal longer than 18 digits (out of subset, kept distinct) | 19+ digit run |
+| 4 | literal longer than 18 digits (out of subset, kept distinct) | `a_big19.pep` (19 digits, seed-valid) |
 | 5 | unsupported (seed-valid but out-of-subset type word) | `a_str.pep` (`-> Str`) |
 
 ## Prime emitter-refusal candidates for A2's run (most to least likely)
