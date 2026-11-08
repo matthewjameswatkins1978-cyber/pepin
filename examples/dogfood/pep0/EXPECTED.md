@@ -116,3 +116,8 @@ after `urn` fails on `4`; native confirmation pending S2).
 
 Fallback ladder if refused: split long-`&&` into 3-byte atoms; split big
 finders further; replace `*` with slice-echo. No new host builtins needed.
+
+Outcome post-S1 (`7e820a7`, per A3-101): the call-position refusals
+(candidates 2/6/7 and the `is_ws_at`/`skip_ws`/`scan_digits` shapes) now emit
+where the step budget allows; `is_main4`/`is_bool4`/`is_unit4` + `main`
+remain step-limited (S2). Per-function movement: see A1's S1 table.
