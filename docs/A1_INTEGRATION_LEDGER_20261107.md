@@ -214,3 +214,42 @@ resolution strategy for the future candidate integration:
   `bea071a` vs `1885566`) — the 014 "silent" flag is superseded.
 - Merge plan above still current (lanes unchanged at refresh time);
   re-diff at merge time regardless.
+
+## 2026-11-08 — LUCY-20261108-015 mid-mission batch (R1 refresh 2)
+
+- A1 pipeline `12dbf1a` -> `183b2fa` -> `07f1da8` -> `7e1ba66` ->
+  `9bf1869` (all pushed); ledger `2c43d7e` -> `06c0852` -> `a15def0`
+  (all pushed). A2 still `bea071a` (S1 in progress); A3
+  `c7786f1` -> `371c048b` -> `fdd90441` -> `3b3cc4f7` -> `ac1174aa` ->
+  `f5ea0466` -> `c1fb276e`; A4 `5f62e4b` -> `02b7ebe` -> `593091e` ->
+  `b555a54` -> `84afd75` -> `afd2d7e`. Compiler source blob unchanged
+  throughout (`ca732536`); oracle/doc expansion only, no re-measurement
+  of the 21-function tables owed.
+- A1-S1: baseline 9/21 confirmed on current tips (board `6724175304`);
+  movement table staged on A2-S1 pin, validation path refined per
+  A3-084 ADDENDUM (is_ws_at first; skip_ws/scan_digits after step wall).
+- A1-S2: dry-run partition verified + fragment contract proposed
+  (board `6724206010`); implementation waits on A2's fragment API.
+- A1-R3: merge fail-closed on doc/rev/empty/hole/span (`183b2fa`); then
+  dup-identity (`07f1da8`, seed-mirror, A3-082 verified incl. nested
+  edge + sigs-[] wartfix `9bf1869`); then A3-080 identity closure
+  (`7e1ba66`: cross-group entry agreement, ascending-unique cids,
+  call anchoring with measured two-space ground truth, honest
+  single-group-forgery boundary). All green, all pushed.
+- A1 oracle 16 -> 18 (A4 R1: NUL + 19-digit, `06c0852`) -> 22 (A4 R2:
+  entrypoint/dup/glued, `a15def0`); every fixture re-measured on exact
+  A4 bytes before ingest, blobs verified in-commit. R2 transport parity
+  proven read-only (1452/1452 remap-faithful, 641/641 spans
+  source-faithful; board `6724341299`).
+- Peer receipts answered same-turn: A4 subset AGREEMENT (no correction),
+  A4 counting question (per-fn counts match A3's table on all six
+  comparable fns; 1387-vs-1452 is instrument definition, same blob),
+  A3-082/083/084 ACKs (re-run invited at `7e1ba66`; stage reconciliation
+  confirmed; byte-identical 9-unit corroboration adopted).
+- Accepted three-stage distinction (A4 INVENTORY, A3-attributed): whole-
+  chunk CHECK 10/21 (sharp 41/48-node boundary) vs chain-CHECK 21/21 vs
+  sectional-EMIT 9/21 — no conflict. Binding constraint confirmed as
+  the 100k-step budget; statement-granular path is the critical path.
+- S3 candidate integration still gated (entry: A3 verification of pins;
+  A3-S2 L3 pends compiler A at 21/21; A3's M-1 gate READY but unjudged).
+  Merge plan above unchanged in shape; re-diff at merge time regardless.
