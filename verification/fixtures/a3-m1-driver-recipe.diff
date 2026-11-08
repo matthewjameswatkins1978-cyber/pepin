@@ -1,0 +1,109 @@
+diff --git a/pep_sectional.py b/pep_sectional.py
+index b679ae8..fb113c0 100644
+--- a/pep_sectional.py
++++ b/pep_sectional.py
+@@ -501,19 +501,84 @@ def build_fragmented_function(session, sem, sl, rep, name, sig_entry):
+     for i, _ in pdecls:
+         out.append(f"  (void)pep_arg_{i};\n")
+     declared = {str(int(nval(n, "id"))) for n in nodes}
++    # A3 PROBE (A3-158 / A3-146 recipe): narrow the node list per fragment.
++    # Two protocol facts measured the hard way: the emitter guards
++    # `checked.syntaxNodeCount == length(parsed.nodes)`, so the report's count
++    # must narrow too; and Int values travel as JSON STRINGS, so a raw int
++    # count is rejected with PEP_TOOL_ARGUMENT_VALUE.
++    _parent = {int(nval(n, "id")): int(nval(n, "parentId")) for n in nodes}
++    _kind = {int(nval(n, "id")): nval(n, "kind") for n in nodes}
++    _all = set(_parent)
++
++    def _subtree(root):
++        keep, changed = {root}, True
++        while changed:
++            changed = False
++            for i in _all:
++                if i not in keep and _parent.get(i) in keep:
++                    keep.add(i)
++                    changed = True
++        return keep
++
++    _base = {fn_id} | set(param_nodes)
++    for _p in param_nodes:
++        _base |= _subtree(_p)
++
++    def _setcount(rec, n):
++        out = []
++        for item in rec["fields"]:
++            if item["name"] == "syntaxNodeCount":
++                out.append({"name": "syntaxNodeCount",
++                            "value": {"type": "Int", "value": str(n)}})
++            else:
++                out.append(item)
++        return {"type": rec["type"], "fields": out}
++
++    def _narrow(target):
++        keep = set(_base)
++        for sid in order:
++            if sid < target and _kind.get(sid) in ("var", "let"):
++                keep |= _subtree(sid)
++        keep |= _subtree(target)
++        kept = [n for n in fields_map(sl)["nodes"]["value"]
++                if int(nval(n, "id")) in keep]
++        out_fields = []
++        for item in sl["fields"]:
++            if item["name"] == "nodes":
++                out_fields.append({"name": "nodes",
++                                   "value": {"type": "List[FlatAstNode]",
++                                             "value": kept}})
++            elif item["name"] == "syntaxNodeCount":
++                out_fields.append({"name": "syntaxNodeCount",
++                                   "value": {"type": "Int",
++                                             "value": str(len(kept))}})
++            else:
++                out_fields.append(item)
++        kept_stmts = [s for s in order if s in keep]
++        return ({"type": "ParserProgress", "fields": out_fields},
++                _setcount(rep, len(kept)),
++                kept_stmts.index(target))
++
+     for pos in range(len(order)):
++        sl_n, rep_n, first_n = _narrow(order[pos])
+         status, diag, parts, _ = emit_fragment(
+-            session, sem, sl, rep, 0, pos, 1)
++            session, sem, sl_n, rep_n, 0, first_n, 1)
+         if status != "emitted":
+             got = diag if isinstance(diag, str) else diag.get("value", diag)
+             raise ValueError(
+                 f"Pep C23 fragment {pos} of {name} refused: {got}")
+         out.extend(parts if isinstance(parts, list) else [parts])
++    _param_ids = {str(i) for i in param_nodes}
+     for _bname, _bsid in carried:
+         if _bsid not in declared:
+             raise ValueError(
+                 f"Pep C23 fragment assembly: carried binding {_bname} "
+                 f"has no declaration in the emitted slice of {name}")
++        # A parameter's C name is pep_arg_<id> and it is already void-cast
++        # above; emitting pep_local_<id> for it produces an undeclared
++        # identifier. Measured: find_ds binds ids 1/3/5, its parameters.
++        if _bsid in _param_ids:
++            continue
+         out.append(f"  (void)pep_local_{_bsid};\n")
+     out.append("}\n")
+     return "".join(str(x) for x in out)
+diff --git a/tests/pep_c23_emitter.pep b/tests/pep_c23_emitter.pep
+index 32bc253..dcddb70 100644
+--- a/tests/pep_c23_emitter.pep
++++ b/tests/pep_c23_emitter.pep
+@@ -5149,11 +5149,11 @@ fn emit_c23_checked_part(parsed: ParserProgress, checked: CheckerReport, part: S
+       reversed = prepend(reversed, "  if (pep_source_length > 0 && fread(pep_source_data, 1, (size_t)pep_source_length, pep_source_file) != (size_t)pep_source_length) { fputs(\"PEP_RUNTIME_SOURCE_OPEN\\n\", stderr); return 1; }\n")
+       reversed = prepend(reversed, "  (void)fclose(pep_source_file);\n")
+       reversed = prepend(reversed, "#if defined(_MSC_VER)\n#pragma warning(pop)\n#endif\n")
+-      reversed = prepend(reversed, "  (void)printf(\"%lld\\n\", (long long)(pep_fn_")
++      reversed = prepend(reversed, "  long long pep_rc = (long long)(pep_fn_")
+       reversed = prepend(reversed, "main")
+-      reversed = prepend(reversed, "((pep_source_bytes){ .data = pep_source_data, .length = (size_t)pep_source_length })));\n")
++      reversed = prepend(reversed, "((pep_source_bytes){ .data = pep_source_data, .length = (size_t)pep_source_length }));\n")
+       reversed = prepend(reversed, "  free(pep_source_data);\n")
+-      reversed = prepend(reversed, "  return 0;\n")
++      reversed = prepend(reversed, "  return (int)pep_rc;\n")
+       reversed = prepend(reversed, "}\n")
+     } else {
+       reversed = prepend(reversed, "int main(void) {\n")
