@@ -43,6 +43,13 @@ GATES = [
     # nine class-(ii) shapes; A3-153 found seven misclassified. Builds the committed
     # product-path C, so it always runs. Set PEPIN_CA_EXE to test a tracked build.
     ("Compiler A contract (14 cases)",   "contract_c7_162.py",   [], {}, ()),
+    # Regression gate for the A13 assignment-target defect: the sectional checker rejects
+    # a 31-line program the one-shot checker calls valid. Fails until A1 fixes L1933, and
+    # its control must pass so a broken checker cannot masquerade as a fix (A3-168).
+    # Reads PEPIN_CA_ROOT from the ambient environment rather than the a1/a2 roots:
+    # the defect only exists in the bound-chunk sectional path, and the pinned A2
+    # worktree predates it, so binding it there produced a false PASS once already.
+    ("A13 assignment-target defect",     "a13_assign_gate_168.py", [], {}, ()),
 ]
 
 # NOT in this list, by design: the A2 prepend+reverse differential. It compares emitted
@@ -112,6 +119,11 @@ def main():
             env[key] = roots[root_name]
         code, detail = run(script, extra, env, HERE.parent)
         if code is None:
+            rows.append((label, "SKIP", detail)); skipped += 1
+        elif code == 3:
+            # 3 means "cannot run in this tree" (e.g. a gate that needs a component the
+            # bound worktree does not have). That is a skip, never a pass: reporting it
+            # as PASS is how a false green happens.
             rows.append((label, "SKIP", detail)); skipped += 1
         elif code == 0:
             rows.append((label, "PASS", detail))
