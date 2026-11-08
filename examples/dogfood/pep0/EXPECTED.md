@@ -69,10 +69,11 @@ value fits Int64; seed-VALID, subset caps at 18).
 Expected exit **4**, stdout exactly: `ERR longlit` (hand-traced:
 `19 <= e - ds` gate; native confirmation pending S2).
 
-### `a_foo.pep` — negative, no `main` entrypoint
+### `a_foo.pep` — unsupported, no `main` entrypoint
 Bytes: `fn foo()->Int{return 1}\n` (seed-VALID: defined-but-unused).
-Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: `is_main4`
-fails on `foo`; native confirmation pending S2).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
+fallback `is_unsupported_prog` matches the complete non-main def;
+contract corrected per A3-153, was exit 1; native confirmation pending S2).
 
 ### `a_dup.pep` — negative, duplicate `main`
 Bytes: `fn main()->Int{return 1}\nfn main()->Int{return 2}\n`
@@ -92,16 +93,88 @@ Bytes: `fn main()->Int{return42}\n` (seed-invalid:
 Expected exit **2**, stdout exactly: `ERR literal` (hand-traced: `is_ws_at`
 after `urn` fails on `4`; native confirmation pending S2).
 
+### `a_Main.pep` — unsupported, capitalised entrypoint
+Bytes: `fn Main()->Int{return 1}\n` (seed-VALID: `Main` is a different name).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced: generic-name
+fallback path; native confirmation pending S2).
+
+### `a_unary.pep` — unsupported, unary minus
+Bytes: `fn main()->Int{return -42}\n` (seed-VALID).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
+`scan_value` unary path; native confirmation pending S2).
+
+### `a_binop.pep` — unsupported, binary minus
+Bytes: `fn main()->Int{return 0-42}\n` (seed-VALID).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
+`scan_value` chained-binop path; native confirmation pending S2).
+
+### `a_plusop.pep` — unsupported, binary plus
+Bytes: `fn main()->Int{return 0+42}\n` (seed-VALID).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced: generic
+binop operator; proves the fallback is not hard-coded to `-`; native
+confirmation pending S2).
+
+### `a_var.pep` — unsupported, `var` declaration
+Bytes: `fn main()->Int{var x = 1 return x}\n` (seed-VALID).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
+`match_varlet_body` with declared/returned name equality; native
+confirmation pending S2).
+
+### `a_let.pep` — unsupported, `let` declaration
+Bytes: `fn main()->Int{let x = 1 return x}\n` (seed-VALID).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced: same as
+`a_var.pep`; native confirmation pending S2).
+
+### `a_twofn.pep` — unsupported, leading non-main definition
+Bytes: `fn a()->Int{return 1} fn main()->Int{return 2}\n` (seed-VALID multi-fn).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced: trailing
+`fn`-with-different-name path; native confirmation pending S2).
+
+### `a_mainfn.pep` — unsupported, trailing non-main definition
+Bytes: `fn main()->Int{return 1} fn foo()->Int{return 2}\n` (seed-VALID multi-fn).
+Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced: trailing-fn
+path on a main-first program; native confirmation pending S2).
+
+### `a_badname.pep` — negative, numeric function name
+Bytes: `fn 123()->Int{return 1}\n` (seed-invalid: `PEP_PARSE_NAME`).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: generic-name scan
+finds no name; native confirmation pending S2).
+
+### `a_dash.pep` — negative, bare unary minus
+Bytes: `fn main()->Int{return -}\n` (seed-invalid: `PEP_PARSE_EXPRESSION`).
+Expected exit **2**, stdout exactly: `ERR literal` (hand-traced: `scan_value`
+finds no digits; native confirmation pending S2).
+
+### `a_bintrail.pep` — negative, dangling operator
+Bytes: `fn main()->Int{return 0-}\n` (seed-invalid: `PEP_PARSE_EXPRESSION`).
+Expected exit **3**, stdout exactly: `ERR junk` (hand-traced: binop chain finds
+no right operand; native confirmation pending S2).
+
+### `a_varbad.pep` — negative, numeric `var` name
+Bytes: `fn main()->Int{var 123 = 1 return x}\n` (seed-invalid: `PEP_PARSE_NAME`).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: declared-name scan
+fails; native confirmation pending S2).
+
+### `a_varnox.pep` — negative, `var` without assignment
+Bytes: `fn main()->Int{var x return x}\n` (seed-invalid: `PEP_PARSE_EXPECTED`).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: `=` expected;
+native confirmation pending S2).
+
+### `a_trailfn.pep` — negative, truncated trailing definition
+Bytes: `fn main()->Int{return 1} fn(\n` (seed-invalid: `PEP_PARSE_NAME`).
+Expected exit **3**, stdout exactly: `ERR junk` (hand-traced: trailing `fn` has
+no name; native confirmation pending S2).
+
 ## Exit-code table
 
 | code | meaning | example |
 |---|---|---|
 | 0 | ok, valid C on stdout — or empty input, silent | `a_ok.pep`, `a_empty.pep` |
-| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `a_foo.pep` (seed-valid), `a_gfn.pep`, `fnmain...`, `a_nul.pep` |
-| 2 | bad literal (no digits, or glued `return42`) | `a_badlit.pep`, `a_grt.pep` |
-| 3 | trailing junk after valid form | `...} extra`, `a_dup.pep` |
+| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `a_gfn.pep`, `fnmain...`, `a_nul.pep`, `a_badname.pep`, `a_varbad.pep`, `a_varnox.pep` |
+| 2 | bad literal (no digits, glued `return42`, bare `-`) | `a_badlit.pep`, `a_grt.pep`, `a_dash.pep` |
+| 3 | trailing junk after valid form | `...} extra`, `a_dup.pep`, `a_bintrail.pep`, `a_trailfn.pep` |
 | 4 | literal longer than 18 digits (out of subset, kept distinct) | `a_big19.pep` (19 digits, seed-valid) |
-| 5 | unsupported (seed-valid but out-of-subset type word) | `a_str.pep` (`-> Str`) |
+| 5 | unsupported (seed-valid but out-of-subset type or form) | `a_str.pep` (`-> Str`), `a_foo.pep` (non-main), `a_Main.pep`, `a_unary.pep`, `a_binop.pep`, `a_plusop.pep`, `a_var.pep`, `a_let.pep`, `a_twofn.pep`, `a_mainfn.pep` |
 
 ## Prime emitter-refusal candidates for A2's run (most to least likely)
 

@@ -21,16 +21,24 @@ Boundary evidence replayed 17/17 from prose by A3 (BOOT-A3-088).
 
 ## Class (ii) — seed-valid but outside Pep-0 (defined behavior, no C)
 
-- `-> Str`, `-> Bool`, `-> Unit` returns (e.g. `a_str.pep` → exit 5).
-- Non-`main` functions, including `fn Main(...)` (seed-valid name).
+- `-> Str`, `-> Bool`, `-> Unit` returns on `main` (e.g. `a_str.pep` → exit 5).
+- Non-`main` single-fn programs, zero params, Int/Str/Bool returns
+  (e.g. `a_foo.pep`, `a_Main.pep` → exit 5); a trailing second `fn` def
+  with a different name likewise (e.g. `a_twofn.pep`, `a_mainfn.pep` →
+  exit 5; duplicate names stay exit 3).
 - Empty (0-byte) input: seed-valid vacuous program → exit 0 silent.
-- Unary minus (`return -42`, seed-valid) and binary arithmetic
-  (`return 0-42`, seed-valid): not in S0; no C emitted.
+- Unary minus (`-42`, optional space) and chained binary arithmetic on Int
+  literals (`0-42`, `0+42`, `0-1-2`; single leading `-` only; no parens):
+  seed-valid, not in S0, no C emitted (e.g. `a_unary.pep`, `a_binop.pep`).
+- `var`/`let` single declarations with Int values and Int returns, declared
+  name equal to returned name (e.g. `a_var.pep`, `a_let.pep` → exit 5).
 - 19-digit in-range literals (e.g. `1000000000000000000`, seed-valid):
   rejected by the 18-digit subset cap (exit 4), never wrapped.
-- Wider Pep (`var`, loops, statement `if`, `let`, multi-fn programs,
-  records, `match`): seed-valid per SEED_LANGUAGE.md/A6 scope; outside
-  S0. Multi-fn (`pos_twofn`) is Slice-3 scope, not S0.
+- Outside the fallback tier too (stay at shape/literal/junk codes): `var`
+  with non-Int values, loops, statement `if`, params-ful or `main`-with-params
+  fns, parenthesised values, `--` prefix, `Unit`-typed non-`main` fns,
+  other return type words, multi-`var` bodies, doubled `fn` names.
+  Multi-fn (`pos_twofn`) is Slice-3 scope, not S0.
 
 ## Class (i) — seed-invalid (rejected by the seed; never reach subset)
 
