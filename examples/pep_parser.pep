@@ -1714,6 +1714,20 @@ fn parser_step_match_arm(cursor: ParserCursor, frame: ParserFrame) -> ParserChun
       return parser_finish_step(cursor, parse_error("PEP_PARSER_INTERNAL",
         "Match frame has no return frame beneath it", next.token, close.stream))
     } else { }
+    # A resumed match must be the whole returned value: a binary operator
+    # or field access after the closing brace would continue the returned
+    # expression (the old whole-expression path parses
+    # `return match ... <op> ...` as one expression), but every node id is
+    # already assigned parent-before-child, so no fresh parent can be
+    # created for the match here. Refuse loudly instead of silently
+    # dropping the rest (resumed match followed by operator is out of
+    # scope until the host supports post-close parents).
+    let afterClose = stream_peek(close.stream, 0)
+    if afterClose.ok && afterClose.token.kind == "symbol" && (afterClose.token.text == "." || afterClose.token.text == "||" || afterClose.token.text == "&&" || afterClose.token.text == "==" || afterClose.token.text == "!=" || afterClose.token.text == "<=" || afterClose.token.text == "+" || afterClose.token.text == "-" || afterClose.token.text == "*" || afterClose.token.text == "/") {
+      return parser_match_error(cursor, parse_error("PEP_PARSE_EXPRESSION",
+        "Resumed match expression cannot be followed by a binary operator or field access", afterClose.token, afterClose.stream), frame, returnFrame,
+        cursor.stream.lexCursor.offset)
+    } else { }
     let returnRoot = FlatAstNode {
       id: retFrame.nodeId, parentId: retFrame.parentId,
       childIndex: retFrame.rootChildIndex, role: retFrame.rootRole,

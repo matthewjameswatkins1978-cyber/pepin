@@ -88,6 +88,13 @@ def register_sectional_tools(session, tool_doc, tool_revision, sample, pep_c23):
          [empty_pp, empty_checked, typed_value("Str", "header")], refused),
         ("pep-c23-unit", "emit_c23_function_unit",
          [empty_pp, empty_checked, typed_value("Int", 0)], refused),
+        # A2-S2 fragment entry (A3-113 registration vector: the empty
+        # program is refused as out-of-range, which is the vector).
+        ("pep-c23-frag", "emit_c23_statement_fragment",
+         [empty_pp, empty_checked, typed_value("Int", 0),
+          typed_value("Int", 0), typed_value("Int", 1)],
+         pep_c23.typed_record("unsupported", (),
+                              "Pep C23 function unit index is out of range")),
         ("bound-chunk", "analyze_chunk_typed_bound",
          [empty_pp,
           {"type": "List[CheckedFunction]", "value": []},
@@ -412,6 +419,106 @@ def emit_section(session, sem, sl, report, part):
     return (fields["status"]["value"], fields["diagnostic"]["value"], parts, steps)
 
 
+def emit_fragment(session, sem, sl, report, function_index, first, count):
+    """One statement-fragment emission: returns (status, diagnostic, parts, steps)."""
+    from pep_c23 import typed as typed_value
+    resp, steps = _invoke(session, "pep-c23-frag",
+                           [sl, report, typed_value("Int", function_index),
+                            typed_value("Int", first),
+                            typed_value("Int", count)], sem)
+    if resp.get("outcome") != "ok":
+        return ("tool-error", (resp.get("error") or {}).get("code", ""), [], steps)
+    fields = {item["name"]: item["value"] for item in resp["result"]["fields"]}
+    parts = [p["value"] if isinstance(p, dict) else p
+             for p in fields["sourceParts"]["value"]]
+    return (fields["status"]["value"], fields["diagnostic"]["value"],
+            parts, steps)
+
+
+_C_TYPE_BY_NAME = {"Int": "int64_t", "Bool": "int64_t",
+                    "SourceBytes": "pep_source_bytes"}
+
+
+def build_fragmented_function(session, sem, sl, rep, name, sig_entry):
+    """Assemble one step-limited function from statement fragments.
+
+    Host-side of A2's fragment contract (single statement per fragment,
+    whole sliced progress + whole merged report, rank-space ids throughout:
+    no narrowing, no remap — measured 30/31 on the integrated tree).
+    Wrapper + parameter decls + per-statement fragment bodies + (void)
+    casts for carried bindings + trailing closing brace. The epilogue
+    (pep_leave/return) comes from the trailing return fragment itself,
+    exactly as the unit emitter produces it. Fail-closed: non-emitting
+    fragments, non-Int/Bool/SourceBytes types, and a missing trailing
+    return all raise with the exact position.
+    """
+    nodes = fields_map(sl)["nodes"]["value"]
+    fn_nodes = [n for n in nodes
+                if nval(n, "kind") == "function"
+                and str(nval(n, "parentId")) == "-1"]
+    if len(fn_nodes) != 1:
+        raise ValueError(
+            "Pep C23 fragment assembly needs a single-function slice")
+    fn_id = int(nval(fn_nodes[0], "id"))
+    # statement positions are rank ids in source order (remap preserves it)
+    order = sorted(int(nval(n, "id")) for n in nodes
+                   if str(nval(n, "parentId")) == str(fn_id)
+                   and str(nval(n, "role")) == "statement")
+    if not order:
+        raise ValueError(
+            f"Pep C23 fragment assembly found no statements for {name}")
+    # trailing statement must be the return (its fragment carries the epilogue)
+    last_kind = next(nval(n, "kind") for n in nodes
+                     if int(nval(n, "id")) == order[-1])
+    if last_kind != "return":
+        raise ValueError(
+            f"Pep C23 fragment assembly needs a trailing return in {name}")
+    # parameter declarations: sliced node ids (the emitter's pep_arg_<id>),
+    # C types from the signature, matched by source-order index
+    param_nodes = sorted(int(nval(n, "id")) for n in nodes
+                         if nval(n, "kind") == "parameter"
+                         and str(nval(n, "parentId")) == str(fn_id))
+    params = sorted(sig_entry, key=lambda p: int(p["index"]))
+    if len(params) != len(param_nodes):
+        raise ValueError(
+            f"Pep C23 fragment assembly: {len(params)} signature params "
+            f"vs {len(param_nodes)} parameter nodes in {name}")
+    pdecls = []
+    for p, nid in zip(params, param_nodes):
+        ctype = _C_TYPE_BY_NAME.get(p["type"])
+        if ctype is None:
+            raise ValueError(
+                f"Pep C23 fragment assembly: unsupported param type "
+                f"{p['type']} in {name}")
+        pdecls.append((nid, ctype))
+    rep_fields = fields_map(rep)
+    carried = [(str(_fval(b, "name")), str(int(_fval(b, "syntaxId"))))
+               for b in rep_fields["bindings"]["value"]]
+    out = []
+    out.append("int64_t pep_fn_%s(%s) {\n" % (
+        name, ", ".join("%s pep_arg_%s" % (t, i) for i, t in pdecls)))
+    out.append("  pep_enter();\n")
+    for i, _ in pdecls:
+        out.append(f"  (void)pep_arg_{i};\n")
+    declared = {str(int(nval(n, "id"))) for n in nodes}
+    for pos in range(len(order)):
+        status, diag, parts, _ = emit_fragment(
+            session, sem, sl, rep, 0, pos, 1)
+        if status != "emitted":
+            got = diag if isinstance(diag, str) else diag.get("value", diag)
+            raise ValueError(
+                f"Pep C23 fragment {pos} of {name} refused: {got}")
+        out.extend(parts if isinstance(parts, list) else [parts])
+    for _bname, _bsid in carried:
+        if _bsid not in declared:
+            raise ValueError(
+                f"Pep C23 fragment assembly: carried binding {_bname} "
+                f"has no declaration in the emitted slice of {name}")
+        out.append(f"  (void)pep_local_{_bsid};\n")
+    out.append("}\n")
+    return "".join(str(x) for x in out)
+
+
 def _top_level_declarations(nodes):
     return [n for n in nodes
             if str(nval(n, "parentId")) == "-1" and nval(n, "kind") != "function"]
@@ -466,9 +573,28 @@ def build_c23(session, sem, parsed, tool_revision, tool_doc, target, sample,
         status, diag, parts, _ = emit_unit(
             session, sem, slices[name], reports[name], 0)
         if status != "emitted":
-            raise ValueError(
-                diag or f"Pep C23 function unit refused {name}")
-        rebuilt.extend(parts)
+            code = diag if isinstance(diag, str) else diag.get("value", diag)
+            if "STEP_LIMIT" not in str(code):
+                raise ValueError(
+                    diag or f"Pep C23 function unit refused {name}")
+            # A3-151 fallback: whole-unit budget exceeded; assemble the
+            # function statement-by-statement through the fragment entry.
+            # (No narrowing: measured 30/31 on full sliced progress.)
+            sig = next((s for s in checked["sigs"]
+                          if s.get("name") == name), None)
+            if sig is None:
+                raise ValueError(
+                    f"Pep C23 fragment assembly found no signature for {name}")
+            sig_params = [{"index": pi, "type": tname}
+                          for (tname, _shp, pi) in sig.get("ptypes", [])]
+            parts = [build_fragmented_function(
+                session, sem, slices[name], reports[name], name,
+                sig_params)]
+            stats_entry = checked["stats"].get(name, {}) or {}
+            stats_entry["mode"] = (str(stats_entry.get("mode", ""))
+                                     + "+fragmented")
+            checked["stats"][name] = stats_entry
+        rebuilt.extend(parts if isinstance(parts, list) else [parts])
     status, diag, epilogue, _ = emit_section(
         session, sem, slices["main"], reports["main"], "main")
     if status != "emitted":
