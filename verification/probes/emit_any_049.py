@@ -173,6 +173,13 @@ def main():
                                  f"unit {label}")
                     emitted += 1
                     print(f"  unit {label:<16} EMITTED ({len(out)} bytes)")
+                    # A3-S2: per-emission step cost. last_execute_steps overwrites on
+                    # each tool_invoke, so read it absolutely right after this call.
+                    if os.environ.get("PEPIN_STEPS") == "1":
+                        got = session.send({"schemaVersion": 3, "op": "metrics"})
+                        steps = (got.get("metrics") or {}).get("last_execute_steps")
+                        unit_nodes = len(fm(sliced[label])["nodes"]["value"])
+                        print(f"       steps={steps}  nodes={unit_nodes}")
                 except RuntimeError as error:
                     refused.append(label)
                     print(f"  unit {label:<16} FIRST REFUSAL: {error}")
