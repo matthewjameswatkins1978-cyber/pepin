@@ -2761,8 +2761,13 @@ fn pep_c23_expression(nodes: List[FlatAstNode], function: FlatAstNode, node: Fla
     return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
   } else {}
   if node.kind == "call" {
-    let variant = pep_c23_union_variant(nodes, node.text)
-    if variant.found { return pep_c23_union_constructor(nodes, function, node, variant.node) } else {}
+    let builtinCall = node.text == "byte_length" || node.text == "byte_at" || node.text == "str_contains" ||
+      node.text == "str_concat" || node.text == "contains" || node.text == "length" ||
+      node.text == "utf8_slice" || node.text == "int_text"
+    if !builtinCall {
+      let variant = pep_c23_union_variant(nodes, node.text)
+      if variant.found { return pep_c23_union_constructor(nodes, function, node, variant.node) } else {}
+    } else {}
     var argumentFound = false
     var argumentNode = pep_c23_empty_ast_node()
     var secondArgumentFound = false
