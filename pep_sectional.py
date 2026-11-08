@@ -184,6 +184,18 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
             raise ValueError("sectional merge hit a hole; not supported")
     calls, fns, etypes = [], [], []
     seen_fn = set()
+    # A3-080: scan ALL groups for the entry fact (the old double-break
+    # took only groups[0]). Copies must agree on (name, semanticId); the
+    # merged entry keeps the group copy (checker id-space, matching the
+    # groups' own call facts), never silently first-wins.
+    entry_keys = set()
+    for _, rep in groups:
+        for e in rep["functions"]["value"]:
+            if _fval(e, "name") == entry_name:
+                entry_keys.add((_fval(e, "name"), _fval(e, "semanticId")))
+    if len(entry_keys) > 1:
+        raise ValueError(
+            "sectional merge: entry fact disagreement across groups")
     for _, rep in groups:
         for e in rep["functions"]["value"]:
             if _fval(e, "name") == entry_name:
@@ -192,7 +204,6 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
                     seen_fn.add(key)
                     fns.append(copy.deepcopy(e))
                 break
-        break
     for e in all_fn_facts:
         key = (_fval(e, "name"), _fval(e, "semanticId"))
         if key in seen_fn:
@@ -200,7 +211,11 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
         seen_fn.add(key)
         fns.append(copy.deepcopy(e))
     for cids, rep in groups:
-        ordered = sorted(int(c) for c in cids)
+        order = [int(c) for c in cids]
+        if order != sorted(order) or len(set(order)) != len(order):
+            raise ValueError(
+                "sectional merge: group ids not ascending-unique")
+        ordered = sorted(order)
         g2s = {str(g): rank[str(doc)] for g, doc in enumerate(ordered)}
         for e in rep["calls"]["value"] + rep["expressionTypes"]["value"]:
             key = str(int(_fval(e, "syntaxId")))
@@ -215,6 +230,16 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
             c = copy.deepcopy(e)
             _fset(c, "syntaxId", g2s[str(int(_fval(e, "syntaxId")))])
             etypes.append(c)
+    # A3-080: every call must anchor in the merged function facts (the
+    # emitter resolves calleeId/callerId by semanticId; a dangling id
+    # means a foreign or forged fact). Single-group fully-consistent
+    # forgery is definitionally valid input and stays the emitter's catch.
+    allowed_ids = {str(_fval(e, "semanticId")) for e in fns}
+    for c in calls:
+        if str(_fval(c, "callerId")) not in allowed_ids or \
+                str(_fval(c, "calleeId")) not in allowed_ids:
+            raise ValueError(
+                "sectional merge: call to unknown function fact")
     first = groups[0][1]
     return {"type": "CheckerReport", "fields": [
         {"name": "document", "value": first["document"]},
