@@ -69,14 +69,37 @@ value fits Int64; seed-VALID, subset caps at 18).
 Expected exit **4**, stdout exactly: `ERR longlit` (hand-traced:
 `19 <= e - ds` gate; native confirmation pending S2).
 
+### `a_foo.pep` — negative, no `main` entrypoint
+Bytes: `fn foo()->Int{return 1}\n` (seed-VALID: defined-but-unused).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: `is_main4`
+fails on `foo`; native confirmation pending S2).
+
+### `a_dup.pep` — negative, duplicate `main`
+Bytes: `fn main()->Int{return 1}\nfn main()->Int{return 2}\n`
+(seed-invalid: `PEP_DUPLICATE_FUNCTION`).
+Expected exit **3**, stdout exactly: `ERR junk` (hand-traced: second form
+is trailing bytes after `}`; native confirmation pending S2).
+
+### `a_gfn.pep` — negative, glued `fn` keyword
+Bytes: `fnmain()->Int{return 42}\n` (seed-invalid:
+`PEP_PARSE_EXPRESSION`).
+Expected exit **1**, stdout exactly: `ERR shape` (hand-traced: ws-after-`fn`
+gate fails on `m`; native confirmation pending S2).
+
+### `a_grt.pep` — negative, glued `return` literal
+Bytes: `fn main()->Int{return42}\n` (seed-invalid:
+`PEP_UNKNOWN_VARIABLE`).
+Expected exit **2**, stdout exactly: `ERR literal` (hand-traced: `is_ws_at`
+after `urn` fails on `4`; native confirmation pending S2).
+
 ## Exit-code table
 
 | code | meaning | example |
 |---|---|---|
 | 0 | ok, valid C on stdout — or empty input, silent | `a_ok.pep`, `a_empty.pep` |
-| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `fn foo...`, `fnmain...`, `a_nul.pep` |
-| 2 | bad literal (no digits, or glued `return42`) | `a_badlit.pep` |
-| 3 | trailing junk after valid form | `...} extra` |
+| 1 | bad shape (structure/brace/delimiter/unknown name) | `a_badbrace.pep`, `a_foo.pep` (seed-valid), `a_gfn.pep`, `fnmain...`, `a_nul.pep` |
+| 2 | bad literal (no digits, or glued `return42`) | `a_badlit.pep`, `a_grt.pep` |
+| 3 | trailing junk after valid form | `...} extra`, `a_dup.pep` |
 | 4 | literal longer than 18 digits (out of subset, kept distinct) | `a_big19.pep` (19 digits, seed-valid) |
 | 5 | unsupported (seed-valid but out-of-subset type word) | `a_str.pep` (`-> Str`) |
 
