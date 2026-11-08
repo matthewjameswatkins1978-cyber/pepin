@@ -34,6 +34,13 @@ AST via seed `inspect --json`.
 `if_statement` 84, `var` 55, `Int` 25, `function` 21, `return` 21,
 `SourceBytes` 19, `expression` 14, `string` 8, `while` 3.
 
+Counting rule: keyed walk (dicts carrying a type/kind/node string
+field); raw dict count is 4161. A1's sectional parse counts 1452 (every
+`FlatAstNode` incl. params, type scalars, separators) on the same blob
+`ca732536`; per-function subtotals agree exactly (main 222, find_brace
+288, find_fn 101, find_ds 122, find_parens 82, check_tail 66). Cite
+per-function counts when precision matters.
+
 ## S0-gap ordered by frequency (extension economics, not a proposal)
 
 `==`/calls/`if`/`&&`/`var`/params first; `while` (3), `*` (1),
