@@ -1,4 +1,6 @@
 # Own-source static inventory (A4 lane, R3 — description only, no claim)
+Status: independently verified to the node by A3 (BOOT-A3-087:
+12/12 kinds, 8/8 operators, totals exact) — treat as verified fact.
 
 Source: `compiler_a.pep` rev-3 (`d78735e`). Counts scripted
 (`_build/r2/inventory.py`, `_build/r2/astc.py`; scratch, not committed);
@@ -33,6 +35,11 @@ AST via seed `inspect --json`.
 `name` 348, `binary` 297, `int` 293, `call` 112, `assignment` 87,
 `if_statement` 84, `var` 55, `Int` 25, `function` 21, `return` 21,
 `SourceBytes` 19, `expression` 14, `string` 8, `while` 3.
+
+Type-mention rule: `Int` 25 / `SourceBytes` 19 count parameter
+annotations only (25+19=44 params); including the 21 `Int` returns,
+all mentions are Int 46, SourceBytes 19. Total reconciles as
+1343 kind-nodes + 44 param-type annotations = 1387.
 
 Counting rule: keyed walk (dicts carrying a type/kind/node string
 field); raw dict count is 4161. A1's sectional parse counts 1452 (every
