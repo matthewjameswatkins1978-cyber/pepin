@@ -726,17 +726,129 @@ fn pep_c23_cross_chunk_call(nodes: List[FlatAstNode], function: FlatAstNode, nod
 // Checked-aware expression entry. The plain path runs FIRST, so every success and every refusal
 // except the missing-target one is byte-for-byte identical to today (one-shot and same-chunk
 // behaviour preserved by construction); "calls require a known target" is exactly where a
-// cross-chunk callee appears, and there the checked-fact path takes over. Supported statement
-// forms in this slice: let initialisers and direct return values -- the two sites threaded with
-// the real report. Nested calls inside arguments resolve same-chunk or refuse; conditional-return
-// bodies keep the plain path (documented boundary).
+// cross-chunk callee appears, and there the checked-fact path takes over. Direct calls route
+// straight to pep_c23_cross_chunk_call; binary and unary nodes whose operands contain the
+// cross-chunk callee are re-lowered operand-by-operand (source-order and error-order preserved)
+// and recombined with the same operator mapping as the plain binary/unary branches.
 fn pep_c23_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
                               checked: CheckerReport) -> PepC23Emission {
   let plain = pep_c23_expression(nodes, function, node)
   if plain.status == "emitted" { return plain } else {}
   if plain.diagnostic != "Pep C23 calls require a known target" { return plain } else {}
   if node.kind == "call" { return pep_c23_cross_chunk_call(nodes, function, node, checked) } else {}
+  if node.kind == "binary" { return pep_c23_binary_expression_checked(nodes, function, node, checked) } else {}
+  if node.kind == "unary" { return pep_c23_unary_expression_checked(nodes, function, node, checked) } else {}
   return plain
+}
+// Checked-aware re-lowering of a binary expression whose plain path refused on a cross-chunk
+// callee. Mirrors pep_c23_expression's binary branch (Str probe, fallible guard, neg, arithmetic
+// helper, comparison/logical) but recurses through pep_c23_expression_checked so a callee living
+// in another checked chunk resolves via pep_c23_cross_chunk_call at its exact position. Left-then-
+// right lowering order is preserved, so diagnostic precedence matches the plain path.
+fn pep_c23_binary_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                                     checked: CheckerReport) -> PepC23Emission {
+  let left = pep_c23_child(nodes, node.id, "left", 0)
+  let right = pep_c23_child(nodes, node.id, "right", 1)
+  if !left.found || !right.found {
+    return pep_c23_unsupported("Pep C23 binary expression is missing an operand")
+  } else {}
+  let checkLeftStr = node.text == "==" || node.text == "!=" || left.node.kind == "string"
+  let checkRightStr = node.text == "==" || node.text == "!=" || right.node.kind == "string"
+  let leftStringValue = if checkLeftStr {
+    pep_c23_str_expression(nodes, function, left.node)
+  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  let rightStringValue = if checkRightStr {
+    pep_c23_str_expression(nodes, function, right.node)
+  } else { PepC23NodeLookup { found: false, node: pep_c23_empty_ast_node() } }
+  if leftStringValue.found || rightStringValue.found {
+    if !leftStringValue.found || !rightStringValue.found ||
+       (node.text != "==" && node.text != "!=") {
+      return pep_c23_unsupported("Pep C23 Str operands currently support only equality and inequality against another Str")
+    } else {}
+    if pep_c23_infallible_value(nodes, left.node) &&
+       pep_c23_infallible_value(nodes, right.node) {
+      return pep_c23_unsupported("Pep C23 rejects two fallible Str comparison operands because C operand evaluation order is unspecified")
+    } else {}
+    let loweredLeftString = pep_c23_expression_checked(nodes, function, left.node, checked)
+    let loweredRightString = pep_c23_expression_checked(nodes, function, right.node, checked)
+    if loweredLeftString.status != "emitted" { return loweredLeftString } else {}
+    if loweredRightString.status != "emitted" { return loweredRightString } else {}
+    var stringParts: List[Str] = if node.text == "!=" { ["(!pep_str_equal("] } else { ["pep_str_equal("] }
+    for part in loweredLeftString.sourceParts { stringParts = append(stringParts, part) }
+    stringParts = append(stringParts, ", ")
+    for part in loweredRightString.sourceParts { stringParts = append(stringParts, part) }
+    if node.text == "!=" { stringParts = append(stringParts, "))") } else {
+      stringParts = append(stringParts, ")")
+    }
+    return PepC23Emission { status: "emitted", sourceParts: stringParts, diagnostic: "" }
+  } else {}
+  if node.text != "&&" && node.text != "||" && pep_c23_expression_may_fail(nodes, left.node) && pep_c23_expression_may_fail(nodes, right.node) {
+    return pep_c23_unsupported("Pep C23 rejects two fallible operands because C operand evaluation order is unspecified")
+  } else {}
+  if node.text == "neg" {
+    let lowered = pep_c23_expression_checked(nodes, function, right.node, checked)
+    if lowered.status != "emitted" { return lowered } else {}
+    var reversedNeg: List[Str] = []
+    reversedNeg = prepend(reversedNeg, "pep_neg(")
+    for part in lowered.sourceParts { reversedNeg = prepend(reversedNeg, part) }
+    reversedNeg = prepend(reversedNeg, ")")
+    return PepC23Emission { status: "emitted", sourceParts: reverse(reversedNeg), diagnostic: "" }
+  } else {}
+  let loweredLeft = pep_c23_expression_checked(nodes, function, left.node, checked)
+  let loweredRight = pep_c23_expression_checked(nodes, function, right.node, checked)
+  if loweredLeft.status != "emitted" { return loweredLeft } else {}
+  if loweredRight.status != "emitted" { return loweredRight } else {}
+  let helper = if node.text == "+" { "pep_add" } else {
+    if node.text == "-" { "pep_sub" } else {
+      if node.text == "*" { "pep_mul" } else {
+        if node.text == "/" { "pep_div" } else { "" }
+      }
+    }
+  }
+  if helper != "" {
+    var reversedArith: List[Str] = []
+    reversedArith = prepend(reversedArith, helper)
+    reversedArith = prepend(reversedArith, "(")
+    for part in loweredLeft.sourceParts { reversedArith = prepend(reversedArith, part) }
+    reversedArith = prepend(reversedArith, ", ")
+    for part in loweredRight.sourceParts { reversedArith = prepend(reversedArith, part) }
+    reversedArith = prepend(reversedArith, ")")
+    return PepC23Emission { status: "emitted", sourceParts: reverse(reversedArith), diagnostic: "" }
+  } else {}
+  if node.text == "==" || node.text == "!=" || node.text == "<" || node.text == "<=" || node.text == ">" || node.text == ">=" || node.text == "&&" || node.text == "||" {
+    var reversedCmp: List[Str] = []
+    reversedCmp = prepend(reversedCmp, "(")
+    for part in loweredLeft.sourceParts { reversedCmp = prepend(reversedCmp, part) }
+    reversedCmp = prepend(reversedCmp, " ")
+    reversedCmp = prepend(reversedCmp, node.text)
+    reversedCmp = prepend(reversedCmp, " ")
+    for part in loweredRight.sourceParts { reversedCmp = prepend(reversedCmp, part) }
+    reversedCmp = prepend(reversedCmp, ")")
+    return PepC23Emission { status: "emitted", sourceParts: reverse(reversedCmp), diagnostic: "" }
+  } else {}
+  return pep_c23_unsupported("Pep C23 binary operator is unsupported")
+}
+// Checked-aware re-lowering of a unary expression (! or -) whose operand contains a cross-chunk
+// callee. Mirrors the plain unary branches, recursing through pep_c23_expression_checked.
+fn pep_c23_unary_expression_checked(nodes: List[FlatAstNode], function: FlatAstNode, node: FlatAstNode,
+                                    checked: CheckerReport) -> PepC23Emission {
+  let operand = pep_c23_child(nodes, node.id, "operand", 0)
+  if !operand.found { return pep_c23_unsupported("Pep C23 unary expression has no operand") } else {}
+  let lowered = pep_c23_expression_checked(nodes, function, operand.node, checked)
+  if lowered.status != "emitted" { return lowered } else {}
+  if node.text == "!" {
+    var notParts: List[Str] = ["(!"]
+    for part in lowered.sourceParts { notParts = append(notParts, part) }
+    notParts = append(notParts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: notParts, diagnostic: "" }
+  } else {}
+  if node.text == "-" {
+    var negParts: List[Str] = ["pep_neg("]
+    for part in lowered.sourceParts { negParts = append(negParts, part) }
+    negParts = append(negParts, ")")
+    return PepC23Emission { status: "emitted", sourceParts: negParts, diagnostic: "" }
+  } else {}
+  return pep_c23_unsupported("Pep C23 expression lowering does not support this expression")
 }
 fn pep_c23_close_generated_call(nodes: List[FlatAstNode], parts: List[Str], argumentCount: Int) -> List[Str] {
   var closedParts = parts
@@ -3300,7 +3412,7 @@ fn pep_c23_if_return_body(nodes: List[FlatAstNode], function: FlatAstNode) -> Pe
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
 
-fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int, localBindings: List[FlatAstNode], result: PepC23NodeLookup) -> PepC23Emission {
+fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, statement: FlatAstNode, depth: Int, localBindings: List[FlatAstNode], result: PepC23NodeLookup, checked: CheckerReport) -> PepC23Emission {
   if depth == 8 { return pep_c23_unsupported("Pep C23 loop condition nesting exceeds the supported depth") } else {}
   let indent = if depth == 0 { "    " } else { "      " }
   if statement.kind == "return" {
@@ -3370,7 +3482,7 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
     if statement.kind == "if_statement" {
       let condition = pep_c23_child(nodes, statement.id, "condition", 0)
       if !condition.found { return pep_c23_unsupported("Pep C23 loop conditional has no condition") } else {}
-      let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+      let loweredCondition = pep_c23_expression_checked(nodes, function, condition.node, checked)
       if loweredCondition.status != "emitted" { return loweredCondition } else {}
       var thenParts: List[Str] = []
       var elseParts: List[Str] = []
@@ -3379,13 +3491,13 @@ fn pep_c23_loop_statement(nodes: List[FlatAstNode], function: FlatAstNode, state
       for branchStatement in nodes {
         if branchStatement.parentId == statement.id && branchStatement.role == "then" {
           foundThen = true
-          let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result)
+          let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
           if loweredBranch.status != "emitted" { return loweredBranch } else {}
           for part in loweredBranch.sourceParts { thenParts = append(thenParts, part) }
         } else {
           if branchStatement.parentId == statement.id && branchStatement.role == "else" {
             foundElse = true
-            let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result)
+            let loweredBranch = pep_c23_loop_statement(nodes, function, branchStatement, depth + 1, localBindings, result, checked)
             if loweredBranch.status != "emitted" { return loweredBranch } else {}
             for part in loweredBranch.sourceParts { elseParts = append(elseParts, part) }
           } else {}
@@ -3490,12 +3602,12 @@ fn pep_c23_mutable_list_update(nodes: List[FlatAstNode], function: FlatAstNode, 
   parts = append(parts, ")")
   return PepC23Emission { status: "emitted", sourceParts: parts, diagnostic: "" }
 }
-fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode], result: PepC23NodeLookup) -> PepC23Emission {
+fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: FlatAstNode, localBindings: List[FlatAstNode], result: PepC23NodeLookup, checked: CheckerReport) -> PepC23Emission {
   let condition = pep_c23_child(nodes, loop.id, "condition", 0)
   if !condition.found || pep_c23_count_children(nodes, loop.id, "body") == 0 {
     return pep_c23_unsupported("Pep C23 while lowering requires a condition and a non-empty assignment body")
   } else {}
-  let loweredCondition = pep_c23_expression(nodes, function, condition.node)
+  let loweredCondition = pep_c23_expression_checked(nodes, function, condition.node, checked)
   if loweredCondition.status != "emitted" { return loweredCondition } else {}
   var parts: List[Str] = ["  while (!!("]
   for part in loweredCondition.sourceParts { parts = append(parts, part) }
@@ -3523,7 +3635,7 @@ fn pep_c23_while_body(nodes: List[FlatAstNode], function: FlatAstNode, loop: Fla
   for part in bindingParts { parts = append(parts, part) }
  }
         } else {
-          let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings, result)
+          let loweredConditional = pep_c23_loop_statement(nodes, function, statement, 0, localBindings, result, checked)
           if loweredConditional.status != "emitted" { return loweredConditional } else {}
           for part in loweredConditional.sourceParts { parts = append(parts, part) }
         }
@@ -3752,7 +3864,7 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
           } else {}
           for bodyStatement in nodes {
             if bodyStatement.parentId == statement.id && bodyStatement.role == "body" {
-              let loweredBody = pep_c23_loop_statement(nodes, function, bodyStatement, 0, localBindings, result)
+              let loweredBody = pep_c23_loop_statement(nodes, function, bodyStatement, 0, localBindings, result, checked)
               if loweredBody.status != "emitted" { return loweredBody } else {}
             } else {}
           }
@@ -3767,8 +3879,8 @@ fn pep_c23_function_expression(nodes: List[FlatAstNode], function: FlatAstNode, 
               localBindingsCollected = true
             } else {}
             let loweredControl = if statement.kind == "while" {
-              pep_c23_while_body(nodes, function, statement, localBindings, result)
-            } else { pep_c23_loop_statement(nodes, function, statement, 0, localBindings, result) }
+              pep_c23_while_body(nodes, function, statement, localBindings, result, checked)
+            } else { pep_c23_loop_statement(nodes, function, statement, 0, localBindings, result, checked) }
             if loweredControl.status != "emitted" { return loweredControl } else {}
           } else {
             if statement.kind == "return" && !returned {
@@ -4334,7 +4446,7 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
           for part in arrayDeclaration { bodyParts = append(bodyParts, part) }
           for loopStatement in parsed.nodes {
             if loopStatement.parentId == statement.id && loopStatement.role == "body" {
-              let loweredBody = pep_c23_loop_statement(parsed.nodes, node, loopStatement, 0, localBindings, result)
+              let loweredBody = pep_c23_loop_statement(parsed.nodes, node, loopStatement, 0, localBindings, result, checked)
               if loweredBody.status != "emitted" { return loweredBody } else {}
               for part in loweredBody.sourceParts { bodyParts = append(bodyParts, part) }
             } else {}
@@ -4352,8 +4464,8 @@ fn pep_c23_function_definition(parsed: ParserProgress, node: FlatAstNode, requir
               localBindingsCollected = true
             } else {}
             let loweredControl = if statement.kind == "while" {
-              pep_c23_while_body(parsed.nodes, node, statement, localBindings, result)
-            } else { pep_c23_loop_statement(parsed.nodes, node, statement, 0, localBindings, result) }
+              pep_c23_while_body(parsed.nodes, node, statement, localBindings, result, checked)
+            } else { pep_c23_loop_statement(parsed.nodes, node, statement, 0, localBindings, result, checked) }
             if loweredControl.status != "emitted" { return loweredControl } else {}
             for part in loweredControl.sourceParts { bodyParts = append(bodyParts, part) }
           } else {
