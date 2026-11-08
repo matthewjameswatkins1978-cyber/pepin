@@ -238,6 +238,20 @@ def merge_reports(sliced_progress, groups, full_sorted, entry_name, all_fn_facts
          "value": {"type": "List[CheckDiagnostic]", "value": []}}]}
 
 
+def _duplicate_top_level_functions(nodes):
+    """Names of top-level functions declared more than once (seed mirrors
+    PEP_DUPLICATE_FUNCTION; the per-slice path checks each slice alone, so
+    the host must refuse the shadow before any dict keying by name)."""
+    seen, dupes = set(), []
+    for n in nodes:
+        if nval(n, "kind") == "function" and str(nval(n, "parentId")) == "-1":
+            name = nval(n, "text")
+            if name in seen and name not in dupes:
+                dupes.append(name)
+            seen.add(name)
+    return dupes
+
+
 def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
                   force_chain=frozenset()):
     """Sectional check of every top-level function.
@@ -246,6 +260,12 @@ def check_program(session, sem, parsed, tool_revision, target, host, sigs=None,
     per-slice (steps, bytes), failures []. Fail-closed on first invalid.
     """
     nodes = fields_map(parsed)["nodes"]["value"]
+    dupes = _duplicate_top_level_functions(nodes)
+    if dupes:
+        return {"order": [], "slices": {}, "reports": {}, "stats": {},
+                "failures": [(name, "duplicate-function",
+                              ["PEP_DUPLICATE_FUNCTION"]) for name in dupes],
+                "sigs": sigs}
     if sigs is None:
         sigs = fetch_all_sigs(session, parsed, tool_revision, sem)
     index = contract.DocumentIndex.from_parsed(parsed)
