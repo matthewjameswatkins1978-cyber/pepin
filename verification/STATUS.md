@@ -41,11 +41,17 @@ that says "verified against the seed" without a blob is ambiguous — see `FINDI
 | Both semantic oracles reproduce | A4's 13 pins + 17 boundary probes; A1's 23-case span-exact oracle | A3-086/088/094 |
 | A4's own-source census is exact | 189/189 table cells; totals reconcile 1343 + 44 + 65 = 1452 | A3-087, A3-092 |
 | M-1 gate is calibrated | Python stubs **and** a native compiled binary; partial implementations score partially | A3-081, A3-132 |
+| **M-1 passes on a modelled build** | full gate 15/15 with three modelled fixes in other lanes | A3-150 |
+| **main emits 31/31, find_brace 21/24** | per-statement node narrowing; the residual three are 5-conjunct conditions | A3-146, A3-147, A3-148 |
 
 ## What is NOT verified — the honest gaps
 
-1. **No compiler A exists.** `main` and `find_brace` cannot be assembled, so nothing reads Pep input or emits C for an unseen
-   source. **No M-1 claim is made anywhere in this lane.**
+1. **The tracked tree has no compiler A yet, but one has been built and it passes M-1.** A complete Pep-authored compiler A
+   assembled from all 21 functions (10 whole units + 11 fragment-assembled, zero refusals) **passes `verify_m1_081.py` 15/15** -
+   all thirteen pinned oracle cases plus both unseen forms, correct exit codes and stdout, linking under clang and gcc. It needs
+   **three modelled fixes in two other lanes**: A4 emitting punctuation as literals rather than `int_text` codes, and an epilogue
+   that neither echoes `main`'s return nor hardcodes `exit 0`. See A3-150. **No M-1 claim is made for the tracked tree** until
+   those land, and A1's `build_c23` still cannot produce the build at all - it has no fragment path (A3-151).
 2. **`find_brace` loses 3 statements, not 7.** The lever was never an emitter optimisation or a `parentId` index — it is the
    size of the node list the host passes. Narrowing per fragment to *function node + parameter subtrees + var/let declaration
    subtrees + target statement* makes **`main` emit 31/31** (#23 at 61,572 steps on 85 nodes instead of 100,001 on 222) and
