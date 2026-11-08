@@ -57,6 +57,11 @@ EXPECTED = {
     # Seed-valid but OUTSIDE the Pep-0 subset: native A must refuse as
     # unsupported, never as invalid. The seed side of that rule is pinned here.
     "out_str": ("valid", []),
+    # A4 R1 feed (@593091e, blob-verified 27B/43B): leading NUL is a seed
+    # lexer error at offset 0; 19-digit in-range is seed-valid (native A is
+    # expected to refuse it separately with exit 4 longlit, outside S0).
+    "a_nul": ("invalid", [("PEP_UNEXPECTED_CHARACTER", 0, 1, 1, 1)]),
+    "a_big19": ("valid", []),
 }
 
 
