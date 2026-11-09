@@ -384,3 +384,8 @@ Differential model (Python old-vs-new): 13,053 inputs (shapes + fuzz + nonzero o
 
 Read A3-205 handoff: applied A3-148 Bool-local split to find_brace's three 5-conjunct conditions (let b_str/b_bool/b_unit, verified shape, semantics preserved by && associativity + short-circuit order). Seed-valid, no new check failure locally. Re-gate requested on e4cca7a2 (supersedes cd6f2dc2 which lacked the split). Narrowed recipe stays parked; full-contract path is buildable pending runbook.
 REF GH #16.
+
+## 2026-11-09 | A4 seed-executes all 27 fixtures: 27/27 match contract's seed-validity assumptions
+
+Ran every pep0 fixture through `pep.ps1 run` (seed execution, independent of hand-reading): 14 exit 0 (a_ok, a_str, a_empty, a_crlf, a_big19, a_foo, a_Main, a_unary, a_binop, a_plusop, a_var, a_let, a_twofn, a_mainfn), 13 exit 1 (all malformed + dup/gfn/grt/u8/nul). Zero discrepancies vs EXPECTED class split; all 7 fallback shapes confirmed seed-valid (genuinely need the fallback). Pre-runbook hygiene so a broken test input can never be mistaken for a compiler failure.
+REF GH #16.
