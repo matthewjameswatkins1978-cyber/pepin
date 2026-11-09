@@ -52,7 +52,18 @@ PINNED = [
     # hand-traced contract, still awaiting native confirmation from S2.
     ("a_nul.pep",     b"\x00fn main()->Int{return 42}\n",              1, "ERR shape"),
     ("a_big19.pep",   b"fn main()->Int{return 1000000000000000000}\n",  4, "ERR longlit"),
-    ("a_foo.pep",     b"fn foo()->Int{return 1}\n",                     1, "ERR shape"),
+    # A3-207: A4's EXPECTED.md has assigned exit 5 to these since R2; my pin for a_foo
+    # carried the old exit 1 and these eight were not pinned at all. Verified against the
+    # native binary at f6cf9caf - every one exits 5 with "ERR unsupported".
+    ("a_foo.pep",     b"fn foo()->Int{return 1}\n",                     5, "ERR unsupported"),
+    ("a_Main.pep",        b"fn Main()->Int{return 1}\n", 5, "ERR unsupported"),
+    ("a_twofn.pep",       b"fn a()->Int{return 1} fn main()->Int{return 2}\n", 5, "ERR unsupported"),
+    ("a_mainfn.pep",      b"fn main()->Int{return 1} fn foo()->Int{return 2}\n", 5, "ERR unsupported"),
+    ("a_unary.pep",       b"fn main()->Int{return -42}\n", 5, "ERR unsupported"),
+    ("a_binop.pep",       b"fn main()->Int{return 0-42}\n", 5, "ERR unsupported"),
+    ("a_plusop.pep",      b"fn main()->Int{return 0+42}\n", 5, "ERR unsupported"),
+    ("a_var.pep",         b"fn main()->Int{var x = 1 return x}\n", 5, "ERR unsupported"),
+    ("a_let.pep",         b"fn main()->Int{let x = 1 return x}\n", 5, "ERR unsupported"),
     ("a_dup.pep",     b"fn main()->Int{return 1}\nfn main()->Int{return 2}\n", 3, "ERR junk"),
     ("a_gfn.pep",     b"fnmain()->Int{return 42}\n",                    1, "ERR shape"),
     ("a_grt.pep",     b"fn main()->Int{return42}\n",                    2, "ERR literal"),
