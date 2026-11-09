@@ -297,15 +297,18 @@ fn find_brace(source: SourceBytes, p: Int, err_in: Int) -> Int {
     err = 5
   } else {
   }
-  if e0 == 0 && err == 5 && is_str3(source, o) == 1 && is_ws_at(source, o + 3) == 0 && expect_byte(source, o + 3, 123) == 0 {
+  let b_str = e0 == 0 && err == 5 && is_str3(source, o) == 1
+  if b_str && is_ws_at(source, o + 3) == 0 && expect_byte(source, o + 3, 123) == 0 {
     err = 1
   } else {
   }
-  if e0 == 0 && err == 5 && is_bool4(source, o) == 1 && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
+  let b_bool = e0 == 0 && err == 5 && is_bool4(source, o) == 1
+  if b_bool && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
     err = 1
   } else {
   }
-  if e0 == 0 && err == 5 && is_unit4(source, o) == 1 && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
+  let b_unit = e0 == 0 && err == 5 && is_unit4(source, o) == 1
+  if b_unit && is_ws_at(source, o + 4) == 0 && expect_byte(source, o + 4, 123) == 0 {
     err = 1
   } else {
   }
