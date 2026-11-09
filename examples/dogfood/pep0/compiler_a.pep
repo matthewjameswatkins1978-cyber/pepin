@@ -505,7 +505,7 @@ fn scan_name(source: SourceBytes, o: Int) -> Int {
     i = i + 1
   } else {
   }
-  var e = i
+  var e: Int = i
   while i + 1 <= n {
     if f == 1 {
       if is_namech(byte_at(source, i)) == 1 {
@@ -594,7 +594,7 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
     p = skip_ws(source, p)
   } else {
   }
-  var d1 = p
+  var d1: Int = p
   if err == 0 {
     d1 = scan_digits(source, p)
   } else {
@@ -619,7 +619,7 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
     more = 1
   } else {
   }
-  var q = p
+  var q: Int = p
   while q + 1 <= n {
     if more == 1 {
       q = skip_ws(source, q)
@@ -639,7 +639,7 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
         q = skip_ws(source, q)
       } else {
       }
-      var d2 = q
+      var d2: Int = q
       if hasop == 1 {
         d2 = scan_digits(source, q)
       } else {
@@ -742,7 +742,7 @@ fn match_tail(source: SourceBytes, o: Int, fs: Int, fe: Int) -> Int {
     }
   } else {
   }
-  var q = p
+  var q: Int = p
   var hasfn = 0
   if err == 0 {
     if r == 0 {
@@ -778,7 +778,7 @@ fn match_tail(source: SourceBytes, o: Int, fs: Int, fe: Int) -> Int {
     }
   } else {
   }
-  var qe = q
+  var qe: Int = q
   if err == 0 {
     if r == 0 {
       if hasfn == 1 {
@@ -899,7 +899,7 @@ fn match_varlet_body(source: SourceBytes, o: Int) -> Int {
   } else {
   }
   var vs = p
-  var ve = p
+  var ve: Int = p
   if err == 0 {
     ve = scan_name(source, p)
   } else {
@@ -934,7 +934,7 @@ fn match_varlet_body(source: SourceBytes, o: Int) -> Int {
     p = skip_ws(source, p)
   } else {
   }
-  var vd = p
+  var vd: Int = p
   if err == 0 {
     vd = scan_digits(source, p)
   } else {
@@ -961,7 +961,7 @@ fn match_varlet_body(source: SourceBytes, o: Int) -> Int {
     p = skip_ws(source, p)
   } else {
   }
-  var rp = p
+  var rp: Int = p
   if err == 0 {
     rp = match_return_ws(source, p)
   } else {
@@ -977,7 +977,7 @@ fn match_varlet_body(source: SourceBytes, o: Int) -> Int {
     p = rp
   } else {
   }
-  var rd = p
+  var rd: Int = p
   if err == 0 {
     rd = scan_digits(source, p)
   } else {
@@ -1002,7 +1002,7 @@ fn match_varlet_body(source: SourceBytes, o: Int) -> Int {
   } else {
   }
   var rs = p
-  var re = p
+  var re: Int = p
   if err == 0 {
     if hasdigits == 0 {
       re = scan_name(source, p)
@@ -1081,7 +1081,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
   } else {
   }
   var ns = o
-  var ne = o
+  var ne: Int = o
   if err == 0 {
     ne = scan_name(source, o)
   } else {
@@ -1228,7 +1228,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
   } else {
   }
   var bs = o
-  var ro = o
+  var ro: Int = o
   if err == 0 {
     ro = match_return_ws(source, o)
   } else {
@@ -1245,7 +1245,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var vo = bs
+  var vo: Int = bs
   var vhit = 0
   if err == 0 {
     if hasret == 1 {
@@ -1268,7 +1268,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var so = bs
+  var so: Int = bs
   var strhit = 0
   if err == 0 {
     if hasret == 1 {
@@ -1291,7 +1291,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var tro = bs
+  var tro: Int = bs
   var truehit = 0
   if err == 0 {
     if hasret == 1 {
@@ -1317,7 +1317,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var fro = bs
+  var fro: Int = bs
   var falsehit = 0
   if err == 0 {
     if hasret == 1 {
@@ -1346,7 +1346,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var wo = bs
+  var wo: Int = bs
   var whit = 0
   if err == 0 {
     if hasret == 0 {
@@ -1369,7 +1369,7 @@ fn is_unsupported_prog(source: SourceBytes) -> Int {
     }
   } else {
   }
-  var be = bs
+  var be: Int = bs
   if vhit == 1 {
     be = vo
   } else {
