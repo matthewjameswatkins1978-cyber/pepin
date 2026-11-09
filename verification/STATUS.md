@@ -57,6 +57,9 @@ as a skip, never a pass.
 | The four fixes that make M-1 possible are each necessary | narrowing → parameter-binding cast → epilogue → Bool-local rewrite | A3-159, A3-170 |
 | Driver recipe travels without A4's source | `verification/fixtures/a3-m1-driver-recipe.diff`, `git apply --check` clean on A1's branch too | A3-170 |
 | The approval runbook can fail | a 3-line stub compiler scores M-1 **1/15**; 6 of 10 sections catch it | A3-172 |
+| **M-1 is 23/23 on clang and gcc** | corrected 21-pin oracle covering every documented shape; 61,941 B C from A4's 35-function source | A3-208 |
+| **The full gate reaches APPROVED** | a local unpushed commit of the driver recipe plus A4's source prints `VERDICT: APPROVED - 10 sections pass` | A3-210 |
+| **The artifact is clean under -Werror -O2** | clang and gcc, and both strict binaries still score 23/23 | A3-209 |
 
 ### The contract defect
 
@@ -66,6 +69,8 @@ as a skip, never a pass.
 | The seven reduce to three source sites | `find_fn` L200, `find_ds` L347/L368, `check_tail` L407 | A3-155 |
 | Exit 5 is reachable from exactly one place | `find_brace` L288-296, three type-word tests | A3-155 |
 | M-1's oracle cannot see this | one example per class; `Str`/`Bool`/`Unit` share one code path | A3-162 |
+| **RESOLVED: the published contract is met** | A4's loop-free `scan_value` + Bool-local `find_brace` gives class (ii) **10/10 exit 5** on the document as written | A3-206 |
+| **The narrowing conclusion is withdrawn** | A3-176 and A3-202 recommended narrowing on 7-of-10 evidence that A4 has since overturned | A3-206 |
 
 ### The A13 checker defect
 
@@ -94,8 +99,9 @@ as a skip, never a pass.
 
 ## What is NOT verified — the honest gaps
 
-1. **No tracked compiler A exists.** The M-1 result is a disposable worktree carrying four unlanded patches. A tracked-tree M-1
-   needs A1 to commit the driver recipe and A4 to make the contract decision.
+1. **No tracked compiler A exists, and it is one commit away.** The full gate prints `APPROVED` on a local commit of the driver
+   recipe plus A4's source (A3-210). What is missing is that commit **on a tracked branch** — A1's integration. A1's branch has not
+   moved since 333c5805 (2026-11-08 20:42) and no active A1 session exists; this is escalated, not forgotten.
 2. **A4's source cannot be built by either path.** One-shot exceeds the 1 MiB JSONL limit at 24,745 B; sectional rejects it at the
    checker (A3-163). The annotation workaround (A3-183) moves it to the step limit but does not build it.
 3. **The fragment path at scale has no owner-side regression test.** Six references to `compiler_a.pep` in `tests/`, all prose in
