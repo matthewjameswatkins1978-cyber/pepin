@@ -106,7 +106,7 @@ Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
 ### `a_binop.pep` — unsupported, binary minus
 Bytes: `fn main()->Int{return 0-42}\n` (seed-VALID).
 Expected exit **5**, stdout exactly: `ERR unsupported` (hand-traced:
-`scan_value` chained-binop path; native confirmation pending S2).
+`scan_value` single-binop path (loop-free since cd6f2dc); native confirmation pending S2).
 
 ### `a_plusop.pep` — unsupported, binary plus
 Bytes: `fn main()->Int{return 0+42}\n` (seed-VALID).

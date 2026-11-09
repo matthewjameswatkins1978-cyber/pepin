@@ -46,7 +46,7 @@ measured emit steps decide. New (unmeasured) fns marked `*`.
 | match_varlet_body | 339* | S2 fragments |
 | find_brace | 284 | known step-limited; S2 fragments |
 | main | 234 (incl. hook) | known step-limited; S2 fragments |
-| scan_value | 221* | S2 fragments (loop; measure emit cost) |
+| scan_value | 207* | S2 fragments (straight-line single group, no loop) |
 | match_tail | 174* | S2 fragments |
 | scan_name | 125* | S2 fragments (loop; measure) |
 | find_ds | 118 | known step-limited; S2 |

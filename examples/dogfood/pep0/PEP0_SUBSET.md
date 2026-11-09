@@ -27,9 +27,11 @@ Boundary evidence replayed 17/17 from prose by A3 (BOOT-A3-088).
   with a different name likewise (e.g. `a_twofn.pep`, `a_mainfn.pep` →
   exit 5; duplicate names stay exit 3).
 - Empty (0-byte) input: seed-valid vacuous program → exit 0 silent.
-- Unary minus (`-42`, optional space) and chained binary arithmetic on Int
-  literals (`0-42`, `0+42`, `0-1-2`; single leading `-` only; no parens):
+- Unary minus (`-42`, optional space) and single binary arithmetic on Int
+  literals (`0-42`, `0+42`; single leading `-` only; no parens):
   seed-valid, not in S0, no C emitted (e.g. `a_unary.pep`, `a_binop.pep`).
+  Chained input (`0-1-2`) is out of contract: the fallback parses one group
+  and the tail check fails, so the S0 shape error stands.
 - `var`/`let` single declarations with Int values and Int returns, declared
   name equal to returned name (e.g. `a_var.pep`, `a_let.pep` → exit 5).
 - 19-digit in-range literals (e.g. `1000000000000000000`, seed-valid):
