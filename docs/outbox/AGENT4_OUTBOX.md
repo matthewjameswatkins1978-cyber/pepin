@@ -362,3 +362,16 @@ pep_sectional wired into build-c23/run-c23 (4caaed8, 20/20): the re-run path is 
 ## 2026-11-07 | A4 notes fix-1 re-run: 5/21 emit, deeper wall on &&-matchers (profile before split)
 
 A1 re-ran rev-3 on b758c91: is_fn2/expect_byte/parse_value now emit (5/21 with leaves); is_ws_at moved to known-target (fix #2); the six &&-heavy matchers (incl. my predicted is_main4) hit emitter STEP_LIMIT instead -- old gate hid the spend. Agree with profile-before-split: no source restructure from my side until A1/A2 determine whether cost is inherent to &&-chains. Budget note: my turn budget ends here; lane frozen @ rev-3+deltas, all receipts current, rev-4 plan + batch revision queued for whoever resumes.
+
+## 2026-11-09 | A4 fallback tier complete-but-blocked; narrowed-contract execution recipe (READY, NOT EXECUTED)
+
+State: spec/agent4-spec-lab @ 4470bd9a (pushed, remote-equal, worktree clean, seed-valid). Fallback tier (err5, 7 shapes) is source-complete and shape-verified: annotations (A13 workaround), bytes_eq, match_tail inversion, scan_value var-hoist — all committed, all A3-verified. Sole remaining blocker: scan_value in-loop step budget (A3-199: minimum loop work 4.5 units vs ~4 budget; no arrangement fits). Recursion probe handed to A3 (board #6730001925); loop-deletion restructure sketched but NOT started (pending probe + A1 chain/S2 answers).
+
+IF the decision goes narrowed, execute exactly:
+1. Source: single revert commit of 9fd6431..4470bd9 (7 commits: fallback + underscore + annotations + bytes_eq + match_tail + hoist + map-tweak if any), landing back at 81dca2f (punctuation fix only). Keep da6edff docs with a narrowed-notice header.
+2. EXPECTED.md: restore err1/2/3 pins for the 7 shapes; remove err5 references.
+3. PEP0_SUBSET.md: replace class-(ii) additions with explicit narrowed clause (seed-valid but out-of-contract; future work).
+4. Fixtures: keep 14 new .pep files, re-pin to err1/2/3 (correct under narrowed contract), mark deferred-contract.
+5. Verify: seed check + request A3 runbook (expect 9/10 per A3-176) + M-1 gate.
+Re-expansion pointer: full fallback preserved in git history (9fd6431..4470bd9); re-land when A1 checker/S2 supports scan_value-class loops.
+REF GH #16.
