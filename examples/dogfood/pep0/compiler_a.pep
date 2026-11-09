@@ -690,6 +690,17 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
   return out
 }
 
+fn bytes_eq(source: SourceBytes, i: Int, j: Int) -> Int {
+  var a = byte_at(source, i)
+  var b = byte_at(source, j)
+  var r = 0
+  if a == b {
+    r = 1
+  } else {
+  }
+  return r
+}
+
 fn names_equal(source: SourceBytes, a1: Int, a2: Int, b1: Int, b2: Int) -> Int {
   var r = 0
   var same = 0
@@ -701,7 +712,7 @@ fn names_equal(source: SourceBytes, a1: Int, a2: Int, b1: Int, b2: Int) -> Int {
   var lim = a2 - a1
   while k + 1 <= lim {
     if same == 1 {
-      if byte_at(source, a1 + k) == byte_at(source, b1 + k) {
+      if bytes_eq(source, a1 + k, b1 + k) == 1 {
         k = k + 1
       } else {
         same = 0
