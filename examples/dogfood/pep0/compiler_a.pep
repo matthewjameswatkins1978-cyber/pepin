@@ -620,10 +620,12 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
   } else {
   }
   var q: Int = p
+  var hasop = 0
+  var d2: Int = 0
   while q + 1 <= n {
     if more == 1 {
       q = skip_ws(source, q)
-      var hasop = 0
+      hasop = 0
       if q + 1 <= n {
         if byte_at(source, q) == 43 || byte_at(source, q) == 42 || byte_at(source, q) == 45 || byte_at(source, q) == 47 {
           hasop = 1
@@ -639,7 +641,7 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
         q = skip_ws(source, q)
       } else {
       }
-      var d2: Int = q
+      d2 = q
       if hasop == 1 {
         d2 = scan_digits(source, q)
       } else {
