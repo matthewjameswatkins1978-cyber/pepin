@@ -43,7 +43,13 @@ Recipe at `docs/outbox/AGENT4_OUTBOX.md` (2026-11-09 entries): revert `9fd6431^.
 restore map with narrowed notice; dry-run validated (clean apply + seed-valid) in a
 deleted throwaway. Turn-50 bound proposal (#6730317040) voided by the re-gate (#6730375278).
 
-## 5. Pointers
+## 5. Merge state (checked turn 52 via read-only `merge-tree` vs `origin/master`)
+
+Lane files merge cleanly (no conflicts in `examples/dogfood/pep0/*` or `docs/outbox/*`).
+One pre-existing conflict in `README.md` project-description text (both sides edited the
+intro; unrelated to this lane — leave for whoever owns that text at integration time).
+
+## 6. Pointers
 
 Outbox (full ledger): `docs/outbox/AGENT4_OUTBOX.md`. Contract/pins: `examples/dogfood/pep0/`
 (EXPECTED.md, PEP0_SUBSET.md, OWN_SOURCE_MAP.md, 27 fixtures). BM lane: task `pepin-a4-fallback`
