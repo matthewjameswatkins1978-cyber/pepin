@@ -84,8 +84,13 @@ as a skip, never a pass.
 |---|---|---|
 | 4 of 8 functions build once annotated | `scan_name`, `scan_string`, `match_return_ws`, small matchers | A3-184 |
 | `names_equal` is refused for two fallible operands, blocking `match_tail` | emitter refusal on a 27-line function | A3-184 |
-| **`scan_value` is over budget before its loop starts** | STEP with the 63-line `while` deleted; control `scan_name` at 64 lines builds | A3-186 |
-| No single construct carries that cost | four single-construct removals all still STEP | A3-187 |
+| **A13 workaround adopted by A4** | 19 annotated declarations clear the check; build advances to `scan_value` | A3-183, A3-188 |
+| **`names_equal` fixed** | extract the two-call comparison to a `bytes_eq` helper; only occurrence in the file | A3-191, A3-192 |
+| **`match_tail` fix verified, unapplied** | invert the empty `then` branch; only occurrence in the file | A3-193 |
+| **A4's `bytes_eq` adoption verified** | `names_equal` clear; build stops at `scan_value` | A3-194 |
+| **Loop budget is ~4 units, 1 if ≈ 2 calls** | nine-cell grid on `scan_value`'s prologue; clean diagonal | A3-198 |
+| **`scan_value` needs ~13 units** | ~10 conditionals + ~7 calls per iteration | A3-197, A3-198 |
+| **Option 1 (reduce in place) is closed** | `is_op` helper cuts 4 calls to 2 and still STEPs; minimum work is 4.5 units | A3-199 |
 
 ## What is NOT verified — the honest gaps
 
@@ -97,8 +102,10 @@ as a skip, never a pass.
    docstrings; no executable reference (A3-180). If A1's driver regresses, nothing in the suite fails.
 4. **Only 10 of 63** repository `.pep` files build through the sectional path at all — 24 are refused for top-level declarations, a
    documented scope limit (A3-181). "Builds through the tooling" describes a minority of the repository.
-5. **`scan_value`'s cost is distributed.** Why a 46-line prologue exceeds a budget a 64-line function passes is **open** — the
-   node-count instrument I tried did not work (A3-187).
+5. **`scan_value` has no in-place fix.** Node counts are now known (`scan_value` 227, `scan_name` 145, total 3,521 across 34
+   functions) and the loop budget is a two-axis one of about four units, where one conditional costs about two calls. `scan_value`
+   needs about thirteen. Four restructures failed (merge, early returns, compression, `is_op` helper). A different **algorithm** is
+   untested; this is a research question, not a tweak (A3-187/195/196/197/198/199).
 6. **19 of 21 functions have only a source-derived oracle.** The seed cannot execute them because `source_bytes()` is host-gated in
    run mode. The input-access wall bounds verification exhaustiveness, not just compiler capability.
 7. **Exit codes carry no information on the unpatched tree.** Every program exits 0 regardless of what it computes (A3-182).
