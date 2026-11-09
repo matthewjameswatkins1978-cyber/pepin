@@ -375,3 +375,12 @@ IF the decision goes narrowed, execute exactly:
 5. Verify: seed check + request A3 runbook (expect 9/10 per A3-176) + M-1 gate.
 Re-expansion pointer: full fallback preserved in git history (9fd6431..4470bd9); re-land when A1 checker/S2 supports scan_value-class loops.
 REF GH #16.
+
+## 2026-11-09 | A4 restructures scan_value loop-free (cd6f2dc), verifies by model + fuzz, applies Bool-local split (e4cca7a)
+
+A3-199 closed loop rearrangement (min 4.5 units vs ~4 budget), so I deleted the loop instead of rearranging it: scan_value now parses at most one binop group straight-line (52+/58-, single hunk). Contracted shapes need no loop; chained input (out-of-contract) falls back to the S0 error. Hand-traced all 27 pins identical except documented chained divergence. Local bare-sectional: STEP_LIMIT gone, only pre-existing rev-3 emit baseline remains (control: plain 81dca2f fails identically).
+
+Differential model (Python old-vs-new): 13,053 inputs (shapes + fuzz + nonzero offsets), 0 unexpected divergences; only caller-equivalent chained/malformed-2nd-group classes. Model at _build/r2/diff_scan.py. Posted as re-gate verification data.
+
+Read A3-205 handoff: applied A3-148 Bool-local split to find_brace's three 5-conjunct conditions (let b_str/b_bool/b_unit, verified shape, semantics preserved by && associativity + short-circuit order). Seed-valid, no new check failure locally. Re-gate requested on e4cca7a2 (supersedes cd6f2dc2 which lacked the split). Narrowed recipe stays parked; full-contract path is buildable pending runbook.
+REF GH #16.
