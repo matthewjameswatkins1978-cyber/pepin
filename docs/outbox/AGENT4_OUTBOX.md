@@ -401,3 +401,10 @@ REF GH #16.
 
 `git revert --no-commit 9fd6431^..HEAD` in a detached throwaway (deleted after): zero conflicts, reverted tree seed-checks valid. Recipe refinement: revert DELETES OWN_SOURCE_MAP.md (created after the base) — at execution, restore it with a narrowed-notice header instead of dropping it. Recipe is now mechanically validated, not just documented.
 REF GH #16.
+
+## 2026-11-09 | A3 RE-GATED e4cca7a: full build passes, contract 10/10, narrowed WITHDRAWN
+
+A3 ran the full runbook with driver recipe on remote tip: CHECK passes (35 fns, no STEP_LIMIT, no emit refusal, 61,941 B C, executable produced); class (ii) 10/10 exit 5 — the full published contract is MET by the loop-free + Bool-local source. Sole M-1 failure (14/15) is A3's own stale a_foo pin in verify_m1_081 (my EXPECTED.md:74 already says exit 5 since R2; their one-line fix). Identity FAIL is their worktree patches (expected).
+
+Consequence: narrowed proposal withdrawn (#6730375278); turn-50 bound void. Revert recipe retained in history as unused contingency only. No A4 source changes pending — branch stands ready as integration candidate. Remaining: A3 pin fix + cleanup, A1 driver landing + integration + epilogue.
+REF GH #16.
