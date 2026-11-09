@@ -1,0 +1,14 @@
+warning: in the working copy of 'tests/pep_checker_a13.pep', LF will be replaced by CRLF the next time Git touches it
+diff --git a/tests/pep_checker_a13.pep b/tests/pep_checker_a13.pep
+index 8f034bc..4c0f3da 100644
+--- a/tests/pep_checker_a13.pep
++++ b/tests/pep_checker_a13.pep
+@@ -1929,7 +1929,7 @@ fn type_analysis(nodes: List[FlatAstNode], functions: List[CheckedFunction], bin
+               let actualShape = expression_type_shape(nodes, value.node.id, functions, bindings, references)
+               let nameMismatch = expectedName != "" && actualName != "" && expectedName != actualName
+               let shapeMismatch = expectedShape.kind != "" && actualShape.kind != "" && !same_type_shape(expectedShape, actualShape)
+-              if expectedName == "" && expectedShape.kind == "" {
++              if expectedName == "" && expectedShape.kind == "" && actualName == "" && actualShape.kind == "" {
+                 reversedDiagnostics = prepend(reversedDiagnostics, diagnostic("PEP_A13_TYPE_UNSUPPORTED", "Assignment target has no supported concrete type", node))
+               } else {}
+               if nameMismatch || shapeMismatch {
