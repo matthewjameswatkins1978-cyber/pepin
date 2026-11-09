@@ -804,9 +804,9 @@ fn match_tail(source: SourceBytes, o: Int, fs: Int, fe: Int) -> Int {
   if err == 0 {
     if r == 0 {
       if hasfn == 1 {
-        if qe == q {
-        } else {
+        if qe != q {
           tact = 1
+        } else {
         }
       } else {
       }
