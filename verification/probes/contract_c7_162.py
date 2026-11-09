@@ -71,8 +71,16 @@ def main():
         print(f"CONTRACT: CANNOT RUN - {why}")
         return 3
     tmpdir = pathlib.Path(tmp)
+    # A3-204: support the narrowed contract so the gate can be run the moment a decision
+    # lands. PEP0_SUBSET.md as written promises nine class-(ii) shapes exit 5; only three
+    # are implemented. CONTRACT=narrow checks just those three.
+    contract = os.environ.get("PEPIN_CONTRACT", "published")
+    cases = CASES
+    if contract == "narrow":
+        cases = [c for c in CASES if not c[0].startswith("classii")
+                 or c[0] in ("classii_str", "classii_bool", "classii_unit")]
     bad, rows = 0, []
-    for name, src, want, why in CASES:
+    for name, src, want, why in cases:
         p = tmpdir / f"{name}.pep"
         p.write_bytes(src)
         r = subprocess.run([exe, str(p)], capture_output=True, text=True, timeout=180)
@@ -88,7 +96,9 @@ def main():
         print("  These are seed-valid inputs reported as malformed. Either give compiler A")
         print("  enough parsing to classify, or narrow the published contract (A3-155).")
     # Summary LAST: the gate runner reports the final line, so it must carry the count.
-    print(f"CONTRACT: {len(rows) - bad}/{len(rows)} match PEP0_SUBSET.md"
+    label = ("PEP0_SUBSET.md as published" if contract == "published"
+             else "narrowed contract (3 return types only)")
+    print(f"CONTRACT[{contract}]: {len(rows) - bad}/{len(rows)} match {label}"
           f"{'' if bad == 0 else f' - {bad} misclassified'}")
     return 1 if bad else 0
 
