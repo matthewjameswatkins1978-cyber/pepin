@@ -396,3 +396,8 @@ REF GH #16.
 
 Self-raised over-match drill on a_grt through the fallback: match_return_ws REQUIRES is_ws_at after `return` (fails on `return42` -> hasret=0); whit path (hasret==0) delegates to match_varlet_body which rejects `return42...` (not var/let) -> wo==bs -> whit cleared -> r=0. Original err2 stands. Also confirmed strhit/truehit/falsehit/vhit all mutually exclusive by (hasret, typ, literal) construction. No over-match path exists in any fallback arm.
 REF GH #16.
+
+## 2026-11-09 | A4 dry-runs narrowed revert in throwaway worktree: applies cleanly, seed-valid
+
+`git revert --no-commit 9fd6431^..HEAD` in a detached throwaway (deleted after): zero conflicts, reverted tree seed-checks valid. Recipe refinement: revert DELETES OWN_SOURCE_MAP.md (created after the base) — at execution, restore it with a narrowed-notice header instead of dropping it. Recipe is now mechanically validated, not just documented.
+REF GH #16.
