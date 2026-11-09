@@ -614,76 +614,70 @@ fn scan_value(source: SourceBytes, o: Int) -> Int {
     p = d1
   } else {
   }
-  var more = 0
+  var q: Int = p
   if err == 0 {
-    more = 1
+    q = skip_ws(source, q)
   } else {
   }
-  var q: Int = p
   var hasop = 0
-  var d2: Int = 0
-  while q + 1 <= n {
-    if more == 1 {
-      q = skip_ws(source, q)
-      hasop = 0
-      if q + 1 <= n {
-        if byte_at(source, q) == 43 || byte_at(source, q) == 42 || byte_at(source, q) == 45 || byte_at(source, q) == 47 {
-          hasop = 1
-        } else {
-        }
-      } else {
-      }
-      if hasop == 1 {
-        q = q + 1
-      } else {
-      }
-      if hasop == 1 {
-        q = skip_ws(source, q)
-      } else {
-      }
-      d2 = q
-      if hasop == 1 {
-        d2 = scan_digits(source, q)
-      } else {
-      }
-      if hasop == 1 {
-        if d2 == q {
-          err = 1
-        } else {
-        }
-      } else {
-      }
-      if hasop == 1 {
-        if err == 0 {
-          if 19 <= d2 - q {
-            err = 1
-          } else {
-          }
-        } else {
-        }
-      } else {
-      }
-      if hasop == 1 {
-        if err == 0 {
-          p = d2
-          q = d2
-        } else {
-        }
-      } else {
-      }
-      if hasop == 0 {
-        more = 0
-        q = n
-      } else {
-      }
-      if err == 1 {
-        more = 0
-        q = n
+  if err == 0 {
+    if q + 1 <= n {
+      if byte_at(source, q) == 43 || byte_at(source, q) == 42 || byte_at(source, q) == 45 || byte_at(source, q) == 47 {
+        hasop = 1
       } else {
       }
     } else {
-      q = n
     }
+  } else {
+  }
+  if err == 0 {
+    if hasop == 1 {
+      q = q + 1
+    } else {
+    }
+  } else {
+  }
+  if err == 0 {
+    if hasop == 1 {
+      q = skip_ws(source, q)
+    } else {
+    }
+  } else {
+  }
+  var d2: Int = q
+  if err == 0 {
+    if hasop == 1 {
+      d2 = scan_digits(source, q)
+    } else {
+    }
+  } else {
+  }
+  if err == 0 {
+    if hasop == 1 {
+      if d2 == q {
+        err = 1
+      } else {
+      }
+    } else {
+    }
+  } else {
+  }
+  if err == 0 {
+    if hasop == 1 {
+      if 19 <= d2 - q {
+        err = 1
+      } else {
+      }
+    } else {
+    }
+  } else {
+  }
+  if err == 0 {
+    if hasop == 1 {
+      p = d2
+    } else {
+    }
+  } else {
   }
   if err == 0 {
     out = p
