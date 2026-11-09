@@ -16,6 +16,7 @@ Exit: 0 all cases match the documented contract
 
 Override the binary with PEPIN_CA_EXE to test a tracked build instead of the fixture.
 """
+import json
 import os
 import pathlib
 import shutil
@@ -25,6 +26,8 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 FIXTURE_C = HERE / "fixtures" / "a3-compilerA-productpath.c"
+# A3-212: the tree-relative path this fixture was built from, used for the anti-rot check.
+SOURCE_REL = "examples/dogfood/pep0/compiler_a.pep"
 
 # (name, source bytes, expected exit, why)
 CASES = [
@@ -70,6 +73,34 @@ def main():
     if exe is None:
         print(f"CONTRACT: CANNOT RUN - {why}")
         return 3
+    # A3-212: anti-rot check. The fixture is a committed copy of compiler A's emitted C,
+    # so it silently measures an older artifact whenever A4's source moves - which is
+    # exactly what happened between A3-198 and A3-211. Warn loudly rather than rot quietly.
+    prov_path = FIXTURE_C.with_suffix(".provenance")
+    rounded = str(FIXTURE_C.relative_to(HERE))
+    if prov_path.is_file():
+        try:
+            prov = json.loads(prov_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"  NOTE: could not read {prov_path.name}: {exc}")
+            prov = {}
+        if prov:
+            print(f"  fixture built from {prov.get('source_revision')} "
+                  f"blob {prov.get('source_blob')} (recipe {prov.get('driver_recipe_sha256')})")
+            ca = os.environ.get("PEPIN_CA_ROOT")
+            if ca:
+                tree_src = pathlib.Path(ca) / SOURCE_REL
+                if tree_src.is_file():
+                    import hashlib
+                    r = subprocess.run(["git", "-C", ca, "hash-object", str(tree_src)],
+                                       capture_output=True, text=True)
+                    blob = r.stdout.strip()[:10]
+                    if blob and blob != prov.get("source_blob"):
+                        print(f"  STALE: {rounded} was built from blob {prov.get('source_blob')} "
+                              f"but the tree's compiler_a.pep is {blob}.")
+                        print("  A gate measuring a stale artifact must not report a verdict. "
+                              "Regenerate the fixture (A3-211) or unset PEPIN_CA_ROOT.")
+                        return 3
     tmpdir = pathlib.Path(tmp)
     # A3-204: support the narrowed contract so the gate can be run the moment a decision
     # lands. PEP0_SUBSET.md as written promises nine class-(ii) shapes exit 5; only three
