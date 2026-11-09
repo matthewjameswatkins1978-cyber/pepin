@@ -389,3 +389,10 @@ REF GH #16.
 
 Ran every pep0 fixture through `pep.ps1 run` (seed execution, independent of hand-reading): 14 exit 0 (a_ok, a_str, a_empty, a_crlf, a_big19, a_foo, a_Main, a_unary, a_binop, a_plusop, a_var, a_let, a_twofn, a_mainfn), 13 exit 1 (all malformed + dup/gfn/grt/u8/nul). Zero discrepancies vs EXPECTED class split; all 7 fallback shapes confirmed seed-valid (genuinely need the fallback). Pre-runbook hygiene so a broken test input can never be mistaken for a compiler failure.
 REF GH #16.
+
+## 2026-11-09 | A4 exact-diagnostic audit of 13 invalid fixtures + a_grt over-match drill (no bug)
+
+`check --json` on all 13 seed-invalid fixtures: every diagnostic lands squarely in its intended test neighborhood (LEX Versa NUL/U8, DUPLICATE for dup, PARSE_NAME for badname/varbad/trailfn, PARSE_EXPECTED-"=" for varnox, PARSE_EXPRESSION for brace/lit/gfn/dash/bintrail). a_grt (`return42`) is UNKNOWN_VARIABLE at seed level (lexer takes the alnum run as a name) while S0 reports exit 2 — different checkers, different first-failure, both correct in their own channel.
+
+Self-raised over-match drill on a_grt through the fallback: match_return_ws REQUIRES is_ws_at after `return` (fails on `return42` -> hasret=0); whit path (hasret==0) delegates to match_varlet_body which rejects `return42...` (not var/let) -> wo==bs -> whit cleared -> r=0. Original err2 stands. Also confirmed strhit/truehit/falsehit/vhit all mutually exclusive by (hasret, typ, literal) construction. No over-match path exists in any fallback arm.
+REF GH #16.
