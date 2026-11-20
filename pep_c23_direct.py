@@ -117,9 +117,11 @@ class C23Emitter:
                 self.binding_types[p["bindingId"]] = p["type"]
 
         # Index global bindings
-        for s in self.globals:
-            if s.get("kind") in ("let", "var"):
-                self.binding_types[s["bindingId"]] = s.get("type", "Int")
+        self.global_bindings = {
+            s["bindingId"]: s for s in self.globals if s.get("kind") in ("let", "var")
+        }
+        for bid, binding in self.global_bindings.items():
+            self.binding_types[bid] = binding["type"]
 
     def emit_c_type(self, type_str: Optional[str]) -> str:
         if not type_str:
@@ -212,8 +214,7 @@ class C23Emitter:
             free_bids.update(self._collect_free_bindings(arm["result"], arm_bound))
 
         # Do not capture global bindings as parameters (they are accessible at file scope)
-        global_bids = {s.get("bindingId") for s in self.globals if "bindingId" in s}
-        captured_bids = sorted(list(free_bids - global_bids))
+        captured_bids = sorted(free_bids - self.global_bindings.keys())
 
         # Helper signature
         params = [f"{subj_c_type} __subj"]
@@ -337,10 +338,10 @@ class C23Emitter:
 
         elif kind == "binding":
             bid = expr["bindingId"]
-            return f"pep_bind_{bid}"
-
-        elif kind == "name":
-            return f"pep_var_{expr['name']}"
+            value = f"pep_bind_{bid}"
+            if bid in self.global_bindings:
+                return f'(pep_require_global(pep_ready_{bid}, "Checked binding is missing at runtime"), {value})'
+            return value
 
         elif kind == "hole":
             raise ValueError("Pep C23 rejected: unresolved typed hole encountered during code generation.")
@@ -485,13 +486,24 @@ class C23Emitter:
             self.binding_types[bid] = ann or "Int"
             if is_global:
                 lines.append(f"{indent}pep_bind_{bid} /* {vname} */ = {vval};")
+                lines.append(f"{indent}pep_ready_{bid} = true;")
             else:
                 lines.append(f"{indent}{c_type} pep_bind_{bid} /* {vname} */ = {vval};")
 
         elif kind == "assignment":
             bid = stmt["bindingId"]
             vval = self.emit_expr(stmt["value"], declarations)
-            lines.append(f"{indent}pep_bind_{bid} = {vval};")
+            if bid in self.global_bindings:
+                value_type = self.emit_c_type(self.binding_types[bid])
+                lines.extend([
+                    f"{indent}{{",
+                    f"{indent}  {value_type} value = {vval};",
+                    f'{indent}  pep_require_global(pep_ready_{bid}, "Checked assignment target is missing at runtime");',
+                    f"{indent}  pep_bind_{bid} = value;",
+                    f"{indent}}}",
+                ])
+            else:
+                lines.append(f"{indent}pep_bind_{bid} = {vval};")
 
         elif kind == "return":
             val = self.emit_expr(stmt["value"], declarations)
@@ -801,13 +813,13 @@ class C23Emitter:
 
         # Global File-Scope Variables
         out.append("/* Global Bindings (File Scope) */")
-        for s in self.globals:
-            if s.get("kind") in ("let", "var"):
-                bid = s["bindingId"]
-                bname = s.get("name", f"bind_{bid}")
-                btype = self.emit_c_type(s.get("type", "Int"))
-                out.append(f"static {btype} pep_bind_{bid}; /* {bname} */")
-                out.append(f"#define pep_var_{bname} pep_bind_{bid}")
+        out.append("PEP_INLINE void pep_require_global(bool ready, const char* message) {")
+        out.append('  if (!ready) { fprintf(stderr, "PEP_RUNTIME_UNRESOLVED_BINDING: %s\\n", message); exit(1); }')
+        out.append("}")
+        for bid, binding in self.global_bindings.items():
+            btype = self.emit_c_type(binding["type"])
+            out.append(f"[[maybe_unused]] static {btype} pep_bind_{bid}; /* {binding['name']} */")
+            out.append(f"[[maybe_unused]] static bool pep_ready_{bid};")
         out.append("")
 
         # Function Prototypes

@@ -328,6 +328,28 @@ say(int_text(read_state()))
             "3\n8\n9\n",
         )
 
+    def test_native_rejects_uninitialized_global_access_in_interpreter_order(self):
+        for statement, message in (
+            ("return later", "Checked binding is missing at runtime"),
+            ("later = rhs()\n    return 0", "Checked assignment target is missing at runtime"),
+        ):
+            with self.subTest(statement=statement):
+                self.assert_native_order_parity(
+                    f"""let first = touch()
+var later = 42
+fn rhs() -> Int {{
+    say("rhs")
+    return 7
+}}
+fn touch() -> Int {{
+    {statement}
+}}
+say(int_text(first))
+""",
+                    "rhs\n" if statement.startswith("later") else "",
+                    f"PEP_RUNTIME_UNRESOLVED_BINDING: {message}\n",
+                )
+
     def test_native_order_preserves_lazy_evaluation(self):
         self.assert_native_order_parity(
             """type Choice = Selected(Int) | Skipped()
