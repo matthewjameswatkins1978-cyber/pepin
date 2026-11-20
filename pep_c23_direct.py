@@ -135,6 +135,8 @@ class C23Emitter:
             return f"pep_rec_{type_str}"
         elif type_str in self.unions:
             return f"pep_union_{type_str}"
+        elif type_str == "List[Str]":
+            return "pep_str_list_t"
         elif type_str.startswith("List"):
             return "pep_list_t"
         return "int64_t"
@@ -370,27 +372,23 @@ class C23Emitter:
                 return f"pep_say({args[0]})"
             elif fname == "int_text":
                 return f"pep_int_text({args[0]})"
-            elif fname == "length":
-                return f"pep_length({args[0]})"
-            elif fname == "contains":
-                return f"pep_contains({args[0]}, {args[1]})"
-            elif fname == "append":
-                return f"pep_append({args[0]}, {args[1]})"
-            elif fname == "prepend":
-                return f"pep_prepend({args[0]}, {args[1]})"
-            elif fname == "reverse":
-                return f"pep_reverse({args[0]})"
+            elif fname in ("length", "contains", "append", "prepend", "reverse"):
+                list_type, _ = unwrap_expr(expr["arguments"][0])
+                prefix = "pep_str_" if list_type == "List[Str]" else "pep_"
+                return f"{prefix}{fname}({', '.join(args)})"
             else:
                 args_str = ", ".join(args)
                 return f"pep_fn_{fname}({args_str})"
 
         elif kind == "list":
             elements = [self.emit_expr(e) for e in expr.get("elements", [])]
-            count = len(elements)
-            if count == 0:
-                return "pep_list_alloc(0)"
-            elems_str = ", ".join(f"(int64_t)({e})" for e in elements)
-            return f"pep_list_create({count}, {elems_str})"
+            is_string_list = ret_type == "List[Str]"
+            prefix = "pep_str_" if is_string_list else "pep_"
+            if not elements:
+                return f"{prefix}list_alloc(0)"
+            if not is_string_list:
+                elements = [f"(int64_t)({element})" for element in elements]
+            return f"{prefix}list_create({len(elements)}, {', '.join(elements)})"
 
         elif kind == "record":
             tid = expr["typeId"]
@@ -501,9 +499,10 @@ class C23Emitter:
             loop_var = f"__list_{bid}"
             idx_var = f"__idx_{bid}"
 
-            lines.append(f"{indent}pep_list_t {loop_var} = {iter_val};")
+            list_type, _ = unwrap_expr(stmt["iterable"])
+            lines.append(f"{indent}{self.emit_c_type(list_type)} {loop_var} = {iter_val};")
             lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {loop_var}.len; ++{idx_var}) {{")
-            lines.append(f"{indent}  {c_type} pep_bind_{bid} /* {vname} */ = ({c_type}){loop_var}.data[{idx_var}];")
+            lines.append(f"{indent}  {c_type} pep_bind_{bid} /* {vname} */ = {loop_var}.data[{idx_var}];")
             for s in stmt.get("body", []):
                 lines.extend(self.emit_stmt(s, indent + "  "))
             lines.append(f"{indent}}}")
@@ -512,6 +511,72 @@ class C23Emitter:
             raise ValueError(f"Unsupported statement kind in C23 emission: {kind} ({stmt})")
 
         return lines
+
+    @staticmethod
+    def _emit_list_runtime(prefix: str, list_type: str, item_type: str, equal: str) -> List[str]:
+        out: List[str] = []
+        out.append("typedef struct {")
+        out.append("  size_t len;")
+        out.append(f"  {item_type}* data;")
+        out.append(f"}} {list_type};")
+        out.append("")
+        out.append(f"static inline {list_type} {prefix}list_alloc(size_t len) {{")
+        out.append(f"  {list_type} list;")
+        out.append("  list.len = len;")
+        out.append("  if (len == 0) {")
+        out.append("    list.data = NULL;")
+        out.append("    return list;")
+        out.append("  }")
+        out.append("  list.data = len <= SIZE_MAX / sizeof *list.data ? malloc(len * sizeof *list.data) : NULL;")
+        out.append("  if (!list.data) {")
+        out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: List allocation failed\\n"); exit(1);')
+        out.append("  }")
+        out.append("  return list;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline {list_type} {prefix}list_create(size_t len, ...) {{")
+        out.append(f"  {list_type} list = {prefix}list_alloc(len);")
+        out.append("  va_list args;")
+        out.append("  va_start(args, len);")
+        out.append("  for (size_t i = 0; i < len; ++i) {")
+        out.append(f"    list.data[i] = va_arg(args, {item_type});")
+        out.append("  }")
+        out.append("  va_end(args);")
+        out.append("  return list;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline int64_t {prefix}length({list_type} list) {{")
+        out.append("  return (int64_t)list.len;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline bool {prefix}contains({list_type} list, {item_type} item) {{")
+        out.append("  for (size_t i = 0; i < list.len; ++i) {")
+        out.append(f"    if ({equal}) return true;")
+        out.append("  }")
+        out.append("  return false;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline {list_type} {prefix}append({list_type} list, {item_type} item) {{")
+        out.append(f"  {list_type} out = {prefix}list_alloc(list.len + 1);")
+        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i] = list.data[i];")
+        out.append("  out.data[list.len] = item;")
+        out.append("  return out;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline {list_type} {prefix}prepend({list_type} list, {item_type} item) {{")
+        out.append(f"  {list_type} out = {prefix}list_alloc(list.len + 1);")
+        out.append("  out.data[0] = item;")
+        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i + 1] = list.data[i];")
+        out.append("  return out;")
+        out.append("}")
+        out.append("")
+        out.append(f"static inline {list_type} {prefix}reverse({list_type} list) {{")
+        out.append(f"  {list_type} out = {prefix}list_alloc(list.len);")
+        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i] = list.data[list.len - 1 - i];")
+        out.append("  return out;")
+        out.append("}")
+        out.append("")
+        return out
 
     def generate_c23(self) -> str:
         # Pre-process match helpers by generating functions first
@@ -625,69 +690,8 @@ class C23Emitter:
         out.append("}")
         out.append("")
 
-        # List Runtime (Heap-Allocated to prevent stack corruption)
-        out.append("/* List Runtime (Heap-Allocated with OOM Checks) */")
-        out.append("typedef struct {")
-        out.append("  size_t len;")
-        out.append("  int64_t* data;")
-        out.append("} pep_list_t;")
-        out.append("")
-        out.append("static inline pep_list_t pep_list_alloc(size_t len) {")
-        out.append("  pep_list_t list;")
-        out.append("  list.len = len;")
-        out.append("  if (len == 0) {")
-        out.append("    list.data = NULL;")
-        out.append("    return list;")
-        out.append("  }")
-        out.append("  list.data = (int64_t*)malloc(len * sizeof(int64_t));")
-        out.append("  if (!list.data) {")
-        out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: List allocation failed\\n"); exit(1);')
-        out.append("  }")
-        out.append("  return list;")
-        out.append("}")
-        out.append("")
-        out.append("static inline pep_list_t pep_list_create(size_t len, ...) {")
-        out.append("  pep_list_t list = pep_list_alloc(len);")
-        out.append("  va_list args;")
-        out.append("  va_start(args, len);")
-        out.append("  for (size_t i = 0; i < len; ++i) {")
-        out.append("    list.data[i] = va_arg(args, int64_t);")
-        out.append("  }")
-        out.append("  va_end(args);")
-        out.append("  return list;")
-        out.append("}")
-        out.append("")
-        out.append("static inline int64_t pep_length(pep_list_t list) {")
-        out.append("  return (int64_t)list.len;")
-        out.append("}")
-        out.append("")
-        out.append("static inline bool pep_contains(pep_list_t list, int64_t item) {")
-        out.append("  for (size_t i = 0; i < list.len; ++i) {")
-        out.append("    if (list.data[i] == item) return true;")
-        out.append("  }")
-        out.append("  return false;")
-        out.append("}")
-        out.append("")
-        out.append("static inline pep_list_t pep_append(pep_list_t list, int64_t item) {")
-        out.append("  pep_list_t out = pep_list_alloc(list.len + 1);")
-        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i] = list.data[i];")
-        out.append("  out.data[list.len] = item;")
-        out.append("  return out;")
-        out.append("}")
-        out.append("")
-        out.append("static inline pep_list_t pep_prepend(pep_list_t list, int64_t item) {")
-        out.append("  pep_list_t out = pep_list_alloc(list.len + 1);")
-        out.append("  out.data[0] = item;")
-        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i + 1] = list.data[i];")
-        out.append("  return out;")
-        out.append("}")
-        out.append("")
-        out.append("static inline pep_list_t pep_reverse(pep_list_t list) {")
-        out.append("  pep_list_t out = pep_list_alloc(list.len);")
-        out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i] = list.data[list.len - 1 - i];")
-        out.append("  return out;")
-        out.append("}")
-        out.append("")
+        out.extend(self._emit_list_runtime("pep_", "pep_list_t", "int64_t", "list.data[i] == item"))
+        out.extend(self._emit_list_runtime("pep_str_", "pep_str_list_t", "pep_str_t", "pep_str_eq(list.data[i], item)"))
 
         # Type Forward Declarations
         out.append("/* Forward Declarations for Types */")

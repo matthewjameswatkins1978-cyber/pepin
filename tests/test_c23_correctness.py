@@ -236,6 +236,29 @@ class C23CorrectnessTests(unittest.TestCase):
                     self.assertEqual(native.returncode, 0, native.stderr)
                     self.assertEqual(native.stdout.replace(b"\r\n", b"\n"), expected)
 
+    def test_native_string_list_operations_match_interpreter(self):
+        source = (
+            'fn words() -> List[Str] { return ["caf\u00e9", "a\\0b"] }\n'
+            'let empty: List[Str] = []\n'
+            'let original = words()\n'
+            'let changed = prepend(append(original, int_text(42)), "\U0001f680")\n'
+            'for word in reverse(changed) { say(word) }\n'
+            'say(int_text(length(original)))\n'
+            'say(int_text(length(empty)))\n'
+            'say(if contains(changed, "a\\0b") { "found" } else { "wrong" })\n'
+            'say(if contains(changed, "a\\0c") || contains(empty, "") { "wrong" } else { "missing" })\n'
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            pep_file = pathlib.Path(folder) / "string_lists.pep"
+            pep_file.write_text(source, encoding="utf-8")
+            reference = pep_c23_direct.run_pep_cmd("run", str(pep_file))
+            expected = "42\na\0b\ncaf\u00e9\n\U0001f680\n2\n0\nfound\nmissing\n"
+            self.assertEqual(reference, (0, expected, ""))
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    native = pep_c23_direct.run_c23(pep_file, compiler)
+                    self.assertEqual(native, reference)
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:
