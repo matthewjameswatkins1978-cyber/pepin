@@ -91,6 +91,7 @@ class C23Emitter:
         self.binding_types: Dict[int, str] = {}
         self.match_helpers: List[str] = []
         self.match_counter = 0
+        self.temporary_counter = 0
 
         # Index types
         for t in self.typed_tree.get("types", []):
@@ -137,9 +138,9 @@ class C23Emitter:
             return f"pep_union_{type_str}"
         elif type_str == "List[Str]":
             return "pep_str_list_t"
-        elif type_str.startswith("List"):
+        elif type_str in ("List[Int]", "List[Bool]"):
             return "pep_list_t"
-        return "int64_t"
+        raise ValueError(f"Unsupported checked type in C23 emission: {type_str}")
 
     def _collect_free_bindings(self, node: Dict[str, Any], bound: Set[int]) -> Set[int]:
         """Collects bindingIds used inside an expression that are not locally bound."""
@@ -193,7 +194,7 @@ class C23Emitter:
             for a in pat.get("arguments", []):
                 self._collect_pattern_bindings(a, bound)
 
-    def _lower_match_to_helper(self, match_expr: Dict[str, Any], result_type: str) -> str:
+    def _lower_match_to_helper(self, match_expr: Dict[str, Any], result_type: str, subject: str) -> str:
         """Lowers a match expression into a clean, strict ISO C23 static inline helper function."""
         helper_id = self.match_counter
         self.match_counter += 1
@@ -240,8 +241,13 @@ class C23Emitter:
             for b_stmt in bindings:
                 lines.append(f"    {b_stmt}")
 
-            res_code = self.emit_expr(res)
-            lines.append(f"    return {res_code};")
+            declarations: List[str] = []
+            res_code = self.emit_expr(res, declarations)
+            lines.extend(f"    {declaration}" for declaration in declarations)
+            if ret_c_type == "void":
+                lines.extend([f"    {res_code};", "    return;"])
+            else:
+                lines.append(f"    return {res_code};")
             lines.append("  }")
 
         lines.append('  fprintf(stderr, "PEP_RUNTIME_MATCH_EXHAUSTION: Match pattern exhaustion\\n");')
@@ -252,8 +258,7 @@ class C23Emitter:
         self.match_helpers.append("\n".join(lines))
 
         # Call-site expression
-        subj_code = self.emit_expr(match_expr["value"])
-        call_args = [subj_code] + [f"pep_bind_{bid}" for bid in captured_bids]
+        call_args = [subject] + [f"pep_bind_{bid}" for bid in captured_bids]
         return f"{fn_name}({', '.join(call_args)})"
 
     def _emit_pattern_checks(self, pat: Dict[str, Any], accessor: str) -> Tuple[List[str], List[str]]:
@@ -286,8 +291,33 @@ class C23Emitter:
 
         return conds, bindings
 
-    def emit_expr(self, expr_node: Dict[str, Any]) -> str:
+    def emit_expr(self, expr_node: Dict[str, Any], declarations: List[str]) -> str:
+        assignments: List[str] = []
+        result = self._emit_expr(expr_node, declarations, assignments)
+        if assignments:
+            # C's comma operator sequences eager operands. The assignments remain
+            # inside the expression so lazy branches and loop tests stay local.
+            return f"({', '.join([*assignments, result])})"
+        return result
+
+    def _emit_expr(
+        self, expr_node: Dict[str, Any], declarations: List[str], assignments: List[str]
+    ) -> str:
+        def lower(node: Dict[str, Any]) -> str:
+            return self.emit_expr(node, declarations)
+
+        def capture(node: Dict[str, Any]) -> str:
+            operand_type, _ = unwrap_expr(node)
+            if not operand_type or operand_type == "Unit":
+                raise ValueError(f"Unsupported C23 value operand type: {operand_type}")
+            name = f"pep_tmp_{self.temporary_counter}"
+            self.temporary_counter += 1
+            declarations.append(f"{self.emit_c_type(operand_type)} {name};")
+            assignments.append(f"{name} = {lower(node)}")
+            return name
+
         ret_type, expr = unwrap_expr(expr_node)
+        self.emit_c_type(ret_type)
         kind = expr.get("kind")
 
         if kind == "int":
@@ -319,8 +349,16 @@ class C23Emitter:
             op = expr["operator"]
             l_type, _ = unwrap_expr(expr["left"])
             r_type, _ = unwrap_expr(expr["right"])
-            left = self.emit_expr(expr["left"])
-            right = self.emit_expr(expr["right"])
+            if op in ("&&", "||"):
+                return f"({lower(expr['left'])} {op} {lower(expr['right'])})"
+            if op in ("==", "!=") and l_type == r_type == "Unit":
+                assignments.extend(f"(void)({lower(expr[side])})" for side in ("left", "right"))
+                return "true" if op == "==" else "false"
+            if op == "neg":
+                assignments.append(f"(void)({lower(expr['left'])})")
+                return f"pep_neg({lower(expr['right'])})"
+            left = capture(expr["left"])
+            right = capture(expr["right"])
 
             # String value equality
             if op == "==":
@@ -339,9 +377,7 @@ class C23Emitter:
                 return f"pep_mul({left}, {right})"
             elif op == "/":
                 return f"pep_div({left}, {right})"
-            elif op == "neg":
-                return f"pep_neg({right})"
-            elif op in ("<=", "<", ">=", ">", "&&", "||"):
+            elif op in ("<=", "<", ">=", ">"):
                 return f"({left} {op} {right})"
             else:
                 raise ValueError(f"Unsupported binary operator in C23 emission: {op}")
@@ -351,7 +387,7 @@ class C23Emitter:
             target = expr.get("value") or expr.get("operand")
             if not target:
                 raise ValueError(f"Unary operator '{op}' missing operand")
-            val = self.emit_expr(target)
+            val = lower(target)
             if op == "!":
                 return f"(!{val})"
             elif op in ("neg", "-"):
@@ -360,14 +396,14 @@ class C23Emitter:
                 raise ValueError(f"Unsupported unary operator in C23 emission: {op}")
 
         elif kind == "if":
-            cond = self.emit_expr(expr["condition"])
-            th = self.emit_expr(expr["then"])
-            el = self.emit_expr(expr["else"])
+            cond = lower(expr["condition"])
+            th = lower(expr["then"])
+            el = lower(expr["else"])
             return f"({cond} ? {th} : {el})"
 
         elif kind == "call":
             fname = expr["name"]
-            args = [self.emit_expr(a) for a in expr.get("arguments", [])]
+            args = [capture(a) for a in expr.get("arguments", [])]
             if fname == "say":
                 return f"pep_say({args[0]})"
             elif fname == "int_text":
@@ -376,12 +412,12 @@ class C23Emitter:
                 list_type, _ = unwrap_expr(expr["arguments"][0])
                 prefix = "pep_str_" if list_type == "List[Str]" else "pep_"
                 return f"{prefix}{fname}({', '.join(args)})"
-            else:
-                args_str = ", ".join(args)
-                return f"pep_fn_{fname}({args_str})"
+            elif fname in self.functions:
+                return f"pep_fn_{fname}({', '.join(args)})"
+            raise ValueError(f"Unsupported checked call in C23 emission: {fname}")
 
         elif kind == "list":
-            elements = [self.emit_expr(e) for e in expr.get("elements", [])]
+            elements = [capture(e) for e in expr.get("elements", [])]
             is_string_list = ret_type == "List[Str]"
             prefix = "pep_str_" if is_string_list else "pep_"
             if not elements:
@@ -402,13 +438,13 @@ class C23Emitter:
             for f in expr.get("fields", []):
                 fid = f["fieldId"]
                 fname = field_map.get(fid, f"field_{fid}")
-                fval = self.emit_expr(f["value"])
+                fval = capture(f["value"])
                 inits.append(f".{fname} = {fval}")
             return f"(pep_rec_{rec_name}){{ {', '.join(inits)} }}"
 
         elif kind == "field_access":
             fid = expr["fieldId"]
-            val_code = self.emit_expr(expr["value"])
+            val_code = lower(expr["value"])
             # Resolve field name from fieldId
             fname = None
             for r in self.records.values():
@@ -425,24 +461,25 @@ class C23Emitter:
         elif kind == "constructor":
             cid = expr["constructorId"]
             cname = expr.get("name")
-            args = [self.emit_expr(a) for a in expr.get("arguments", [])]
+            args = [capture(a) for a in expr.get("arguments", [])]
             args_str = ", ".join(args)
             return f"pep_ctor_{cname}({args_str})"
 
         elif kind == "match":
-            return self._lower_match_to_helper(expr, ret_type or "Int")
+            return self._lower_match_to_helper(expr, ret_type or "Int", capture(expr["value"]))
 
         else:
             raise ValueError(f"Unsupported expression kind in C23 emission: {kind} ({expr})")
 
     def emit_stmt(self, stmt: Dict[str, Any], indent: str = "  ", is_global: bool = False) -> List[str]:
         lines: List[str] = []
+        declarations: List[str] = []
         kind = stmt.get("kind")
 
         if kind in ("let", "var"):
             vname = stmt["name"]
             bid = stmt["bindingId"]
-            vval = self.emit_expr(stmt["value"])
+            vval = self.emit_expr(stmt["value"], declarations)
             ann = stmt.get("type")
             c_type = self.emit_c_type(ann)
             self.binding_types[bid] = ann or "Int"
@@ -453,15 +490,19 @@ class C23Emitter:
 
         elif kind == "assignment":
             bid = stmt["bindingId"]
-            vval = self.emit_expr(stmt["value"])
+            vval = self.emit_expr(stmt["value"], declarations)
             lines.append(f"{indent}pep_bind_{bid} = {vval};")
 
         elif kind == "return":
-            val = self.emit_expr(stmt["value"])
-            lines.append(f"{indent}return {val};")
+            val = self.emit_expr(stmt["value"], declarations)
+            value_type, _ = unwrap_expr(stmt["value"])
+            if value_type == "Unit":
+                lines.extend([f"{indent}{val};", f"{indent}return;"])
+            else:
+                lines.append(f"{indent}return {val};")
 
         elif kind == "expression":
-            val = self.emit_expr(stmt["value"])
+            val = self.emit_expr(stmt["value"], declarations)
             lines.append(f"{indent}{val};")
 
         elif kind == "block":
@@ -471,7 +512,7 @@ class C23Emitter:
             lines.append(f"{indent}}}")
 
         elif kind == "if_statement":
-            cond = self.emit_expr(stmt["condition"])
+            cond = self.emit_expr(stmt["condition"], declarations)
             lines.append(f"{indent}if ({cond}) {{")
             for s in stmt.get("then", []):
                 lines.extend(self.emit_stmt(s, indent + "  "))
@@ -483,7 +524,7 @@ class C23Emitter:
             lines.append(f"{indent}}}")
 
         elif kind == "while":
-            cond = self.emit_expr(stmt["condition"])
+            cond = self.emit_expr(stmt["condition"], declarations)
             lines.append(f"{indent}while ({cond}) {{")
             for s in stmt.get("body", []):
                 lines.extend(self.emit_stmt(s, indent + "  "))
@@ -495,7 +536,7 @@ class C23Emitter:
             ann = stmt.get("type", "Int")
             self.binding_types[bid] = ann
             c_type = self.emit_c_type(ann)
-            iter_val = self.emit_expr(stmt["iterable"])
+            iter_val = self.emit_expr(stmt["iterable"], declarations)
             loop_var = f"__list_{bid}"
             idx_var = f"__idx_{bid}"
 
@@ -510,7 +551,7 @@ class C23Emitter:
         else:
             raise ValueError(f"Unsupported statement kind in C23 emission: {kind} ({stmt})")
 
-        return lines
+        return [*(f"{indent}{declaration}" for declaration in declarations), *lines]
 
     @staticmethod
     def _emit_list_runtime(prefix: str, list_type: str, item_type: str, equal: str) -> List[str]:

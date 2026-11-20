@@ -259,6 +259,112 @@ class C23CorrectnessTests(unittest.TestCase):
                     native = pep_c23_direct.run_c23(pep_file, compiler)
                     self.assertEqual(native, reference)
 
+    def assert_native_order_parity(self, source, stdout, stderr=""):
+        with tempfile.TemporaryDirectory() as folder:
+            path = pathlib.Path(folder)
+            pep_file = path / "order.pep"
+            pep_file.write_text(source, encoding="utf-8")
+            reference = pep_c23_direct.run_pep_cmd("run", str(pep_file))
+            expected = (1 if stderr else 0, stdout, stderr)
+            # The interpreter prefixes runtime errors with the source line and column.
+            reference_error = reference[2].split(" ", 1)[1] if stderr else reference[2]
+            self.assertEqual((*reference[:2], reference_error), expected)
+
+            c_file = path / "order.c"
+            executable = path / "order.exe"
+            pep_c23_direct.build_c23(pep_file, executable, emit_c_path=c_file)
+            for compiler in filter(None, [self.clang, self.gcc]):
+                for optimization in ("-O0", "-O2", "-O3"):
+                    with self.subTest(compiler=compiler.name, optimization=optimization):
+                        compiled = subprocess.run(
+                            [str(compiler), "-std=c23", "-pedantic-errors", "-Wall", "-Wextra",
+                             "-Werror", optimization, str(c_file), "-o", str(executable)],
+                            capture_output=True, text=True, encoding="utf-8",
+                        )
+                        self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                        native = subprocess.run(
+                            [str(executable)], capture_output=True, text=True, encoding="utf-8"
+                        )
+                        self.assertEqual((native.returncode, native.stdout, native.stderr), expected)
+
+    def test_native_order_for_calls_and_eager_operands(self):
+        self.assert_native_order_parity(
+            """type Pair { left: Int, right: Int }
+type Values = Both(Int, Int) | Neither()
+fn mark(n: Int) -> Int {
+    say(int_text(n))
+    return n
+}
+fn subtract(a: Int, b: Int) -> Int { return a - b }
+say(int_text(subtract(mark(1), mark(2))))
+say(int_text(mark(3) + subtract(mark(4), mark(5))))
+say(if mark(6) <= mark(7) { "less" } else { "wrong" })
+let pair = Pair { right: mark(8), left: mark(9) }
+say(int_text(pair.left))
+let chosen = match Both(mark(10), mark(11)) {
+    Both(first, second) => subtract(mark(first + 2), mark(second + 2))
+    Neither() => mark(99)
+}
+say(int_text(chosen))
+let items = [mark(14), mark(15)]
+for item in items { say(int_text(item + 100)) }
+""",
+            "1\n2\n-1\n3\n4\n5\n2\n6\n7\nless\n8\n9\n9\n10\n11\n12\n13\n-1\n14\n15\n114\n115\n",
+        )
+
+    def test_native_order_preserves_lazy_evaluation(self):
+        self.assert_native_order_parity(
+            """type Choice = Selected(Int) | Skipped()
+fn flag(n: Int, result: Bool) -> Bool {
+    say(int_text(n))
+    return result
+}
+fn never() -> Int { return 1 / 0 }
+say(if flag(1, false) && flag(99, true) { int_text(never()) } else { "and" })
+say(if flag(2, true) || flag(99, false) { "or" } else { int_text(never()) })
+say(if flag(3, true) && flag(4, true) { "both" } else { int_text(never()) })
+let value = match Selected(5) {
+    Skipped() => never()
+    Selected(n) => if flag(n, false) { never() } else { n + 1 }
+}
+say(int_text(value))
+var count = 7
+while flag(count, count <= 8) {
+    count = count + 1
+}
+""",
+            "1\nand\n2\nor\n3\n4\nboth\n5\n6\n7\n8\n9\n",
+        )
+
+    def test_native_order_stops_at_first_runtime_failure(self):
+        preamble = """fn left() -> Int {
+    say("left")
+    return 1 / 0
+}
+fn right() -> Int {
+    say("right")
+    return 9223372036854775807 + 1
+}
+fn subtract(a: Int, b: Int) -> Int { return a - b }
+"""
+        for expression in ("subtract(left(), right())", "left() + right()"):
+            with self.subTest(expression=expression):
+                self.assert_native_order_parity(
+                    preamble + f"say(int_text({expression}))\n",
+                    "left\n", "PEP_RUNTIME_DIVISION_BY_ZERO: Division by zero\n",
+                )
+
+    def test_native_rejects_unsupported_checked_value_type_before_writing_c(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pep_file = pathlib.Path(folder) / "unsupported.pep"
+            pep_file.write_text("let xs: List[List[Int]] = [[1]]\n", encoding="utf-8")
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(pep_file)), (0, "", ""))
+            executable = pep_file.with_suffix(".exe")
+            with self.assertRaisesRegex(ValueError, r"Unsupported checked type.*List\[List\[Int\]\]"):
+                pep_c23_direct.build_c23(pep_file, executable)
+            self.assertFalse(executable.with_suffix(".c").exists())
+            self.assertFalse(executable.exists())
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:
