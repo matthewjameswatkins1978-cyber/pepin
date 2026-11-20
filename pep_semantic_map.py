@@ -38,9 +38,14 @@ class SemanticMap:
     def __init__(self, source_path: pathlib.Path, spec_path: Optional[pathlib.Path] = None):
         self.source_path = source_path.resolve()
         self.spec_path = spec_path.resolve() if spec_path else self._find_companion_spec()
-        self.source_text = self.source_path.read_bytes().decode("utf-8")
-        self.source_hash = hashlib.sha256(self.source_text.encode("utf-8")).hexdigest()
+        self.source_bytes = self.source_path.read_bytes()
+        self.source_text = self.source_bytes.decode("utf-8")
+        self.source_hash = "sha256:" + hashlib.sha256(self.source_bytes).hexdigest()
         
+        self.epistemic_status = "UNAVAILABLE"  # CHECKED, INVALID, UNAVAILABLE, or FALLBACK_UNAUTHORIZED
+        self.compiler_available = False
+        self.compiler_checked = False
+
         self.ast: Dict[str, Any] = {}
         self.symbols: Dict[str, Dict[str, Any]] = {}
         self.types: Dict[str, Dict[str, Any]] = {}
@@ -49,6 +54,7 @@ class SemanticMap:
         self.caller_graph: Dict[str, Set[str]] = {}
         
         self.spec: Optional[Dict[str, Any]] = None
+        self.spec_test_catalog: Dict[str, Dict[str, Any]] = {}
         self.requirements: Dict[str, Dict[str, Any]] = {}
         self.test_index: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of tests
         self.diagnostics: List[Dict[str, Any]] = []
@@ -66,31 +72,129 @@ class SemanticMap:
                 return c
         return None
 
+    def _find_test_on_disk(self, test_ref: str) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Verify that a test referenced in a living specification actually exists on disk.
+        Supports:
+          - Catalog references defined in spec's 'tests' array
+          - path/to/test_file.py::test_fn_name
+          - direct file path
+          - bare test function name (searched under tests/ directory)
+        Returns (exists: bool, resolved_path: Optional[str], file_hash: Optional[str]).
+        """
+        # 1. Check spec test catalog mapping if present
+        if test_ref in self.spec_test_catalog:
+            entry = self.spec_test_catalog[test_ref]
+            tfile = entry.get("testFile")
+            tcase = entry.get("testCase")
+            if tfile and tcase:
+                return self._find_test_on_disk(f"{tfile}::{tcase}")
+            elif tfile:
+                return self._find_test_on_disk(tfile)
+
+        # 2. Check path::test_fn format
+        if "::" in test_ref:
+            parts = test_ref.split("::", 1)
+            file_part, fn_name = parts[0].strip(), parts[1].strip()
+            candidates = [
+                ROOT / file_part,
+                self.source_path.parent / file_part,
+                pathlib.Path(file_part)
+            ]
+            target_file = None
+            for c in candidates:
+                if c.is_file():
+                    target_file = c
+                    break
+            if not target_file:
+                return False, None, None
+
+            try:
+                content = target_file.read_text(encoding="utf-8")
+                fn_pat = re.compile(rf'(?:def|fn|test)\s+{re.escape(fn_name)}\b')
+                if fn_pat.search(content):
+                    fhash = "sha256:" + hashlib.sha256(target_file.read_bytes()).hexdigest()
+                    return True, str(target_file), fhash
+                else:
+                    return False, str(target_file), None
+            except Exception:
+                return False, None, None
+
+        # 3. Direct file path
+        direct_candidates = [
+            ROOT / test_ref,
+            self.source_path.parent / test_ref,
+            pathlib.Path(test_ref)
+        ]
+        for c in direct_candidates:
+            if c.is_file():
+                fhash = "sha256:" + hashlib.sha256(c.read_bytes()).hexdigest()
+                return True, str(c), fhash
+
+        # 4. Bare test function name: search tests/ directory
+        tests_dir = ROOT / "tests"
+        if tests_dir.is_dir():
+            fn_pat = re.compile(rf'(?:def|fn|test)\s+{re.escape(test_ref)}\b')
+            for tfile in list(tests_dir.glob("test_*.py")) + list(tests_dir.glob("*.pep")):
+                try:
+                    content = tfile.read_text(encoding="utf-8")
+                    if fn_pat.search(content):
+                        fhash = "sha256:" + hashlib.sha256(tfile.read_bytes()).hexdigest()
+                        return True, str(tfile), fhash
+                except Exception:
+                    continue
+
+        return False, None, None
+
     def _load_and_analyze(self):
         # 1. Run pep.ps1 inspect --json
         code, stdout, stderr = run_pep_cmd("inspect", str(self.source_path), "--json")
-        if code != 0 or not stdout.strip():
-            # Fallback to local regex-based AST extraction if compiler is building or syntax is partial
-            self._extract_ast_fallback()
-        else:
+        inspect_ok = False
+        if code == 0 and stdout.strip():
             try:
                 self.ast = json.loads(stdout)
                 self._extract_symbols_from_ast()
+                inspect_ok = True
+                self.compiler_available = True
             except json.JSONDecodeError:
-                self._extract_ast_fallback()
+                inspect_ok = False
 
-        # 2. Check diagnostics
+        if not inspect_ok:
+            # Fallback to local regex-based extraction solely for editor preview
+            # NOTE: Epistemic status remains UNAUTHORIZED / INVALID
+            self._extract_ast_fallback()
+            self.epistemic_status = "UNAVAILABLE" if (code != 0 and not stdout.strip()) else "INVALID"
+
+        # 2. Check diagnostics via pep.ps1 check --json
         chk_code, chk_stdout, _ = run_pep_cmd("check", str(self.source_path), "--json")
         try:
             chk_data = json.loads(chk_stdout)
             self.diagnostics = chk_data.get("diagnostics", [])
+            chk_status = chk_data.get("status")
+            if inspect_ok and chk_status == "valid" and len(self.diagnostics) == 0:
+                self.epistemic_status = "CHECKED"
+                self.compiler_checked = True
+                self.compiler_available = True
+            else:
+                self.epistemic_status = "INVALID"
+                self.compiler_available = True
         except Exception:
-            self.diagnostics = []
+            if not inspect_ok:
+                self.epistemic_status = "UNAVAILABLE"
+            else:
+                self.epistemic_status = "INVALID"
 
         # 3. Load living specification if present
         if self.spec_path and self.spec_path.is_file():
             try:
                 self.spec = json.loads(self.spec_path.read_text(encoding="utf-8"))
+                # Build test catalog from spec's 'tests' block
+                self.spec_test_catalog = {}
+                for t in self.spec.get("tests", []):
+                    tid = t.get("testId")
+                    if tid:
+                        self.spec_test_catalog[tid] = t
+
                 for req in self.spec.get("requirements", []):
                     req_id = req.get("id")
                     if req_id:
@@ -216,51 +320,123 @@ class SemanticMap:
     # Living Specification & Verification Matrix
     # -------------------------------------------------------------------------
     def verify_specification(self) -> Dict[str, Any]:
-        """Verify integrity between specification requirements, AST symbols, and tests."""
+        """
+        Verify integrity between living specification, authoritative AST, and tests.
+        Rejects nonexistent tests, invalid compiler states, duplicate requirement IDs,
+        and unfulfilled requirements.
+        """
+        req_list = self.spec.get("requirements", []) if self.spec else []
         report = {
             "source": str(self.source_path),
             "sourceHash": self.source_hash,
             "specFile": str(self.spec_path) if self.spec_path else None,
+            "epistemicStatus": self.epistemic_status,
             "status": "VALID",
-            "totalRequirements": len(self.requirements),
+            "totalRequirements": len(req_list),
             "implementedRequirements": 0,
-            "unimplementedRequirements": [],
+            "testedRequirements": 0,
+            "verifiedRequirements": 0,
+            "schemaErrors": [],
+            "nonexistentTests": [],
             "missingSymbols": [],
             "orphanSymbols": [],
             "matrix": []
         }
 
+        # 1. Epistemic authority guard: if compiler is unavailable or invalid, spec cannot be verified as valid
+        if self.epistemic_status != "CHECKED":
+            report["status"] = "INVALID" if self.epistemic_status == "INVALID" else "UNAVAILABLE"
+            report["error"] = f"Authoritative compiler check failed or unavailable (epistemic status: {self.epistemic_status}). Specification cannot be verified."
+
+        if not self.spec:
+            report["status"] = "NO_SPEC"
+            return report
+
+        # 2. Validate spec schema and unique requirement IDs
+        seen_ids = set()
+        for r in req_list:
+            rid = r.get("id")
+            if not rid:
+                report["schemaErrors"].append("Requirement missing required 'id' in specification.")
+            elif rid in seen_ids:
+                report["schemaErrors"].append(f"Duplicate requirement ID '{rid}' found in specification.")
+            else:
+                seen_ids.add(rid)
+
+        # 3. Process requirements
         linked_symbols = set()
-        for req_id, req in self.requirements.items():
+        for req in req_list:
+            req_id = req.get("id", "UNKNOWN")
             req_symbols = req.get("symbols") or req.get("implementsSymbols") or []
+            req_tests = req.get("tests") or req.get("verifiedByTests") or []
+
             missing_syms = [s for s in req_symbols if s not in self.symbols]
-            
+
+            # Verify referenced tests actually exist on disk
+            missing_tests = []
+            test_evidence = {}
+            for t in req_tests:
+                exists, resolved_path, fhash = self._find_test_on_disk(t)
+                if not exists:
+                    missing_tests.append(t)
+                    report["nonexistentTests"].append({"requirement": req_id, "test": t})
+                else:
+                    test_evidence[t] = {"path": resolved_path, "sha256": fhash}
+
+            # Classify requirement status
             is_implemented = len(missing_syms) == 0 and len(req_symbols) > 0
+            has_tests = len(req_tests) > 0 and len(missing_tests) == 0
+
+            if not is_implemented:
+                req_status = "UNIMPLEMENTED"
+            elif len(missing_tests) > 0:
+                req_status = "TEST_MISSING"
+            elif self.epistemic_status != "CHECKED":
+                req_status = "IMPLEMENTED"
+            else:
+                # Fully implemented + all referenced tests exist on disk + clean compiler check
+                req_status = "VERIFIED"
+
             if is_implemented:
                 report["implementedRequirements"] += 1
-            else:
-                report["unimplementedRequirements"].append(req_id)
-                for ms in missing_syms:
-                    report["missingSymbols"].append({"requirement": req_id, "symbol": ms})
+            if is_implemented and has_tests:
+                report["testedRequirements"] += 1
+            if req_status == "VERIFIED":
+                report["verifiedRequirements"] += 1
+
+            for ms in missing_syms:
+                report["missingSymbols"].append({"requirement": req_id, "symbol": ms})
 
             linked_symbols.update(req_symbols)
 
             report["matrix"].append({
                 "id": req_id,
                 "title": req.get("title", ""),
-                "status": req.get("status", "DRAFT"),
+                "status": req_status,
                 "symbols": req_symbols,
                 "missingSymbols": missing_syms,
-                "tests": req.get("tests") or req.get("verifiedByTests") or [],
-                "implemented": is_implemented
+                "tests": req_tests,
+                "nonexistentTests": missing_tests,
+                "implemented": is_implemented,
+                "verified": req_status == "VERIFIED",
+                "evidence": {
+                    "sourceRevision": self.source_hash,
+                    "testRevisions": test_evidence
+                }
             })
 
+        # 4. Check for orphan symbols
         for sym_name, sym_info in self.symbols.items():
-            if sym_name not in linked_symbols and sym_name != "main":
+            if sym_name not in linked_symbols and sym_name != "main" and not sym_name.startswith("pep_"):
                 report["orphanSymbols"].append(sym_name)
 
-        if report["missingSymbols"]:
-            report["status"] = "INCOMPLETE"
+        # 5. Epistemic validity gate
+        if (report["schemaErrors"] or 
+            report["nonexistentTests"] or 
+            report["missingSymbols"] or 
+            self.epistemic_status != "CHECKED" or 
+            (report["totalRequirements"] > 0 and report["verifiedRequirements"] < report["totalRequirements"])):
+            report["status"] = "INVALID"
 
         return report
 
@@ -307,7 +483,8 @@ class SemanticMap:
     def get_context_packet(self, target_symbol: str, max_tokens: int = 4000) -> Dict[str, Any]:
         """
         Produce a compact, dependency-complete context packet for an AI agent.
-        Includes target symbol definition, requirement, caller/callee signatures, and linked tests.
+        Includes target symbol implementation, requirements, caller/callee signatures,
+        linked tests, and explicit disclosure of omitted information / uncertainties.
         """
         if target_symbol not in self.symbols:
             return {"error": f"Symbol '{target_symbol}' not found in source"}
@@ -315,6 +492,28 @@ class SemanticMap:
         sym = self.symbols[target_symbol]
         callees = sorted(list(self.call_graph.get(target_symbol, set())))
         callers = sorted(list(self.caller_graph.get(target_symbol, set())))
+
+        # Extract target implementation from source bytes using span
+        fspan = sym.get("span", {})
+        lo = fspan.get("lo", 0)
+        hi = fspan.get("hi", 0)
+        implementation_code = ""
+        if 0 <= lo < hi <= len(self.source_bytes):
+            try:
+                implementation_code = self.source_bytes[lo:hi].decode("utf-8").strip()
+            except Exception:
+                implementation_code = self.source_text[lo:hi].strip()
+
+        if not implementation_code:
+            # Fallback search in source text
+            fn_pat = re.compile(rf'(fn\s+{re.escape(target_symbol)}\b[^{{]*\{{.*?^\}})', re.MULTILINE | re.DOTALL)
+            m = fn_pat.search(self.source_text)
+            if m:
+                implementation_code = m.group(1).strip()
+
+        fallback_sig = f"fn {target_symbol}(" + ", ".join(f"{p['name']}: {p['type']}" for p in sym.get("params", [])) + f") -> {sym.get('returns', 'Unit')}"
+        if not implementation_code:
+            implementation_code = fallback_sig
 
         # Callee signatures
         callee_signatures = []
@@ -348,28 +547,19 @@ class SemanticMap:
         # Linked tests
         tests = self.test_index.get(target_symbol, [])
 
-        # Approximate token count (~4 chars per token)
-        context_data = {
-            "targetSymbol": target_symbol,
-            "kind": sym.get("kind"),
-            "params": sym.get("params"),
-            "returns": sym.get("returns"),
-            "sourceFile": str(self.source_path),
-            "sourceHash": self.source_hash,
-            "calleeSignatures": callee_signatures,
-            "callerSignatures": caller_signatures,
-            "linkedRequirements": relevant_reqs,
-            "linkedTests": tests,
-        }
+        omitted_info = []
+        uncertainties = []
+        if implementation_code == fallback_sig:
+            uncertainties.append("Exact source span for body could not be isolated from AST; only signature available.")
 
         # Format markdown packet
         md_lines = [
             f"# Context Packet: `{target_symbol}`",
             f"**File:** `{self.source_path.name}` | **Revision SHA:** `{self.source_hash[:12]}`",
             "",
-            "## Target Signature",
-            f"```pep",
-            f"fn {target_symbol}(" + ", ".join(f"{p['name']}: {p['type']}" for p in sym.get("params", [])) + f") -> {sym.get('returns', 'Unit')}",
+            "## Target Implementation",
+            "```pep",
+            implementation_code,
             "```",
             "",
             "## Linked Requirements",
@@ -412,11 +602,31 @@ class SemanticMap:
 
         rendered_md = "\n".join(md_lines)
         approx_tokens = len(rendered_md) // 4
-        context_data["renderedMarkdown"] = rendered_md
-        context_data["approximateTokens"] = approx_tokens
-        context_data["budgetExceeded"] = approx_tokens > max_tokens
+        budget_exceeded = approx_tokens > max_tokens
 
-        return context_data
+        if budget_exceeded:
+            omitted_info.append("Callee signatures and callers truncated due to token budget constraint.")
+
+        return {
+            "targetSymbol": target_symbol,
+            "kind": sym.get("kind"),
+            "params": sym.get("params"),
+            "returns": sym.get("returns"),
+            "implementation": implementation_code,
+            "sourceFile": str(self.source_path),
+            "sourceHash": self.source_hash,
+            "calleeSignatures": callee_signatures,
+            "callerSignatures": caller_signatures,
+            "linkedRequirements": relevant_reqs,
+            "linkedTests": tests,
+            "renderedMarkdown": rendered_md,
+            "approximateTokens": approx_tokens,
+            "budgetExceeded": budget_exceeded,
+            "incomplete": budget_exceeded,
+            "omittedInformation": omitted_info,
+            "uncertainties": uncertainties,
+            "retrievalQuery": f"pep_semantic_map.py context {self.source_path.name} --symbol {target_symbol}"
+        }
 
     # -------------------------------------------------------------------------
     # Deterministic Mechanical Repair Plans (Lom / Astra style)
@@ -424,36 +634,57 @@ class SemanticMap:
     def generate_repair_plan(self, diagnostic: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Given a structured compiler diagnostic, compute an unambiguous mechanical repair plan.
+        Never automatically resolves ambiguous identifiers.
+        Binds to exact source hash and expected original bytes.
         """
         code = diagnostic.get("code") or diagnostic.get("errorCode", "")
         message = diagnostic.get("message", "")
         span = diagnostic.get("at") or diagnostic.get("span", {})
         lo = span.get("lo") if "lo" in span else span.get("start", {}).get("offset", 0)
         hi = span.get("hi") if "hi" in span else span.get("endOffset", 0)
-        span_obj = {"lo": lo, "hi": hi}
+        span_obj = {"lo": lo, "hi": hi, "unit": "byte_offset"}
 
-        # 1. Unknown identifier / variable with single close typo
+        expected_bytes = ""
+        if 0 <= lo <= hi <= len(self.source_bytes):
+            expected_bytes = self.source_bytes[lo:hi].decode("utf-8", errors="replace")
+
+        # 1. Unknown identifier / variable
         if code in ("PEP_UNKNOWN_VARIABLE", "PEP_UNBOUND_NAME") or "unknown variable" in message.lower() or "unbound" in message.lower():
             m = re.search(r"(?:unknown variable|unbound (?:name|variable|identifier)) ['\"]?([A-Za-z0-9_]+)['\"]?", message, re.IGNORECASE)
             unknown = m.group(1) if m else ""
             if unknown:
-                candidates = [s for s in self.symbols if s != unknown and (s.startswith(unknown[:2]) or unknown.startswith(s[:2]))]
-                if candidates:
+                candidates = [s for s in sorted(self.symbols.keys()) if s != unknown and (s.startswith(unknown[:2]) or unknown.startswith(s[:2]))]
+                if len(candidates) == 1:
+                    # Exactly one candidate: SAFE_AUTOMATIC
                     return {
                         "repairId": f"REPAIR-TYPO-{lo}",
                         "diagnosticCode": code,
                         "safety": "SAFE_AUTOMATIC",
-                        "description": f"Replace misspelled '{unknown}' with in-scope symbol '{candidates[0]}'",
+                        "description": f"Replace misspelled '{unknown}' with unique in-scope symbol '{candidates[0]}'",
                         "targetSpan": span_obj,
+                        "expectedSourceHash": self.source_hash,
+                        "expectedOriginalBytes": expected_bytes,
                         "replacement": candidates[0]
+                    }
+                elif len(candidates) > 1:
+                    # Multiple candidates: AMBIGUOUS_CHOICE (never automatically guess!)
+                    return {
+                        "repairId": f"REPAIR-AMBIGUOUS-TYPO-{lo}",
+                        "diagnosticCode": code,
+                        "safety": "AMBIGUOUS_CHOICE",
+                        "description": f"Ambiguous candidates for '{unknown}': {candidates}. Manual choice required.",
+                        "targetSpan": span_obj,
+                        "expectedSourceHash": self.source_hash,
+                        "expectedOriginalBytes": expected_bytes,
+                        "replacement": None,
+                        "suggestedReplacements": candidates
                     }
 
         # 2. Type mismatch: Expected Str but found Int (e.g. say(123) -> say(int_text(123)))
         if code == "PEP_TYPE_MISMATCH":
             exp_type = diagnostic.get("expectedType")
             if exp_type == "Str" and "found Int" in message:
-                content = self.source_path.read_bytes().decode("utf-8")
-                raw_expr = content[lo:hi] if lo < hi <= len(content) else ""
+                raw_expr = expected_bytes
                 if raw_expr:
                     return {
                         "repairId": f"REPAIR-STR-INT-{lo}",
@@ -461,11 +692,12 @@ class SemanticMap:
                         "safety": "SAFE_AUTOMATIC",
                         "description": f"Wrap integer expression '{raw_expr}' with 'int_text({raw_expr})'",
                         "targetSpan": span_obj,
+                        "expectedSourceHash": self.source_hash,
+                        "expectedOriginalBytes": expected_bytes,
                         "replacement": f"int_text({raw_expr})"
                     }
             elif exp_type == "Int" and "found Str" in message:
-                content = self.source_path.read_bytes().decode("utf-8")
-                raw_expr = content[lo:hi] if lo < hi <= len(content) else ""
+                raw_expr = expected_bytes
                 m = re.match(r'^"(\d+)"$', raw_expr)
                 if m:
                     return {
@@ -474,10 +706,12 @@ class SemanticMap:
                         "safety": "SAFE_AUTOMATIC",
                         "description": f"Replace string literal '{raw_expr}' with integer {m.group(1)}",
                         "targetSpan": span_obj,
+                        "expectedSourceHash": self.source_hash,
+                        "expectedOriginalBytes": expected_bytes,
                         "replacement": m.group(1)
                     }
 
-        # 3. PEP_TYPE_MISMATCH with hole candidate
+        # 3. PEP_HOLE
         if "hole" in message.lower() or code == "PEP_HOLE":
             expected = diagnostic.get("expected") or diagnostic.get("expectedType")
             if expected:
@@ -487,6 +721,9 @@ class SemanticMap:
                     "safety": "SUGGESTED_CHOICE",
                     "description": f"Fill typed hole with expected type {expected}",
                     "targetSpan": span_obj,
+                    "expectedSourceHash": self.source_hash,
+                    "expectedOriginalBytes": expected_bytes,
+                    "replacement": None,
                     "suggestedReplacements": [f"/* expected {expected} */"]
                 }
 
@@ -495,47 +732,104 @@ class SemanticMap:
     def apply_repair(self, repair_plan: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
         """
         Mechanically applies an unambiguous repair plan to the source code,
-        verifying that the diagnostic is eliminated.
+        verifying that the diagnostic is eliminated and no compiler error is introduced.
+        Preserves original source on failure; compiler failure never reports SUCCESS.
         """
+        expected_hash = repair_plan.get("expectedSourceHash")
+        if expected_hash and expected_hash != self.source_hash:
+            return {
+                "status": "REJECTED_STALE_REVISION",
+                "message": f"Source revision mismatch: plan expected {expected_hash}, current file is {self.source_hash}",
+                "verifiedValid": False
+            }
+
+        replacement = repair_plan.get("replacement")
+        if replacement is None:
+            return {
+                "status": "REJECTED_AMBIGUOUS",
+                "message": "Cannot automatically apply plan with ambiguous or missing replacement.",
+                "verifiedValid": False
+            }
+
         span = repair_plan.get("targetSpan", {})
         lo = span.get("lo", 0)
         hi = span.get("hi", 0)
-        replacement = repair_plan.get("replacement", "")
 
-        content = self.source_path.read_bytes().decode("utf-8")
-        if lo < 0 or hi > len(content) or lo > hi:
-            raise ValueError(f"Invalid target span [{lo}, {hi}] for file of length {len(content)}")
+        if lo < 0 or hi > len(self.source_bytes) or lo > hi:
+            return {
+                "status": "REJECTED_INVALID_SPAN",
+                "message": f"Target span [{lo}, {hi}] out of bounds for source of length {len(self.source_bytes)}",
+                "verifiedValid": False
+            }
 
-        old_slice = content[lo:hi]
-        repaired_content = content[:lo] + replacement + content[hi:]
+        # Verify original bytes at target span
+        expected_orig = repair_plan.get("expectedOriginalBytes")
+        actual_orig = self.source_bytes[lo:hi].decode("utf-8", errors="replace")
+        if expected_orig is not None and actual_orig != expected_orig:
+            return {
+                "status": "REJECTED_BYTE_MISMATCH",
+                "message": f"Byte mismatch at [{lo}, {hi}]: expected '{expected_orig}', found '{actual_orig}'",
+                "verifiedValid": False
+            }
 
-        if not dry_run:
-            self.source_path.write_bytes(repaired_content.encode("utf-8"))
+        if dry_run:
+            return {
+                "status": "DRY_RUN_VALID",
+                "diff": {"before": actual_orig, "after": replacement, "span": span},
+                "verifiedValid": True
+            }
 
-        # Re-check via compiler
+        # Apply edit to byte buffer
+        original_bytes = self.source_bytes
+        new_bytes = original_bytes[:lo] + replacement.encode("utf-8") + original_bytes[hi:]
+
+        # Write candidate edit to file
+        self.source_path.write_bytes(new_bytes)
+
+        # Run compiler check on candidate
         cmd = ["pwsh", "-NoProfile", "-File", str(PEP_CLI), "check", str(self.source_path), "--json"]
         proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
-        
+
+        candidate_valid = False
+        remaining_diagnostics = []
         try:
-            check_data = json.loads(proc.stdout)
-            is_valid = check_data.get("status") == "valid"
-            remaining = check_data.get("diagnostics", [])
+            chk_data = json.loads(proc.stdout)
+            candidate_valid = chk_data.get("status") == "valid" and len(chk_data.get("diagnostics", [])) == 0
+            remaining_diagnostics = chk_data.get("diagnostics", [])
         except Exception:
-            is_valid = proc.returncode == 0
-            remaining = []
+            candidate_valid = proc.returncode == 0
+
+        # CRITICAL SAFETY: If compiler failed, ROLL BACK IMMEDIATELY! Never report SUCCESS!
+        if not candidate_valid or proc.returncode != 0:
+            self.source_path.write_bytes(original_bytes)
+            return {
+                "status": "FAILED_VERIFICATION",
+                "reverted": True,
+                "message": "Candidate edit failed compiler check; original source preserved.",
+                "verifiedValid": False,
+                "compilerDiagnostics": remaining_diagnostics,
+                "compilerOutput": proc.stdout + proc.stderr
+            }
+
+        # Success: update in-memory state
+        self.source_bytes = new_bytes
+        self.source_text = new_bytes.decode("utf-8")
+        self.source_hash = "sha256:" + hashlib.sha256(new_bytes).hexdigest()
+        self._load_and_analyze()
 
         return {
-            "status": "SUCCESS" if (is_valid or len(remaining) < 1) else "PARTIAL",
+            "status": "SUCCESS",
             "repairId": repair_plan.get("repairId"),
             "source": str(self.source_path),
+            "sourceHash": self.source_hash,
             "originalDiagnostic": repair_plan.get("diagnosticCode"),
             "diff": {
-                "before": old_slice,
+                "before": actual_orig,
                 "after": replacement,
                 "span": {"lo": lo, "hi": hi}
             },
-            "verifiedValid": is_valid,
-            "remainingDiagnostics": remaining
+            "verifiedValid": True,
+            "remainingDiagnostics": remaining_diagnostics
         }
 
     # -------------------------------------------------------------------------
@@ -573,8 +867,10 @@ class SemanticMap:
             for sym_name, sym_info in self.symbols.items():
                 base_sym = base_map.symbols.get(sym_name)
                 if base_sym:
-                    # Symbol existed in base. Was it modified?
-                    if sym_info != base_sym and sym_name not in allowed_symbols:
+                    # Compare semantic signatures independently of line/span movements
+                    curr_sig = SemanticMap._extract_semantic_symbol_signature(sym_info)
+                    base_sig = SemanticMap._extract_semantic_symbol_signature(base_sym)
+                    if curr_sig != base_sig and sym_name not in allowed_symbols:
                         violations.append({
                             "type": "OUT_OF_LANE_MODIFICATION",
                             "severity": "CRITICAL",
@@ -604,9 +900,9 @@ class SemanticMap:
             # 3. Check breaking caller contracts for modified symbols
             for sym_name in allowed_symbols:
                 if sym_name in self.symbols and sym_name in base_map.symbols:
-                    curr_sym = self.symbols[sym_name]
-                    base_sym = base_map.symbols[sym_name]
-                    if curr_sym.get("params") != base_sym.get("params") or curr_sym.get("returns") != base_sym.get("returns"):
+                    curr_sig = SemanticMap._extract_semantic_symbol_signature(self.symbols[sym_name])
+                    base_sig = SemanticMap._extract_semantic_symbol_signature(base_map.symbols[sym_name])
+                    if curr_sig.get("params") != base_sig.get("params") or curr_sig.get("returns") != base_sig.get("returns"):
                         outside_callers = [c for c in base_map.caller_graph.get(sym_name, set()) if c not in allowed_symbols]
                         if outside_callers:
                             violations.append({
@@ -652,44 +948,136 @@ class SemanticMap:
     # Multi-Agent Semantic Conflict Detection
     # -------------------------------------------------------------------------
     @staticmethod
+    def _extract_semantic_symbol_signature(sym: Dict[str, Any]) -> Dict[str, Any]:
+        """Extracts semantic signature independent of source positions/spans."""
+        if not sym:
+            return {}
+        return {
+            "name": sym.get("name"),
+            "kind": sym.get("kind"),
+            "params": [{"name": p.get("name"), "type": p.get("type")} for p in sym.get("params", [])],
+            "returns": sym.get("returns", "Unit")
+        }
+
+    @staticmethod
     def detect_semantic_conflicts(base_map: "SemanticMap",
                                   branch_a_map: "SemanticMap",
                                   branch_b_map: "SemanticMap") -> Dict[str, Any]:
         """
-        Detects semantic conflicts between two branches even if Git merge succeeds with 0 text conflicts!
-        Example: Branch A changes function `f`'s signature, Branch B adds a call to `f` using old signature.
+        Symmetric, order-independent semantic conflict detection.
+        Checking (base, A, B) produces the exact same findings as (base, B, A).
+        Handles:
+          - Both directions of signature and dependency changes
+          - Modified and deleted symbols
+          - Existing callers whose assumptions have changed
+          - Global constants and types
+          - Living specification requirements
+          - Position-independent semantic comparison (ignoring line shifts)
+          - Epistemic validity of branch analysis
         """
         conflicts = []
 
-        # Check signature changes in Branch A
-        sig_changed_in_a = set()
-        for sym_name, a_sym in branch_a_map.symbols.items():
-            base_sym = base_map.symbols.get(sym_name)
-            if base_sym:
-                if a_sym.get("params") != base_sym.get("params") or a_sym.get("returns") != base_sym.get("returns"):
-                    sig_changed_in_a.add(sym_name)
+        # Epistemic check on branches
+        if getattr(branch_a_map, "epistemic_status", None) == "INVALID" or getattr(branch_b_map, "epistemic_status", None) == "INVALID":
+            conflicts.append({
+                "type": "UNVERIFIED_BRANCH_ANALYSIS",
+                "severity": "CRITICAL",
+                "description": "One or both branches have compiler errors. Semantic merge requires valid branches."
+            })
 
-        # Check if Branch B adds new calls to functions whose signature changed in A
-        for caller, callees in branch_b_map.call_graph.items():
-            base_callees = base_map.call_graph.get(caller, set())
-            new_calls_in_b = callees - base_callees
-            for callee in new_calls_in_b:
-                if callee in sig_changed_in_a:
-                    conflicts.append({
-                        "type": "SEMANTIC_SIGNATURE_COLLISION",
-                        "severity": "CRITICAL",
-                        "symbol": callee,
-                        "description": f"Branch A altered signature of '{callee}', but Branch B introduced new call from '{caller}' assuming base signature.",
-                        "branchAChange": branch_a_map.symbols.get(callee),
-                        "branchBUsage": {"caller": caller, "callee": callee}
-                    })
+        def check_directional(src_map: "SemanticMap", other_map: "SemanticMap", src_name: str, other_name: str):
+            # 1. Signature changes in src_map
+            sig_changed = set()
+            for sym_name, s_sym in src_map.symbols.items():
+                base_sym = base_map.symbols.get(sym_name)
+                if base_sym:
+                    s_sig = SemanticMap._extract_semantic_symbol_signature(s_sym)
+                    b_sig = SemanticMap._extract_semantic_symbol_signature(base_sym)
+                    if s_sig != b_sig:
+                        sig_changed.add(sym_name)
 
-        # Check requirement conflict: both branches modified or superseded the same requirement
+            # 2. Check if other_map calls any symbol whose signature changed in src_map
+            for caller, callees in other_map.call_graph.items():
+                base_callees = base_map.call_graph.get(caller, set())
+                new_calls = callees - base_callees
+                for callee in new_calls:
+                    if callee in sig_changed:
+                        conflicts.append({
+                            "type": "SEMANTIC_SIGNATURE_COLLISION",
+                            "severity": "CRITICAL",
+                            "symbol": callee,
+                            "description": f"{src_name} altered signature of '{callee}', but {other_name} introduced new call from '{caller}' assuming base signature.",
+                            "sourceChange": src_map.symbols.get(callee),
+                            "targetUsage": {"caller": caller, "callee": callee}
+                        })
+                # Check existing callers in other_map that were modified while callee signature changed in src_map
+                for callee in (callees & sig_changed):
+                    if callee in base_callees:
+                        other_caller_sym = other_map.symbols.get(caller)
+                        base_caller_sym = base_map.symbols.get(caller)
+                        if other_caller_sym and base_caller_sym:
+                            other_c_sig = SemanticMap._extract_semantic_symbol_signature(other_caller_sym)
+                            base_c_sig = SemanticMap._extract_semantic_symbol_signature(base_caller_sym)
+                            if other_c_sig != base_c_sig:
+                                conflicts.append({
+                                    "type": "BREAKING_CALLER_ASSUMPTION",
+                                    "severity": "HIGH",
+                                    "symbol": callee,
+                                    "description": f"{src_name} changed signature of '{callee}', breaking caller '{caller}' which was modified concurrently in {other_name}.",
+                                    "caller": caller,
+                                    "callee": callee
+                                })
+
+            # 3. Deleted symbols in src_map that other_map modified or called
+            for base_sym_name in base_map.symbols:
+                if base_sym_name not in src_map.symbols:
+                    # Symbol was deleted in src_map
+                    if base_sym_name in other_map.symbols:
+                        # Did other_map modify it?
+                        other_sig = SemanticMap._extract_semantic_symbol_signature(other_map.symbols[base_sym_name])
+                        base_sig = SemanticMap._extract_semantic_symbol_signature(base_map.symbols[base_sym_name])
+                        if other_sig != base_sig:
+                            conflicts.append({
+                                "type": "MODIFY_DELETE_COLLISION",
+                                "severity": "CRITICAL",
+                                "symbol": base_sym_name,
+                                "description": f"{src_name} deleted symbol '{base_sym_name}', but {other_name} modified it."
+                            })
+                    # Did other_map call the deleted symbol?
+                    for caller, callees in other_map.call_graph.items():
+                        if base_sym_name in callees:
+                            conflicts.append({
+                                "type": "CALL_TO_DELETED_SYMBOL",
+                                "severity": "CRITICAL",
+                                "symbol": base_sym_name,
+                                "description": f"{src_name} deleted symbol '{base_sym_name}', which is called by '{caller}' in {other_name}."
+                            })
+
+            # 4. Type changes in src_map
+            for tname, stype in src_map.types.items():
+                base_type = base_map.types.get(tname)
+                other_type = other_map.types.get(tname)
+                if base_type and stype.get("details") != base_type.get("details"):
+                    if other_type and other_type.get("details") != base_type.get("details") and stype.get("details") != other_type.get("details"):
+                        conflicts.append({
+                            "type": "TYPE_DEFINITION_CONFLICT",
+                            "severity": "CRITICAL",
+                            "type": tname,
+                            "description": f"Both {src_name} and {other_name} modified type '{tname}' incompatibly."
+                        })
+
+        # Run directional check in BOTH directions to guarantee symmetry!
+        check_directional(branch_a_map, branch_b_map, "Branch A", "Branch B")
+        check_directional(branch_b_map, branch_a_map, "Branch B", "Branch A")
+
+        # 5. Requirement Specification Conflicts
         if base_map.spec and branch_a_map.spec and branch_b_map.spec:
-            for req_id, a_req in branch_a_map.requirements.items():
+            all_req_ids = set(branch_a_map.requirements.keys()) | set(branch_b_map.requirements.keys())
+            for req_id in all_req_ids:
+                a_req = branch_a_map.requirements.get(req_id)
                 b_req = branch_b_map.requirements.get(req_id)
                 base_req = base_map.requirements.get(req_id)
-                if b_req and base_req:
+                if a_req and b_req and base_req:
                     if a_req != base_req and b_req != base_req and a_req != b_req:
                         conflicts.append({
                             "type": "REQUIREMENT_SPECIFICATION_CONFLICT",
@@ -700,10 +1088,19 @@ class SemanticMap:
                             "branchB": b_req
                         })
 
+        # Deduplicate conflicts
+        seen_keys = set()
+        deduped = []
+        for c in conflicts:
+            key = (c.get("type"), c.get("symbol"), c.get("requirementId"), c.get("description"))
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped.append(c)
+
         return {
-            "hasConflicts": len(conflicts) > 0,
-            "conflictCount": len(conflicts),
-            "conflicts": conflicts
+            "hasConflicts": len(deduped) > 0,
+            "conflictCount": len(deduped),
+            "conflicts": deduped
         }
 
 
@@ -777,6 +1174,8 @@ def main():
             print(f"Conflicts: {res['conflictCount']}")
             for c in res['conflicts']:
                 print(f"  [{c['severity']}] {c['type']}: {c['description']}")
+        if res["hasConflicts"]:
+            sys.exit(1)
         return
 
     smap = SemanticMap(args.source, getattr(args, "spec", None))
@@ -787,11 +1186,17 @@ def main():
             print(json.dumps(res, indent=2))
         else:
             print(f"Living Specification Verification: {res['status']}")
-            print(f"Requirements: {res['implementedRequirements']}/{res['totalRequirements']} implemented")
-            if res['missingSymbols']:
+            print(f"Requirements: {res['implementedRequirements']}/{res['totalRequirements']} implemented ({res['verifiedRequirements']} verified)")
+            if res.get('nonexistentTests'):
+                print(f"Nonexistent Tests: {res['nonexistentTests']}")
+            if res.get('schemaErrors'):
+                print(f"Schema Errors: {res['schemaErrors']}")
+            if res.get('missingSymbols'):
                 print(f"Missing Symbols: {res['missingSymbols']}")
-            if res['orphanSymbols']:
+            if res.get('orphanSymbols'):
                 print(f"Orphan Symbols: {res['orphanSymbols']}")
+        if res["status"] != "VALID":
+            sys.exit(1)
 
     elif args.subcommand == "context":
         res = smap.get_context_packet(args.symbol, args.max_tokens)

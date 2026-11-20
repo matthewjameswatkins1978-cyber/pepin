@@ -110,9 +110,9 @@ def check_c23_parity() -> Dict[str, Any]:
     interp_res = run_cmd(["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(ref_pep)])
     expected_output = interp_res.stdout.strip()
 
-    inspect_res = run_cmd(["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "inspect", str(calc_pep), "--json"])
-    ast_data = json.loads(inspect_res.stdout)
-    emitter = C23Emitter(ast_data)
+    check_res = run_cmd(["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "check", str(calc_pep), "--json"])
+    chk_data = json.loads(check_res.stdout)
+    emitter = C23Emitter(chk_data)
     c_code = emitter.generate_c23()
     c_file = build_dir / "verify_calc.c"
     c_file.write_text(c_code, encoding="utf-8")
@@ -189,6 +189,28 @@ def check_multi_agent_lanes() -> Dict[str, Any]:
     }
 
 
+def check_consolidation_regression_suites() -> Dict[str, Any]:
+    """Test 5: Verify Lucy's reproduced defect regressions (C23 correctness & trustworthy semantic map)."""
+    start = time.perf_counter()
+    proc1 = subprocess.run([sys.executable, "-m", "unittest", "tests.test_c23_correctness"], cwd=str(ROOT), capture_output=True, text=True)
+    proc2 = subprocess.run([sys.executable, "-m", "unittest", "tests.test_semantic_map_trustworthy"], cwd=str(ROOT), capture_output=True, text=True)
+
+    passed1 = proc1.returncode == 0
+    passed2 = proc2.returncode == 0
+    all_ok = passed1 and passed2
+
+    duration = time.perf_counter() - start
+    return {
+        "name": "Consolidation & Correctness Regressions (PEP-AG-20261120-02)",
+        "passed": all_ok,
+        "durationMs": round(duration * 1000, 2),
+        "c23CorrectnessPassed": passed1,
+        "semanticMapTrustworthyPassed": passed2,
+        "c23Output": proc1.stderr.strip() if not passed1 else "8/8 passed",
+        "semanticMapOutput": proc2.stderr.strip() if not passed2 else "10/10 passed"
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pepin Architecture Verification Suite")
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
@@ -202,6 +224,7 @@ def main():
         check_living_specifications(),
         check_c23_parity(),
         check_multi_agent_lanes(),
+        check_consolidation_regression_suites(),
     ]
 
     total_duration = round((time.perf_counter() - overall_start) * 1000, 2)

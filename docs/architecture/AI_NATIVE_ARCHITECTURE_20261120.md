@@ -214,10 +214,92 @@ python pep_semantic_map.py check-merge base.pep branchA.pep branchB.pep --json
 
 ## 10. Roadmap & Packet Progression Recommendations
 
-1. **Packet A8 (Current Master):** Preserved intact as baseline.
+1. **Packet A8 (Current Master):** Preserved intact as baseline (`e706939`).
 2. **Packet A9 / Architecture Transition (Immediate):**
    - Land the Unified Semantic Map (`pep_semantic_map.py`), Living Specifications, Multi-Error Diagnostics (`pep_ocaml.ml`), and C23 Direct Emitter (`pep_c23_direct.py`).
    - Merge `ag/ai-native-architecture-20261120` following formal review.
 3. **Packet A10+ (Standard Library & Modules):**
    - Expand `std/` with string algorithms, linear collections, and file I/O primitives.
    - Self-hosting compiler work continues on separate branch targeting C23 as generator output.
+
+---
+
+## 11. Minimal Auditable Integration Path from Accepted A8 Baseline (PEP-AG-20261120-02 Consolidation)
+
+### 11.1 Origin of Branch Commit Divergence
+The reviewed branch `ag/ai-native-architecture-20261120` was 267 commits ahead of `master` (`e706939`) because it was forked from `campaign/pep-v01-sustained-build-20261027`, which contained extensive exploratory self-hosting trials (A11–A14 parser and checker bundles in Pep, micro-chunking ledgers, etc.).
+
+### 11.2 Audited Component Inventory
+
+#### Category A: Ready for Integration (Core Architecture)
+The following cohesive files constitute the verified AI-native architecture:
+1. **Authoritative Checked C23 Native Emitter (`pep_c23_direct.py`)**:
+   - Lowers directly from compiler `typedTree` (`pep.ps1 check --json`).
+   - Strict ISO C23 conformance (compiled with `-std=c23 -pedantic-errors -Wall -Wextra -Werror` on Clang and GCC).
+   - Zero GNU statement expressions (`match` lowered to static inline functions).
+   - Safe heap-allocated list runtime (`pep_list_alloc`, `pep_list_create`) with OOM trapping.
+   - String value semantics (`strcmp`) for `==` and `!=`.
+   - File-scope static global constant initialization avoiding variable shadowing.
+   - Unary negative integer overflow checking against `INT64_MIN`.
+   - Top-level conditional and loop statement execution inside `pep_init_top_level()`.
+   - Output/source path collision protection.
+2. **Trustworthy Semantic Map & Repair Engine (`pep_semantic_map.py`)**:
+   - Epistemic authority gating: `CHECKED`, `INVALID`, `UNAVAILABLE`. Regex fallback cannot authorize verification or repairs.
+   - Living specification verification: verifies that referenced unit tests exist on disk; distinguishes `UNIMPLEMENTED`, `TEST_MISSING`, `IMPLEMENTED`, `VERIFIED`.
+   - Rejects duplicate requirement IDs and spec schema errors.
+   - Revision-bound mechanical repair plans: binds to `expectedSourceHash` and `expectedOriginalBytes`.
+   - Disallows automatic resolution of ambiguous typos (requires manual choice if multiple candidates exist).
+   - Atomic repair application with instant rollback on compiler check failure.
+   - Context packets: extracts full target implementation source lines, related types, explicit disclosure of omissions/uncertainties, and token budget enforcement.
+   - Symmetric, order-independent multi-agent conflict detection (detects signature collisions, deleted symbols, broken caller assumptions, type conflicts, and spec conflicts; ignores harmless line shifts).
+3. **Core Standard Library Prelude (`std/prelude.pep`, `std/prelude.spec.json`)**:
+   - Fundamental mathematical primitives (`abs`, `min`, `max`, `clamp`, `sign`, `mod`, `pow`, `gcd`).
+   - Safe nullability via `OptionInt` tagged union and `unwrap_or`.
+   - List utilities (`sum`, `list_max`, `list_min`, `count_occurrences`).
+4. **Verification Suites & Automation**:
+   - `tests/test_c23_correctness.py`: Dedicated regressions for all 7 reproduced defects.
+   - `tests/test_semantic_map_trustworthy.py`: Tests for negative paths, missing tests, epistemic gates, and symmetric conflicts.
+   - `tests/test_c23_cli.py`: Native CLI verification.
+   - `tests/test_std_prelude.py`: Bit-for-bit parity across interpreter, Clang C23, and GCC C23.
+   - `tests/test_agent_collaboration.py`: Multi-agent lane governance and conflict prevention.
+   - `tests/benchmark_agent_repair.py`: Empirical measurement of token reduction (75.3%) and multi-error speedup (4x).
+   - `scripts/verify_architecture.py`: Turnkey 5-suite verification runner.
+
+#### Category B: Experimental Features to Remain on Development Branches
+The following items remain isolated on `campaign/` branches and should **NOT** be merged to `master`:
+- Pep-written self-hosting compiler source files (`examples/pep_lexer.pep`, `examples/pep_parser.pep`, `tests/pep_checker_a13.pep`, `tests/pep_c23_emitter.pep`).
+- Bundled staged self-hosting artifacts in `_build/a12/`, `_build/a13/`, `_build/a14/`.
+- Micro-chunking ledger logic and statements designed for the in-interpreter evaluation ceiling.
+
+#### Category C: Superseded / Retired Components
+- **Regex AST Fallback as an Authority**: Retired. Regex parsing is strictly demoted to an unauthorized editor preview aid; verification and repair require `pep.ps1 check` with `status == "valid"`.
+- **GNU Statement Expressions**: Superseded by strict ISO C23 static inline match helpers.
+- **Old C11 Planned Generator**: Superseded by the ISO C23 direct compiler in accordance with `docs/TECHNICAL_RESOLUTION_002.md`.
+
+### 11.3 Step-by-Step Integration Recipe to Master (A8 Baseline)
+To land these verified capabilities onto `master` cleanly and auditably without dragging 267 exploratory commits:
+1. Checkout a clean integration branch directly from `master` (`e706939`):
+   ```powershell
+   git checkout -b integrate/ai-native-architecture-a9 e706939
+   ```
+2. Apply the Category A files directly from `ag/ai-native-architecture-20261120`:
+   ```powershell
+   git checkout ag/ai-native-architecture-20261120 -- `
+       pep_c23_direct.py `
+       pep_semantic_map.py `
+       std/ `
+       examples/agent_calculator.pep `
+       examples/agent_calculator.spec.json `
+       scripts/verify_architecture.py `
+       tests/test_c23_correctness.py `
+       tests/test_semantic_map_trustworthy.py `
+       tests/test_c23_cli.py `
+       tests/test_std_prelude.py `
+       tests/test_agent_collaboration.py `
+       tests/benchmark_agent_repair.py `
+       tests/test_agent_calculator.py `
+       docs/architecture/AI_NATIVE_ARCHITECTURE_20261120.md
+   ```
+3. Run `python scripts/verify_architecture.py` to confirm 100% test pass on the clean base.
+4. Fast-forward / merge to `master` under formal sign-off.
+
