@@ -63,6 +63,28 @@ class TrustworthySemanticMapTests(unittest.TestCase):
         self.assertTrue(len(report["nonexistentTests"]) > 0)
         self.assertEqual(report["nonexistentTests"][0]["requirement"], "REQ-SAMPLE-001")
 
+    def test_test_references_do_not_verify_requirements(self):
+        source = self.td / "sample.pep"
+        source.write_text("fn sample() -> Int { return 1 }\n", encoding="utf-8")
+        oracle = self.td / "test_oracle.py"
+        oracle.write_text("def test_sample():\n    assert False\n", encoding="utf-8")
+        spec_file = self.td / "sample.spec.json"
+
+        for references in ([], [f"{oracle}::test_sample"]):
+            with self.subTest(references=references):
+                spec_file.write_text(json.dumps({"requirements": [{
+                    "id": "REQ-SAMPLE",
+                    "symbols": ["sample"],
+                    "tests": references,
+                }]}), encoding="utf-8")
+                report = SemanticMap(source, spec_file).verify_specification()
+                self.assertEqual(report["status"], "VALID")
+                self.assertEqual(report["testedRequirements"], 0)
+                self.assertEqual(report["verifiedRequirements"], 0)
+                self.assertEqual(report["requirementsWithTestReferences"], len(references))
+                self.assertEqual(report["matrix"][0]["status"], "IMPLEMENTED")
+                self.assertFalse(report["matrix"][0]["verified"])
+
     def test_compiler_unavailability_never_reports_valid(self):
         """When compiler check is not valid, spec verification must not report VALID."""
         pep_src = self.td / "broken_syntax.pep"

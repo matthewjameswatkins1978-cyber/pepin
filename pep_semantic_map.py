@@ -335,6 +335,7 @@ class SemanticMap:
             "totalRequirements": len(req_list),
             "implementedRequirements": 0,
             "testedRequirements": 0,
+            "requirementsWithTestReferences": 0,
             "verifiedRequirements": 0,
             "schemaErrors": [],
             "nonexistentTests": [],
@@ -391,18 +392,13 @@ class SemanticMap:
                 req_status = "UNIMPLEMENTED"
             elif len(missing_tests) > 0:
                 req_status = "TEST_MISSING"
-            elif self.epistemic_status != "CHECKED":
-                req_status = "IMPLEMENTED"
             else:
-                # Fully implemented + all referenced tests exist on disk + clean compiler check
-                req_status = "VERIFIED"
+                req_status = "IMPLEMENTED"
 
             if is_implemented:
                 report["implementedRequirements"] += 1
             if is_implemented and has_tests:
-                report["testedRequirements"] += 1
-            if req_status == "VERIFIED":
-                report["verifiedRequirements"] += 1
+                report["requirementsWithTestReferences"] += 1
 
             for ms in missing_syms:
                 report["missingSymbols"].append({"requirement": req_id, "symbol": ms})
@@ -418,7 +414,7 @@ class SemanticMap:
                 "tests": req_tests,
                 "nonexistentTests": missing_tests,
                 "implemented": is_implemented,
-                "verified": req_status == "VERIFIED",
+                "verified": False,
                 "evidence": {
                     "sourceRevision": self.source_hash,
                     "testRevisions": test_evidence
@@ -434,8 +430,7 @@ class SemanticMap:
         if (report["schemaErrors"] or 
             report["nonexistentTests"] or 
             report["missingSymbols"] or 
-            self.epistemic_status != "CHECKED" or 
-            (report["totalRequirements"] > 0 and report["verifiedRequirements"] < report["totalRequirements"])):
+            report["implementedRequirements"] < report["totalRequirements"]):
             report["status"] = "INVALID"
 
         return report
@@ -1112,7 +1107,7 @@ def main():
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     # verify-spec
-    p_verify = subparsers.add_parser("verify-spec", help="Verify living specification against code and tests")
+    p_verify = subparsers.add_parser("verify-spec", help="Validate living specification against checked symbols and test references")
     p_verify.add_argument("source", type=pathlib.Path, help="Target .pep source file")
     p_verify.add_argument("--spec", type=pathlib.Path, default=None, help="Companion .spec.json file")
     p_verify.add_argument("--json", action="store_true", help="Output JSON format")
@@ -1185,7 +1180,7 @@ def main():
         if args.json:
             print(json.dumps(res, indent=2))
         else:
-            print(f"Living Specification Verification: {res['status']}")
+            print(f"Living Specification Validation: {res['status']}")
             print(f"Requirements: {res['implementedRequirements']}/{res['totalRequirements']} implemented ({res['verifiedRequirements']} verified)")
             if res.get('nonexistentTests'):
                 print(f"Nonexistent Tests: {res['nonexistentTests']}")
