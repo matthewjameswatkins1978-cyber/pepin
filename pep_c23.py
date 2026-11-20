@@ -207,6 +207,8 @@ def parser():
     result.add_argument("--compiler", help="Clang executable path (defaults to Clang on PATH)")
     result.add_argument("--emit-c", type=pathlib.Path,
                         help="generated C23 source path (defaults beside the executable)")
+    result.add_argument("--direct", action="store_true",
+                        help="use direct C23 code generator supporting full Pep language")
     return result
 
 
@@ -219,6 +221,20 @@ def main(argv=None):
     if args.command == "build-c23" and args.output is None:
         print("build-c23 requires -o/--output", file=sys.stderr)
         return 2
+    if args.direct:
+        import pep_c23_direct
+        compiler = compiler_path(args.compiler) if args.compiler else None
+        if args.command == "build-c23":
+            out_exe = pep_c23_direct.build_c23(source_path, args.output.resolve(), compiler, args.emit_c)
+            print(f"Built native executable: {out_exe}")
+            return 0
+        else:
+            code, stdout, stderr = pep_c23_direct.run_c23(source_path, compiler)
+            if stdout:
+                sys.stdout.write(stdout)
+            if stderr:
+                sys.stderr.write(stderr)
+            return code
     try:
         source_bytes = source_path.read_bytes()
         source_identity = hashlib.sha256(source_bytes).hexdigest()[:12]

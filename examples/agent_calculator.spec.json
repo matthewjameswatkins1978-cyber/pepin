@@ -1,0 +1,96 @@
+{
+  "$schema": "https://pepin.lang/schemas/living-spec-v1.json",
+  "project": "pepin",
+  "specVersion": "1.0.0",
+  "title": "Agent Calculator Module",
+  "purpose": "Provide verified, arithmetic calculation primitives with strict bounds and invariants.",
+  "nonGoals": [
+    "Floating point arithmetic",
+    "Arbitrary precision bignums"
+  ],
+  "requirements": [
+    {
+      "id": "REQ-CALC-001",
+      "title": "Integer Factorial Calculation",
+      "description": "Compute the factorial of a non-negative integer using recursive formulation.",
+      "level": "MUST",
+      "status": "VERIFIED",
+      "symbols": ["factorial"],
+      "tests": [
+        "tests/test_agent_calculator.py::test_factorial_base",
+        "tests/test_agent_calculator.py::test_factorial_recursive"
+      ],
+      "invariants": [
+        "factorial(0) == 1",
+        "factorial(1) == 1",
+        "factorial(n) == n * factorial(n - 1) for n > 1"
+      ],
+      "failureModes": [
+        {
+          "condition": "Integer overflow (n > 20)",
+          "behavior": "Controlled runtime arithmetic trap"
+        }
+      ]
+    },
+    {
+      "id": "REQ-CALC-002",
+      "title": "Integer Exponentiation",
+      "description": "Compute base raised to power of non-negative exponent.",
+      "level": "MUST",
+      "status": "VERIFIED",
+      "symbols": ["power"],
+      "tests": [
+        "tests/test_agent_calculator.py::test_power_zero_exponent",
+        "tests/test_agent_calculator.py::test_power_positive"
+      ],
+      "invariants": [
+        "power(base, 0) == 1",
+        "power(base, exp) == base * power(base, exp - 1) for exp > 0"
+      ],
+      "failureModes": [
+        {
+          "condition": "exp < 0",
+          "behavior": "Returns 1 (integer truncated non-negative domain)"
+        }
+      ]
+    },
+    {
+      "id": "REQ-CALC-003",
+      "title": "Integer Range Clamping",
+      "description": "Constrain an integer value within specified lower and upper bounds.",
+      "level": "MUST",
+      "status": "VERIFIED",
+      "symbols": ["clamp"],
+      "tests": [
+        "tests/test_agent_calculator.py::test_clamp_within_range",
+        "tests/test_agent_calculator.py::test_clamp_below_min",
+        "tests/test_agent_calculator.py::test_clamp_above_max"
+      ],
+      "invariants": [
+        "clamp(val, min_val, max_val) >= min_val",
+        "clamp(val, min_val, max_val) <= max_val"
+      ],
+      "failureModes": [
+        {
+          "condition": "min_val > max_val",
+          "behavior": "Returns min_val (lower bound takes precedence)"
+        }
+      ]
+    },
+    {
+      "id": "REQ-CALC-004",
+      "title": "Clamped Factorial Composite Calculation",
+      "description": "Compute factorial of n clamped to maximum limit.",
+      "level": "SHOULD",
+      "status": "VERIFIED",
+      "symbols": ["calculate_clamped_factorial"],
+      "tests": [
+        "tests/test_agent_calculator.py::test_calculate_clamped_factorial"
+      ],
+      "invariants": [
+        "calculate_clamped_factorial(n, limit) <= limit"
+      ],
+      "failureModes": []
+    }
+  ]
+}

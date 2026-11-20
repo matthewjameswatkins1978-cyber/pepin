@@ -689,17 +689,17 @@ let check tops =
        loop env (TWhile(checked_condition,inner,sp)::acc) false rest
     in loop env [] false xs
   in
+  let global_env=ref [[]] and top_typed=ref [] in
+  List.iter(function TopStmt s->let typed,env,_=check_stmts !global_env "<top-level>" None [s] in global_env:=env;top_typed:=List.rev_append typed !top_typed|_->())tops;
   let functions=ref [] in
   List.iter(function TopFun f->
     let sig_=Hashtbl.find signatures f.fname in
     let seen=Hashtbl.create 8 in
     let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s;mutable_=false})f.params in
-    let typed,_,terminated=check_stmts [params] f.fname (Some f.result) f.body in
+    let typed,_,terminated=check_stmts (params :: !global_env) f.fname (Some f.result) f.body in
     if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
     functions:={sig_;tparams=params;tbody=typed}::!functions
    |_->()) tops;
-  let global_env=ref [[]] and top_typed=ref [] in
-  List.iter(function TopStmt s->let typed,env,_=check_stmts !global_env "<top-level>" None [s] in global_env:=env;top_typed:=List.rev_append typed !top_typed|_->())tops;
   {functions=List.rev !functions;tops=List.rev !top_typed;holes=List.rev !holes;records=List.rev !records;unions=List.rev !unions}
 
 let rec typed_expr_json e =
@@ -771,6 +771,7 @@ let checked_bin op a b sp =
 let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=512) ?(semantic_snapshot_value=None) ?(source_bytes_value=None) c =
  let fs=Hashtbl.create 16 in List.iter(fun f->Hashtbl.add fs f.sig_.fid f)c.functions;
  let remaining_steps = ref step_limit in
+ let global_env_ref = ref [] in
  let tick sp =
    decr remaining_steps;
    if !remaining_steps < 0 then runtime "PEP_RUNTIME_STEP_LIMIT" "Execution step budget exceeded" sp
@@ -865,7 +866,7 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
       |Some id->
         if List.length callstack>=max_depth then runtime "PEP_RUNTIME_CALL_DEPTH" "Maximum function call depth exceeded" e.espan;
         let function_=Hashtbl.find fs id in
-        let env'=List.map2(fun binding value->binding.bid,ref value)function_.tparams values in
+        let env'=(List.map2(fun binding value->binding.bid,ref value)function_.tparams values) @ !global_env_ref in
         (match exec_stmts env' (name::callstack) function_.tbody with Some value->value|None->VUnit)
  and match_pattern env pattern value = match pattern,value with
   |TPWildcard _,_->Some env
@@ -885,7 +886,9 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
     (match stmt with
      |TLet(binding,expression)|TVar(binding,expression)->
        let value=eval env stack expression in
-       exec_stmts ((binding.bid,ref value)::env) stack rest
+       let env'=((binding.bid,ref value)::env) in
+       if stack=[] then global_env_ref := (binding.bid, ref value) :: !global_env_ref;
+       exec_stmts env' stack rest
      |TAssign(binding,expression,span)->
        let value=eval env stack expression in
        (try (List.assoc binding.bid env):=value with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked assignment target is missing at runtime" span);
@@ -918,13 +921,21 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
        in repeat()
      |TExpr expression->ignore(eval env stack expression);exec_stmts env stack rest)
  in
+  let init_tops () =
+    List.iter (function
+      | TLet(b, e) | TVar(b, e) ->
+        let v = eval !global_env_ref [] e in
+        global_env_ref := (b.bid, ref v) :: !global_env_ref
+      | _ -> ()) c.tops
+  in
  match entry with
- |None -> ignore(exec_stmts [] [] c.tops); VUnit
+ |None -> ignore(exec_stmts !global_env_ref [] c.tops); VUnit
  |Some (function_id,arguments) ->
+   init_tops ();
    let f = match List.find_opt (fun f -> f.sig_.fid=function_id) c.functions with
      |Some f -> f |None -> runtime "PEP_RUNTIME_UNKNOWN_FUNCTION" "Checked tool function is missing" (mkspan 0 0 1 1) in
    if List.length arguments <> List.length f.tparams then runtime "PEP_RUNTIME_ARGUMENT_COUNT" "Tool argument count did not match the checked function" f.sig_.decl.fspan;
-   let env = List.map2 (fun binding value -> binding.bid,ref value) f.tparams arguments in
+   let env = (List.map2 (fun binding value -> binding.bid,ref value) f.tparams arguments) @ !global_env_ref in
    match exec_stmts env [f.sig_.name] f.tbody with Some value -> value |None -> VUnit
 
 (* Session protocol v3. Revisions are content-addressed and each analysis is
