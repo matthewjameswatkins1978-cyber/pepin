@@ -201,6 +201,41 @@ class C23CorrectnessTests(unittest.TestCase):
                     run_res = subprocess.run([str(exe_file)], capture_output=True, text=True, encoding="utf-8")
                     self.assertEqual(run_res.stdout.strip(), "123")
 
+    def test_native_string_bytes_match_interpreter(self):
+        source = (
+            'fn echo(value: Str) -> Str { return value }\n'
+            'say(echo("caf\u00e9 \U0001f680"))\n'
+            'say("a\\0b")\n'
+            'say(if "a\\0b" != "a\\0c" { "different" } else { "wrong" })\n'
+            'say(if "a\\0b" == "a\\0b" { "equal" } else { "wrong" })\n'
+            'say(if "" == "" { int_text(-123) } else { "wrong" })\n'
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            pep_file = pathlib.Path(folder) / "strings.pep"
+            pep_file.write_text(source, encoding="utf-8")
+            reference = subprocess.run(
+                ["pwsh", "-NoProfile", "-File", str(ROOT / "pep.ps1"), "run", str(pep_file)],
+                capture_output=True,
+            )
+            self.assertEqual(reference.returncode, 0, reference.stderr)
+            expected = "caf\u00e9 \U0001f680\na\0b\ndifferent\nequal\n-123\n".encode("utf-8")
+            self.assertEqual(reference.stdout.replace(b"\r\n", b"\n"), expected)
+
+            c_file = pep_file.with_suffix(".c")
+            executable = pep_file.with_suffix(".exe")
+            pep_c23_direct.build_c23(pep_file, executable, emit_c_path=c_file)
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    compiled = subprocess.run(
+                        [str(compiler), "-std=c23", "-pedantic-errors", "-Wall", "-Wextra",
+                         "-Werror", str(c_file), "-o", str(executable)],
+                        capture_output=True,
+                    )
+                    self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                    native = subprocess.run([str(executable)], capture_output=True)
+                    self.assertEqual(native.returncode, 0, native.stderr)
+                    self.assertEqual(native.stdout.replace(b"\r\n", b"\n"), expected)
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:

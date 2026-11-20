@@ -12,7 +12,7 @@ Key Guarantees:
 2. Global Constants: Top-level let/var bindings are declared at file scope and initialized in order.
 3. Unary Negation: Correctly translates unary and binary `neg` with overflow checks.
 4. Typed Holes: Rejects incomplete programs upfront; never silently compiles holes to zero.
-5. String Equality: Compares string contents using `strcmp` (`pep_str_eq`), not pointer addresses.
+5. String Equality: Compares the full UTF-8 byte sequences.
 6. Safe Memory Lifetimes: List storage is heap-allocated (`pep_list_t`), preventing escaping stack corruption.
 7. Top-Level Statements: Full support for top-level conditionals, loops, lets, and expressions.
 8. Strict ISO C23: Lowers `match` expressions into static inline functions with zero GNU statement expressions.
@@ -128,7 +128,7 @@ class C23Emitter:
         elif type_str == "Bool":
             return "bool"
         elif type_str == "Str":
-            return "const char*"
+            return "pep_str_t"
         elif type_str == "Unit":
             return "void"
         elif type_str in self.records:
@@ -295,7 +295,13 @@ class C23Emitter:
             return "true" if expr["value"] else "false"
 
         elif kind == "string":
-            return json.dumps(expr["value"])
+            data = expr["value"].encode("utf-8")
+            # Fixed-width octal escapes preserve UTF-8 bytes in C literals.
+            literal = "".join(
+                chr(byte) if 32 <= byte < 127 and byte not in (34, 92) else f"\\{byte:03o}"
+                for byte in data
+            )
+            return f'(pep_str_t){{ "{literal}", {len(data)} }}'
 
         elif kind == "binding":
             bid = expr["bindingId"]
@@ -598,23 +604,24 @@ class C23Emitter:
 
         # Monomorphic Built-ins
         out.append("/* Monomorphic Built-ins & String Equality */")
-        out.append("static inline void pep_say(const char* s) {")
-        out.append('  printf("%s\\n", s ? s : "");')
+        out.append("typedef struct { const char* data; size_t len; } pep_str_t;")
+        out.append("")
+        out.append("static inline void pep_say(pep_str_t s) {")
+        out.append("  if (s.len) fwrite(s.data, 1, s.len, stdout);")
+        out.append("  putchar('\\n');")
         out.append("}")
         out.append("")
-        out.append("static inline const char* pep_int_text(int64_t n) {")
+        out.append("static inline pep_str_t pep_int_text(int64_t n) {")
         out.append("  char* buf = (char*)malloc(32);")
         out.append("  if (!buf) {")
         out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: String allocation failed\\n"); exit(1);')
         out.append("  }")
-        out.append('  snprintf(buf, 32, "%lld", (long long)n);')
-        out.append("  return buf;")
+        out.append('  int len = snprintf(buf, 32, "%lld", (long long)n);')
+        out.append("  return (pep_str_t){ buf, (size_t)len };")
         out.append("}")
         out.append("")
-        out.append("static inline bool pep_str_eq(const char* a, const char* b) {")
-        out.append("  if (a == b) return true;")
-        out.append("  if (!a || !b) return false;")
-        out.append("  return strcmp(a, b) == 0;")
+        out.append("static inline bool pep_str_eq(pep_str_t a, pep_str_t b) {")
+        out.append("  return a.len == b.len && (a.len == 0 || memcmp(a.data, b.data, a.len) == 0);")
         out.append("}")
         out.append("")
 
