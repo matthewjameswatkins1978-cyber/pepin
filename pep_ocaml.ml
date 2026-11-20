@@ -958,9 +958,9 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
     (match stmt with
      |TLet(binding,expression)|TVar(binding,expression)->
        let value=eval env stack expression in
-       let env'=((binding.bid,ref value)::env) in
-       if stack=[] then global_env_ref := (binding.bid, ref value) :: !global_env_ref;
-       exec_stmts env' stack rest
+       let slot = binding.bid, ref value in
+       if stack=[] then global_env_ref := slot :: !global_env_ref;
+       exec_stmts (slot::env) stack rest
      |TAssign(binding,expression,span)->
        let value=eval env stack expression in
        (try (List.assoc binding.bid env):=value with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked assignment target is missing at runtime" span);

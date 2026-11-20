@@ -312,6 +312,22 @@ for item in items { say(int_text(item + 100)) }
             "1\n2\n-1\n3\n4\n5\n2\n6\n7\nless\n8\n9\n9\n10\n11\n12\n13\n-1\n14\n15\n114\n115\n",
         )
 
+    def test_native_order_snapshots_mutable_global_before_later_operand(self):
+        self.assert_native_order_parity(
+            """var state = 1
+fn change() -> Int {
+    state = 8
+    return 2
+}
+say(int_text(state + change()))
+say(int_text(state))
+state = 9
+fn read_state() -> Int { return state }
+say(int_text(read_state()))
+""",
+            "3\n8\n9\n",
+        )
+
     def test_native_order_preserves_lazy_evaluation(self):
         self.assert_native_order_parity(
             """type Choice = Selected(Int) | Skipped()
