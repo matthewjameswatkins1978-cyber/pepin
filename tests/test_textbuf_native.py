@@ -774,11 +774,11 @@ class TextbufNativeTests(unittest.TestCase):
         gcc = shutil.which("gcc")
         self.assertIsNotNone(clang, "Clang not found")
         self.assertIsNotNone(gcc, "GCC not found")
-        expected = b"42\n6\n"
+        expected = "42\n6\n"
         outputs = []
         for compiler, name in ((clang, "arena_clang.exe"), (gcc, "arena_gcc.exe")):
             demo = self.build_arena_demo(compiler, name)
-            ran = run_bytes([str(demo)])
+            ran = run_program([str(demo)])
             self.assertEqual(ran.returncode, 0, ran.stderr)
             self.assertEqual(ran.stdout, expected)
             outputs.append(ran.stdout)
