@@ -102,6 +102,96 @@ class MultiAgentCollaborationTests(unittest.TestCase):
         self.assertGreater(reduction_pct, 70.0, f"Expected >70% context savings, got {reduction_pct:.1f}%")
         self.assertLess(packet_tokens, 300, "Context packet should be bounded under 300 tokens for small helper")
 
+    def test_verify_lane_allowed_changes(self):
+        """Agent modifies only symbols inside its assigned lane -> APPROVED."""
+        lane_def = {
+            "laneId": "lane-math-helpers",
+            "allowedSymbols": ["clamp", "power"],
+            "allowNewSymbols": False,
+            "assignedRequirements": ["REQ-CALC-002", "REQ-CALC-003"]
+        }
+        agent_map = copy.deepcopy(self.base_map)
+        res = agent_map.verify_lane(lane_def, self.base_map)
+        self.assertTrue(res["laneValid"])
+        self.assertEqual(res["status"], "APPROVED")
+        self.assertEqual(res["violationCount"], 0)
+
+    def test_verify_lane_rejects_out_of_lane_changes(self):
+        """Agent modifies symbol outside its declared lane -> REJECTED."""
+        lane_def = {
+            "laneId": "lane-math-helpers",
+            "allowedSymbols": ["clamp", "power"],
+            "allowNewSymbols": False,
+            "assignedRequirements": ["REQ-CALC-002"]
+        }
+        agent_map = copy.deepcopy(self.base_map)
+        # Agent accidentally mutates 'factorial' (which belongs to another lane)
+        agent_map.symbols["factorial"]["returns"] = "Bool"
+
+        res = agent_map.verify_lane(lane_def, self.base_map)
+        self.assertFalse(res["laneValid"])
+        self.assertEqual(res["status"], "REJECTED")
+        violations = [v["type"] for v in res["violations"]]
+        self.assertIn("OUT_OF_LANE_MODIFICATION", violations)
+
+    def test_verify_lane_rejects_breaking_caller_contract(self):
+        """Agent modifies signature of an assigned symbol that outside callers depend on -> REJECTED."""
+        lane_def = {
+            "laneId": "lane-math-helpers",
+            "allowedSymbols": ["clamp"],
+            "allowNewSymbols": False
+        }
+        agent_map = copy.deepcopy(self.base_map)
+        # In base_map, 'calculate_clamped_factorial' calls 'clamp'.
+        # 'calculate_clamped_factorial' is OUTSIDE this lane!
+        agent_map.symbols["clamp"]["params"].append({"name": "extra", "type": "Int"})
+
+        res = agent_map.verify_lane(lane_def, self.base_map)
+        self.assertFalse(res["laneValid"])
+        violations = [v["type"] for v in res["violations"]]
+        self.assertIn("BREAKING_CALLER_CONTRACT", violations)
+
+    def test_verify_lane_cli_execution(self):
+        """Verify CLI execution of verify-lane."""
+        import subprocess
+        lane_path = ROOT / "_build" / "test_lane.json"
+        lane_path.parent.mkdir(parents=True, exist_ok=True)
+        lane_def = {
+            "laneId": "test-cli-lane",
+            "allowedSymbols": ["clamp", "power", "factorial", "calculate_clamped_factorial"],
+            "allowNewSymbols": False,
+            "assignedRequirements": ["REQ-CALC-001", "REQ-CALC-002", "REQ-CALC-003", "REQ-CALC-004"]
+        }
+        lane_path.write_text(json.dumps(lane_def), encoding="utf-8")
+
+        cmd = [
+            sys.executable, str(ROOT / "pep_semantic_map.py"),
+            "verify-lane", str(self.source_pep),
+            "--lane-file", str(lane_path),
+            "--base", str(self.source_pep),
+            "--json"
+        ]
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertTrue(data["laneValid"])
+        self.assertEqual(data["status"], "APPROVED")
+
+    def test_check_merge_cli_execution(self):
+        """Verify CLI execution of check-merge."""
+        import subprocess
+        # Check merge with base vs base vs base should be completely safe
+        cmd = [
+            sys.executable, str(ROOT / "pep_semantic_map.py"),
+            "check-merge", str(self.source_pep), str(self.source_pep), str(self.source_pep),
+            "--json"
+        ]
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        data = json.loads(proc.stdout)
+        self.assertFalse(data["hasConflicts"])
+        self.assertEqual(data["conflictCount"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,7 @@ class SemanticMap:
         self.spec: Optional[Dict[str, Any]] = None
         self.requirements: Dict[str, Dict[str, Any]] = {}
         self.test_index: Dict[str, List[Dict[str, Any]]] = {}  # symbol -> list of tests
+        self.diagnostics: List[Dict[str, Any]] = []
         
         self._load_and_analyze()
 
@@ -78,7 +79,15 @@ class SemanticMap:
             except json.JSONDecodeError:
                 self._extract_ast_fallback()
 
-        # 2. Load living specification if present
+        # 2. Check diagnostics
+        chk_code, chk_stdout, _ = run_pep_cmd("check", str(self.source_path), "--json")
+        try:
+            chk_data = json.loads(chk_stdout)
+            self.diagnostics = chk_data.get("diagnostics", [])
+        except Exception:
+            self.diagnostics = []
+
+        # 3. Load living specification if present
         if self.spec_path and self.spec_path.is_file():
             try:
                 self.spec = json.loads(self.spec_path.read_text(encoding="utf-8"))
@@ -530,6 +539,116 @@ class SemanticMap:
         }
 
     # -------------------------------------------------------------------------
+    # Multi-Agent Coordination Lane Verification
+    # -------------------------------------------------------------------------
+    def verify_lane(self, lane_def: Dict[str, Any], base_map: Optional["SemanticMap"] = None) -> Dict[str, Any]:
+        """
+        Validates that modifications stay strictly within an agent's designated semantic lane.
+        Checks:
+        1. Clean compiler status (zero syntax/type errors in lane).
+        2. Out-of-lane symbol mutations (if allowNewSymbols is False).
+        3. Breaking caller contracts for modified symbols (if base_map provided).
+        4. Assigned requirement fulfillment in living specification.
+        """
+        lane_id = lane_def.get("laneId", "unknown-lane")
+        allowed_symbols = set(lane_def.get("allowedSymbols", []))
+        allow_new = lane_def.get("allowNewSymbols", False)
+        assigned_reqs = set(lane_def.get("assignedRequirements", []))
+
+        violations = []
+
+        # 1. Check compiler health
+        if self.diagnostics:
+            for diag in self.diagnostics:
+                violations.append({
+                    "type": "COMPILER_DIAGNOSTIC",
+                    "severity": "CRITICAL",
+                    "message": f"Compilation error in lane: {diag.get('message', '')} ({diag.get('code', '')})",
+                    "diagnostic": diag
+                })
+
+        # 2. Check out-of-lane symbols if base_map is present
+        if base_map:
+            # Check modified existing symbols
+            for sym_name, sym_info in self.symbols.items():
+                base_sym = base_map.symbols.get(sym_name)
+                if base_sym:
+                    # Symbol existed in base. Was it modified?
+                    if sym_info != base_sym and sym_name not in allowed_symbols:
+                        violations.append({
+                            "type": "OUT_OF_LANE_MODIFICATION",
+                            "severity": "CRITICAL",
+                            "symbol": sym_name,
+                            "message": f"Symbol '{sym_name}' was modified but is outside lane '{lane_id}' allowed symbols."
+                        })
+                else:
+                    # New symbol added
+                    if not allow_new and sym_name not in allowed_symbols:
+                        violations.append({
+                            "type": "OUT_OF_LANE_ADDITION",
+                            "severity": "HIGH",
+                            "symbol": sym_name,
+                            "message": f"New symbol '{sym_name}' was added but is outside lane '{lane_id}' allowed symbols."
+                        })
+
+            # Check deleted symbols
+            for base_sym_name in base_map.symbols:
+                if base_sym_name not in self.symbols and base_sym_name not in allowed_symbols:
+                    violations.append({
+                        "type": "OUT_OF_LANE_DELETION",
+                        "severity": "CRITICAL",
+                        "symbol": base_sym_name,
+                        "message": f"Symbol '{base_sym_name}' was removed but is outside lane '{lane_id}' allowed symbols."
+                    })
+
+            # 3. Check breaking caller contracts for modified symbols
+            for sym_name in allowed_symbols:
+                if sym_name in self.symbols and sym_name in base_map.symbols:
+                    curr_sym = self.symbols[sym_name]
+                    base_sym = base_map.symbols[sym_name]
+                    if curr_sym.get("params") != base_sym.get("params") or curr_sym.get("returns") != base_sym.get("returns"):
+                        outside_callers = [c for c in base_map.caller_graph.get(sym_name, set()) if c not in allowed_symbols]
+                        if outside_callers:
+                            violations.append({
+                                "type": "BREAKING_CALLER_CONTRACT",
+                                "severity": "HIGH",
+                                "symbol": sym_name,
+                                "message": f"Signature of '{sym_name}' was changed in lane '{lane_id}', breaking outside callers: {outside_callers}",
+                                "outsideCallers": outside_callers
+                            })
+
+        # 4. Check assigned requirements fulfillment
+        if self.spec and assigned_reqs:
+            for req_id in assigned_reqs:
+                req = self.requirements.get(req_id)
+                if not req:
+                    violations.append({
+                        "type": "REQUIREMENT_MISSING",
+                        "severity": "HIGH",
+                        "requirementId": req_id,
+                        "message": f"Assigned requirement '{req_id}' is not defined in the specification."
+                    })
+                else:
+                    req_symbols = req.get("symbols", [])
+                    missing_syms = [s for s in req_symbols if s not in self.symbols]
+                    if missing_syms:
+                        violations.append({
+                            "type": "REQUIREMENT_UNSATISFIED",
+                            "severity": "HIGH",
+                            "requirementId": req_id,
+                            "message": f"Assigned requirement '{req_id}' is missing required symbols: {missing_syms}"
+                        })
+
+        valid = len(violations) == 0
+        return {
+            "laneValid": valid,
+            "laneId": lane_id,
+            "status": "APPROVED" if valid else "REJECTED",
+            "violationCount": len(violations),
+            "violations": violations
+        }
+
+    # -------------------------------------------------------------------------
     # Multi-Agent Semantic Conflict Detection
     # -------------------------------------------------------------------------
     @staticmethod
@@ -630,7 +749,35 @@ def main():
     p_apply.add_argument("--auto", action="store_true", help="Automatically apply all SAFE_AUTOMATIC repairs")
     p_apply.add_argument("--json", action="store_true", help="Output JSON format")
 
+    # verify-lane
+    p_lane = subparsers.add_parser("verify-lane", help="Verify that changes strictly adhere to a designated semantic lane")
+    p_lane.add_argument("source", type=pathlib.Path, help="Target .pep source file")
+    p_lane.add_argument("--lane-file", type=pathlib.Path, required=True, help="Lane definition JSON file")
+    p_lane.add_argument("--base", type=pathlib.Path, default=None, help="Base .pep source file before lane changes")
+    p_lane.add_argument("--json", action="store_true", help="Output JSON format")
+
+    # check-merge
+    p_merge = subparsers.add_parser("check-merge", help="Check semantic merge safety between base and two branch sources")
+    p_merge.add_argument("base", type=pathlib.Path, help="Base .pep source file")
+    p_merge.add_argument("branch_a", type=pathlib.Path, help="Branch A .pep source file")
+    p_merge.add_argument("branch_b", type=pathlib.Path, help="Branch B .pep source file")
+    p_merge.add_argument("--json", action="store_true", help="Output JSON format")
+
     args = parser.parse_args()
+
+    if args.subcommand == "check-merge":
+        base_map = SemanticMap(args.base)
+        a_map = SemanticMap(args.branch_a)
+        b_map = SemanticMap(args.branch_b)
+        res = SemanticMap.detect_semantic_conflicts(base_map, a_map, b_map)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"Semantic Merge Verdict: {'CONFLICTS DETECTED' if res['hasConflicts'] else 'SAFE TO MERGE'}")
+            print(f"Conflicts: {res['conflictCount']}")
+            for c in res['conflicts']:
+                print(f"  [{c['severity']}] {c['type']}: {c['description']}")
+        return
 
     smap = SemanticMap(args.source, getattr(args, "spec", None))
 
@@ -736,6 +883,21 @@ def main():
             print(f"Applied {len(applied)} mechanical repairs.")
             for o in applied:
                 print(f"  {o['repairId']}: {o['status']} (valid: {o['verifiedValid']})")
+
+    elif args.subcommand == "verify-lane":
+        with open(args.lane_file, "r", encoding="utf-8") as f:
+            lane_def = json.load(f)
+        base_map = SemanticMap(args.base) if args.base else None
+        res = smap.verify_lane(lane_def, base_map)
+        if args.json:
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"Lane Verification for '{res['laneId']}': {res['status']}")
+            print(f"Violations: {res['violationCount']}")
+            for v in res['violations']:
+                print(f"  [{v['severity']}] {v['type']}: {v['message']}")
+        if not res["laneValid"]:
+            sys.exit(1)
 
 
 if __name__ == "__main__":
