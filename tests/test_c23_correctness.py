@@ -428,6 +428,11 @@ fn subtract(a: Int, b: Int) -> Int { return a - b }
 
             semantic = SemanticMap(entry)
             self.assertEqual(semantic.module_graph, graph)
+            context = semantic.get_context_packet("std/scale.pep::twice")
+            self.assertEqual(context["implementation"], "fn twice(n: Int) -> Int { return helper(n) * 2 }")
+            self.assertEqual(context["moduleRevision"], graph["revision"])
+            self.assertEqual(context["sourceHash"], graph["files"][1]["revision"])
+            self.assertIn("error", semantic.get_context_packet("std/scale.pep::helper"))
             self.assertFalse(semantic.verify_lane({})["laneValid"])
             self.assertEqual(semantic.apply_repair({})["status"], "UNSUPPORTED_MODULE_REPAIR")
             self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(entry)), (0, "42\n", ""))
@@ -438,6 +443,7 @@ fn subtract(a: Int, b: Int) -> Int { return a - b }
             status, new_output, error = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
             self.assertEqual(status, 0, error or new_output)
             self.assertNotEqual(json.loads(new_output)["moduleGraph"]["revision"], graph["revision"])
+            self.assertIn("std/ops.pep", semantic.get_context_packet("std/scale.pep::twice")["error"])
 
     def test_file_module_boundaries_fail_with_source_identity(self):
         cases = (

@@ -2,6 +2,28 @@
 
 The seed choice implements part of the broader [Founding Design v0.3](FOUNDING_DESIGN_v0.3.md). Binding future technical constraints are in [Technical Resolution 001](TECHNICAL_RESOLUTION_001.md), as amended by [Technical Resolution 002](TECHNICAL_RESOLUTION_002.md); this file records current seed facts and limits.
 
+## Provisional file modules
+
+The provisional core branch supports function modules in file-based CLI projects. The entry file's physical parent directory is the project root. An import such as `import math.scale as scale` resolves the case-exact path `math/scale.pep` underneath that root. Imported declarations are private by default. Export a function with `pub fn` and call it through an explicit qualifier. Imported files can declare functions and import other files. Cycles, noncanonical paths, imported types, and top-level execution in imported files are diagnosed.
+
+`math/scale.pep`
+
+```pep
+fn adjust(value: Int) -> Int { return value + 1 }
+pub fn twice(value: Int) -> Int { return adjust(value) * 2 }
+```
+
+`main.pep`
+
+```pep
+import math.scale as scale
+say(int_text(scale.twice(20)))
+```
+
+From the repository root, use `.\pep.ps1 run PATH_TO_MAIN.pep` or `.\pep.ps1 run-c23 PATH_TO_MAIN.pep --direct`. Both should print `42`. Use `.\pep.ps1 check PATH_TO_MAIN.pep --json` to inspect the checked tree and the content-addressed `moduleGraph`. Use `python pep_semantic_map.py context PATH_TO_MAIN.pep --symbol math/scale.pep::twice --json` to retrieve the exported function's source and dependencies. Context refuses to use a graph after any module source changes.
+
+Session-based editing, module-aware repairs and lane approval, imported nominal types, packages, and user-defined generics remain outside this slice.
+
 ## Decision
 
 Use **OCaml 5.5.2** as Pep's seed implementation language. The compiler owns Pep's syntax, typed representation, semantic queries, diagnostics, and eventual self-hosting path. OCaml is implementation machinery; it does not define Pep's surface syntax or semantics.

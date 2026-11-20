@@ -498,14 +498,42 @@ class SemanticMap:
     # -------------------------------------------------------------------------
     # Dependency-Complete Context Packet (Aver / Lume style)
     # -------------------------------------------------------------------------
+    def _read_module_snapshot(self, target_document: str) -> Tuple[pathlib.Path, bytes, str]:
+        root = self.source_path.parent
+        target = None
+        for document in self.module_graph["files"]:
+            name = document["document"]
+            pathname = (root / name).resolve()
+            if not pathname.is_relative_to(root) or pathname != root / name:
+                raise ValueError(f"Module moved outside its checked path: {name}")
+            content = pathname.read_bytes()
+            revision = "sha256:" + hashlib.sha256(content).hexdigest()
+            if revision != document["revision"]:
+                raise ValueError(f"Module changed since the compiler check: {name}")
+            if name == target_document:
+                target = (pathname, content, revision)
+        if target is None:
+            raise ValueError(f"No checked source snapshot for {target_document}")
+        return target
+
     def get_context_packet(self, target_symbol: str, max_tokens: int = 4000) -> Dict[str, Any]:
         """
         Produce a compact, dependency-complete context packet for an AI agent.
         Includes target symbol implementation, requirements, caller/callee signatures,
         linked tests, and explicit disclosure of omitted information / uncertainties.
         """
-        if self.has_module_sources:
-            return {"error": "Multi-file context requires revision-pinned source snapshots"}
+        requested_symbol = target_symbol
+        if self.has_module_sources and not self.module_graph:
+            return {"error": "A checked module graph is required for context"}
+        if self.module_graph and "::" in target_symbol:
+            document, _, name = target_symbol.partition("::")
+            exports = [
+                export["symbol"] for file in self.module_graph["files"] if file["document"] == document
+                for export in file["exports"] if export["name"] == name
+            ]
+            if len(exports) != 1:
+                return {"error": f"Public symbol '{target_symbol}' not found in graph"}
+            target_symbol = exports[0]
         if target_symbol not in self.symbols:
             return {"error": f"Symbol '{target_symbol}' not found in source"}
 
@@ -515,15 +543,25 @@ class SemanticMap:
 
         # Extract target implementation from source bytes using span
         fspan = sym.get("span", {})
-        lo = fspan.get("lo", 0)
-        hi = fspan.get("hi", 0)
-        implementation_code = ""
-        if 0 <= lo < hi <= len(self.source_bytes):
+        lo = fspan.get("lo", fspan.get("start", {}).get("offset", 0))
+        hi = fspan.get("hi", fspan.get("endOffset", 0))
+        source_path, source_bytes, source_hash = self.source_path, self.source_bytes, self.source_hash
+        if self.module_graph:
             try:
-                implementation_code = self.source_bytes[lo:hi].decode("utf-8").strip()
-            except Exception:
+                source_path, source_bytes, source_hash = self._read_module_snapshot(fspan.get("document", ""))
+            except (OSError, ValueError) as error:
+                return {"error": str(error)}
+        implementation_code = ""
+        if 0 <= lo < hi <= len(source_bytes):
+            try:
+                implementation_code = source_bytes[lo:hi].decode("utf-8").strip()
+            except UnicodeDecodeError:
+                if self.module_graph:
+                    return {"error": "Checked module span is not on UTF-8 boundaries"}
                 implementation_code = self.source_text[lo:hi].strip()
 
+        if self.module_graph and not implementation_code:
+            return {"error": "Checked module span is missing or out of bounds"}
         if not implementation_code:
             # Fallback search in source text
             fn_pat = re.compile(rf'(fn\s+{re.escape(target_symbol)}\b[^{{]*\{{.*?^\}})', re.MULTILINE | re.DOTALL)
@@ -571,11 +609,13 @@ class SemanticMap:
         uncertainties = []
         if implementation_code == fallback_sig:
             uncertainties.append("Exact source span for body could not be isolated from AST; only signature available.")
+        if self.module_graph:
+            uncertainties.append("Module context includes entry-project test links only.")
 
         # Format markdown packet
         md_lines = [
-            f"# Context Packet: `{target_symbol}`",
-            f"**File:** `{self.source_path.name}` | **Revision SHA:** `{self.source_hash[:12]}`",
+            f"# Context Packet: `{requested_symbol}`",
+            f"**File:** `{source_path.name}` | **Revision SHA:** `{source_hash[:12]}`",
             "",
             "## Target Implementation",
             "```pep",
@@ -628,13 +668,14 @@ class SemanticMap:
             omitted_info.append("Callee signatures and callers truncated due to token budget constraint.")
 
         return {
-            "targetSymbol": target_symbol,
+            "targetSymbol": requested_symbol,
             "kind": sym.get("kind"),
             "params": sym.get("params"),
             "returns": sym.get("returns"),
             "implementation": implementation_code,
-            "sourceFile": str(self.source_path),
-            "sourceHash": self.source_hash,
+            "sourceFile": str(source_path),
+            "sourceHash": source_hash,
+            **({"moduleRevision": self.module_graph["revision"]} if self.module_graph else {}),
             "calleeSignatures": callee_signatures,
             "callerSignatures": caller_signatures,
             "linkedRequirements": relevant_reqs,
@@ -645,7 +686,7 @@ class SemanticMap:
             "incomplete": budget_exceeded,
             "omittedInformation": omitted_info,
             "uncertainties": uncertainties,
-            "retrievalQuery": f"pep_semantic_map.py context {self.source_path.name} --symbol {target_symbol}"
+            "retrievalQuery": f"pep_semantic_map.py context {self.source_path.name} --symbol {requested_symbol}"
         }
 
     # -------------------------------------------------------------------------
