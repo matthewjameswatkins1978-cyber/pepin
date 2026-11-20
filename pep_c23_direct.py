@@ -48,6 +48,8 @@ class C23Emitter:
     def __init__(self, ast_data: Dict[str, Any]):
         self.ast = ast_data.get("ast", [])
         self.types: Dict[str, Dict[str, Any]] = {}
+        self.unions: Dict[str, Dict[str, Any]] = {}
+        self.constructors: Dict[str, Tuple[str, int, Dict[str, Any]]] = {}
         self.functions: Dict[str, Dict[str, Any]] = {}
         self.globals: List[Dict[str, Any]] = []
         self.c_lines: List[str] = []
@@ -57,6 +59,10 @@ class C23Emitter:
             kind = item.get("kind")
             if kind == "record_declaration":
                 self.types[item["name"]] = item
+            elif kind == "union_declaration":
+                self.unions[item["name"]] = item
+                for idx, v in enumerate(item.get("variants", [])):
+                    self.constructors[v["name"]] = (item["name"], idx, v)
             elif kind == "function":
                 self.functions[item["name"]] = item
             elif kind in ("let", "var", "expression", "return"):
@@ -73,6 +79,8 @@ class C23Emitter:
             return "void"
         elif type_str in self.types:
             return f"pep_rec_{type_str}"
+        elif type_str in self.unions:
+            return f"pep_union_{type_str}"
         elif type_str.startswith("List["):
             return "pep_list_t"
         return "int64_t"
@@ -106,7 +114,7 @@ class C23Emitter:
             return f"({left} {op} {right})"
         elif kind == "unary":
             op = expr["operator"]
-            val = self.emit_expr(expr["value"])
+            val = self.emit_expr(expr.get("value") or expr.get("operand"))
             if op == "!":
                 return f"(!{val})"
             elif op == "neg":
@@ -139,6 +147,57 @@ class C23Emitter:
             target = self.emit_expr(target_expr)
             fname = expr.get("field") or expr.get("name")
             return f"({target}.{fname})"
+        elif kind == "list":
+            elements = [self.emit_expr(e) for e in expr.get("elements", [])]
+            if not elements:
+                return "((pep_list_t){ .len = 0, .data = NULL })"
+            elems_str = ", ".join(elements)
+            return f"((pep_list_t){{ .len = {len(elements)}, .data = (int64_t[]){{ {elems_str} }} }})"
+        elif kind == "match":
+            subject_expr = expr.get("value") or expr.get("subject")
+            subject = self.emit_expr(subject_expr)
+            arms = expr.get("arms", [])
+            lines = [f"({{ auto __m_val = {subject}; int64_t __m_res = 0;"]
+            first_arm = True
+            for arm in arms:
+                pat = arm["pattern"]
+                pkind = pat.get("kind")
+                conds = []
+                binds = []
+                if pkind == "constructor_pattern":
+                    cname = pat["name"]
+                    if cname in self.constructors:
+                        uname, cidx, cinfo = self.constructors[cname]
+                        conds.append(f"__m_val.tag == {cidx}")
+                        for arg_idx, arg_pat in enumerate(pat.get("arguments", [])):
+                            if arg_pat.get("kind") == "binding_pattern":
+                                bname = arg_pat["name"]
+                                binds.append(f"int64_t pep_var_{bname} = __m_val.val.{cname}._{arg_idx};")
+                elif pkind == "binding_pattern":
+                    bname = pat["name"]
+                    binds.append(f"auto pep_var_{bname} = __m_val;")
+                elif pkind == "wildcard_pattern":
+                    pass
+
+                arm_code = self.emit_expr(arm["result"])
+                if conds:
+                    cond_str = " && ".join(conds)
+                    prefix = "if" if first_arm else "else if"
+                    lines.append(f"{prefix} ({cond_str}) {{")
+                    for b in binds:
+                        lines.append(f"  {b}")
+                    lines.append(f"  __m_res = {arm_code};")
+                    lines.append("}")
+                    first_arm = False
+                else:
+                    lines.append("else {" if not first_arm else "{")
+                    for b in binds:
+                        lines.append(f"  {b}")
+                    lines.append(f"  __m_res = {arm_code};")
+                    lines.append("}")
+                    break
+            lines.append("__m_res; })")
+            return " ".join(lines)
         return "0"
 
     def emit_stmt(self, stmt: Dict[str, Any], indent: str = "  ") -> List[str]:
@@ -169,6 +228,17 @@ class C23Emitter:
                 lines.append(f"{indent}}} else {{")
                 for s in stmt.get("else", []):
                     lines.extend(self.emit_stmt(s, indent + "  "))
+            lines.append(f"{indent}}}")
+        elif kind == "for_in":
+            bname = stmt["name"]
+            iterable = self.emit_expr(stmt["iterable"])
+            idx_var = f"__i_{bname}_{abs(hash(bname)) % 10000}"
+            list_var = f"__list_{bname}_{abs(hash(bname)) % 10000}"
+            lines.append(f"{indent}pep_list_t {list_var} = {iterable};")
+            lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {list_var}.len; ++{idx_var}) {{")
+            lines.append(f"{indent}  int64_t pep_var_{bname} = {list_var}.data[{idx_var}];")
+            for s in stmt.get("body", []):
+                lines.extend(self.emit_stmt(s, indent + "  "))
             lines.append(f"{indent}}}")
         elif kind == "while":
             cond = self.emit_expr(stmt["condition"])
@@ -245,6 +315,55 @@ class C23Emitter:
         out.append("  return buf;")
         out.append("}")
         out.append("")
+
+        # List Runtime
+        out.append("/* List Runtime */")
+        out.append("typedef struct {")
+        out.append("  size_t len;")
+        out.append("  int64_t* data;")
+        out.append("} pep_list_t;")
+        out.append("")
+        out.append("static inline int64_t pep_length(pep_list_t list) {")
+        out.append("  return (int64_t)list.len;")
+        out.append("}")
+        out.append("")
+
+        # Tagged Unions
+        if self.unions:
+            out.append("/* Tagged Union Types */")
+            for uname, uinfo in self.unions.items():
+                out.append(f"typedef struct pep_union_{uname} {{")
+                out.append("  int tag;")
+                out.append("  union {")
+                for v in uinfo.get("variants", []):
+                    vname = v["name"]
+                    args = v.get("arguments", [])
+                    if args:
+                        out.append(f"    struct {{")
+                        for i, a in enumerate(args):
+                            out.append(f"      {self.emit_c_type(a)} _{i};")
+                        out.append(f"    }} {vname};")
+                out.append("  } val;")
+                out.append(f"}} pep_union_{uname};")
+                out.append("")
+
+                # Constructor functions
+                for idx, v in enumerate(uinfo.get("variants", [])):
+                    vname = v["name"]
+                    args = v.get("arguments", [])
+                    if args:
+                        c_params = [f"{self.emit_c_type(a)} _{i}" for i, a in enumerate(args)]
+                        out.append(f"static inline pep_union_{uname} pep_fn_{vname}({', '.join(c_params)}) {{")
+                        out.append(f"  pep_union_{uname} u = {{ .tag = {idx} }};")
+                        for i in range(len(args)):
+                            out.append(f"  u.val.{vname}._{i} = _{i};")
+                        out.append("  return u;")
+                        out.append("}")
+                    else:
+                        out.append(f"static inline pep_union_{uname} pep_fn_{vname}(void) {{")
+                        out.append(f"  return (pep_union_{uname}){{ .tag = {idx} }};")
+                        out.append("}")
+                    out.append("")
 
         # Type declarations (Records)
         if self.types:

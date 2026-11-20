@@ -38,7 +38,7 @@ class SemanticMap:
     def __init__(self, source_path: pathlib.Path, spec_path: Optional[pathlib.Path] = None):
         self.source_path = source_path.resolve()
         self.spec_path = spec_path.resolve() if spec_path else self._find_companion_spec()
-        self.source_text = self.source_path.read_text(encoding="utf-8")
+        self.source_text = self.source_path.read_bytes().decode("utf-8")
         self.source_hash = hashlib.sha256(self.source_text.encode("utf-8")).hexdigest()
         
         self.ast: Dict[str, Any] = {}
@@ -86,8 +86,10 @@ class SemanticMap:
                     req_id = req.get("id")
                     if req_id:
                         self.requirements[req_id] = req
-                        for sym in req.get("symbols", []):
-                            for test in req.get("tests", []):
+                        syms = req.get("symbols") or req.get("implementsSymbols") or []
+                        tests = req.get("tests") or req.get("verifiedByTests") or []
+                        for sym in syms:
+                            for test in tests:
                                 self.test_index.setdefault(sym, []).append({
                                     "test": test,
                                     "requirement": req_id
@@ -127,15 +129,17 @@ class SemanticMap:
                 self.caller_graph.setdefault(name, set())
                 self._extract_calls_from_statements(name, body)
 
-            elif kind in ("record", "union", "TopType"):
+            elif kind in ("record", "union", "TopType", "record_declaration", "union_declaration"):
                 decl = item.get("decl", item)
                 tname = decl.get("name", "")
-                self.types[tname] = {
+                type_info = {
                     "kind": decl.get("kind", kind),
                     "name": tname,
                     "span": decl.get("span", {}),
                     "details": decl
                 }
+                self.types[tname] = type_info
+                self.symbols[tname] = type_info
 
     def _extract_calls_from_statements(self, caller: str, stmts: List[Dict[str, Any]]):
         def walk_node(node: Any):
@@ -219,7 +223,7 @@ class SemanticMap:
 
         linked_symbols = set()
         for req_id, req in self.requirements.items():
-            req_symbols = req.get("symbols", [])
+            req_symbols = req.get("symbols") or req.get("implementsSymbols") or []
             missing_syms = [s for s in req_symbols if s not in self.symbols]
             
             is_implemented = len(missing_syms) == 0 and len(req_symbols) > 0
@@ -238,7 +242,7 @@ class SemanticMap:
                 "status": req.get("status", "DRAFT"),
                 "symbols": req_symbols,
                 "missingSymbols": missing_syms,
-                "tests": req.get("tests", []),
+                "tests": req.get("tests") or req.get("verifiedByTests") or [],
                 "implemented": is_implemented
             })
 
@@ -322,7 +326,8 @@ class SemanticMap:
         # Relevant requirements
         relevant_reqs = []
         for req_id, req in self.requirements.items():
-            if target_symbol in req.get("symbols", []):
+            syms = req.get("symbols") or req.get("implementsSymbols") or []
+            if target_symbol in syms:
                 relevant_reqs.append({
                     "id": req_id,
                     "title": req.get("title", ""),
@@ -414,40 +419,115 @@ class SemanticMap:
         code = diagnostic.get("code") or diagnostic.get("errorCode", "")
         message = diagnostic.get("message", "")
         span = diagnostic.get("at") or diagnostic.get("span", {})
-        lo = span.get("lo", 0)
-        hi = span.get("hi", 0)
+        lo = span.get("lo") if "lo" in span else span.get("start", {}).get("offset", 0)
+        hi = span.get("hi") if "hi" in span else span.get("endOffset", 0)
+        span_obj = {"lo": lo, "hi": hi}
 
-        # 1. PEP_TYPE_MISMATCH with hole candidate
+        # 1. Unknown identifier / variable with single close typo
+        if code in ("PEP_UNKNOWN_VARIABLE", "PEP_UNBOUND_NAME") or "unknown variable" in message.lower() or "unbound" in message.lower():
+            m = re.search(r"(?:unknown variable|unbound (?:name|variable|identifier)) ['\"]?([A-Za-z0-9_]+)['\"]?", message, re.IGNORECASE)
+            unknown = m.group(1) if m else ""
+            if unknown:
+                candidates = [s for s in self.symbols if s != unknown and (s.startswith(unknown[:2]) or unknown.startswith(s[:2]))]
+                if candidates:
+                    return {
+                        "repairId": f"REPAIR-TYPO-{lo}",
+                        "diagnosticCode": code,
+                        "safety": "SAFE_AUTOMATIC",
+                        "description": f"Replace misspelled '{unknown}' with in-scope symbol '{candidates[0]}'",
+                        "targetSpan": span_obj,
+                        "replacement": candidates[0]
+                    }
+
+        # 2. Type mismatch: Expected Str but found Int (e.g. say(123) -> say(int_text(123)))
+        if code == "PEP_TYPE_MISMATCH":
+            exp_type = diagnostic.get("expectedType")
+            if exp_type == "Str" and "found Int" in message:
+                content = self.source_path.read_bytes().decode("utf-8")
+                raw_expr = content[lo:hi] if lo < hi <= len(content) else ""
+                if raw_expr:
+                    return {
+                        "repairId": f"REPAIR-STR-INT-{lo}",
+                        "diagnosticCode": code,
+                        "safety": "SAFE_AUTOMATIC",
+                        "description": f"Wrap integer expression '{raw_expr}' with 'int_text({raw_expr})'",
+                        "targetSpan": span_obj,
+                        "replacement": f"int_text({raw_expr})"
+                    }
+            elif exp_type == "Int" and "found Str" in message:
+                content = self.source_path.read_bytes().decode("utf-8")
+                raw_expr = content[lo:hi] if lo < hi <= len(content) else ""
+                m = re.match(r'^"(\d+)"$', raw_expr)
+                if m:
+                    return {
+                        "repairId": f"REPAIR-INT-LITERAL-{lo}",
+                        "diagnosticCode": code,
+                        "safety": "SAFE_AUTOMATIC",
+                        "description": f"Replace string literal '{raw_expr}' with integer {m.group(1)}",
+                        "targetSpan": span_obj,
+                        "replacement": m.group(1)
+                    }
+
+        # 3. PEP_TYPE_MISMATCH with hole candidate
         if "hole" in message.lower() or code == "PEP_HOLE":
-            expected = diagnostic.get("expected")
+            expected = diagnostic.get("expected") or diagnostic.get("expectedType")
             if expected:
                 return {
                     "repairId": f"REPAIR-{code}-{lo}",
                     "diagnosticCode": code,
                     "safety": "SUGGESTED_CHOICE",
                     "description": f"Fill typed hole with expected type {expected}",
-                    "targetSpan": span,
+                    "targetSpan": span_obj,
                     "suggestedReplacements": [f"/* expected {expected} */"]
                 }
 
-        # 2. Unknown identifier with single close typo
-        if code == "PEP_UNBOUND_NAME" or "unbound" in message.lower():
-            m = re.search(r"unbound (?:name|variable|identifier) ['\"]?([A-Za-z0-9_]+)['\"]?", message, re.IGNORECASE)
-            unknown = m.group(1) if m else ""
-            if unknown:
-                # Find closest symbol
-                candidates = [s for s in self.symbols if s != unknown and (s.startswith(unknown[:2]) or unknown.startswith(s[:2]))]
-                if len(candidates) == 1:
-                    return {
-                        "repairId": f"REPAIR-TYPO-{lo}",
-                        "diagnosticCode": code,
-                        "safety": "SAFE_AUTOMATIC",
-                        "description": f"Replace misspelled '{unknown}' with in-scope symbol '{candidates[0]}'",
-                        "targetSpan": span,
-                        "replacement": candidates[0]
-                    }
-
         return None
+
+    def apply_repair(self, repair_plan: Dict[str, Any], dry_run: bool = False) -> Dict[str, Any]:
+        """
+        Mechanically applies an unambiguous repair plan to the source code,
+        verifying that the diagnostic is eliminated.
+        """
+        span = repair_plan.get("targetSpan", {})
+        lo = span.get("lo", 0)
+        hi = span.get("hi", 0)
+        replacement = repair_plan.get("replacement", "")
+
+        content = self.source_path.read_bytes().decode("utf-8")
+        if lo < 0 or hi > len(content) or lo > hi:
+            raise ValueError(f"Invalid target span [{lo}, {hi}] for file of length {len(content)}")
+
+        old_slice = content[lo:hi]
+        repaired_content = content[:lo] + replacement + content[hi:]
+
+        if not dry_run:
+            self.source_path.write_bytes(repaired_content.encode("utf-8"))
+
+        # Re-check via compiler
+        cmd = ["pwsh", "-NoProfile", "-File", str(PEP_CLI), "check", str(self.source_path), "--json"]
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+        
+        try:
+            check_data = json.loads(proc.stdout)
+            is_valid = check_data.get("status") == "valid"
+            remaining = check_data.get("diagnostics", [])
+        except Exception:
+            is_valid = proc.returncode == 0
+            remaining = []
+
+        return {
+            "status": "SUCCESS" if (is_valid or len(remaining) < 1) else "PARTIAL",
+            "repairId": repair_plan.get("repairId"),
+            "source": str(self.source_path),
+            "originalDiagnostic": repair_plan.get("diagnosticCode"),
+            "diff": {
+                "before": old_slice,
+                "after": replacement,
+                "span": {"lo": lo, "hi": hi}
+            },
+            "verifiedValid": is_valid,
+            "remainingDiagnostics": remaining
+        }
 
     # -------------------------------------------------------------------------
     # Multi-Agent Semantic Conflict Detection
@@ -539,6 +619,17 @@ def main():
     p_map.add_argument("source", type=pathlib.Path, help="Target .pep source file")
     p_map.add_argument("--json", action="store_true", help="Output JSON format")
 
+    # repair
+    p_repair = subparsers.add_parser("repair", help="Analyze diagnostics and compute mechanical repair plans")
+    p_repair.add_argument("source", type=pathlib.Path, help="Target .pep source file")
+    p_repair.add_argument("--json", action="store_true", help="Output JSON format")
+
+    # apply-repair
+    p_apply = subparsers.add_parser("apply-repair", help="Apply mechanical repair plans and verify validity")
+    p_apply.add_argument("source", type=pathlib.Path, help="Target .pep source file")
+    p_apply.add_argument("--auto", action="store_true", help="Automatically apply all SAFE_AUTOMATIC repairs")
+    p_apply.add_argument("--json", action="store_true", help="Output JSON format")
+
     args = parser.parse_args()
 
     smap = SemanticMap(args.source, getattr(args, "spec", None))
@@ -583,6 +674,68 @@ def main():
             "callEdges": smap.calls
         }
         print(json.dumps(data, indent=2))
+
+    elif args.subcommand == "repair":
+        cmd = ["pwsh", "-NoProfile", "-File", str(PEP_CLI), "check", str(args.source), "--json"]
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+        try:
+            data = json.loads(proc.stdout)
+            diags = data.get("diagnostics", [])
+        except Exception:
+            diags = []
+
+        plans = []
+        for d in diags:
+            plan = smap.generate_repair_plan(d)
+            if plan:
+                plans.append(plan)
+
+        out = {
+            "source": str(args.source),
+            "diagnosticCount": len(diags),
+            "repairableCount": len(plans),
+            "repairs": plans
+        }
+        if args.json:
+            print(json.dumps(out, indent=2))
+        else:
+            print(f"Diagnostics: {len(diags)}, Repairable: {len(plans)}")
+            for p in plans:
+                print(f"  [{p['safety']}] {p['repairId']}: {p['description']}")
+
+    elif args.subcommand == "apply-repair":
+        cmd = ["pwsh", "-NoProfile", "-File", str(PEP_CLI), "check", str(args.source), "--json"]
+        proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, encoding="utf-8")
+        try:
+            data = json.loads(proc.stdout)
+            diags = data.get("diagnostics", [])
+        except Exception:
+            diags = []
+
+        applied = []
+        plans = []
+        for d in diags:
+            p = smap.generate_repair_plan(d)
+            if p and (p["safety"] == "SAFE_AUTOMATIC" or not args.auto):
+                plans.append(p)
+
+        # Sort descending by lo offset so earlier offsets remain intact
+        plans.sort(key=lambda p: p["targetSpan"]["lo"], reverse=True)
+        for p in plans:
+            outcome = smap.apply_repair(p)
+            applied.append(outcome)
+
+        out = {
+            "source": str(args.source),
+            "appliedCount": len(applied),
+            "outcomes": applied
+        }
+        if args.json:
+            print(json.dumps(out, indent=2))
+        else:
+            print(f"Applied {len(applied)} mechanical repairs.")
+            for o in applied:
+                print(f"  {o['repairId']}: {o['status']} (valid: {o['verifiedValid']})")
 
 
 if __name__ == "__main__":

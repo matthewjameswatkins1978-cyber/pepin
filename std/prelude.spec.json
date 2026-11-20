@@ -1,0 +1,204 @@
+{
+  "specVersion": 1,
+  "module": "std::prelude",
+  "sourceFile": "std/prelude.pep",
+  "description": "Pepin Core Standard Prelude providing mathematical, logical, Option, and List utilities.",
+  "requirements": [
+    {
+      "id": "REQ-STD-MATH-001",
+      "title": "Arithmetic Primitives",
+      "description": "Mathematical absolute value, minimum, maximum, clamp, and sign determination.",
+      "category": "functional",
+      "invariants": [
+        "abs(x) >= 0 for all representable x != Int64.min",
+        "min(a, b) <= a && min(a, b) <= b",
+        "max(a, b) >= a && max(a, b) >= b",
+        "lo <= clamp(v, lo, hi) <= hi when lo <= hi"
+      ],
+      "implementsSymbols": ["abs", "min", "max", "clamp", "sign"],
+      "verifiedByTests": ["TEST-STD-MATH-001"]
+    },
+    {
+      "id": "REQ-STD-MATH-002",
+      "title": "Exponentiation and GCD",
+      "description": "Binary exponentiation and Euclidean greatest common divisor algorithm.",
+      "category": "functional",
+      "invariants": [
+        "pow(b, 0) == 1",
+        "pow(b, e) == b * pow(b, e - 1) for e > 0",
+        "gcd(a, b) divides both a and b"
+      ],
+      "implementsSymbols": ["mod", "pow", "gcd", "is_even", "is_odd"],
+      "verifiedByTests": ["TEST-STD-MATH-002"]
+    },
+    {
+      "id": "REQ-STD-OPT-001",
+      "title": "OptionInt Tagged Union",
+      "description": "Safe nullability via tagged union None | Some(Int) with fallback unwrapping.",
+      "category": "functional",
+      "invariants": [
+        "unwrap_or(Some(v), d) == v",
+        "unwrap_or(None, d) == d"
+      ],
+      "implementsSymbols": ["OptionInt", "unwrap_or"],
+      "verifiedByTests": ["TEST-STD-OPT-001"]
+    },
+    {
+      "id": "REQ-STD-LIST-001",
+      "title": "List Aggregation and Search",
+      "description": "List total sum, minimum, maximum, and element frequency counting.",
+      "category": "functional",
+      "invariants": [
+        "sum([]) == 0",
+        "list_max([], def) == def",
+        "count_occurrences([], target) == 0"
+      ],
+      "implementsSymbols": ["sum", "list_max", "list_min", "count_occurrences"],
+      "verifiedByTests": ["TEST-STD-LIST-001"]
+    }
+  ],
+  "symbols": [
+    {
+      "name": "abs",
+      "kind": "function",
+      "signature": "abs(n: Int) -> Int",
+      "doc": "Returns absolute value of n.",
+      "fulfillsRequirements": ["REQ-STD-MATH-001"]
+    },
+    {
+      "name": "min",
+      "kind": "function",
+      "signature": "min(a: Int, b: Int) -> Int",
+      "doc": "Returns smaller of two values.",
+      "fulfillsRequirements": ["REQ-STD-MATH-001"]
+    },
+    {
+      "name": "max",
+      "kind": "function",
+      "signature": "max(a: Int, b: Int) -> Int",
+      "doc": "Returns larger of two values.",
+      "fulfillsRequirements": ["REQ-STD-MATH-001"]
+    },
+    {
+      "name": "clamp",
+      "kind": "function",
+      "signature": "clamp(v: Int, lo: Int, hi: Int) -> Int",
+      "doc": "Clamps value into [lo, hi].",
+      "fulfillsRequirements": ["REQ-STD-MATH-001"]
+    },
+    {
+      "name": "sign",
+      "kind": "function",
+      "signature": "sign(n: Int) -> Int",
+      "doc": "Returns -1, 0, or 1.",
+      "fulfillsRequirements": ["REQ-STD-MATH-001"]
+    },
+    {
+      "name": "mod",
+      "kind": "function",
+      "signature": "mod(a: Int, b: Int) -> Int",
+      "doc": "Modulo arithmetic.",
+      "fulfillsRequirements": ["REQ-STD-MATH-002"]
+    },
+    {
+      "name": "is_even",
+      "kind": "function",
+      "signature": "is_even(n: Int) -> Bool",
+      "doc": "Checks if integer is even.",
+      "fulfillsRequirements": ["REQ-STD-MATH-002"]
+    },
+    {
+      "name": "is_odd",
+      "kind": "function",
+      "signature": "is_odd(n: Int) -> Bool",
+      "doc": "Checks if integer is odd.",
+      "fulfillsRequirements": ["REQ-STD-MATH-002"]
+    },
+    {
+      "name": "pow",
+      "kind": "function",
+      "signature": "pow(base: Int, exp: Int) -> Int",
+      "doc": "Computes base^exp via binary exponentiation.",
+      "fulfillsRequirements": ["REQ-STD-MATH-002"]
+    },
+    {
+      "name": "gcd",
+      "kind": "function",
+      "signature": "gcd(a: Int, b: Int) -> Int",
+      "doc": "Computes greatest common divisor using Euclidean algorithm.",
+      "fulfillsRequirements": ["REQ-STD-MATH-002"]
+    },
+    {
+      "name": "OptionInt",
+      "kind": "type",
+      "signature": "type OptionInt = None | Some(Int)",
+      "doc": "Optional Int tagged union.",
+      "fulfillsRequirements": ["REQ-STD-OPT-001"]
+    },
+    {
+      "name": "unwrap_or",
+      "kind": "function",
+      "signature": "unwrap_or(opt: OptionInt, default_val: Int) -> Int",
+      "doc": "Unwraps Some(v) or returns default_val.",
+      "fulfillsRequirements": ["REQ-STD-OPT-001"]
+    },
+    {
+      "name": "sum",
+      "kind": "function",
+      "signature": "sum(nums: List[Int]) -> Int",
+      "doc": "Sums integer list.",
+      "fulfillsRequirements": ["REQ-STD-LIST-001"]
+    },
+    {
+      "name": "list_max",
+      "kind": "function",
+      "signature": "list_max(nums: List[Int], default_val: Int) -> Int",
+      "doc": "Finds maximum in list or returns default_val.",
+      "fulfillsRequirements": ["REQ-STD-LIST-001"]
+    },
+    {
+      "name": "list_min",
+      "kind": "function",
+      "signature": "list_min(nums: List[Int], default_val: Int) -> Int",
+      "doc": "Finds minimum in list or returns default_val.",
+      "fulfillsRequirements": ["REQ-STD-LIST-001"]
+    },
+    {
+      "name": "count_occurrences",
+      "kind": "function",
+      "signature": "count_occurrences(nums: List[Int], target: Int) -> Int",
+      "doc": "Counts occurrences of target in list.",
+      "fulfillsRequirements": ["REQ-STD-LIST-001"]
+    }
+  ],
+  "tests": [
+    {
+      "testId": "TEST-STD-MATH-001",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_math_primitives",
+      "verifiesRequirements": ["REQ-STD-MATH-001"],
+      "targetSymbols": ["abs", "min", "max", "clamp", "sign"]
+    },
+    {
+      "testId": "TEST-STD-MATH-002",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_pow_and_gcd",
+      "verifiesRequirements": ["REQ-STD-MATH-002"],
+      "targetSymbols": ["mod", "pow", "gcd", "is_even", "is_odd"]
+    },
+    {
+      "testId": "TEST-STD-OPT-001",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_option_int",
+      "verifiesRequirements": ["REQ-STD-OPT-001"],
+      "targetSymbols": ["OptionInt", "unwrap_or"]
+    },
+    {
+      "testId": "TEST-STD-LIST-001",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_list_utilities",
+      "verifiesRequirements": ["REQ-STD-LIST-001"],
+      "targetSymbols": ["sum", "list_max", "list_min", "count_occurrences"]
+    }
+  ]
+}

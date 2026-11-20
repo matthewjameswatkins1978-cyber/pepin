@@ -17,6 +17,7 @@ type top = TopFun of func | TopStmt of stmt | TopType of type_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
+exception MultiError of error list
 
 let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
@@ -390,6 +391,13 @@ let check tops =
   let fresh_ctor ()=let n= !next_ctor_id in incr next_ctor_id;n in
   let type_table=Hashtbl.create 16 and constructor_table=Hashtbl.create 32 in
   let records=ref [] and unions=ref [] in
+  let errors=ref [] in
+  let max_errors = 20 in
+  let record_error err =
+    errors := err :: !errors;
+    if List.length !errors >= max_errors then
+      raise (MultiError (List.rev !errors))
+  in
   List.iter (fun info -> Hashtbl.add type_table info.record_name (`Record info)) semantic_record_infos;
   List.iter(function
     |TopType (RecordDecl(name,fields,sp))->
@@ -410,7 +418,7 @@ let check tops =
         Hashtbl.add type_table name (`Union info); unions:=info::!unions
     |_->()) tops;
   let rec valid_type ty sp = match ty with
-    |Named name when not (Hashtbl.mem type_table name) -> fail "PEP_UNKNOWN_TYPE" ("Unknown type '"^name^"'") sp ()
+    |Named name when not (Hashtbl.mem type_table name) -> record_error {code="PEP_UNKNOWN_TYPE";message="Unknown type '"^name^"'";at=sp;expected=None}
     |List element -> valid_type element sp
     |_ -> () in
   List.iter (function
@@ -420,7 +428,7 @@ let check tops =
     |TopStmt _->()) tops;
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
-  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then fail "PEP_RESERVED_FUNCTION" ("Function name "^f.fname^" is reserved for a builtin or constructor") f.fspan () else if Hashtbl.mem signatures f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function '"^f.fname^"'") f.fspan () else
+  List.iter(function TopFun f->if List.mem f.fname ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"] || Hashtbl.mem constructor_table f.fname then record_error {code="PEP_RESERVED_FUNCTION";message=("Function name "^f.fname^" is reserved for a builtin or constructor");at=f.fspan;expected=None} else if Hashtbl.mem signatures f.fname then record_error {code="PEP_DUPLICATE_FUNCTION";message=("Duplicate function '"^f.fname^"'");at=f.fspan;expected=None} else
     let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
     |_->())tops;
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
@@ -644,33 +652,74 @@ let check tops =
      |[]->List.rev acc,env,terminated
      |s::rest when terminated->fail "PEP_UNREACHABLE" "Statement follows an unconditional return" (stmt_span s) ()
      |SLet(name,annotation,e,sp)::rest ->
-       if has_current env name then fail "PEP_DUPLICATE_BINDING" ("Duplicate binding '"^name^"' in this scope") sp ();
+       if has_current env name then record_error {code="PEP_DUPLICATE_BINDING";message=("Duplicate binding '"^name^"' in this scope");at=sp;expected=None};
        (match annotation with Some ty->valid_type ty sp|None->());
-       let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
-       let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
-       let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=false} in
+       let (b, te) =
+         try
+           let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
+           let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
+           let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=false} in
+           (b, te)
+         with Error d ->
+           record_error d;
+           let b={bid=fresh();bname=name;bty=annotation;bspan=sp;mutable_=false} in
+           let dummy_te = {node=XInt 0L; ety=annotation; espan=sp} in
+           (b, dummy_te)
+       in
        let env'=(match env with []->[[b]]|h::tl->(b::h)::tl) in
        loop env' (TLet(b,te)::acc) false rest
      |SVar(name,annotation,e,sp)::rest ->
-       if has_current env name then fail "PEP_DUPLICATE_BINDING" ("Duplicate binding '"^name^"' in this scope") sp ();
+       if has_current env name then record_error {code="PEP_DUPLICATE_BINDING";message=("Duplicate binding '"^name^"' in this scope");at=sp;expected=None};
        (match annotation with Some ty->valid_type ty sp|None->());
-       let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
-       let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
-       let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=true} in
+       let (b, te) =
+         try
+           let te=match annotation with Some t->check_expr env scope (Some t) e|None->synth env scope e in
+           let ty=match annotation,te.ety with Some t,_->Some t|None,t->t in
+           let b={bid=fresh();bname=name;bty=ty;bspan=sp;mutable_=true} in
+           (b, te)
+         with Error d ->
+           record_error d;
+           let b={bid=fresh();bname=name;bty=annotation;bspan=sp;mutable_=true} in
+           let dummy_te = {node=XInt 0L; ety=annotation; espan=sp} in
+           (b, dummy_te)
+       in
        let env'=(match env with []->[[b]]|h::tl->(b::h)::tl) in
        loop env' (TVar(b,te)::acc) false rest
      |SAssign(name,e,sp)::rest->
-       let binding=match lookup env name with
-         |None->fail "PEP_UNKNOWN_VARIABLE" ("Unknown variable '"^name^"'") sp ()
-         |Some binding when not binding.mutable_->fail "PEP_ASSIGN_IMMUTABLE" ("Cannot assign to immutable binding '"^name^"'") sp ()
-         |Some binding->binding in
-       let expected_type=match binding.bty with Some ty->Some ty|None->fail "PEP_UNCONSTRAINED_BINDING" ("Cannot assign to binding '"^name^"' without a known type") sp () in
-       let value=check_expr env scope expected_type e in
-       loop env (TAssign(binding,value,sp)::acc) false rest
+       let stmt_opt =
+         try
+           let binding=match lookup env name with
+             |None->fail "PEP_UNKNOWN_VARIABLE" ("Unknown variable '"^name^"'") sp ()
+             |Some binding when not binding.mutable_->fail "PEP_ASSIGN_IMMUTABLE" ("Cannot assign to immutable binding '"^name^"'") sp ()
+             |Some binding->binding in
+           let expected_type=match binding.bty with Some ty->Some ty|None->fail "PEP_UNCONSTRAINED_BINDING" ("Cannot assign to binding '"^name^"' without a known type") sp () in
+           let value=check_expr env scope expected_type e in
+           Some (TAssign(binding,value,sp))
+         with Error d ->
+           record_error d;
+           None
+       in
+       let acc' = match stmt_opt with Some s -> s::acc | None -> acc in
+       loop env acc' false rest
      |SReturn(e,sp)::rest ->
        if expected=None then fail "PEP_RETURN_OUTSIDE_FUNCTION" "return is only valid inside a function" sp ();
-       let te=check_expr env scope expected e in loop env (TReturn te::acc) true rest
-     |SExpr(e,_)::rest->let te=synth env scope e in loop env (TExpr te::acc) false rest
+       let te =
+         try
+           check_expr env scope expected e
+         with Error d ->
+           record_error d;
+           {node=XInt 0L; ety=expected; espan=sp}
+       in
+       loop env (TReturn te::acc) true rest
+     |SExpr(e,_)::rest->
+       let te =
+         try
+           synth env scope e
+         with Error d ->
+           record_error d;
+           {node=XInt 0L; ety=None; espan=expr_span e}
+       in
+       loop env (TExpr te::acc) false rest
      |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected body in loop env (TBlock inner::acc) term rest
      |SIf(condition,yes,no,sp)::rest->
        let checked_condition=check_expr env scope (Some Bool) condition in
@@ -690,16 +739,37 @@ let check tops =
     in loop env [] false xs
   in
   let global_env=ref [[]] and top_typed=ref [] in
-  List.iter(function TopStmt s->let typed,env,_=check_stmts !global_env "<top-level>" None [s] in global_env:=env;top_typed:=List.rev_append typed !top_typed|_->())tops;
+  List.iter(function TopStmt s->
+    (try
+       let typed,env,_=check_stmts !global_env "<top-level>" None [s] in
+       global_env:=env;top_typed:=List.rev_append typed !top_typed
+     with Error d ->
+       record_error d)
+    |_->())tops;
   let functions=ref [] in
   List.iter(function TopFun f->
-    let sig_=Hashtbl.find signatures f.fname in
-    let seen=Hashtbl.create 8 in
-    let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s;mutable_=false})f.params in
-    let typed,_,terminated=check_stmts (params :: !global_env) f.fname (Some f.result) f.body in
-    if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
-    functions:={sig_;tparams=params;tbody=typed}::!functions
+    (try
+       let sig_=match Hashtbl.find_opt signatures f.fname with
+         | Some s -> s
+         | None ->
+             let fid = fresh() in
+             let s = {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f} in
+             Hashtbl.add signatures f.fname s; s
+       in
+       let seen=Hashtbl.create 8 in
+       let params=List.map(fun(n,t,s)->if Hashtbl.mem seen n then fail "PEP_DUPLICATE_PARAMETER" ("Duplicate parameter '"^n^"'") s ();Hashtbl.add seen n ();{bid=fresh();bname=n;bty=Some t;bspan=s;mutable_=false})f.params in
+       let typed,_,terminated=check_stmts (params :: !global_env) f.fname (Some f.result) f.body in
+       if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
+       functions:={sig_;tparams=params;tbody=typed}::!functions
+     with Error d ->
+       record_error d)
    |_->()) tops;
+  if !errors <> [] then (
+    let errs = List.rev !errors in
+    match errs with
+    | [single] -> raise (Error single)
+    | multiple -> raise (MultiError multiple)
+  );
   {functions=List.rev !functions;tops=List.rev !top_typed;holes=List.rev !holes;records=List.rev !records;unions=List.rev !unions}
 
 let rec typed_expr_json e =
@@ -746,7 +816,9 @@ let hole_json h =
  let bindings="["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"mutable\":"^string_of_bool b.mutable_^"}")h.hbindings)^"]" in
  let actions=match h.hty with None->"[]"|Some ty->"[{\"kind\":\"fill_hole\",\"expectedType\":"^json_string(type_name ty)^",\"candidates\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^"}")(candidates ty h.hbindings))^"]}]" in
  "{\"identity\":"^(match h.hid with None->"null"|Some x->json_string x)^",\"scope\":"^json_string h.hscope^",\"expectedType\":"^(match h.hty with None->"null"|Some t->json_string(type_name t))^",\"bindings\":"^bindings^",\"actions\":"^actions^",\"span\":"^span_json h.hspan^"}"
-let diag_json d = "{\"schemaVersion\":2,\"status\":\"invalid\",\"diagnostics\":[{\"code\":"^json_string d.code^",\"severity\":\"error\",\"message\":"^json_string d.message^",\"expectedType\":"^(match d.expected with None->"null"|Some t->json_string(type_name t))^",\"span\":"^span_json d.at^"}]}"
+let single_diag_json d = "{\"code\":"^json_string d.code^",\"severity\":\"error\",\"message\":"^json_string d.message^",\"expectedType\":"^(match d.expected with None->"null"|Some t->json_string(type_name t))^",\"span\":"^span_json d.at^"}"
+let diags_json ds = "{\"schemaVersion\":2,\"status\":\"invalid\",\"diagnostics\":["^String.concat ","(List.map single_diag_json ds)^"]}"
+let diag_json d = diags_json [d]
 let program_status c = if c.holes=[] then "valid" else "incomplete"
 let check_json tops c = "{\"schemaVersion\":2,\"status\":"^json_string(program_status c)^",\"ast\":"^ast_json tops^",\"typedTree\":"^typed_json c^",\"holes\":["^String.concat ","(List.map hole_json c.holes)^"],\"diagnostics\":[]}"
 
@@ -1172,6 +1244,7 @@ type session_analysis = {
   parsed: program option;
   checked: checked option;
   diagnostic: error option;
+  diagnostics: error list;
 }
 
 type session_document = {
@@ -1197,11 +1270,17 @@ let analyse_session_source source =
     incr session_typecheck_count;
     try
       let checked = check tops in
-      { source; revision; parsed = Some tops; checked = Some checked; diagnostic = None }
-    with Error diagnostic ->
-      { source; revision; parsed = Some tops; checked = None; diagnostic = Some diagnostic }
-  with Error diagnostic ->
-    { source; revision; parsed = None; checked = None; diagnostic = Some diagnostic }
+      { source; revision; parsed = Some tops; checked = Some checked; diagnostic = None; diagnostics = [] }
+    with
+    | MultiError ds ->
+      { source; revision; parsed = Some tops; checked = None; diagnostic = (match ds with [] -> None | d::_ -> Some d); diagnostics = ds }
+    | Error diagnostic ->
+      { source; revision; parsed = Some tops; checked = None; diagnostic = Some diagnostic; diagnostics = [diagnostic] }
+  with
+  | MultiError ds ->
+    { source; revision; parsed = None; checked = None; diagnostic = (match ds with [] -> None | d::_ -> Some d); diagnostics = ds }
+  | Error diagnostic ->
+    { source; revision; parsed = None; checked = None; diagnostic = Some diagnostic; diagnostics = [diagnostic] }
 
 let session_status analysis =
   match analysis.diagnostic, analysis.checked with
@@ -1525,12 +1604,12 @@ let session_semantic_target tool_checked target_message =
   let target_document=session_document ["document",JString document_id] in
   let analysis=session_get_revision target_document revision in
   let status=session_status analysis in
-  let diagnostic_values=match analysis.diagnostic with
-    |None->[]
-    |Some diagnostic ->
-        [tool_semantic_record tool_checked "SemanticDiagnostic"
-          ["code",VStr diagnostic.code;"message",VStr diagnostic.message;
-           "startByte",VInt(Int64.of_int diagnostic.at.lo);"endByte",VInt(Int64.of_int diagnostic.at.hi)]]
+  let diagnostic_values =
+    List.map (fun diagnostic ->
+      tool_semantic_record tool_checked "SemanticDiagnostic"
+        ["code",VStr diagnostic.code;"message",VStr diagnostic.message;
+         "startByte",VInt(Int64.of_int diagnostic.at.lo);"endByte",VInt(Int64.of_int diagnostic.at.hi)]
+    ) analysis.diagnostics
   in
   let functions,calls,roots=match analysis.checked with
     |None when entry_names<>[]->raise(Session_error("PEP_SEMANTIC_ROOT_UNAVAILABLE","Entry functions cannot be resolved for invalid target source"))
@@ -1749,7 +1828,7 @@ let session_response operation document revision analysis ?offset ?(extra="") ?(
   let ast, typed = if metadata_only then ("null", "null") else
     ((match analysis.parsed with None -> "null" | Some tops -> ast_json tops),
      (match analysis.checked with None -> "null" | Some checked -> typed_json checked)) in
-  let diagnostics = match analysis.diagnostic with None -> "[]" | Some diagnostic -> "[" ^ session_diagnostic_json diagnostic ^ "]" in
+  let diagnostics = "[" ^ String.concat "," (List.map session_diagnostic_json analysis.diagnostics) ^ "]" in
   Printf.sprintf "{\"schemaVersion\":3,\"outcome\":\"ok\",\"operation\":%s,\"document\":%s,\"name\":%s,\"revision\":%s,\"status\":%s,\"ast\":%s,\"typedTree\":%s,\"holes\":[%s],\"diagnostics\":%s%s}"
     (json_string operation) (json_string document)
     (match Hashtbl.find_opt session_documents document with
@@ -1858,9 +1937,10 @@ let session_fill_hole document fields =
            let status = session_status candidate in
            match candidate.diagnostic with
            | Some diagnostic ->
+               let diags_str = "[" ^ String.concat "," (List.map session_diagnostic_json candidate.diagnostics) ^ "]" in
                session_fill_rejection operation mode document document.current_revision
                  (Some candidate.revision) (Some status) diagnostic.message source_diff
-                 ("[" ^ session_diagnostic_json diagnostic ^ "]")
+                 diags_str
            | None ->
                let extra = Printf.sprintf ",\"mode\":%s,\"baseRevision\":%s,\"currentRevision\":%s,\"sourceDiff\":%s"
                  (json_string mode) (json_string document.current_revision)
@@ -1871,7 +1951,13 @@ let session_fill_hole document fields =
                  Hashtbl.replace document.revisions candidate.revision candidate;
                  document.current_revision <- candidate.revision;
                  session_response operation document.document_id candidate.revision candidate ~extra ())
-         with Error diagnostic ->
+         with
+         | MultiError ds ->
+           let diagnostic = match ds with [] -> {code="PEP_ERROR";message="Error";at={lo=0;hi=0;line=1;column=1};expected=None} | hd::_ -> hd in
+           let diags_str = "[" ^ String.concat "," (List.map session_diagnostic_json ds) ^ "]" in
+           session_fill_rejection operation mode document document.current_revision None (Some "invalid")
+             diagnostic.message source_diff diags_str
+         | Error diagnostic ->
            session_fill_rejection operation mode document document.current_revision None (Some "invalid")
              diagnostic.message source_diff ("[" ^ session_diagnostic_json diagnostic ^ "]"))
 
@@ -2018,6 +2104,13 @@ let () =
     else ignore (execute checked)
   |_ ->usage()
  with
- |Error d->if Array.exists((=)"--json")Sys.argv then print_endline(diag_json d) else prerr_endline(Printf.sprintf "%s:%d:%d: %s: %s" (List.hd(Array.to_list Sys.argv)) d.at.line d.at.column d.code d.message);exit 1
+ |Error d->
+    if Array.exists((=)"--json")Sys.argv then print_endline(diag_json d)
+    else prerr_endline(Printf.sprintf "%s:%d:%d: %s: %s" (List.hd(Array.to_list Sys.argv)) d.at.line d.at.column d.code d.message);
+    exit 1
+ |MultiError ds->
+    if Array.exists((=)"--json")Sys.argv then print_endline(diags_json ds)
+    else List.iter (fun d -> prerr_endline(Printf.sprintf "%s:%d:%d: %s: %s" (List.hd(Array.to_list Sys.argv)) d.at.line d.at.column d.code d.message)) ds;
+    exit 1
  |Runtime(code,message,sp)->if Array.exists((=)"--json")Sys.argv then print_endline("{\"schemaVersion\":2,\"status\":\"runtime_error\",\"diagnostics\":[{\"code\":"^json_string code^",\"severity\":\"error\",\"message\":"^json_string message^",\"span\":"^span_json sp^"}]}") else prerr_endline(Printf.sprintf "%d:%d: %s: %s" sp.line sp.column code message);exit 1
  |Sys_error m->prerr_endline m;exit 2
