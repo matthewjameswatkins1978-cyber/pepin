@@ -43,6 +43,8 @@ class SemanticMap:
         self.source_hash = "sha256:" + hashlib.sha256(self.source_bytes).hexdigest()
         
         self.epistemic_status = "UNAVAILABLE"  # CHECKED, INVALID, UNAVAILABLE, or FALLBACK_UNAUTHORIZED
+        self.module_graph: Optional[Dict[str, Any]] = None
+        self.has_module_sources = False
         self.compiler_available = False
         self.compiler_checked = False
 
@@ -153,6 +155,7 @@ class SemanticMap:
         if code == 0 and stdout.strip():
             try:
                 self.ast = json.loads(stdout)
+                self.has_module_sources = bool(self.ast.get("moduleGraph"))
                 self._extract_symbols_from_ast()
                 inspect_ok = True
                 self.compiler_available = True
@@ -171,6 +174,26 @@ class SemanticMap:
             chk_data = json.loads(chk_stdout)
             self.diagnostics = chk_data.get("diagnostics", [])
             chk_status = chk_data.get("status")
+            graph = chk_data.get("moduleGraph")
+            self.has_module_sources = (
+                self.has_module_sources or bool(graph)
+                or any(d.get("span", {}).get("document") for d in self.diagnostics)
+            )
+            if self.has_module_sources:
+                self.compiler_available = True
+                if chk_status != "valid":
+                    self.epistemic_status = "INVALID"
+                elif graph and graph == self.ast.get("moduleGraph") and any(
+                    file["document"] == graph["entry"] and file["revision"] == self.source_hash
+                    for file in graph["files"]
+                ):
+                    self.module_graph = graph
+                    self.epistemic_status = "UNAVAILABLE"
+                else:
+                    self.epistemic_status = "UNAVAILABLE"
+                    self.symbols.clear()
+                    self.calls.clear()
+                return
             if inspect_ok and chk_status == "valid" and len(self.diagnostics) == 0:
                 self.epistemic_status = "CHECKED"
                 self.compiler_checked = True
@@ -481,6 +504,8 @@ class SemanticMap:
         Includes target symbol implementation, requirements, caller/callee signatures,
         linked tests, and explicit disclosure of omitted information / uncertainties.
         """
+        if self.has_module_sources:
+            return {"error": "Multi-file context requires revision-pinned source snapshots"}
         if target_symbol not in self.symbols:
             return {"error": f"Symbol '{target_symbol}' not found in source"}
 
@@ -632,6 +657,8 @@ class SemanticMap:
         Never automatically resolves ambiguous identifiers.
         Binds to exact source hash and expected original bytes.
         """
+        if self.has_module_sources or diagnostic.get("span", {}).get("document"):
+            return None
         code = diagnostic.get("code") or diagnostic.get("errorCode", "")
         message = diagnostic.get("message", "")
         span = diagnostic.get("at") or diagnostic.get("span", {})
@@ -730,6 +757,12 @@ class SemanticMap:
         verifying that the diagnostic is eliminated and no compiler error is introduced.
         Preserves original source on failure; compiler failure never reports SUCCESS.
         """
+        if self.has_module_sources:
+            return {
+                "status": "UNSUPPORTED_MODULE_REPAIR",
+                "message": "Multi-file repair requires revision-pinned source snapshots.",
+                "verifiedValid": False,
+            }
         expected_hash = repair_plan.get("expectedSourceHash")
         if expected_hash and expected_hash != self.source_hash:
             return {
@@ -845,6 +878,12 @@ class SemanticMap:
         assigned_reqs = set(lane_def.get("assignedRequirements", []))
 
         violations = []
+        if self.has_module_sources or (base_map and base_map.has_module_sources):
+            violations.append({
+                "type": "UNSUPPORTED_MODULE_LANE",
+                "severity": "CRITICAL",
+                "message": "Multi-file lane verification is unavailable.",
+            })
 
         # 1. Check compiler health
         if self.diagnostics:
@@ -971,6 +1010,13 @@ class SemanticMap:
           - Epistemic validity of branch analysis
         """
         conflicts = []
+
+        if any(smap.has_module_sources for smap in (base_map, branch_a_map, branch_b_map)):
+            conflicts.append({
+                "type": "UNSUPPORTED_MODULE_MERGE",
+                "severity": "CRITICAL",
+                "description": "Multi-file semantic merge verification is unavailable.",
+            })
 
         # Epistemic check on branches
         if getattr(branch_a_map, "epistemic_status", None) == "INVALID" or getattr(branch_b_map, "epistemic_status", None) == "INVALID":
@@ -1220,6 +1266,9 @@ def main():
             "types": list(smap.types.keys()),
             "callEdges": smap.calls
         }
+        if smap.has_module_sources:
+            data["moduleGraph"] = smap.module_graph
+            data["moduleGraphStatus"] = "CHECKED" if smap.module_graph else "UNAVAILABLE"
         print(json.dumps(data, indent=2))
 
     elif args.subcommand == "repair":

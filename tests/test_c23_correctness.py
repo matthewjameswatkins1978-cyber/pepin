@@ -403,6 +403,71 @@ fn subtract(a: Int, b: Int) -> Int { return a - b }
             self.assertFalse(executable.with_suffix(".c").exists())
             self.assertFalse(executable.exists())
 
+    def test_file_modules_check_and_execute_the_same_program(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            (root / "std").mkdir()
+            ops = root / "std" / "ops.pep"
+            ops.write_text("pub fn increment(n: Int) -> Int { return n + 1 }\n", encoding="utf-8")
+            (root / "std" / "scale.pep").write_text(
+                "import std.ops\n"
+                "fn helper(n: Int) -> Int { return ops.increment(n) }\n"
+                "pub fn twice(n: Int) -> Int { return helper(n) * 2 }\n", encoding="utf-8"
+            )
+            entry = root / "main.pep"
+            entry.write_text("import std.scale as math\nsay(int_text(math.twice(20)))\n", encoding="utf-8")
+            status, output, error = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+            self.assertEqual(status, 0, error or output)
+            checked = json.loads(output)
+            graph = checked["moduleGraph"]
+            self.assertEqual(graph["entry"], "main.pep")
+            self.assertEqual([f["document"] for f in graph["files"]],
+                             ["std/ops.pep", "std/scale.pep", "main.pep"])
+            self.assertEqual([ex["name"] for ex in graph["files"][1]["exports"]], ["twice"])
+            from pep_semantic_map import SemanticMap
+
+            semantic = SemanticMap(entry)
+            self.assertEqual(semantic.module_graph, graph)
+            self.assertFalse(semantic.verify_lane({})["laneValid"])
+            self.assertEqual(semantic.apply_repair({})["status"], "UNSUPPORTED_MODULE_REPAIR")
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(entry)), (0, "42\n", ""))
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    self.assertEqual(pep_c23_direct.run_c23(entry, compiler), (0, "42\n", ""))
+            ops.write_text("pub fn increment(n: Int) -> Int { return n + 2 }\n", encoding="utf-8")
+            status, new_output, error = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+            self.assertEqual(status, 0, error or new_output)
+            self.assertNotEqual(json.loads(new_output)["moduleGraph"]["revision"], graph["revision"])
+
+    def test_file_module_boundaries_fail_with_source_identity(self):
+        cases = (
+            ("say(int_text(lib.secret()))", "fn secret() -> Int { return 42 }\n",
+             "PEP_MODULE_PRIVATE", "main.pep"),
+            ("say(int_text(lib.entry()))", "pub fn entry() -> Int { return outside() }\n",
+             "PEP_UNKNOWN_FUNCTION", "lib.pep"),
+            ("say(int_text(lib.entry()))", "pub fn entry() -> Int { return hidden }\n",
+             "PEP_UNKNOWN_VARIABLE", "lib.pep"),
+            ("say(int_text(lib.fun()))", "import main\npub fn fun() -> Int { return 0 }\n",
+             "PEP_MODULE_CYCLE", "lib.pep"),
+            ("say(int_text(lib.fun()))", "say(\"unexpected\")\n",
+             "PEP_MODULE_INITIALIZER", "lib.pep"),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            entry = root / "main.pep"
+            lib = root / "lib.pep"
+            for expression, dependency, code, source in cases:
+                with self.subTest(code=code):
+                    entry.write_text("import lib\nlet hidden = 9\n"
+                                     "fn outside() -> Int { return 8 }\n" + expression + "\n",
+                                     encoding="utf-8")
+                    lib.write_text(dependency, encoding="utf-8")
+                    status, output, stderr = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+                    self.assertNotEqual(status, 0, output or stderr)
+                    diagnostics = json.loads(output)["diagnostics"]
+                    self.assertIn((code, source), [(d["code"], d["span"].get("document"))
+                                                  for d in diagnostics])
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:
