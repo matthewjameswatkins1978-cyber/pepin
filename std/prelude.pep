@@ -130,6 +130,18 @@ fn count_occurrences(nums: List[Int], target: Int) -> Int {
     return count
 }
 
+fn list_prefix_sum(nums: List[Int], count: Int) -> Int {
+    if count <= 0 { return 0 }
+    var remaining = count
+    var total = 0
+    for item in nums {
+        total = total + item
+        remaining = remaining - 1
+        if remaining == 0 { break }
+    }
+    return total
+}
+
 // Verification runner
 let p_abs = abs(0 - 42);
 say(int_text(p_abs))

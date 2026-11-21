@@ -5,6 +5,7 @@ anchored to living specification requirements in std/prelude.spec.json.
 
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -12,9 +13,9 @@ PEP_PRELUDE = ROOT / "std" / "prelude.pep"
 
 
 class TestStdPrelude(unittest.TestCase):
-    def run_interpreter(self) -> str:
+    def run_interpreter(self, source=PEP_PRELUDE) -> str:
         res = subprocess.run(
-            ["pwsh", "-NoProfile", "-File", "pep.ps1", "run", str(PEP_PRELUDE)],
+            ["pwsh", "-NoProfile", "-File", "pep.ps1", "run", str(source)],
             cwd=str(ROOT),
             capture_output=True,
             text=True,
@@ -23,9 +24,9 @@ class TestStdPrelude(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Interpreter failed: {res.stderr}")
         return res.stdout.strip()
 
-    def run_c23_direct(self, compiler: str = "clang") -> str:
+    def run_c23_direct(self, compiler: str = "clang", source=PEP_PRELUDE) -> str:
         res = subprocess.run(
-            ["pwsh", "-NoProfile", "-File", "pep.ps1", "run-c23", str(PEP_PRELUDE), "--direct", "--compiler", compiler],
+            ["pwsh", "-NoProfile", "-File", "pep.ps1", "run-c23", str(source), "--direct", "--compiler", compiler],
             cwd=str(ROOT),
             capture_output=True,
             text=True,
@@ -81,6 +82,25 @@ class TestStdPrelude(unittest.TestCase):
         self.assertEqual(out[4], "99")
         self.assertEqual(out[5], "1")
         self.assertEqual(out[8], "3")
+
+
+    def test_list_prefix_sum(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = pathlib.Path(folder) / "prefix.pep"
+            source.write_text(
+                PEP_PRELUDE.read_text(encoding="utf-8") + """
+say(int_text(list_prefix_sum([], 1)))
+say(int_text(list_prefix_sum([9], -1)))
+say(int_text(list_prefix_sum([1, 2, 9223372036854775807], 2)))
+say(int_text(list_prefix_sum([9, -2], 9223372036854775807)))
+""",
+                encoding="utf-8",
+            )
+            reference = self.run_interpreter(source)
+            self.assertEqual(reference.splitlines()[-4:], ["0", "0", "3", "7"])
+            for compiler in ("clang", "gcc"):
+                with self.subTest(compiler=compiler):
+                    self.assertEqual(self.run_c23_direct(compiler, source), reference)
 
 
 if __name__ == "__main__":

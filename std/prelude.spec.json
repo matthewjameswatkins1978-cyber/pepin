@@ -55,6 +55,19 @@
       ],
       "implementsSymbols": ["sum", "list_max", "list_min", "count_occurrences"],
       "verifiedByTests": ["TEST-STD-LIST-001"]
+    },
+    {
+      "id": "REQ-STD-LIST-002",
+      "title": "Bounded prefix sum",
+      "description": "Sum the first count integers or the entire list if it is shorter. Non-positive counts yield zero.",
+      "category": "functional",
+      "invariants": [
+        "list_prefix_sum([], count) == 0",
+        "list_prefix_sum(nums, 0) == 0",
+        "list_prefix_sum([1, 2, 3], 2) == 3"
+      ],
+      "implementsSymbols": ["list_prefix_sum"],
+      "verifiedByTests": ["TEST-STD-LIST-002"]
     }
   ],
   "symbols": [
@@ -169,6 +182,13 @@
       "signature": "count_occurrences(nums: List[Int], target: Int) -> Int",
       "doc": "Counts occurrences of target in list.",
       "fulfillsRequirements": ["REQ-STD-LIST-001"]
+    },
+    {
+      "name": "list_prefix_sum",
+      "kind": "function",
+      "signature": "list_prefix_sum(nums: List[Int], count: Int) -> Int",
+      "doc": "Sums up to count leading integers. Stops before unselected elements and uses checked Int addition.",
+      "fulfillsRequirements": ["REQ-STD-LIST-002"]
     }
   ],
   "tests": [
@@ -199,6 +219,13 @@
       "testCase": "test_list_utilities",
       "verifiesRequirements": ["REQ-STD-LIST-001"],
       "targetSymbols": ["sum", "list_max", "list_min", "count_occurrences"]
+    },
+    {
+      "testId": "TEST-STD-LIST-002",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_list_prefix_sum",
+      "verifiesRequirements": ["REQ-STD-LIST-002"],
+      "targetSymbols": ["list_prefix_sum"]
     }
   ]
 }
