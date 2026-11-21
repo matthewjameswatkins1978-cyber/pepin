@@ -103,5 +103,25 @@ say(int_text(list_prefix_sum([9, -2], 9223372036854775807)))
                     self.assertEqual(self.run_c23_direct(compiler, source), reference)
 
 
+    def test_list_first_or(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = pathlib.Path(folder) / "first_or.pep"
+            source.write_text(
+                PEP_PRELUDE.read_text(encoding="utf-8") + """
+say(list_first_or(["first", "ignored"], "fallback"))
+say(list_first_or([], "fallback"))
+say(int_text(list_first_or([42], 0)))
+let nested = list_first_or([], [17, 18])
+say(int_text(nested[1]))
+""",
+                encoding="utf-8",
+            )
+            reference = self.run_interpreter(source)
+            self.assertEqual(reference.splitlines()[-4:], ["first", "fallback", "42", "18"])
+            for compiler in ("clang", "gcc"):
+                with self.subTest(compiler=compiler):
+                    self.assertEqual(self.run_c23_direct(compiler, source), reference)
+
+
 if __name__ == "__main__":
     unittest.main()

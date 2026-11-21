@@ -142,6 +142,13 @@ fn list_prefix_sum(nums: List[Int], count: Int) -> Int {
     return total
 }
 
+fn list_first_or[T](values: List[T], fallback: T) -> T {
+    for value in values {
+        return value
+    }
+    return fallback
+}
+
 // Verification runner
 let p_abs = abs(0 - 42);
 say(int_text(p_abs))

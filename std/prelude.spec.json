@@ -68,6 +68,19 @@
       ],
       "implementsSymbols": ["list_prefix_sum"],
       "verifiedByTests": ["TEST-STD-LIST-002"]
+    },
+    {
+      "id": "REQ-STD-LIST-003",
+      "title": "Generic first element with a fallback",
+      "description": "Return the first element of a list or the supplied fallback if the list is empty.",
+      "category": "functional",
+      "invariants": [
+        "list_first_or([], fallback) == fallback",
+        "list_first_or([1, 2], 3) == 1",
+        "The fallback and the list element have the same type."
+      ],
+      "implementsSymbols": ["list_first_or"],
+      "verifiedByTests": ["TEST-STD-LIST-003"]
     }
   ],
   "symbols": [
@@ -189,6 +202,13 @@
       "signature": "list_prefix_sum(nums: List[Int], count: Int) -> Int",
       "doc": "Sums up to count leading integers. Stops before unselected elements and uses checked Int addition.",
       "fulfillsRequirements": ["REQ-STD-LIST-002"]
+    },
+    {
+      "name": "list_first_or",
+      "kind": "function",
+      "signature": "list_first_or[T](values: List[T], fallback: T) -> T",
+      "doc": "Returns the first element or a fallback of the same type.",
+      "fulfillsRequirements": ["REQ-STD-LIST-003"]
     }
   ],
   "tests": [
@@ -226,6 +246,13 @@
       "testCase": "test_list_prefix_sum",
       "verifiesRequirements": ["REQ-STD-LIST-002"],
       "targetSymbols": ["list_prefix_sum"]
+    },
+    {
+      "testId": "TEST-STD-LIST-003",
+      "testFile": "tests/test_std_prelude.py",
+      "testCase": "test_list_first_or",
+      "verifiesRequirements": ["REQ-STD-LIST-003"],
+      "targetSymbols": ["list_first_or"]
     }
   ]
 }
