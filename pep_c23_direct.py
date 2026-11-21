@@ -768,7 +768,7 @@ class C23Emitter:
             fname = f["name"]
             ret_type = self.emit_c_type(f.get("returnType", "Unit"))
             c_params = []
-            frame = RootFrame()
+            frame = RootFrame(pep_function=True)
             for p in f.get("parameters", []):
                 ptype = self.emit_c_type(p["type"])
                 bid = p["bindingId"]
@@ -780,7 +780,7 @@ class C23Emitter:
             for s in f.get("body", []):
                 f_lines.extend(self.emit_stmt(s, frame))
             if ret_type == "void":
-                f_lines.append(frame.leave("  "))
+                f_lines.extend(frame.leave("  "))
                 f_lines.append("  return;")
             f_lines.append("}")
             f_lines.append("")
@@ -1004,7 +1004,7 @@ class C23Emitter:
         out.append("static void pep_init_top_level(void) {")
         out.extend(top_frame.enter())
         out.extend(top_lines)
-        out.append(top_frame.leave("  "))
+        out.extend(top_frame.leave("  "))
         out.append("}")
         out.append("")
 
@@ -1028,7 +1028,7 @@ class C23Emitter:
                 out.append('  printf("%lld\\n", (long long)exit_val);')
             else:
                 out.append("  pep_fn_main();")
-        out.append(global_frame.leave("  "))
+        out.extend(global_frame.leave("  "))
         out.append("  return 0;")
         out.append("}")
         out.append("")

@@ -121,7 +121,7 @@ def _inline_runtime(stem):
 
 def runtime_source():
     return (_inline_runtime(RUNTIME / "pep_heap" / "pep_heap")
-            + "\n" + _inline_runtime(RUNTIME / "pep_text" / "pep_utf8") + """
+            + "\n" + _inline_runtime(RUNTIME / "pep_text" / "pep_utf8") + r"""
 typedef struct {
     pep_heap_roots mark;
     void *address;
@@ -133,6 +133,23 @@ typedef struct {
 } pep_root_slots;
 
 static pep_heap pep_native_heap;
+static unsigned int pep_call_depth;
+
+static inline void pep_enter_native_call(void)
+{
+    // The plain OCaml run limit is 512 active Pep calls. Internal
+    // lowering helpers and built-ins never enter this counter.
+    if (pep_call_depth >= 512) {
+        fputs("PEP_RUNTIME_CALL_DEPTH: Maximum function call depth exceeded\n", stderr);
+        exit(1);
+    }
+    ++pep_call_depth;
+}
+
+static inline void pep_leave_native_call(void)
+{
+    --pep_call_depth;
+}
 
 static void pep_mark_slots(pep_heap_marker *marker, void *context)
 {
@@ -150,7 +167,8 @@ static void pep_destroy_native_heap(void)
 
 
 class RootFrame:
-    def __init__(self):
+    def __init__(self, *, pep_function=False):
+        self.pep_function = pep_function
         self.slots = {}
         self.temporaries = []
         self.locals = []
@@ -184,10 +202,11 @@ class RootFrame:
         return [f"{indent}{clear};" for clear in self.clear_slots(self.locals[checkpoint:])]
 
     def enter(self):
-        lines = [
+        lines = ["  pep_enter_native_call();"] if self.pep_function else []
+        lines.extend([
             "  pep_heap_frame pep_roots;",
             f"  const bool pep_has_roots = {'true' if self.slots else 'false'};",
-        ]
+        ])
         if self.slots:
             lines.extend(f"  {c_type} {name} = {{0}};"
                          for name, (c_type, declare) in self.slots.items() if declare)
@@ -202,18 +221,21 @@ class RootFrame:
         return lines
 
     def leave(self, indent):
-        return f"{indent}if (pep_has_roots) pep_heap_pop_frame(&pep_native_heap, &pep_roots);"
+        lines = [f"{indent}if (pep_has_roots) pep_heap_pop_frame(&pep_native_heap, &pep_roots);"]
+        if self.pep_function:
+            lines.append(f"{indent}pep_leave_native_call();")
+        return lines
 
     def lower_return(self, c_type, value, indent):
         if c_type == "void":
-            return [f"{indent}{value};", self.leave(indent), f"{indent}return;"]
+            return [f"{indent}{value};", *self.leave(indent), f"{indent}return;"]
         # The result is fully evaluated before unlinking its frame. The caller
         # consumes or publishes it before any further managed allocation.
         inner = indent + "  "
         return [
             f"{indent}{{",
             f"{inner}{c_type} pep_return_value = {value};",
-            self.leave(inner),
+            *self.leave(inner),
             f"{inner}return pep_return_value;",
             f"{indent}}}",
         ]
