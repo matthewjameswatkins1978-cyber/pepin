@@ -149,6 +149,23 @@ class C23ManagedMemoryTests(unittest.TestCase):
                     self.assertEqual(calls, 3201)
                     self.assertLessEqual(peak, 512 if stress else 65536)
 
+    def test_completed_expressions_release_temporary_roots(self):
+        width = 256
+        statements = 16
+        literal = ", ".join(["1"] * width)
+        statement = "    say(int_text(length(make())))\n"
+        source = (f"fn make() -> List[Int] {{ return [{literal}] }}\n"
+                  f"fn show() -> Unit {{\n{statement * statements}}}\n"
+                  "show()\n")
+        c_file, seed = self.emit(source)
+        self.assertEqual(seed, (0, f"{width}\n" * statements, ""))
+        for compiler in self.compilers():
+            with self.subTest(compiler=compiler):
+                code, output, error, peak, calls = self.run_native(compiler, c_file, stress=True)
+                self.assertEqual((code, output, error), seed)
+                self.assertEqual(calls, 2 * statements)
+                self.assertLessEqual(peak, 4096)
+
     def test_exact_roots_for_globals_aggregates_calls_and_control_flow(self):
         c_file, seed = self.emit(GRAPH)
         self.assertEqual(seed, (0, "11\n42\n9\n7\n23\n", ""))

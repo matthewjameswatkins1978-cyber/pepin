@@ -56,12 +56,22 @@ static void pep_destroy_native_heap(void)
 class RootFrame:
     def __init__(self):
         self.slots = {}
+        self.temporaries = []
 
     def track(self, name, c_type, *, declare=False):
         if not has_references(c_type):
             return False
         self.slots[name] = (c_type, declare)
         return True
+
+    def track_temporary(self, name, c_type):
+        if not self.track(name, c_type, declare=True):
+            return False
+        self.temporaries.append((name, c_type))
+        return True
+
+    def clear_temporaries(self, checkpoint):
+        return [f"{name} = ({c_type}){{0}}" for name, c_type in self.temporaries[checkpoint:]]
 
     def enter(self):
         lines = [

@@ -340,7 +340,7 @@ class C23Emitter:
             name = f"pep_tmp_{self.temporary_counter}"
             self.temporary_counter += 1
             c_type = self.emit_c_type(operand_type)
-            if not frame.track(name, c_type, declare=True):
+            if not frame.track_temporary(name, c_type):
                 declarations.append(f"{c_type} {name};")
             assignments.append(f"{name} = {lower(node)}")
             return name
@@ -504,12 +504,26 @@ class C23Emitter:
         else:
             raise ValueError(f"Unsupported expression kind in C23 emission: {kind} ({expr})")
 
+    def _emit_condition(
+        self, expr: Dict[str, Any], declarations: List[str], frame: RootFrame
+    ) -> str:
+        checkpoint = len(frame.temporaries)
+        condition = self.emit_expr(expr, declarations, frame)
+        cleanup = frame.clear_temporaries(checkpoint)
+        if not cleanup:
+            return condition
+        name = f"pep_condition_{self.temporary_counter}"
+        self.temporary_counter += 1
+        declarations.append(f"bool {name};")
+        return f"({', '.join([f'{name} = {condition}', *cleanup, name])})"
+
     def emit_stmt(
         self, stmt: Dict[str, Any], frame: RootFrame, indent: str = "  ", is_global: bool = False
     ) -> List[str]:
         lines: List[str] = []
         declarations: List[str] = []
         kind = stmt.get("kind")
+        checkpoint = len(frame.temporaries)
 
         if kind in ("let", "var"):
             vname = stmt["name"]
@@ -557,7 +571,7 @@ class C23Emitter:
             lines.append(f"{indent}}}")
 
         elif kind == "if_statement":
-            cond = self.emit_expr(stmt["condition"], declarations, frame)
+            cond = self._emit_condition(stmt["condition"], declarations, frame)
             lines.append(f"{indent}if ({cond}) {{")
             for s in stmt.get("then", []):
                 lines.extend(self.emit_stmt(s, frame, indent + "  "))
@@ -572,7 +586,7 @@ class C23Emitter:
             lines.append(f"{indent}{kind};")
 
         elif kind == "while":
-            cond = self.emit_expr(stmt["condition"], declarations, frame)
+            cond = self._emit_condition(stmt["condition"], declarations, frame)
             lines.append(f"{indent}while ({cond}) {{")
             for s in stmt.get("body", []):
                 lines.extend(self.emit_stmt(s, frame, indent + "  "))
@@ -591,6 +605,7 @@ class C23Emitter:
             list_type, _ = unwrap_expr(stmt["iterable"])
             frame.track(loop_var, self.emit_c_type(list_type), declare=True)
             lines.append(f"{indent}{loop_var} = {iter_val};")
+            lines.extend(f"{indent}{clear};" for clear in frame.clear_temporaries(checkpoint))
             lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {loop_var}.len; ++{idx_var}) {{")
             binder = f"pep_bind_{bid}"
             storage = "" if frame.track(binder, c_type, declare=True) else f"{c_type} "
@@ -602,6 +617,8 @@ class C23Emitter:
         else:
             raise ValueError(f"Unsupported statement kind in C23 emission: {kind} ({stmt})")
 
+        if kind in ("let", "var", "assignment", "expression"):
+            lines.extend(f"{indent}{clear};" for clear in frame.clear_temporaries(checkpoint))
         return [*(f"{indent}{declaration}" for declaration in declarations), *lines]
 
     @staticmethod
