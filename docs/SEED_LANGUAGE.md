@@ -26,6 +26,12 @@ When a module declares `pub type Counter { value: Int }`, importers can name the
 
 Session-based editing, module-aware repairs and lane approval, packages, and user-defined generics remain outside this slice.
 
+## Provisional statement control flow
+
+**PEP-DEC-009 / V1 (statement conditionals).** A statement `if condition { … }` may omit the else branch. An `else if` is a nested statement in the false branch, with the same lexical scoping and lazy selection as a braced `else`. In a function returning a non-`Unit` value, a conditional terminates the block only when every branch terminates. An expression `if` still requires a compatible else value. Checked programs expose the nested branch as an `if_statement` in the typed tree used by the interpreter and direct C23 backend.
+
+Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_binding_is_immutable_and_loop_return_flow_is_conservative` and `tests.test_c23_correctness` (optional else and else-if parity).
+
 ## Decision
 
 Use **OCaml 5.5.2** as Pep's seed implementation language. The compiler owns Pep's syntax, typed representation, semantic queries, diagnostics, and eventual self-hosting path. OCaml is implementation machinery; it does not define Pep's surface syntax or semantics.

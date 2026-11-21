@@ -166,6 +166,22 @@ class C23CorrectnessTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             self.assertEqual(stdout.strip(), "15")
 
+    def test_statement_if_with_optional_else_and_else_if(self):
+        self.assert_native_order_parity(
+            """fn choose(x: Int) -> Int {
+    if x == 1 { return 10 }
+    else if x == 2 { return 20 }
+    else if x == 3 { return 30 }
+    else { return -1 }
+}
+if false { say("unselected") }
+if true { say("selected") }
+say(int_text(choose(2)))
+say(int_text(choose(0)))
+""",
+            "selected\n20\n-1\n",
+        )
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (

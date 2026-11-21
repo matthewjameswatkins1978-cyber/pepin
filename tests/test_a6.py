@@ -148,6 +148,10 @@ say(int_text(value))
             "for item in [1] { item = 2 }": "PEP_ASSIGN_IMMUTABLE",
             "fn maybe() -> Int { while true { return 1 } }": "PEP_MISSING_RETURN",
             "fn branch(value: Bool) -> Int { if value { return 1 } else { return 2 } }": None,
+            "fn branch(value: Bool) -> Int { if value { return 1 } }": "PEP_MISSING_RETURN",
+            "fn branch(value: Bool) -> Int { if value { return 1 } return 2 }": None,
+            "let value = if true { 1 }": "PEP_PARSE_ELSE",
+            "if true { let hidden = 1 } else if hidden == 1 {}": "PEP_UNKNOWN_VARIABLE",
         }
         for source, expected in cases.items():
             with self.subTest(expected=expected, source=source):
