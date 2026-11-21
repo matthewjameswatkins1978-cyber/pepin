@@ -52,6 +52,8 @@ class A6CollectionsAndControlTests(unittest.TestCase):
             "for item in [1] {}\nlet outside = item": "PEP_UNKNOWN_VARIABLE",
             "if 1 {} else {}": "PEP_TYPE_MISMATCH",
             "while 1 {}": "PEP_TYPE_MISMATCH",
+            "let wrong = 1 >= true": "PEP_TYPE_MISMATCH",
+            "let wrong = \"a\" < \"b\"": "PEP_TYPE_MISMATCH",
         }
         for source, expected in cases.items():
             with self.subTest(expected=expected, source=source):

@@ -36,6 +36,8 @@ Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_binding_is_immut
 
 Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_control_is_contextual_and_terminates_the_current_block` and `tests.test_c23_correctness` (nearest-loop transfer parity).
 
+**PEP-DEC-005 / V1 (integer ordering).** The signed `Int` comparisons `<`, `<=`, `>`, and `>=` return `Bool` and bind more tightly than equality and less tightly than addition. Operands are evaluated left to right. Other types require an explicit supported operation. The [module demo](../examples/module_demo/main.pep) uses these comparisons, checked indexing, and loop control to sum squares over a bounded prefix. See `tests.test_c23_correctness` (signed ordering, precedence, side effects and module demo) and `tests.test_a6` (invalid operand types).
+
 ## Provisional checked list indexing
 
 **PEP-DEC-005 / V1 (indexed reads).** `values[index]` reads an immutable `List[T]` and produces `T`, using zero-based `Int` indices. A bracket on the same line as the preceding token continues the expression. Postfix indexing composes with field access and other indices. The receiver is evaluated before the index, once each. A negative or out-of-range index traps with `PEP_RUNTIME_INDEX_BOUNDS` before subsequent effects. The interpreter traverses the list up to the requested element and charges step budget during traversal. Direct C23 checks the bounds and reads its existing contiguous list storage. The typed tree reports the operands, element type, source span, and required runtime bounds check. Indexed writes, `get` returning `Option`, and indexing other collections remain future work.

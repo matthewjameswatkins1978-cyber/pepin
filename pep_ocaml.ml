@@ -139,14 +139,15 @@ let lex ?document source =
       if !i<n && is_alpha source.[!i] then (ignore(advance());while !i<n&&is_alnum source.[!i] do ignore(advance()) done;
         add (Hole(Some(String.sub source (lo+1) (!i-lo-1)))) lo ln cl)
       else add (Hole None) lo ln cl; loop())
-    else if c='<' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "<=") lo ln cl;loop())
+    else if (c='<' || c='>') && !i+1<n && source.[!i+1]='=' then
+      (ignore(advance());ignore(advance());add (Sym(String.make 1 c^"=")) lo ln cl;loop())
     else if c='=' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "==") lo ln cl;loop())
     else if c='!' && !i+1<n && source.[!i+1]='=' then (ignore(advance());ignore(advance());add (Sym "!=") lo ln cl;loop())
     else if c='&' && !i+1<n && source.[!i+1]='&' then (ignore(advance());ignore(advance());add (Sym "&&") lo ln cl;loop())
     else if c='|' && !i+1<n && source.[!i+1]='|' then (ignore(advance());ignore(advance());add (Sym "||") lo ln cl;loop())
     else if c='-' && !i+1<n && source.[!i+1]='>' then (ignore(advance());ignore(advance());add (Sym "->") lo ln cl;loop())
     else if c='=' && !i+1<n && source.[!i+1]='>' then (ignore(advance());ignore(advance());add (Sym "=>") lo ln cl;loop())
-    else if List.mem c ['(';')';'{';'}';'[';']';',';':';';';'+';'-';'*';'/';'=';'.';'|';'&';'!'] then
+    else if List.mem c ['(';')';'{';'}';'[';']';',';':';';';'+';'-';'*';'/';'=';'.';'|';'&';'!';'<';'>'] then
       (ignore(advance());add (Sym(String.make 1 c)) lo ln cl;loop())
     else fail "PEP_UNEXPECTED_CHARACTER" (Printf.sprintf "Unexpected character %C" c) (mkspan lo (lo+1) ln cl) ()
   in loop(); Array.of_list(List.rev !tokens)
@@ -268,7 +269,7 @@ and parse_tail p min_prec lhs =
         ECall(alias^"."^field,values,combine start close)
       |_->EField(lhs,field,combine (expr_span lhs) field_token.at)
     in parse_tail p min_prec next)
-  else let op,prec=match (peek p).kind with Sym "||"->"||",1|Sym "&&"->"&&",2|Sym "=="->"==",3|Sym "!="->"!=",3|Sym "<="->"<=",5|Sym "+"->"+",10|Sym "-"->"-",10|Sym "*"->"*",20|Sym "/"->"/",20|_->"",-1 in
+  else let op,prec=match (peek p).kind with Sym "||"->"||",1|Sym "&&"->"&&",2|Sym "=="->"==",3|Sym "!="->"!=",3|Sym (("<"|"<="|">"|">=") as op)->op,5|Sym "+"->"+",10|Sym "-"->"-",10|Sym "*"->"*",20|Sym "/"->"/",20|_->"",-1 in
   if prec<min_prec then lhs else (ignore(take p); let rhs=parse_expr p (prec+1) in parse_tail p min_prec (EBin(op,lhs,rhs,combine (expr_span lhs) (expr_span rhs))))
 let rec parse_stmt p =
   let parse_body () =
@@ -574,8 +575,10 @@ let check ?entry_document tops =
        |Some ty->fail "PEP_FIELD_ON_NON_RECORD" ("Type '"^type_name ty^"' has no fields") s ()
        |None->fail "PEP_FIELD_ON_UNTYPED_VALUE" "Cannot access a field on an expression without a known type" s ())
    |EMatch(subject,arms,s)->match_expr env scope None subject arms s
-   |EBin("<=",a,b,s)->let ta=check_expr env scope (Some Int) a and tb=check_expr env scope (Some Int) b in
-      {node=XBin("<=",ta,tb);ety=Some Bool;espan=s}
+   |EBin(("<"|"<="|">"|">=") as op,a,b,s)->
+      let ta=check_expr env scope (Some Int) a in
+      let tb=check_expr env scope (Some Int) b in
+      {node=XBin(op,ta,tb);ety=Some Bool;espan=s}
    |EBin(("&&"|"||") as op,a,b,s)->let ta=check_expr env scope (Some Bool) a and tb=check_expr env scope (Some Bool) b in
       {node=XBin(op,ta,tb);ety=Some Bool;espan=s}
    |EBin(("=="|"!=") as op,a,b,s)->
@@ -942,7 +945,10 @@ let checked_bin op a b sp =
  let sub_over x y = y<0L && x>Int64.add Int64.max_int y || y>0L && x<Int64.add Int64.min_int y in
  let mul_over x y = if x=0L||y=0L then false else if x=Int64.min_int then y= -1L else if y=Int64.min_int then x= -1L else if x>0L then (if y>0L then x>Int64.div Int64.max_int y else y<Int64.div Int64.min_int x) else (if y>0L then x<Int64.div Int64.min_int y else y<Int64.div Int64.max_int x) in
  match op with
+ |"<"->VBool(a<b)
  |"<="->VBool(a<=b)
+ |">"->VBool(a>b)
+ |">="->VBool(a>=b)
  |"+"->if add_over a b then runtime "PEP_RUNTIME_OVERFLOW" "Integer addition overflow" sp else VInt(Int64.add a b)
  |"-"->if sub_over a b then runtime "PEP_RUNTIME_OVERFLOW" "Integer subtraction overflow" sp else VInt(Int64.sub a b)
  |"*"->if mul_over a b then runtime "PEP_RUNTIME_OVERFLOW" "Integer multiplication overflow" sp else VInt(Int64.mul a b)
@@ -2434,7 +2440,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"checked_list_index\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"checked_list_index\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"integer_ordering\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let tops,graph,entry_document=load_file_program file in

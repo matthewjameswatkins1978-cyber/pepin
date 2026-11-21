@@ -253,6 +253,26 @@ if [true, false][0] && ![true, false][1] { say("bool") }
                     "PEP_RUNTIME_INDEX_BOUNDS: List index out of bounds\n",
                 )
 
+    def test_integer_order_uses_signed_values_and_evaluation_order(self):
+        self.assert_native_order_parity(
+            """fn first() -> Int { say("first") return -9223372036854775807 - 1 }
+fn last() -> Int { say("last") return 9223372036854775807 }
+if first() < last() { say("strict") }
+if -1 >= -1 && 0 > -1 && -1 <= 0 { say("inclusive") }
+if 3 > 3 || 0 >= 1 || 1 < 1 { say("wrong") }
+if 1 + 2 < 2 * 2 && (1 < 2) == true { say("precedence") }
+""",
+            "first\nlast\nstrict\ninclusive\nprecedence\n",
+        )
+
+    def test_module_demo_exercises_checked_collection_library(self):
+        path = ROOT / "examples" / "module_demo" / "main.pep"
+        expected = (0, "42\n17\n", "")
+        self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(path)), expected)
+        for compiler in filter(None, [self.clang, self.gcc]):
+            with self.subTest(compiler=compiler.name):
+                self.assertEqual(pep_c23_direct.run_c23(path, compiler_bin=compiler), expected)
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (
