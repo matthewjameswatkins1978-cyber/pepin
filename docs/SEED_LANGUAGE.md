@@ -36,6 +36,12 @@ Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_binding_is_immut
 
 Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_control_is_contextual_and_terminates_the_current_block` and `tests.test_c23_correctness` (nearest-loop transfer parity).
 
+## Provisional checked list indexing
+
+**PEP-DEC-005 / V1 (indexed reads).** `values[index]` reads an immutable `List[T]` and produces `T`, using zero-based `Int` indices. A bracket on the same line as the preceding token continues the expression. Postfix indexing composes with field access and other indices. The receiver is evaluated before the index, once each. A negative or out-of-range index traps with `PEP_RUNTIME_INDEX_BOUNDS` before subsequent effects. The interpreter traverses the list up to the requested element and charges step budget during traversal. Direct C23 checks the bounds and reads its existing contiguous list storage. The typed tree reports the operands, element type, source span, and required runtime bounds check. Indexed writes, `get` returning `Option`, and indexing other collections remain future work.
+
+Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_list_index_is_typed_and_bounds_checked` and `tests.test_c23_correctness` (indexed read ordering, bounds and nominal, nested and Boolean value parity).
+
 ## Decision
 
 Use **OCaml 5.5.2** as Pep's seed implementation language. The compiler owns Pep's syntax, typed representation, semantic queries, diagnostics, and eventual self-hosting path. OCaml is implementation machinery; it does not define Pep's surface syntax or semantics.

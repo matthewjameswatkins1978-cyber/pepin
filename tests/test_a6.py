@@ -184,6 +184,24 @@ say(int_text(value))
         self.assertEqual(body[1]["kind"], "break")
         self.assertEqual(body[1]["span"]["start"]["column"], 36)
 
+    def test_list_index_is_typed_and_bounds_checked(self):
+        result, response = self.check_source("let a = [[1]]\nlet n = a[0][?offset]\n")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(response["status"], "incomplete")
+        self.assertEqual(response["holes"][0]["expectedType"], "Int")
+        value = response["typedTree"]["statements"][1]["value"]
+        self.assertEqual(value["type"], "Int")
+        self.assertEqual(value["expression"]["boundsCheck"], "runtime")
+        for source, expected in (
+            ('let x = "str"[0]', "PEP_INDEX_REQUIRES_LIST"),
+            ("let x = [1][true]", "PEP_TYPE_MISMATCH"),
+            ("let a = [1]\na[0] = 2", "PEP_INDEX_WRITE_UNSUPPORTED"),
+        ):
+            with self.subTest(source=source):
+                result, response = self.check_source(source)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(response["diagnostics"][0]["code"], expected)
+
     def test_recursive_value_equality_is_not_implicitly_defined(self):
         source = "type Expr = Number(Int)\nlet value = Number(1) == Number(1)\n"
         result, response = self.check_source(source)

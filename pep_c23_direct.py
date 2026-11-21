@@ -442,6 +442,11 @@ class C23Emitter:
                 elements = [f"(int64_t)({element})" for element in elements]
             return f"{prefix}list_create({len(elements)}, {', '.join(elements)})"
 
+        elif kind == "index":
+            target = capture(expr["target"])
+            index = capture(expr["index"])
+            return f"{target}.data[pep_checked_index({index}, {target}.len)]"
+
         elif kind == "record":
             tid = expr["typeId"]
             rec_info = self.records_by_id.get(tid)
@@ -530,7 +535,7 @@ class C23Emitter:
 
         elif kind == "expression":
             val = self.emit_expr(stmt["value"], declarations)
-            lines.append(f"{indent}{val};")
+            lines.append(f"{indent}(void)({val});")
 
         elif kind == "block":
             lines.append(f"{indent}{{")
@@ -718,6 +723,14 @@ class C23Emitter:
         out.append("#endif")
         out.append("")
         out.append("#define PEP_INLINE [[maybe_unused]] static inline")
+        out.append("")
+
+        out.append("static inline size_t pep_checked_index(int64_t index, size_t length) {")
+        out.append("  if (index < 0 || (uintmax_t)index >= (uintmax_t)length) {")
+        out.append('    fprintf(stderr, "PEP_RUNTIME_INDEX_BOUNDS: List index out of bounds\\n"); exit(1);')
+        out.append("  }")
+        out.append("  return (size_t)index;")
+        out.append("}")
         out.append("")
 
         # Checked Arithmetic Runtime

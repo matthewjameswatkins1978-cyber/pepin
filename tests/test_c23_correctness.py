@@ -217,6 +217,42 @@ say(int_text(total))
             "after inner\n4\n2\n",
         )
 
+    def test_native_list_index_is_sequenced_and_preserves_value_types(self):
+        self.assert_native_order_parity(
+            """type Row { label: Str }
+var rows = [[Row { label: "original" }], [Row { label: "second" }]]
+fn base() -> List[List[Row]] {
+    say("base")
+    return rows
+}
+fn offset() -> Int {
+    say("offset")
+    rows = [[Row { label: "replacement" }]]
+    return 0
+}
+say(base()[offset()][0].label)
+rows[0][0]
+[1, 2]
+say(rows[0][0].label)
+if [true, false][0] && ![true, false][1] { say("bool") }
+""",
+            "base\noffset\noriginal\nreplacement\nbool\n",
+        )
+
+    def test_native_list_index_traps_before_following_side_effects(self):
+        for declaration, index in (
+            ("let values: List[Int] = []", 0),
+            ("let values = [1]", -1),
+            ("let values = [1]", 1),
+            ("let values = [1]", 9223372036854775807),
+        ):
+            with self.subTest(index=index, declaration=declaration):
+                self.assert_native_order_parity(
+                    f'{declaration}\nsay("before")\nsay(int_text(values[{index}]))\nsay("after")\n',
+                    "before\n",
+                    "PEP_RUNTIME_INDEX_BOUNDS: List index out of bounds\n",
+                )
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (

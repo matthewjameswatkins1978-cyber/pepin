@@ -7,7 +7,7 @@ type expr =
   | EName of string*span | EHole of string option*span
   | ECall of string*expr list*span | EBin of string*expr*expr*span | EUnary of string*expr*span | EList of expr list*span | EIf of expr*expr*expr*span
   | ERecord of string*(string*expr*span) list*span | EField of expr*string*span
-  | EMatch of expr*match_arm list*span
+  | EMatch of expr*match_arm list*span | EIndex of expr*expr*span
 and pattern = PWildcard of span | PBind of string*span | PConstructor of string*pattern list*span
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
@@ -40,12 +40,12 @@ let pos_json s = Printf.sprintf "{\"offset\":%d,\"line\":%d,\"column\":%d}" s.lo
 let span_json s =
   let document=match s.document with None->""|Some name->",\"document\":"^json_string name in
   Printf.sprintf "{\"start\":%s,\"endOffset\":%d%s}" (pos_json s) s.hi document
-let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)->s
+let expr_span = function EInt(_,s)|EBool(_,s)|EStr(_,s)|EName(_,s)|EHole(_,s)|ECall(_,_,s)|EBin(_,_,_,s)|EUnary(_,_,s)|EList(_,s)|EIf(_,_,_,s)|ERecord(_,_,s)|EField(_,_,s)|EMatch(_,_,s)|EIndex(_,_,s)->s
 let rec contains_empty_list = function
  |EList([],_) -> true
  |EList(items,_) -> List.exists contains_empty_list items
  |ECall(_,args,_) -> List.exists contains_empty_list args
- |EBin(_,left,right,_) -> contains_empty_list left || contains_empty_list right
+ |EBin(_,left,right,_) |EIndex(left,right,_) -> contains_empty_list left || contains_empty_list right
  |EUnary(_,value,_) -> contains_empty_list value
  |EIf(condition,yes,no,_) -> contains_empty_list condition || contains_empty_list yes || contains_empty_list no
  |ERecord(_,fields,_) -> List.exists(fun(_,value,_)->contains_empty_list value)fields
@@ -244,12 +244,17 @@ let rec parse_expr p min_prec =
         let close=at p in expect_sym p "}"; ERecord(name,!fields,combine first.at close)
       ) else EName(name,first.at)
     |Sym "(" ->let e=parse_expr p 0 in let close=at p in expect_sym p ")";
-        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EBin(o,l,r,_)->EBin(o,l,r,s)|EUnary(o,x,_)->EUnary(o,x,s)|EList(xs,_)->EList(xs,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s))
+        let s=combine first.at close in (match e with EInt(n,_)->EInt(n,s)|EBool(v,_)->EBool(v,s)|EStr(v,_)->EStr(v,s)|EName(n,_)->EName(n,s)|EHole(h,_)->EHole(h,s)|ECall(n,a,_)->ECall(n,a,s)|EBin(o,l,r,_)->EBin(o,l,r,s)|EUnary(o,x,_)->EUnary(o,x,s)|EList(xs,_)->EList(xs,s)|EIf(c,y,n,_)->EIf(c,y,n,s)|ERecord(n,f,_)->ERecord(n,f,s)|EField(e,n,_)->EField(e,n,s)|EMatch(e,a,_)->EMatch(e,a,s)|EIndex(e,i,_)->EIndex(e,i,s))
     |Sym "-" -> let rhs=parse_expr p 30 in EBin("neg",EInt(0L,first.at),rhs,combine first.at (expr_span rhs))
     |t->fail "PEP_PARSE_EXPRESSION" "Expected an expression" first.at () in
   parse_tail p min_prec lhs
 and parse_tail p min_prec lhs =
-  if symbol p "." then (
+  if symbol p "[" && (peek p).at.line=p.ts.(p.p-1).at.line then (
+    ignore(take p);
+    let index=parse_expr p 0 in
+    let ending=at p in expect_sym p "]";
+    parse_tail p min_prec (EIndex(lhs,index,combine (expr_span lhs) ending)))
+  else if symbol p "." then (
     ignore(take p);
     let field_token=peek p in let field=expect_id p in
     let next=match lhs with
@@ -325,6 +330,8 @@ let rec parse_stmt p =
     |EName(name,_) when accept_sym p "=" ->
         let value=parse_expr p 0 in let sp=combine (expr_span e) (expr_span value) in
         ignore(accept_sym p ";");SAssign(name,value,sp)
+    |EIndex _ when symbol p "=" ->
+        fail "PEP_INDEX_WRITE_UNSUPPORTED" "Indexed assignment is not supported" (at p) ()
     |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
 let parse_func p =
   let start=(take p).at in let name=expect_id p in expect_sym p "(";
@@ -391,7 +398,7 @@ let parse_single_expression source =
 type binding = { bid:int; bname:string; bty:ty option; bspan:span; mutable_:bool }
 type signature = { fid:int; name:string; params:(string*ty) list; result:ty; decl:func }
 type texpr = { node:texpr_node; ety:ty option; espan:span }
-and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XUnary of string*texpr|XList of texpr list|XIf of texpr*texpr*texpr
+and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XUnary of string*texpr|XList of texpr list|XIndex of texpr*texpr|XIf of texpr*texpr*texpr
   | XRecord of int*(int*texpr) list | XField of int*texpr | XConstructor of int*int*string*texpr list | XMatch of texpr*tmatch_arm list
 and tpattern = TPWildcard of span | TPBind of binding | TPConstructor of int*tpattern list*span
 and tmatch_arm = { tpattern:tpattern; tresult:texpr }
@@ -430,6 +437,7 @@ let rec ast_expr_json e = let s=span_json(expr_span e) in match e with
  |ECall(n,args,_)->"{\"kind\":\"call\",\"name\":"^json_string n^",\"arguments\":["^String.concat ","(List.map ast_expr_json args)^"],\"span\":"^s^"}"
  |EBin(o,a,b,_)->"{\"kind\":\"binary\",\"operator\":"^json_string o^",\"left\":"^ast_expr_json a^",\"right\":"^ast_expr_json b^",\"span\":"^s^"}"
  |EUnary(o,x,_)->"{\"kind\":\"unary\",\"operator\":"^json_string o^",\"operand\":"^ast_expr_json x^",\"span\":"^s^"}"
+ |EIndex(target,index,_)->"{\"kind\":\"index\",\"target\":"^ast_expr_json target^",\"index\":"^ast_expr_json index^",\"span\":"^s^"}"
  |EList(xs,_)->"{\"kind\":\"list\",\"elements\":["^String.concat ","(List.map ast_expr_json xs)^"],\"span\":"^s^"}"
  |EIf(c,y,n,_)->"{\"kind\":\"if\",\"condition\":"^ast_expr_json c^",\"then\":"^ast_expr_json y^",\"else\":"^ast_expr_json n^",\"span\":"^s^"}"
  |ERecord(n,fields,_)->"{\"kind\":\"record\",\"typeName\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(name,e,sp)->"{\"name\":"^json_string name^",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}") fields)^"] ,\"span\":"^s^"}"
@@ -537,6 +545,7 @@ let check ?entry_document tops =
    |EBool(v,s)->{node=XBool v;ety=Some Bool;espan=s}
    |EStr(v,s)->{node=XStr v;ety=Some Str;espan=s}
    |EList(items,s)->list_expr env scope None items s
+   |EIndex(target,index,s)->index_expr env scope None target index s
    |EUnary("!",value,s)->let checked=check_expr env scope (Some Bool) value in {node=XUnary("!",checked);ety=Some Bool;espan=s}
    |EUnary(operator,_,s)->fail "PEP_UNKNOWN_UNARY_OPERATOR" ("Unsupported unary operator '"^operator^"'") s ()
    |EHole(id,s)->record_hole env scope id None s;{node=XHole id;ety=None;espan=s}
@@ -587,6 +596,17 @@ let check ?entry_document tops =
        |_->let th=synth env scope y in th,check_expr env scope th.ety n in
       (match then_expr.ety,else_expr.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,then_expr,else_expr);ety=(match then_expr.ety with Some _ as t->t|None->else_expr.ety);espan=s}
+  and index_expr env scope expected target index sp =
+    let collection=
+      if contains_empty_list target then check_expr env scope (Option.map (fun ty->List ty) expected) target
+      else synth env scope target in
+    let element=match collection.ety with
+      |Some(List ty)->ty
+      |Some ty->fail "PEP_INDEX_REQUIRES_LIST" ("Indexing requires a List, found "^type_name ty) (expr_span target) ()
+      |None->fail "PEP_INDEX_REQUIRES_LIST" "Indexing requires a list with a known element type" (expr_span target) ()
+    in
+    let offset=check_expr env scope (Some Int) index in
+    {node=XIndex(collection,offset);ety=Some element;espan=sp}
   and list_expr env scope expected_element items sp =
     let element_type=match expected_element with Some ty->Some ty|None->
       let saved_holes= !holes in holes:=[];
@@ -611,7 +631,8 @@ let check ?entry_document tops =
       (match ty.ety,en.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,ty,en);ety=(match expected with Some _ as t->t|None->(match ty.ety with Some _ as t->t|None->en.ety));espan=s}
    |EMatch(subject,arms,s)->match_expr env scope expected subject arms s
-   |_->let t=synth env scope e in (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
+   |_->let t=match e with EIndex(target,index,s)->index_expr env scope expected target index s|_->synth env scope e in
+      (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
   and call env scope name args s =
     match Hashtbl.find_opt constructor_table name with
     |Some (owner,(cid,_,params,_))->
@@ -868,6 +889,7 @@ let rec typed_expr_json e =
  |XCall(fid,n,args)->"{\"kind\":\"call\",\"name\":"^json_string n^",\"functionId\":"^(match fid with None->"null"|Some x->string_of_int x)^",\"arguments\":["^String.concat ","(List.map typed_expr_json args)^"]}"
  |XBin(op,a,b)->"{\"kind\":\"binary\",\"operator\":"^json_string op^",\"left\":"^typed_expr_json a^",\"right\":"^typed_expr_json b^"}"
  |XUnary(op,value)->"{\"kind\":\"unary\",\"operator\":"^json_string op^",\"value\":"^typed_expr_json value^"}"
+ |XIndex(target,index)->"{\"kind\":\"index\",\"target\":"^typed_expr_json target^",\"index\":"^typed_expr_json index^",\"boundsCheck\":\"runtime\"}"
  |XList(items)->"{\"kind\":\"list\",\"elements\":["^String.concat ","(List.map typed_expr_json items)^"]}"
  |XIf(c,y,n)->"{\"kind\":\"if\",\"condition\":"^typed_expr_json c^",\"then\":"^typed_expr_json y^",\"else\":"^typed_expr_json n^"}"
  |XRecord(id,fields)->"{\"kind\":\"record\",\"typeId\":"^string_of_int id^",\"fields\":["^String.concat "," (List.map(fun(fid,value)->"{\"fieldId\":"^string_of_int fid^",\"value\":"^typed_expr_json value^"}")fields)^"]}"
@@ -943,6 +965,18 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
   |XHole _->runtime "PEP_RUNTIME_HOLE" "Cannot execute an incomplete expression" e.espan
   |XList items->
     let rec collect acc=function []->VList(List.rev acc)|item::rest->let value=eval env callstack item in tick e.espan;collect(value::acc)rest in collect [] items
+  |XIndex(target,index)->
+    let collection=eval env callstack target in
+    let offset=eval env callstack index in
+    (match collection,offset with
+     |VList values,VInt position->
+       let out_of_bounds () = runtime "PEP_RUNTIME_INDEX_BOUNDS" "List index out of bounds" e.espan in
+       let rec nth remaining = function
+         |[]->out_of_bounds ()
+         |value::rest->tick e.espan;if remaining=0L then value else nth (Int64.pred remaining) rest
+       in
+       if position<0L then out_of_bounds () else nth position values
+     |_ ->runtime "PEP_RUNTIME_INVALID_INDEX" "Checked list index received invalid operands" e.espan)
   |XUnary("!",value)->(match eval env callstack value with VBool result->VBool(not result)|_->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked logical negation received a non-Bool value" e.espan)
   |XUnary(operator,_)->runtime "PEP_RUNTIME_UNKNOWN_UNARY_OPERATOR" ("Unsupported checked unary operator '"^operator^"'") e.espan
   |XRecord(id,fields)->VRecord(id,List.map(fun(fid,value)->fid,eval env callstack value)fields)
@@ -1641,7 +1675,7 @@ let session_tool_value_v2 checked expected payload =
 let rec tool_expr_calls expression =
   let child_calls = match expression.node with
     | XCall (_,_,args) -> List.concat_map tool_expr_calls args
-    | XBin (_,left,right) -> tool_expr_calls left @ tool_expr_calls right
+    | XBin (_,left,right) | XIndex (left,right) -> tool_expr_calls left @ tool_expr_calls right
     | XIf (condition,yes,no) -> tool_expr_calls condition @ tool_expr_calls yes @ tool_expr_calls no
     | XRecord (_,fields) -> List.concat_map (fun (_,value) -> tool_expr_calls value) fields
     | XField (_,value) -> tool_expr_calls value
@@ -2325,6 +2359,7 @@ let load_file_program file =
         |EBin(op,l,r,s)->EBin(op,expression l,expression r,s)
         |EUnary(op,x,s)->EUnary(op,expression x,s)
         |EList(xs,s)->EList(List.map expression xs,s)
+        |EIndex(target,index,s)->EIndex(expression target,expression index,s)
         |EIf(c,y,n,s)->EIf(expression c,expression y,expression n,s)
         |ERecord(n,fields,s)->
           ERecord(resolve_type n s,List.map (fun (f,v,sp)->f,expression v,sp) fields,s)
@@ -2399,7 +2434,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"checked_list_index\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let tops,graph,entry_document=load_file_program file in
