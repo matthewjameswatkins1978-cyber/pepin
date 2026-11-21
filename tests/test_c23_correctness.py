@@ -572,6 +572,13 @@ pub fn unwrap(reading: Reading) -> Int {
             self.assertEqual([(t["name"], t["opaque"]) for t in types],
                              [("Counter", True), ("Reading", True)])
             self.assertTrue(all(set(t) == {"name", "symbol", "opaque"} for t in types))
+            exports = {item["name"]: item for item in graph["files"][0]["exports"]}
+            self.assertEqual(exports["make"]["parameters"], [{"name": "value", "type": "Int"}])
+            self.assertEqual(exports["make"]["returnType"], types[0]["symbol"])
+            self.assertEqual(exports["read"]["parameters"], [{"name": "counter", "type": types[0]["symbol"]}])
+            self.assertEqual(exports["read"]["returnType"], types[1]["symbol"])
+            self.assertEqual(exports["read"]["span"]["document"], "alpha.pep")
+            self.assertNotIn("body", exports["read"])
             reference = pep_c23_direct.run_pep_cmd("run", str(entry))
             self.assertEqual(reference, (0, "42\n", ""))
             for compiler in filter(None, [self.clang, self.gcc]):

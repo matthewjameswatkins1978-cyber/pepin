@@ -2316,14 +2316,17 @@ let load_file_program file =
         |SFor(n,e,body,s)->SFor(n,expression e,List.map statement body,s)
         |SWhile(c,body,s)->SWhile(expression c,List.map statement body,s)
       in
+      let public_interfaces=Hashtbl.create (List.length public_names) in
       let declarations=List.map (function
         |TopFun f->
           let public=List.mem f.fname public_names in
-          TopFun {f with
+          let linked={f with
             fname=Hashtbl.find functions f.fname;
             params=List.map (fun (name,ty,at)->name,local_type ~public at ty,at) f.params;
             result=local_type ~public f.fspan f.result;
-            body=List.map statement f.body}
+            body=List.map statement f.body} in
+          if public then Hashtbl.add public_interfaces f.fname linked;
+          TopFun linked
         |TopStmt s->TopStmt(statement s)
         |TopType (RecordDecl(name,fields,span))->
           TopType(RecordDecl(resolve_type name span,
@@ -2333,7 +2336,12 @@ let load_file_program file =
             List.map (fun (ctor,args,at)->Hashtbl.find constructors ctor,List.map (local_type at) args,at) cases,span))
         ) parsed.tops in
       let exports=List.map (fun name->
-        "{\"name\":"^json_string name^",\"symbol\":"^json_string (Hashtbl.find functions name)^"}") public_names in
+        let signature=Hashtbl.find public_interfaces name in
+        let parameters=List.map (fun (param,ty,_)->
+          "{\"name\":"^json_string param^",\"type\":"^json_string (type_name ty)^"}") signature.params in
+        "{\"name\":"^json_string name^",\"symbol\":"^json_string signature.fname^
+        ",\"parameters\":["^String.concat "," parameters^"],\"returnType\":"^json_string (type_name signature.result)^
+        ",\"span\":"^span_json signature.fspan^"}") public_names in
       let type_exports=List.map (fun (name,symbol)->
         "{\"name\":"^json_string name^",\"symbol\":"^json_string symbol^",\"opaque\":true}") public_types in
       let imports=List.map (fun i->
