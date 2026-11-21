@@ -691,8 +691,8 @@ class A13FunctionResolutionTests(unittest.TestCase):
 
     def test_nested_append_return_context_matches_ocaml(self):
         cases = [
-            ("integer", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[1]]) }", "valid"),
-            ("contextual-inner-bool", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [[true]]) }", "valid"),
+            ("integer", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [1]) }", "valid"),
+            ("nested-integer", "fn f(xs: List[List[List[Int]]]) -> List[List[List[Int]]] { return append(xs, [[1]]) }", "valid"),
             ("exact-depth-mismatch", "fn f(xs: List[List[Int]]) -> List[List[Int]] { return append(xs, [true]) }", "invalid"),
         ]
         for name, source, expected_status in cases:
@@ -710,6 +710,16 @@ class A13FunctionResolutionTests(unittest.TestCase):
                     for item in report["diagnostics"]["value"]
                 ]
                 self.assertEqual(actual, expected, report)
+
+    def test_seed_rejects_extra_list_layer_still_accepted_by_staged_checker(self):
+        for item in ("[[1]]", "[[true]]"):
+            source = f"fn f(xs: List[List[Int]]) -> List[List[Int]] {{ return append(xs, {item}) }}"
+            with self.subTest(item=item):
+                reference = self._reference_check("extra-list-layer", source)
+                self.assertEqual(reference["status"], "invalid", reference)
+                self.assertEqual(reference["diagnostics"][0]["code"], "PEP_TYPE_MISMATCH")
+                _, report = self._analyze(source)
+                self.assertEqual(scalar(report["status"]), "valid", report)
 
     def test_primitive_builtin_signatures_are_checked(self):
         source = "fn main() -> Unit { say(int_text(7)); return say(\"done\") }"
