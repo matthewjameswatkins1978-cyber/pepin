@@ -742,6 +742,28 @@ say(int_text(result))
             self.assertFalse(output.exists())
             self.assertFalse(output.with_suffix(".c").exists())
 
+    def test_native_output_cannot_overwrite_transitive_module_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            entry = root / "entry.pep"
+            lib = root / "lib.pep"
+            deep = root / "deep.pep"
+            entry.write_text("import lib\nsay(int_text(lib.get()))\n", encoding="utf-8")
+            lib.write_text("import deep\npub fn get() -> Int { return deep.value() }\n", encoding="utf-8")
+            original = b"pub fn value() -> Int { return 42 }\n"
+            deep.write_bytes(original)
+            hardlink = root / "output-link.c"
+            os.link(deep, hardlink)
+            normal_c = root / "ordinary.c"
+            normal_exe = root / "ordinary.exe"
+            for output, c_file in ((deep, normal_c), (normal_exe, deep), (normal_exe, hardlink)):
+                with self.subTest(output=output, c_file=c_file):
+                    with self.assertRaisesRegex(ValueError, "Pep module source and native output collide"):
+                        pep_c23_direct.build_c23(entry, output, emit_c_path=c_file)
+                    self.assertEqual(deep.read_bytes(), original)
+                    self.assertFalse(normal_c.exists())
+                    self.assertFalse(normal_exe.exists())
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:

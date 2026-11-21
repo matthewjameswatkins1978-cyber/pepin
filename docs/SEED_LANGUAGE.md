@@ -20,7 +20,7 @@ import math.scale as scale
 say(int_text(scale.twice(20)))
 ```
 
-From the repository root, use `.\pep.ps1 run PATH_TO_MAIN.pep` or `.\pep.ps1 run-c23 PATH_TO_MAIN.pep --direct`. Both should print `42`. Use `.\pep.ps1 check PATH_TO_MAIN.pep --json` to inspect the checked tree and the content-addressed `moduleGraph`. Use `python pep_semantic_map.py context PATH_TO_MAIN.pep --symbol math/scale.pep::twice --json` to retrieve the exported function's source and dependencies. Context refuses to use a graph after any module source changes.
+From the repository root, use `.\pep.ps1 run PATH_TO_MAIN.pep` or `.\pep.ps1 run-c23 PATH_TO_MAIN.pep --direct`. Both should print `42`. Use `.\pep.ps1 check PATH_TO_MAIN.pep --json` to inspect the checked tree and the content-addressed `moduleGraph`. Use `python pep_semantic_map.py context PATH_TO_MAIN.pep --symbol math/scale.pep::twice --json` to retrieve the exported function's source and dependencies. Context refuses to use a graph after any module source changes. The direct C23 driver also refuses output paths that name any source in the checked module graph, including transitive imports and existing hard links. See `tests.test_c23_correctness` (module source/output collision).
 
 When a module declares `pub type Counter { value: Int }`, importers can name the type as `alias.Counter` and pass values through public functions. Record fields and tagged-union constructors stay private. Define public construction and inspection functions within the declaring module. The checked module graph lists public type identities in `typeExports`.
 

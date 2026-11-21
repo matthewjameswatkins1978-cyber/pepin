@@ -938,6 +938,15 @@ class C23Emitter:
         return "\n".join(out)
 
 
+def _same_file(first: pathlib.Path, second: pathlib.Path) -> bool:
+    if first == second:
+        return True
+    try:
+        return first.samefile(second)
+    except FileNotFoundError:
+        return False
+
+
 def build_c23(source_pep: pathlib.Path, output_exe: pathlib.Path,
               compiler_bin: Optional[pathlib.Path] = None,
               emit_c_path: Optional[pathlib.Path] = None) -> pathlib.Path:
@@ -946,11 +955,11 @@ def build_c23(source_pep: pathlib.Path, output_exe: pathlib.Path,
     c_file = (emit_c_path or output_exe.with_suffix(".c")).resolve()
 
     # Guard against source/output path collisions
-    if source_resolved == output_resolved:
+    if _same_file(source_resolved, output_resolved):
         raise ValueError(f"Pep source file and output executable collide: {source_resolved}")
-    if source_resolved == c_file:
+    if _same_file(source_resolved, c_file):
         raise ValueError(f"Pep source file and generated C file collide: {source_resolved}")
-    if output_resolved == c_file:
+    if _same_file(output_resolved, c_file):
         raise ValueError(f"Output executable and generated C file collide: {output_resolved}")
 
     # Authoritative Compiler Check
@@ -964,6 +973,11 @@ def build_c23(source_pep: pathlib.Path, output_exe: pathlib.Path,
         raise RuntimeError(f"Failed to parse compiler check output: {stdout[:400]}") from e
 
     emitter = C23Emitter(checked_data)
+    for module in checked_data.get("moduleGraph", {}).get("files", []):
+        imported = source_resolved.parent / module["document"]
+        for output in (c_file, output_resolved):
+            if _same_file(imported, output):
+                raise ValueError(f"Pep module source and native output collide: {imported} and {output}")
     c_source = emitter.generate_c23()
 
     c_file.parent.mkdir(parents=True, exist_ok=True)
