@@ -166,6 +166,37 @@ class C23ManagedMemoryTests(unittest.TestCase):
                 self.assertEqual(calls, 2 * statements)
                 self.assertLessEqual(peak, 4096)
 
+    def test_lexical_exit_and_loop_transfer_release_managed_bindings(self):
+        width = 256
+        literal = ", ".join(["1"] * width)
+        source = f"""\
+fn make() -> List[Int] {{ return [{literal}] }}
+fn show() -> Unit {{
+    if true {{
+        let scoped = make()
+        say(int_text(length(scoped)))
+    }}
+    var step = 0
+    while step < 3 {{
+        step = step + 1
+        let iteration = make()
+        say(int_text(length(iteration)))
+        if step == 1 {{ continue }}
+        break
+    }}
+    say(int_text(length(make())))
+}}
+show()
+"""
+        c_file, seed = self.emit(source)
+        self.assertEqual(seed, (0, f"{width}\n" * 4, ""))
+        for compiler in self.compilers():
+            with self.subTest(compiler=compiler):
+                code, output, error, peak, calls = self.run_native(compiler, c_file, stress=True)
+                self.assertEqual((code, output, error), seed)
+                self.assertEqual(calls, 8)
+                self.assertLessEqual(peak, 4096)
+
     def test_exact_roots_for_globals_aggregates_calls_and_control_flow(self):
         c_file, seed = self.emit(GRAPH)
         self.assertEqual(seed, (0, "11\n42\n9\n7\n23\n", ""))

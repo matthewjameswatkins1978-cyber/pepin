@@ -517,6 +517,23 @@ class C23Emitter:
         declarations.append(f"bool {name};")
         return f"({', '.join([f'{name} = {condition}', *cleanup, name])})"
 
+    def _emit_scope(self, statements, frame, indent, *, loop=False, binder=None):
+        checkpoint = len(frame.locals)
+        lines = []
+        if loop:
+            frame.loop_scopes.append(checkpoint)
+        if binder is not None:
+            name, c_type, value = binder
+            storage = "" if frame.track_local(name, c_type) else f"{c_type} "
+            lines.append(f"{indent}{storage}{name} = {value};")
+        for stmt in statements:
+            lines.extend(self.emit_stmt(stmt, frame, indent))
+        lines.extend(frame.clear_locals(checkpoint, indent))
+        del frame.locals[checkpoint:]
+        if loop:
+            frame.loop_scopes.pop()
+        return lines
+
     def emit_stmt(
         self, stmt: Dict[str, Any], frame: RootFrame, indent: str = "  ", is_global: bool = False
     ) -> List[str]:
@@ -537,7 +554,7 @@ class C23Emitter:
                 lines.append(f"{indent}pep_ready_{bid} = true;")
             else:
                 binder = f"pep_bind_{bid}"
-                storage = "" if frame.track(binder, c_type, declare=True) else f"{c_type} "
+                storage = "" if frame.track_local(binder, c_type) else f"{c_type} "
                 lines.append(f"{indent}{storage}{binder} /* {vname} */ = {vval};")
 
         elif kind == "assignment":
@@ -566,35 +583,33 @@ class C23Emitter:
 
         elif kind == "block":
             lines.append(f"{indent}{{")
-            for s in stmt.get("statements", []):
-                lines.extend(self.emit_stmt(s, frame, indent + "  "))
+            lines.extend(self._emit_scope(stmt.get("statements", []), frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         elif kind == "if_statement":
             cond = self._emit_condition(stmt["condition"], declarations, frame)
             lines.append(f"{indent}if ({cond}) {{")
-            for s in stmt.get("then", []):
-                lines.extend(self.emit_stmt(s, frame, indent + "  "))
+            lines.extend(self._emit_scope(stmt.get("then", []), frame, indent + "  "))
             else_branch = stmt.get("else", [])
             if else_branch:
                 lines.append(f"{indent}}} else {{")
-                for s in else_branch:
-                    lines.extend(self.emit_stmt(s, frame, indent + "  "))
+                lines.extend(self._emit_scope(else_branch, frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         elif kind in ("break", "continue"):
+            if not frame.loop_scopes:
+                raise ValueError(f"C23 encountered {kind} outside a loop")
+            lines.extend(frame.clear_locals(frame.loop_scopes[-1], indent))
             lines.append(f"{indent}{kind};")
 
         elif kind == "while":
             cond = self._emit_condition(stmt["condition"], declarations, frame)
             lines.append(f"{indent}while ({cond}) {{")
-            for s in stmt.get("body", []):
-                lines.extend(self.emit_stmt(s, frame, indent + "  "))
+            lines.extend(self._emit_scope(stmt.get("body", []), frame, indent + "  ", loop=True))
             lines.append(f"{indent}}}")
 
         elif kind == "for_in":
             bid = stmt["bindingId"]
-            vname = stmt.get("name", f"bind_{bid}")
             ann = stmt.get("type", "Int")
             self.binding_types[bid] = ann
             c_type = self.emit_c_type(ann)
@@ -607,12 +622,10 @@ class C23Emitter:
             lines.append(f"{indent}{loop_var} = {iter_val};")
             lines.extend(f"{indent}{clear};" for clear in frame.clear_temporaries(checkpoint))
             lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {loop_var}.len; ++{idx_var}) {{")
-            binder = f"pep_bind_{bid}"
-            storage = "" if frame.track(binder, c_type, declare=True) else f"{c_type} "
-            lines.append(f"{indent}  {storage}{binder} /* {vname} */ = {loop_var}.data[{idx_var}];")
-            for s in stmt.get("body", []):
-                lines.extend(self.emit_stmt(s, frame, indent + "  "))
+            binder = (f"pep_bind_{bid}", c_type, f"{loop_var}.data[{idx_var}]")
+            lines.extend(self._emit_scope(stmt.get("body", []), frame, indent + "  ", loop=True, binder=binder))
             lines.append(f"{indent}}}")
+            lines.extend(f"{indent}{clear};" for clear in frame.clear_slots((loop_var,)))
 
         else:
             raise ValueError(f"Unsupported statement kind in C23 emission: {kind} ({stmt})")

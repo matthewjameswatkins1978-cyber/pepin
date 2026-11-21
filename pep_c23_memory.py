@@ -57,6 +57,8 @@ class RootFrame:
     def __init__(self):
         self.slots = {}
         self.temporaries = []
+        self.locals = []
+        self.loop_scopes = []
 
     def track(self, name, c_type, *, declare=False):
         if not has_references(c_type):
@@ -67,11 +69,23 @@ class RootFrame:
     def track_temporary(self, name, c_type):
         if not self.track(name, c_type, declare=True):
             return False
-        self.temporaries.append((name, c_type))
+        self.temporaries.append(name)
         return True
 
+    def track_local(self, name, c_type):
+        if not self.track(name, c_type, declare=True):
+            return False
+        self.locals.append(name)
+        return True
+
+    def clear_slots(self, names):
+        return [f"{name} = ({self.slots[name][0]}){{0}}" for name in names]
+
     def clear_temporaries(self, checkpoint):
-        return [f"{name} = ({c_type}){{0}}" for name, c_type in self.temporaries[checkpoint:]]
+        return self.clear_slots(self.temporaries[checkpoint:])
+
+    def clear_locals(self, checkpoint, indent):
+        return [f"{indent}{clear};" for clear in self.clear_slots(self.locals[checkpoint:])]
 
     def enter(self):
         lines = [
