@@ -239,6 +239,36 @@ say(int_text(length([mark(33), mark(99), mark(55)])))
                 self.assertIn("PEP_RUNTIME_INDEX_BOUNDS", error)
                 self.assertEqual(calls, 6)
 
+    def test_small_scalar_iterator_literals_use_bounded_stack_storage(self):
+        large = ", ".join(["1"] * 33)
+        source = f"""\
+var visits = 0
+fn choose(value: Int) -> Int {{
+    visits = visits + 1
+    say(int_text(value))
+    return value
+}}
+for value in [choose(1), choose(2), choose(3)] {{
+    if value == 1 {{ continue }}
+    say(int_text(value))
+    if value == 2 {{ break }}
+}}
+for flag in [true, false] {{
+    if flag {{ say("yes") }} else {{ say("no") }}
+}}
+say(int_text(visits))
+for value in [{large}] {{
+    if value == 1 {{ say("large"); break }}
+}}
+"""
+        c_file, seed = self.emit(source)
+        self.assertEqual(seed, (0, "1\n2\n3\n2\nyes\nno\n3\nlarge\n", ""))
+        for compiler in self.compilers():
+            with self.subTest(compiler=compiler):
+                code, output, error, _, calls = self.run_native(compiler, c_file, stress=True)
+                self.assertEqual((code, output, error), seed)
+                self.assertEqual(calls, 6)
+
     def test_allocation_failure_releases_preserved_roots(self):
         c_file, seed = self.emit(OOM)
         self.assertEqual(seed, (0, "before failure\n1\n", ""))

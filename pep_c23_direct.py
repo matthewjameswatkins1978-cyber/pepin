@@ -34,6 +34,7 @@ from pep_c23_memory import (
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PEP_CLI = ROOT / "pep.ps1"
+MAX_STACK_ITERATOR_ITEMS = 32
 
 
 def run_pep_cmd(*args: str, cwd: Optional[pathlib.Path] = None) -> Tuple[int, str, str]:
@@ -629,12 +630,24 @@ class C23Emitter:
             ann = stmt.get("type", "Int")
             self.binding_types[bid] = ann
             c_type = self.emit_c_type(ann)
-            iter_val = self.emit_expr(stmt["iterable"], declarations, frame)
             loop_var = f"__list_{bid}"
             idx_var = f"__idx_{bid}"
 
-            list_type, _ = unwrap_expr(stmt["iterable"])
-            frame.track(loop_var, self.emit_c_type(list_type), declare=True)
+            list_type, iterable = unwrap_expr(stmt["iterable"])
+            c_list_type = self.emit_c_type(list_type)
+            elements = iterable.get("elements", []) if iterable.get("kind") == "list" else []
+            if list_type in ("List[Int]", "List[Bool]") and 0 < len(elements) <= MAX_STACK_ITERATOR_ITEMS:
+                # A scalar literal's snapshot is visible only to this loop.
+                # Separate assignments retain eager evaluation order in C.
+                data = f"pep_loop_data_{bid}"
+                lines.append(f"{indent}int64_t {data}[{len(elements)}];")
+                for i, element in enumerate(elements):
+                    value = self.emit_expr(element, declarations, frame)
+                    lines.append(f"{indent}{data}[{i}] = {value};")
+                iter_val = f"({c_list_type}){{ {len(elements)}, {data}, nullptr }}"
+            else:
+                iter_val = self.emit_expr(stmt["iterable"], declarations, frame)
+            frame.track(loop_var, c_list_type, declare=True)
             lines.append(f"{indent}{loop_var} = {iter_val};")
             lines.extend(f"{indent}{clear};" for clear in frame.clear_temporaries(checkpoint))
             lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {loop_var}.len; ++{idx_var}) {{")
