@@ -32,6 +32,10 @@ Session-based editing, module-aware repairs and lane approval, packages, and use
 
 Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_binding_is_immutable_and_loop_return_flow_is_conservative` and `tests.test_c23_correctness` (optional else and else-if parity).
 
+**PEP-DEC-009 / V1 (loop transfers).** `break` exits the nearest enclosing `while` or `for` body. `continue` rechecks the nearest `while` condition or advances the nearest `for` iterator. Branch and block scopes are exited normally. The checker rejects either keyword outside a loop and rejects statements after unconditional transfers in the same block. Loops still do not establish a function's return completeness. The checked tree exposes source-spanned `break` and `continue` statements. This slice has no Pep-owned resources or managed native cleanup.
+
+Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_control_is_contextual_and_terminates_the_current_block` and `tests.test_c23_correctness` (nearest-loop transfer parity).
+
 ## Decision
 
 Use **OCaml 5.5.2** as Pep's seed implementation language. The compiler owns Pep's syntax, typed representation, semantic queries, diagnostics, and eventual self-hosting path. OCaml is implementation machinery; it does not define Pep's surface syntax or semantics.

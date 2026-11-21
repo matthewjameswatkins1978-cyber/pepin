@@ -182,6 +182,41 @@ say(int_text(choose(0)))
             "selected\n20\n-1\n",
         )
 
+    def test_nearest_loop_transfer_preserves_rechecks_and_return(self):
+        self.assert_native_order_parity(
+            """var checks = 0
+fn recheck() -> Bool {
+    checks = checks + 1
+    return true
+}
+fn nested() -> Int {
+    for outer in [1, 2, 3] {
+        if outer == 1 { continue }
+        var inner = 0
+        while recheck() {
+            inner = inner + 1
+            if inner == 1 { continue }
+            if outer == 2 { break }
+            return checks
+        }
+        say("after inner")
+    }
+    return -1
+}
+say(int_text(nested()))
+var total = 0
+while total <= 1 {
+    for number in [9, 10] {
+        total = total + 1
+        if number == 9 { break }
+        say("unreachable at runtime")
+    }
+}
+say(int_text(total))
+""",
+            "after inner\n4\n2\n",
+        )
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (

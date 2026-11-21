@@ -550,6 +550,9 @@ class C23Emitter:
                     lines.extend(self.emit_stmt(s, indent + "  "))
             lines.append(f"{indent}}}")
 
+        elif kind in ("break", "continue"):
+            lines.append(f"{indent}{kind};")
+
         elif kind == "while":
             cond = self.emit_expr(stmt["condition"], declarations)
             lines.append(f"{indent}while ({cond}) {{")

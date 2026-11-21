@@ -11,7 +11,9 @@ type expr =
 and pattern = PWildcard of span | PBind of string*span | PConstructor of string*pattern list*span
 and match_arm = { pattern:pattern; result:expr; arm_span:span }
 type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of string*(string*(ty list)*span) list*span
-type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SExpr of expr*span
+type loop_transfer = Break | Continue
+let loop_transfer_name = function Break->"break"|Continue->"continue"
+type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SLoopTransfer of loop_transfer*span | SExpr of expr*span
 type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
 type top = TopFun of func | TopStmt of stmt | TopType of type_decl
 type program = top list
@@ -50,7 +52,7 @@ let rec contains_empty_list = function
  |EField(value,_,_) -> contains_empty_list value
  |EMatch(subject,arms,_) -> contains_empty_list subject || List.exists(fun (arm:match_arm)->contains_empty_list arm.result)arms
  |EInt _|EBool _|EStr _|EName _|EHole _ -> false
-let stmt_span = function SLet(_,_,_,s)|SVar(_,_,_,s)|SAssign(_,_,s)|SReturn(_,s)|SBlock(_,s)|SIf(_,_,_,s)|SFor(_,_,_,s)|SWhile(_,_,s)|SExpr(_,s)->s
+let stmt_span = function SLet(_,_,_,s)|SVar(_,_,_,s)|SAssign(_,_,s)|SReturn(_,s)|SBlock(_,s)|SIf(_,_,_,s)|SFor(_,_,_,s)|SWhile(_,_,s)|SLoopTransfer(_,s)|SExpr(_,s)->s
 let is_digit c = c>='0'&&c<='9'
 let is_alpha c = c>='a'&&c<='z'||c>='A'&&c<='Z'||c='_'
 let is_alnum c = is_alpha c || is_digit c
@@ -295,6 +297,11 @@ let rec parse_stmt p =
         else parse_body ())
     in
     SIf(condition,yes,no,combine start no_end))
+  else if keyword p "break" || keyword p "continue" then (
+    let transfer=if keyword p "break" then Break else Continue in
+    let start=(take p).at in
+    ignore(accept_sym p ";");
+    SLoopTransfer(transfer,start))
   else if keyword p "while" then (
     let start=(take p).at in
     let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
@@ -388,7 +395,7 @@ and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of
   | XRecord of int*(int*texpr) list | XField of int*texpr | XConstructor of int*int*string*texpr list | XMatch of texpr*tmatch_arm list
 and tpattern = TPWildcard of span | TPBind of binding | TPConstructor of int*tpattern list*span
 and tmatch_arm = { tpattern:tpattern; tresult:texpr }
-type tstmt = TLet of binding*texpr|TVar of binding*texpr|TAssign of binding*texpr*span|TReturn of texpr|TBlock of tstmt list|TIf of texpr*tstmt list*tstmt list*span|TFor of binding*texpr*tstmt list*span|TWhile of texpr*tstmt list*span|TExpr of texpr
+type tstmt = TLet of binding*texpr|TVar of binding*texpr|TAssign of binding*texpr*span|TReturn of texpr|TBlock of tstmt list|TIf of texpr*tstmt list*tstmt list*span|TFor of binding*texpr*tstmt list*span|TWhile of texpr*tstmt list*span|TLoopTransfer of loop_transfer*span|TExpr of texpr
 type tfunc = { sig_:signature; tparams:binding list; tbody:tstmt list }
 type hole = { hid:string option; hscope:string; hty:ty option; hspan:span; hbindings:binding list }
 type record_info = { record_id:int; record_name:string; record_fields:(int*string*ty*span) list; record_span:span }
@@ -441,6 +448,7 @@ let rec ast_stmt_json s=match s with
  |SIf(c,y,n,sp)->"{\"kind\":\"if_statement\",\"condition\":"^ast_expr_json c^",\"then\":["^String.concat ","(List.map ast_stmt_json y)^"],\"else\":["^String.concat ","(List.map ast_stmt_json n)^"],\"span\":"^span_json sp^"}"
  |SFor(name,values,body,sp)->"{\"kind\":\"for_in\",\"name\":"^json_string name^",\"iterable\":"^ast_expr_json values^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
+ |SLoopTransfer(transfer,sp)->"{\"kind\":"^json_string(loop_transfer_name transfer)^",\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
 let ast_json tops = "["^String.concat ","(List.map(function
  |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
@@ -716,10 +724,10 @@ let check ?entry_document tops =
       match List.find_opt(fun(_,result)->result.ety<>None)checked_arms with None->None|Some(_,result)->result.ety in
     {node=XMatch(checked_subject,List.map(fun(p,r)->{tpattern=p;tresult=r})checked_arms);ety=result_type;espan=sp}
   in
-  let rec check_stmts env scope expected xs =
+  let rec check_stmts env scope expected ~in_loop xs =
     let rec loop env acc terminated = function
      |[]->List.rev acc,env,terminated
-     |s::rest when terminated->fail "PEP_UNREACHABLE" "Statement follows an unconditional return" (stmt_span s) ()
+     |s::_ when terminated->fail "PEP_UNREACHABLE" "Statement cannot be reached after control leaves this block" (stmt_span s) ()
      |SLet(name,annotation,e,sp)::rest ->
        if has_current env name then record_error {code="PEP_DUPLICATE_BINDING";message=("Duplicate binding '"^name^"' in this scope");at=sp;expected=None};
        (match annotation with Some ty->valid_type ty sp|None->());
@@ -780,6 +788,10 @@ let check ?entry_document tops =
            {node=XInt 0L; ety=expected; espan=sp}
        in
        loop env (TReturn te::acc) true rest
+     |SLoopTransfer(transfer,sp)::rest->
+       if not in_loop then
+         fail "PEP_LOOP_CONTROL_OUTSIDE_LOOP" (loop_transfer_name transfer^" is only valid inside a loop") sp ();
+       loop env (TLoopTransfer(transfer,sp)::acc) true rest
      |SExpr(e,_)::rest->
        let te =
          try
@@ -789,28 +801,28 @@ let check ?entry_document tops =
            {node=XInt 0L; ety=None; espan=expr_span e}
        in
        loop env (TExpr te::acc) false rest
-     |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected body in loop env (TBlock inner::acc) term rest
+     |SBlock(body,_)::rest->let inner,_,term=check_stmts ([]::env) scope expected ~in_loop body in loop env (TBlock inner::acc) term rest
      |SIf(condition,yes,no,sp)::rest->
        let checked_condition=check_expr env scope (Some Bool) condition in
-       let checked_yes,_,yes_returns=check_stmts ([]::env) scope expected yes in
-       let checked_no,_,no_returns=check_stmts ([]::env) scope expected no in
+       let checked_yes,_,yes_returns=check_stmts ([]::env) scope expected ~in_loop yes in
+       let checked_no,_,no_returns=check_stmts ([]::env) scope expected ~in_loop no in
        loop env (TIf(checked_condition,checked_yes,checked_no,sp)::acc) (yes_returns && no_returns) rest
      |SFor(name,values,body,sp)::rest->
        let checked_values=synth env scope values in
        let element_type=match checked_values.ety with Some(List ty)->ty|Some ty->fail "PEP_FOR_REQUIRES_LIST" ("for-in requires a List, found "^type_name ty) (expr_span values) ()|None->fail "PEP_FOR_REQUIRES_LIST" "for-in requires a list with a known element type" (expr_span values) () in
        let binding={bid=fresh();bname=name;bty=Some element_type;bspan=sp;mutable_=false} in
-       let inner,_,_=check_stmts ([binding]::env) scope expected body in
+       let inner,_,_=check_stmts ([binding]::env) scope expected ~in_loop:true body in
        loop env (TFor(binding,checked_values,inner,sp)::acc) false rest
      |SWhile(condition,body,sp)::rest->
        let checked_condition=check_expr env scope (Some Bool) condition in
-       let inner,_,_=check_stmts ([]::env) scope expected body in
+       let inner,_,_=check_stmts ([]::env) scope expected ~in_loop:true body in
        loop env (TWhile(checked_condition,inner,sp)::acc) false rest
     in loop env [] false xs
   in
   let global_env=ref [[]] and top_typed=ref [] in
   List.iter(function TopStmt s->
     (try
-       let typed,env,_=check_stmts !global_env "<top-level>" None [s] in
+       let typed,env,_=check_stmts !global_env "<top-level>" None ~in_loop:false [s] in
        global_env:=env;top_typed:=List.rev_append typed !top_typed
      with Error d ->
        record_error d)
@@ -831,7 +843,7 @@ let check ?entry_document tops =
          |Some doc when f.fspan.document<>Some doc -> [[]]
          |_-> !global_env
        in
-       let typed,_,terminated=check_stmts (params :: globals) f.fname (Some f.result) f.body in
+       let typed,_,terminated=check_stmts (params :: globals) f.fname (Some f.result) ~in_loop:false f.body in
        if f.result<>Unit && not terminated then fail "PEP_MISSING_RETURN" ("Function '"^f.fname^"' must return "^type_name f.result) f.fspan ~expected:f.result ();
        functions:={sig_;tparams=params;tbody=typed}::!functions
      with Error d ->
@@ -876,6 +888,7 @@ let rec typed_stmt_json = function
  |TIf(c,y,n,sp)->"{\"kind\":\"if_statement\",\"condition\":"^typed_expr_json c^",\"then\":["^String.concat ","(List.map typed_stmt_json y)^"],\"else\":["^String.concat ","(List.map typed_stmt_json n)^"],\"span\":"^span_json sp^"}"
  |TFor(b,values,body,sp)->"{\"kind\":\"for_in\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^",\"iterable\":"^typed_expr_json values^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |TWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^typed_expr_json c^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
+ |TLoopTransfer(transfer,sp)->"{\"kind\":"^json_string(loop_transfer_name transfer)^",\"span\":"^span_json sp^"}"
  |TExpr e->"{\"kind\":\"expression\",\"value\":"^typed_expr_json e^"}"
 let typed_json_base c =
  "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
@@ -898,6 +911,7 @@ let check_json tops c = "{\"schemaVersion\":2,\"status\":"^json_string(program_s
 type value = VInt of int64|VBool of bool|VStr of string|VSourceBytes of string|VUnit|VRecord of int*(int*value) list|VVariant of int*int*value list|VList of value list
 exception Runtime of string*string*span
 let runtime code message sp=raise(Runtime(code,message,sp))
+exception Loop_transfer of loop_transfer
 let int_value = function VInt n->n|_->assert false
 let scalar_equal left right = match left,right with
  |VInt a,VInt b->a=b|VBool a,VBool b->a=b|VStr a,VStr b->String.equal a b|VUnit,VUnit->true|_->false
@@ -1024,7 +1038,7 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
   |stmt::rest->
     let statement_span=match stmt with
       |TLet(binding,_)|TVar(binding,_)->binding.bspan
-      |TAssign(_,_,span)|TIf(_,_,_,span)|TFor(_,_,_,span)|TWhile(_,_,span)->span
+      |TAssign(_,_,span)|TIf(_,_,_,span)|TFor(_,_,_,span)|TWhile(_,_,span)|TLoopTransfer(_,span)->span
       |TReturn expression|TExpr expression->expression.espan
       |TBlock _->mkspan 0 0 1 1 in
     tick statement_span;
@@ -1039,6 +1053,7 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
        (try (List.assoc binding.bid env):=value with Not_found->runtime "PEP_RUNTIME_UNRESOLVED_BINDING" "Checked assignment target is missing at runtime" span);
        exec_stmts env stack rest
      |TReturn expression->Some(eval env stack expression)
+     |TLoopTransfer(transfer,_)->raise(Loop_transfer transfer)
      |TBlock statements->(match exec_stmts env stack statements with Some value->Some value|None->exec_stmts env stack rest)
      |TIf(condition,yes,no,span)->
        (match eval env stack condition with
@@ -1054,14 +1069,20 @@ let execute ?(entry=None) ?(allow_say=true) ?(step_limit=1_000_000) ?(max_depth=
               tick span;
               (match exec_stmts ((binding.bid,ref value)::env) stack body with
                |Some result->Some result
-               |None->iterate remaining)
+               |None | exception Loop_transfer Continue->iterate remaining
+               |exception Loop_transfer Break->exec_stmts env stack rest)
           in iterate values
         |_ ->runtime "PEP_RUNTIME_EXPECTED_LIST" "Checked for-in received a non-list value" span)
      |TWhile(condition,body,span)->
        let rec repeat () =
          match eval env stack condition with
          |VBool false->exec_stmts env stack rest
-         |VBool true->tick span;(match exec_stmts env stack body with Some result->Some result|None->repeat())
+         |VBool true->
+           tick span;
+           (match exec_stmts env stack body with
+            |Some result->Some result
+            |None | exception Loop_transfer Continue->repeat()
+            |exception Loop_transfer Break->exec_stmts env stack rest)
          |_ ->runtime "PEP_RUNTIME_EXPECTED_BOOL" "Checked while condition received a non-Bool value" span
        in repeat()
      |TExpr expression->ignore(eval env stack expression);exec_stmts env stack rest)
@@ -1640,6 +1661,7 @@ let rec tool_stmt_calls = function
   | TFor (_,iterable,body,_) -> tool_expr_calls iterable @ List.concat_map tool_stmt_calls body
   | TWhile (condition,body,_) -> tool_expr_calls condition @ List.concat_map tool_stmt_calls body
   | TBlock statements -> List.concat_map tool_stmt_calls statements
+  | TLoopTransfer _ -> []
 
 let tool_reaches_say checked function_id =
   let functions = Hashtbl.create 16 in
@@ -2323,6 +2345,7 @@ let load_file_program file =
         |SIf(c,y,n,s)->SIf(expression c,List.map statement y,List.map statement n,s)
         |SFor(n,e,body,s)->SFor(n,expression e,List.map statement body,s)
         |SWhile(c,body,s)->SWhile(expression c,List.map statement body,s)
+        |SLoopTransfer _ as transfer->transfer
       in
       let public_interfaces=Hashtbl.create (List.length public_names) in
       let declarations=List.map (function
@@ -2376,7 +2399,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"short_circuit_boolean_logic\",\"scalar_equality\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let tops,graph,entry_document=load_file_program file in

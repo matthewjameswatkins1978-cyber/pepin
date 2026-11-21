@@ -163,6 +163,27 @@ say(int_text(value))
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertEqual(response["diagnostics"][0]["code"], expected)
 
+    def test_loop_control_is_contextual_and_terminates_the_current_block(self):
+        cases = {
+            "break": "PEP_LOOP_CONTROL_OUTSIDE_LOOP",
+            "fn bad() -> Unit { { continue } }": "PEP_LOOP_CONTROL_OUTSIDE_LOOP",
+            "while true { if true { break } else { continue } say(\"unreachable\") }": "PEP_UNREACHABLE",
+            "while true { { break } say(\"unreachable\") }": "PEP_UNREACHABLE",
+            "fn f() -> Int { while true { break } }": "PEP_MISSING_RETURN",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                result, response = self.check_source(source)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(response["diagnostics"][0]["code"], expected)
+
+        result, response = self.check_source("while true { if false { continue } break }")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        body = response["typedTree"]["statements"][0]["body"]
+        self.assertEqual(body[0]["then"][0]["kind"], "continue")
+        self.assertEqual(body[1]["kind"], "break")
+        self.assertEqual(body[1]["span"]["start"]["column"], 36)
+
     def test_recursive_value_equality_is_not_implicitly_defined(self):
         source = "type Expr = Number(Int)\nlet value = Number(1) == Number(1)\n"
         result, response = self.check_source(source)
