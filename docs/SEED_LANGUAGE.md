@@ -28,7 +28,7 @@ Session-based editing, module-aware repairs and lane approval, packages, and use
 
 ## Provisional statement control flow
 
-**PEP-DEC-009 / V1 (statement conditionals).** A statement `if condition { … }` may omit the else branch. An `else if` is a nested statement in the false branch, with the same lexical scoping and lazy selection as a braced `else`. In a function returning a non-`Unit` value, a conditional terminates the block only when every branch terminates. An expression `if` still requires a compatible else value. Checked programs expose the nested branch as an `if_statement` in the typed tree used by the interpreter and direct C23 backend.
+**PEP-DEC-009 / V1 (statement conditionals).** A statement `if condition { … }` may omit the else branch. An `else if` is a nested statement in the false branch, with the same lexical scoping and lazy selection as a braced `else`. In a function returning a non-`Unit` value, a conditional terminates the block only when every branch terminates. An expression `if` also supports `else if` and requires a compatible final else value. Checked programs expose the nested branch as an `if_statement` in the typed tree used by the interpreter and direct C23 backend.
 
 Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_binding_is_immutable_and_loop_return_flow_is_conservative` and `tests.test_c23_correctness` (optional else and else-if parity).
 

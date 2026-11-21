@@ -216,12 +216,7 @@ let rec parse_expr p min_prec =
         if not(symbol p "]") then (items := [parse_expr p 0]; while accept_sym p "," do if not(symbol p "]") then items := !items @ [parse_expr p 0] done);
         let ending=at p in expect_sym p "]"; EList(!items,combine first.at ending)
     |Sym "!" -> let rhs=parse_expr p 30 in EUnary("!",rhs,combine first.at (expr_span rhs))
-    |Id "if" ->
-        let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
-        let condition=parse_expr p 0 in p.record_literals_allowed<-previous;
-        expect_sym p "{"; let yes=parse_expr p 0 in ignore(at p); expect_sym p "}";
-        if not(keyword p "else") then fail "PEP_PARSE_ELSE" "Expected else after the true branch" (at p) ();
-        ignore(take p); expect_sym p "{"; let no=parse_expr p 0 in let ending=at p in expect_sym p "}"; EIf(condition,yes,no,combine first.at ending)
+    |Id "if" ->parse_if_expr p first.at
     |Id "match" ->
         let previous = p.record_literals_allowed in p.record_literals_allowed <- false;
         let subject = parse_expr p 0 in p.record_literals_allowed <- previous;
@@ -249,6 +244,24 @@ let rec parse_expr p min_prec =
     |Sym "-" -> let rhs=parse_expr p 30 in EBin("neg",EInt(0L,first.at),rhs,combine first.at (expr_span rhs))
     |t->fail "PEP_PARSE_EXPRESSION" "Expected an expression" first.at () in
   parse_tail p min_prec lhs
+and parse_if_expr p start =
+  let previous=p.record_literals_allowed in p.record_literals_allowed<-false;
+  let condition=parse_expr p 0 in p.record_literals_allowed<-previous;
+  expect_sym p "{";
+  let yes=parse_expr p 0 in expect_sym p "}";
+  if not(keyword p "else") then fail "PEP_PARSE_ELSE" "Expected else after the true branch" (at p) ();
+  ignore(take p);
+  let no,ending =
+    if keyword p "if" then (
+      let nested=parse_if_expr p (take p).at in
+      nested,expr_span nested)
+    else (
+      expect_sym p "{";
+      let value=parse_expr p 0 in
+      let closing=at p in expect_sym p "}";
+      value,closing)
+  in
+  EIf(condition,yes,no,combine start ending)
 and parse_tail p min_prec lhs =
   if symbol p "[" && (peek p).at.line=p.ts.(p.p-1).at.line then (
     ignore(take p);

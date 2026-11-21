@@ -153,6 +153,8 @@ say(int_text(value))
             "fn branch(value: Bool) -> Int { if value { return 1 } }": "PEP_MISSING_RETURN",
             "fn branch(value: Bool) -> Int { if value { return 1 } return 2 }": None,
             "let value = if true { 1 }": "PEP_PARSE_ELSE",
+            "let value = if true { 1 } else if false { 2 }": "PEP_PARSE_ELSE",
+            "let value = if true { 1 } else if false { 2 } else { false }": "PEP_TYPE_MISMATCH",
             "if true { let hidden = 1 } else if hidden == 1 {}": "PEP_UNKNOWN_VARIABLE",
         }
         for source, expected in cases.items():

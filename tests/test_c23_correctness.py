@@ -273,6 +273,17 @@ if 1 + 2 < 2 * 2 && (1 < 2) == true { say("precedence") }
             with self.subTest(compiler=compiler.name):
                 self.assertEqual(pep_c23_direct.run_c23(path, compiler_bin=compiler), expected)
 
+    def test_expression_else_if_chains_are_lazy_and_keep_outer_precedence(self):
+        self.assert_native_order_parity(
+            """fn mark() -> Bool { say("condition") return true }
+let value = if false { 1 / 0 } else if mark() { 41 } else { 1 / 0 } + 1
+say(int_text(value))
+let lists: List[Int] = if false { [] } else if false { [] } else { [5] }
+say(int_text(lists[0]))
+""",
+            "condition\n42\n5\n",
+        )
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (
