@@ -216,6 +216,43 @@ show()
                 self.assertEqual((code, output), seed[:2])
                 self.assertIn("PEP_RUNTIME_INDEX_BOUNDS", error)
 
+    def test_call_depth_counts_only_pep_functions_after_eager_arguments(self):
+        source = """\
+type Step = More(Int) | Done()
+fn descend(n: Int) -> Int {
+    let token = [int_text(n)]
+    let step = if n == 0 { Done() } else { More(n - 1) }
+    return match step {
+        Done() => length(token)
+        More(next) => descend(
+            if next == 0 && (say("arg-left") == say("arg-right")) { LAST } else { next }
+        ) + length(token)
+    }
+}
+say(int_text(descend(DEPTH)))
+say("later")
+"""
+        prefix = "arg-left\narg-right\n"
+        compilers = self.compilers()
+        for depth, last, expected_error in (
+            (511, "next", ""),
+            (512, "next", "PEP_RUNTIME_CALL_DEPTH"),
+            (512, "1 / next", "PEP_RUNTIME_DIVISION_BY_ZERO"),
+        ):
+            c_file, seed = self.emit(source.replace("DEPTH", str(depth)).replace("LAST", last))
+            expected = (1, prefix) if expected_error else (0, prefix + "512\nlater\n")
+            self.assertEqual(seed[:2], expected)
+            if expected_error:
+                self.assertIn(expected_error, seed[2])
+            for compiler in compilers:
+                with self.subTest(compiler=compiler, depth=depth, last=last):
+                    code, output, error, _, _ = self.run_native(compiler, c_file, stress=True)
+                    self.assertEqual((code, output), expected)
+                    if expected_error:
+                        self.assertIn(expected_error, error)
+                    else:
+                        self.assertEqual(error, "")
+
     def test_nonescaping_literal_length_preserves_eager_elements(self):
         source = """\
 fn mark(value: Int) -> Int {
