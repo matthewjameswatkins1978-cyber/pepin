@@ -1,9 +1,8 @@
 // Agent-4 UTF-8 helpers: minimal C23 runtime primitives for validation,
 // decoding, and encoding. Pep cannot express raw bytes, so the byte
-// mechanics live here. The classification policy (widths, continuation
-// ranges, boundary values) is transcribed exactly from the Pep-written
-// lexer model `utf8_error` in examples/lexer_fragment.pep and mirrored in
-// callable Pep form in pep_utf8_model.pep; this file owns only the bytes.
+// mechanics live here. Validation follows `invalid_utf8_offset` in the
+// OCaml seed and `utf8_check` in examples/pep_lexer.pep. The strict scalar
+// classification table used by decode is mirrored in pep_utf8_model.pep.
 // Invalid input never produces a scalar value; every entry point reports
 // the failure and changes nothing it does not own.
 #ifndef PEP_UTF8_H
@@ -19,8 +18,12 @@ enum {
 };
 
 // Validate n bytes. Returns PEP_UTF8_OK, or PEP_UTF8_INVALID with
-// *error_offset set to the first bad byte (same offsets as the Pep model:
-// truncation reports the lead byte, a bad continuation reports that byte).
+// *error_offset set using the seed's diagnostic policy: truncation or an
+// invalid lead reports that lead byte; for a complete structural sequence,
+// the first non-continuation reports its own byte, and otherwise overlong,
+// surrogate and out-of-range scalars report their lead. On OK the offset
+// is unchanged. Structural widths include C0/C1 and F5-F7 only to select
+// the error offset, never to accept an invalid scalar.
 // A null error_offset is allowed; the status still reports validity.
 // A null s is always PEP_UTF8_BADARG, even with n == 0: pass "" or a
 // real buffer for empty input.
