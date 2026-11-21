@@ -860,7 +860,7 @@ class A12ParserDifferentialTests(unittest.TestCase):
 
     def test_malformed_delimiters_match_ocaml_diagnostics(self):
         corpus = [
-            ("missing_else", "fn f() -> Int { if true { return 1 } }", "PEP_PARSE_ELSE", "invalid"),
+            ("missing_expression_else", "fn f() -> Int { return if true { 1 } }", "PEP_PARSE_ELSE", "invalid"),
             ("mismatched_group", "fn f() -> Int { return (1 }", "PEP_PARSE_EXPECTED", "invalid"),
             ("mismatched_list", "fn f() -> Int { return [1 }", "PEP_PARSE_EXPECTED", "invalid"),
             ("truncated_union", "type X = A(Int) |", "PEP_PARSE_NAME", "incomplete"),
@@ -889,6 +889,14 @@ class A12ParserDifferentialTests(unittest.TestCase):
                                  diagnostic["span"]["start"]["offset"])
                 self.assertEqual(scalar(parser_fields["errorEnd"]),
                                  diagnostic["span"]["endOffset"])
+
+    def test_statement_if_without_else_is_a_seed_extension(self):
+        source = b"fn f() -> Int { if true { return 1 } return 2 }"
+        target, parsed = self.parse(source, metadata_only=True)
+        self.assertEqual(target["status"], "valid")
+        parser_fields = fields(parsed)
+        self.assertEqual(scalar(parser_fields["status"]), "invalid")
+        self.assertEqual(scalar(parser_fields["errorCode"]), "PEP_PARSE_ELSE")
 
     def test_repository_examples_match_ocaml_parser_ast(self):
         matched = 0
