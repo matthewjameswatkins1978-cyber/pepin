@@ -32,8 +32,9 @@ pep_heap_object *pep_heap_alloc(pep_heap *heap, size_t size, pep_heap_trace trac
 void *pep_heap_data(pep_heap_object *object);
 size_t pep_heap_size(const pep_heap_object *object);
 
-// Frames are caller-owned and pop in reverse order. Publish initialised
-// roots before push, keep the context valid until pop, and pop before return.
+// Frames are caller-owned and pop in reverse order. Push an unlinked frame
+// with a non-NULL callback and initialised roots. Keep the context valid
+// until pop, and pop before returning from the frame's owning scope.
 void pep_heap_push_frame(pep_heap *heap, pep_heap_frame *frame,
                          pep_heap_roots trace, void *context);
 void pep_heap_pop_frame(pep_heap *heap, pep_heap_frame *frame);
@@ -43,12 +44,15 @@ void pep_heap_pop_frame(pep_heap *heap, pep_heap_frame *frame);
 // owner. Collection visits registered frames and the optional extra roots.
 // A trace callback can read the object's payload and size.
 // Each non-NULL handle must be live in this heap. Callbacks may only inspect
-// roots/payloads and mark handles. The marker is valid only during collection.
+// roots/payloads and mark handles. They must never reenter the heap API to
+// allocate, collect, destroy, or change frames. The marker is valid only
+// during collection.
 void pep_heap_mark(pep_heap_marker *marker, pep_heap_object *object);
 void pep_heap_collect(pep_heap *heap, pep_heap_roots roots, void *context);
 
-// Collect before allocation above the adaptive byte threshold, on allocation
-// failure before retrying once, or before every allocation if heap.stress.
+// Collect before allocation above the adaptive byte threshold, or before
+// every allocation if heap.stress. Retry a failed allocation once after
+// collection if the heap held objects and had not already collected.
 // All live roots must be visible in frames. The returned object is unrooted.
 pep_heap_object *pep_heap_alloc_safepoint(pep_heap *heap, size_t size,
                                           pep_heap_trace trace);
