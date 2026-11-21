@@ -284,6 +284,58 @@ say(int_text(lists[0]))
             "condition\n42\n5\n",
         )
 
+    def test_native_generic_functions_use_checked_concrete_instances(self):
+        self.assert_native_order_parity(
+            """type Row { name: Str }
+type Marker = Ready(Int) | Missing()
+fn first[T](values: List[T]) -> T {
+    var head: T = values[0]
+    for item in values {
+        head = item
+        break
+    }
+    return head
+}
+fn second[A, B](first: A, second: B) -> B {
+    first
+    return second
+}
+fn empty[T]() -> List[T] { return [] }
+fn match_value[T](item: Marker, value: T) -> T {
+    return match item { Ready(num) => if num > 0 { value } else { value } Missing() => value }
+}
+let nothing: List[Str] = empty()
+say(int_text(length(nothing)))
+say(int_text(first([42, 9])))
+say(first([Row { name: "nominal" }]).name)
+say(int_text(first([[5]])[0]))
+say(second(true, match_value(Ready(1), "two parameters")))
+""",
+            "0\n42\nnominal\n5\ntwo parameters\n",
+        )
+
+    def test_public_generic_function_keeps_checked_module_interface(self):
+        from pep_semantic_map import SemanticMap
+
+        with tempfile.TemporaryDirectory() as folder:
+            entry = pathlib.Path(folder) / "entry.pep"
+            lib = entry.with_name("lib.pep")
+            lib.write_text("pub fn first[T](values: List[T]) -> T { return values[0] }\n", encoding="utf-8")
+            entry.write_text(
+                'import lib\nsay(lib.first(["a"]))\nsay(int_text(lib.first([2])))\n',
+                encoding="utf-8",
+            )
+            semantic = SemanticMap(entry)
+            context = semantic.get_context_packet("lib.pep::first")
+            self.assertEqual(context["typeParameters"], ["T"])
+            self.assertEqual(context["params"][0]["type"], "List[T]")
+            self.assertEqual(semantic.module_graph["files"][0]["exports"][0]["typeParameters"], ["T"])
+            expected = (0, "a\n2\n", "")
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(entry)), expected)
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    self.assertEqual(pep_c23_direct.run_c23(entry, compiler_bin=compiler), expected)
+
     def test_strict_iso_c23_pedantic_compilation(self):
         """Defect 7: Pattern matching must compile with strict -pedantic-errors on Clang and GCC."""
         source = (

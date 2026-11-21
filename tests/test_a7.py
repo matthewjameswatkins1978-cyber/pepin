@@ -178,6 +178,50 @@ class PepA7Tests(unittest.TestCase):
         self.assertEqual(responses[11]["revision"], tool_revision)
         self.assertEqual(responses[12]["revision"], tool_revision)
 
+    def test_snapshot_links_generic_calls_to_source_functions(self):
+        tool_source = "fn snapshot() -> ProgramInfo { return semantic_snapshot() }\n"
+        target_source = """fn entry() -> Int {
+    say(keep("pep"))
+    return keep(42)
+}
+fn keep[T](value: T) -> T { marker() return value }
+fn marker() -> Unit {}
+entry()
+"""
+        tool_revision = revision(tool_source)
+        target_revision = revision(target_source)
+        target = semantic_target("doc-2", target_revision)
+        functions = []
+        for index, name in enumerate(("entry", "keep", "marker")):
+            start, end = declaration_span(target_source, name)
+            functions.append(record(
+                "FunctionInfo", id=scalar("Int", str(index)), name=scalar("Str", name),
+                startByte=scalar("Int", str(start)), endByte=scalar("Int", str(end)),
+            ))
+        edges = [
+            record("CallEdge", caller=scalar("Int", str(caller)), callee=scalar("Int", str(callee)))
+            for caller, callee in ((0, 1), (1, 2))
+        ]
+        expected = record(
+            "ProgramInfo", document=scalar("Str", "doc-2"), revision=scalar("Str", target_revision),
+            status=scalar("Str", "valid"), functions=list_value("List[FunctionInfo]", functions),
+            calls=list_value("List[CallEdge]", edges), roots=list_value("List[Int]", [scalar("Int", "0")]),
+            diagnostics=list_value("List[SemanticDiagnostic]", []),
+        )
+        requests = [
+            {"schemaVersion": 3, "op": "open", "source": tool_source},
+            {"schemaVersion": 3, "op": "open", "source": target_source},
+            tool_request("tool_register", tool="snapshot", document="doc-1",
+                         revision=tool_revision, function="snapshot"),
+            tool_request("tool_validate", tool="snapshot", document="doc-1", revision=tool_revision,
+                         testVectors=[{"arguments": [], "expect": expected, "semanticTarget": target}]),
+        ]
+        completed = invoke_session(requests)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        responses = [json.loads(line) for line in completed.stdout.splitlines()]
+        self.assertEqual(len(responses), len(requests))
+        self.assertEqual(responses[-1]["status"], "Validated", responses[-1])
+
     def test_host_target_grants_are_required_and_invalid_source_has_typed_diagnostics(self):
         tool_source = (
             "fn snapshot() -> ProgramInfo { return semantic_snapshot() }\n"

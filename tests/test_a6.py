@@ -206,6 +206,47 @@ say(int_text(value))
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertEqual(response["diagnostics"][0]["code"], expected)
 
+    def test_generic_functions_check_bodies_and_infer_concrete_arguments(self):
+        source = """fn pair[T](first: T, rest: List[T]) -> List[T] {
+    return prepend(rest, first)
+}
+let numbers = pair(42, [])
+let more = pair(9, [5])
+let labels = pair("pep", [])
+"""
+        result, response = self.check_source(source)
+        self.assertEqual(result.returncode, 0, response)
+        tree = response["typedTree"]
+        template, = tree["genericFunctions"]
+        self.assertEqual(template["typeParameters"], ["T"])
+        self.assertEqual(template["returnType"], "List[T]")
+        instances = {tuple(fn["genericOrigin"]["typeArguments"]): fn for fn in tree["functions"]}
+        self.assertEqual(set(instances), {("Int",), ("Str",)})
+        self.assertEqual(len(tree["functions"]), 2)
+        self.assertEqual(instances[("Int",)]["returnType"], "List[Int]")
+        self.assertNotEqual(instances[("Int",)]["parameters"][0]["bindingId"],
+                            instances[("Str",)]["parameters"][0]["bindingId"])
+        self.assertEqual(tree["statements"][0]["value"]["expression"]["functionId"],
+                         instances[("Int",)]["functionId"])
+        self.assertEqual(tree["statements"][1]["value"]["expression"]["functionId"],
+                         instances[("Int",)]["functionId"])
+
+        cases = (
+            ("fn wrong[T](x: T) -> T { return x + 1 }", "PEP_TYPE_MISMATCH"),
+            ("fn wrong[T](x: T) -> Bool { return x == x }", "PEP_EQUALITY_UNSUPPORTED"),
+            ("fn wrong[T]() -> T { return [1] }", "PEP_TYPE_MISMATCH"),
+            ("fn bad[T,T](x: T) -> T { return x }", "PEP_GENERIC_PARAMETER"),
+            ("fn bad[T: Ordered](x: T) -> T { return x }", "PEP_GENERIC_CONSTRAINT_UNSUPPORTED"),
+            ("fn empty[T]() -> List[T] { return [] }\nlet bad = empty()", "PEP_GENERIC_INFERENCE"),
+            ("fn choose[T](a: T, b: T) -> T { return a }\nlet bad = choose(1, [2])", "PEP_TYPE_MISMATCH"),
+            ("fn recurse[T](x: T) -> T { return recurse(x) }", "PEP_GENERIC_NESTED_CALL_UNSUPPORTED"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                result, response = self.check_source(source)
+                self.assertEqual(result.returncode, 1, response)
+                self.assertEqual(response["diagnostics"][0]["code"], expected)
+
     def test_recursive_value_equality_is_not_implicitly_defined(self):
         source = "type Expr = Number(Int)\nlet value = Number(1) == Number(1)\n"
         result, response = self.check_source(source)

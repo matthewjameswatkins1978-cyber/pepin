@@ -257,6 +257,7 @@ class SemanticMap:
                     "kind": "function",
                     "name": name,
                     "params": params,
+                    "typeParameters": fn.get("typeParameters", []),
                     "returns": ret_type,
                     "span": fspan,
                     "body": body,
@@ -569,25 +570,22 @@ class SemanticMap:
             if m:
                 implementation_code = m.group(1).strip()
 
-        fallback_sig = f"fn {target_symbol}(" + ", ".join(f"{p['name']}: {p['type']}" for p in sym.get("params", [])) + f") -> {sym.get('returns', 'Unit')}"
+        def signature(name: str) -> str:
+            symbol = self.symbols[name]
+            type_params = symbol.get("typeParameters", [])
+            generic = f"[{', '.join(type_params)}]" if type_params else ""
+            params = ", ".join(f"{p['name']}: {p['type']}" for p in symbol.get("params", []))
+            return f"fn {name}{generic}({params}) -> {symbol.get('returns', 'Unit')}"
+
+        fallback_sig = signature(target_symbol)
         if not implementation_code:
             implementation_code = fallback_sig
 
         # Callee signatures
-        callee_signatures = []
-        for c in callees:
-            if c in self.symbols:
-                csym = self.symbols[c]
-                params = ", ".join(f"{p['name']}: {p['type']}" for p in csym.get("params", []))
-                callee_signatures.append(f"fn {c}({params}) -> {csym.get('returns', 'Unit')}")
+        callee_signatures = [signature(c) for c in callees if c in self.symbols]
 
         # Caller signatures
-        caller_signatures = []
-        for c in callers:
-            if c in self.symbols:
-                csym = self.symbols[c]
-                params = ", ".join(f"{p['name']}: {p['type']}" for p in csym.get("params", []))
-                caller_signatures.append(f"fn {c}({params}) -> {csym.get('returns', 'Unit')}")
+        caller_signatures = [signature(c) for c in callers if c in self.symbols]
 
         # Relevant requirements
         relevant_reqs = []
@@ -672,6 +670,7 @@ class SemanticMap:
             "kind": sym.get("kind"),
             "params": sym.get("params"),
             "returns": sym.get("returns"),
+            **({"typeParameters": sym["typeParameters"]} if sym.get("typeParameters") else {}),
             "implementation": implementation_code,
             "sourceFile": str(source_path),
             "sourceHash": source_hash,

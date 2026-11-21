@@ -24,7 +24,7 @@ From the repository root, use `.\pep.ps1 run PATH_TO_MAIN.pep` or `.\pep.ps1 run
 
 When a module declares `pub type Counter { value: Int }`, importers can name the type as `alias.Counter` and pass values through public functions. Record fields and tagged-union constructors stay private. Define public construction and inspection functions within the declaring module. The checked module graph lists public type identities in `typeExports`.
 
-Session-based editing, module-aware repairs and lane approval, packages, and user-defined generics remain outside this slice.
+Session-based module editing, module-aware repairs and lane approval, and packages remain outside this slice.
 
 ## Provisional statement control flow
 
@@ -43,6 +43,14 @@ Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_loop_control_is_conte
 **PEP-DEC-005 / V1 (indexed reads).** `values[index]` reads an immutable `List[T]` and produces `T`, using zero-based `Int` indices. A bracket on the same line as the preceding token continues the expression. Postfix indexing composes with field access and other indices. The receiver is evaluated before the index, once each. A negative or out-of-range index traps with `PEP_RUNTIME_INDEX_BOUNDS` before subsequent effects. The interpreter traverses the list up to the requested element and charges step budget during traversal. Direct C23 checks the bounds and reads its existing contiguous list storage. The typed tree reports the operands, element type, source span, and required runtime bounds check. Indexed writes, `get` returning `Option`, and indexing other collections remain future work.
 
 Evidence: `tests.test_a6.A6CollectionsAndControlTests.test_list_index_is_typed_and_bounds_checked` and `tests.test_c23_correctness` (indexed read ordering, bounds and nominal, nested and Boolean value parity).
+
+## Provisional generic functions
+
+**PEP-DEC-003B / V2.** Declare type parameters with `fn first[T](values: List[T]) -> T { return values[0] }`. The checker checks the body with abstract type parameters, even when the function is unused. Calls infer type arguments from arguments and the expected result when available. The interpreter and direct C23 consume the same concrete checked instances, deduplicated by source function and concrete types. The typed tree links each instance to its template and exposes the checked template separately. Public generic signatures retain their type parameters in the checked module graph and Semantic Map.
+
+This slice supports unconstrained, nonrecursive generic functions declared locally or exported from a file module. Nested calls to generic functions from a monomorphic caller are allowed. Calls from generic bodies to other generic functions (including recursion), explicit type arguments, constraints and generic nominal type declarations require follow-up. Ambiguous calls and programs requiring more than 256 distinct instances receive diagnostics.
+
+Evidence: `tests.test_a6` (template checking and inference), `tests.test_a7` (source function identities and call edges), and `tests.test_c23_correctness` (concrete native parity and public module interfaces).
 
 ## Decision
 

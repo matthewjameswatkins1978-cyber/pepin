@@ -1,4 +1,4 @@
-type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | List of ty
+type ty = Int | Bool | Str | SourceBytes | Unit | Named of string | TypeParam of string | List of ty
 type span = { lo:int; hi:int; line:int; column:int; document:string option }
 type token_kind = Id of string | Number of int64 | Text of string | Hole of string option | Sym of string | Eof
 type token = { kind:token_kind; at:span }
@@ -14,14 +14,14 @@ type type_decl = RecordDecl of string*(string*ty*span) list*span | UnionDecl of 
 type loop_transfer = Break | Continue
 let loop_transfer_name = function Break->"break"|Continue->"continue"
 type stmt = SLet of string*ty option*expr*span | SVar of string*ty option*expr*span | SAssign of string*expr*span | SReturn of expr*span | SBlock of stmt list*span | SIf of expr*stmt list*stmt list*span | SFor of string*expr*stmt list*span | SWhile of expr*stmt list*span | SLoopTransfer of loop_transfer*span | SExpr of expr*span
-type func = { fname:string; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
+type func = { fname:string; type_params:string list; params:(string*ty*span) list; result:ty; body:stmt list; fspan:span }
 type top = TopFun of func | TopStmt of stmt | TopType of type_decl
 type program = top list
 type error = { code:string; message:string; at:span; expected:ty option }
 exception Error of error
 exception MultiError of error list
 
-let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n->n | List t->"List["^type_name t^"]"
+let rec type_name = function Int->"Int" | Bool->"Bool" | Str->"Str" | SourceBytes->"SourceBytes" | Unit->"Unit" | Named n|TypeParam n->n | List t->"List["^type_name t^"]"
 let scalar_equality_type = function Int|Bool|Str|Unit->true|_->false
 let mkspan lo hi line column = {lo;hi;line;column;document=None}
 let fail code message at ?expected () = raise(Error {code;message;at;expected})
@@ -152,7 +152,7 @@ let lex ?document source =
     else fail "PEP_UNEXPECTED_CHARACTER" (Printf.sprintf "Unexpected character %C" c) (mkspan lo (lo+1) ln cl) ()
   in loop(); Array.of_list(List.rev !tokens)
 
-type parser = { ts:token array; mutable p:int; mutable record_literals_allowed:bool }
+type parser = { ts:token array; mutable p:int; mutable record_literals_allowed:bool; mutable type_params:string list }
 let peek p = p.ts.(p.p)
 let take p = let t=peek p in p.p<-min (p.p+1) (Array.length p.ts-1);t
 let at p = (peek p).at
@@ -165,6 +165,7 @@ let rec parse_type p = match take p with
   |{kind=Id qualifier;_} when accept_sym p "." -> Named(qualifier^"."^expect_id p)
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
+  |{kind=Id name;_} when List.mem name p.type_params->TypeParam name
   |{kind=Id name;_}->Named name
   |t->fail "PEP_PARSE_TYPE" "Expected a type name" t.at ()
 let combine a b = {a with hi=b.hi}
@@ -348,14 +349,30 @@ let rec parse_stmt p =
         fail "PEP_INDEX_WRITE_UNSUPPORTED" "Indexed assignment is not supported" (at p) ()
     |_->ignore(accept_sym p ";");SExpr(e,expr_span e))
 let parse_func p =
-  let start=(take p).at in let name=expect_id p in expect_sym p "(";
+  let start=(take p).at in let name=expect_id p in
+  let type_params =
+    if not(accept_sym p "[") then [] else (
+      let rec gather acc =
+        let span=at p in
+        let name=expect_id p in
+        if List.mem name acc || List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] then
+          fail "PEP_GENERIC_PARAMETER" ("Duplicate or reserved type parameter "^name) span ();
+        if symbol p ":" then
+          fail "PEP_GENERIC_CONSTRAINT_UNSUPPORTED" "Generic constraints are not yet supported" (at p) ();
+        if accept_sym p "," then gather (name::acc)
+        else (expect_sym p "]";List.rev (name::acc))
+      in gather [])
+  in
+  p.type_params<-type_params;
+  expect_sym p "(";
   let params=ref [] in
   if not(symbol p ")") then (
     let param () = let n=expect_id p in let ns=p.ts.(p.p-1).at in expect_sym p ":";let t=parse_type p in params:= !params@[(n,t,ns)] in
     param();while accept_sym p "," do param() done);
   expect_sym p ")"; expect_sym p "->"; let result=parse_type p in
   let body=match parse_stmt p with SBlock(xs,_)->xs|s->fail "PEP_FUNCTION_BODY" "Expected a braced function body" (stmt_span s) () in
-  let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending}
+  p.type_params<-[];
+  let ending=p.ts.(p.p-1).at in {fname=name;type_params;params= !params;result;body;fspan=combine start ending}
 type import_decl = { parts:string list; alias:string; import_span:span }
 type parsed_module = {
   tops:top list;
@@ -365,7 +382,7 @@ type parsed_module = {
 }
 
 let parse_module ?document source =
-  let p={ts=lex ?document source;p=0;record_literals_allowed=true} in
+  let p={ts=lex ?document source;p=0;record_literals_allowed=true;type_params=[]} in
   let tops=ref [] and imports=ref [] and exports=ref [] and type_exports=ref [] in
   while (peek p).kind<>Eof do
     if keyword p "import" then (
@@ -403,14 +420,17 @@ let parse source =
   parsed.tops
 
 let parse_single_expression source =
-  let p={ts=lex source;p=0;record_literals_allowed=true} in
+  let p={ts=lex source;p=0;record_literals_allowed=true;type_params=[]} in
   let expression=parse_expr p 0 in
   match (peek p).kind with
   | Eof -> expression
   | _ -> fail "PEP_REPLACEMENT_TRAILING_INPUT" "Replacement must contain exactly one expression" (peek p).at ()
 
 type binding = { bid:int; bname:string; bty:ty option; bspan:span; mutable_:bool }
-type signature = { fid:int; name:string; params:(string*ty) list; result:ty; decl:func }
+type signature = {
+  fid:int; name:string; params:(string*ty) list; result:ty; decl:func;
+  generic_origin:(int * string * ty list) option;
+}
 type texpr = { node:texpr_node; ety:ty option; espan:span }
 and texpr_node = XInt of int64|XBool of bool|XStr of string|XVar of int|XHole of string option|XCall of int option*string*texpr list|XBin of string*texpr*texpr|XUnary of string*texpr|XList of texpr list|XIndex of texpr*texpr|XIf of texpr*texpr*texpr
   | XRecord of int*(int*texpr) list | XField of int*texpr | XConstructor of int*int*string*texpr list | XMatch of texpr*tmatch_arm list
@@ -421,7 +441,7 @@ type tfunc = { sig_:signature; tparams:binding list; tbody:tstmt list }
 type hole = { hid:string option; hscope:string; hty:ty option; hspan:span; hbindings:binding list }
 type record_info = { record_id:int; record_name:string; record_fields:(int*string*ty*span) list; record_span:span }
 type union_info = { union_id:int; union_name:string; union_variants:(int*string*ty list*span) list; union_span:span }
-type checked = { functions:tfunc list; tops:tstmt list; holes:hole list; records:record_info list; unions:union_info list }
+type checked = { functions:tfunc list; generic_functions:tfunc list; tops:tstmt list; holes:hole list; records:record_info list; unions:union_info list }
 
 let semantic_record_info id name base fields =
   { record_id=id; record_name=name;
@@ -472,13 +492,70 @@ let rec ast_stmt_json s=match s with
  |SWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^ast_expr_json c^",\"body\":["^String.concat ","(List.map ast_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |SLoopTransfer(transfer,sp)->"{\"kind\":"^json_string(loop_transfer_name transfer)^",\"span\":"^span_json sp^"}"
  |SExpr(e,sp)->"{\"kind\":\"expression\",\"value\":"^ast_expr_json e^",\"span\":"^span_json sp^"}"
+let generic_parameters_json names =
+  if names=[] then "" else ",\"typeParameters\":["^String.concat ","(List.map json_string names)^"]"
 let ast_json tops = "["^String.concat ","(List.map(function
- |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
+ |TopFun f->"{\"kind\":\"function\",\"name\":"^json_string f.fname^generic_parameters_json f.type_params^",\"parameters\":["^String.concat ","(List.map(fun(n,t,s)->"{\"name\":"^json_string n^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json s^"}")f.params)^"],\"returnType\":"^json_string(type_name f.result)^",\"body\":["^String.concat ","(List.map ast_stmt_json f.body)^"],\"span\":"^span_json f.fspan^"}"
  |TopStmt s->ast_stmt_json s
  |TopType (RecordDecl(n,fields,sp))->"{\"kind\":\"record_declaration\",\"name\":"^json_string n^",\"fields\":["^String.concat "," (List.map(fun(field,t,fs)->"{\"name\":"^json_string field^",\"type\":"^json_string(type_name t)^",\"span\":"^span_json fs^"}") fields)^"] ,\"span\":"^span_json sp^"}"
  |TopType (UnionDecl(n,variants,sp))->"{\"kind\":\"union_declaration\",\"name\":"^json_string n^",\"variants\":["^String.concat "," (List.map(fun(name,types,vs)->"{\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun t->json_string(type_name t)) types)^"] ,\"span\":"^span_json vs^"}") variants)^"] ,\"span\":"^span_json sp^"}")tops)^"]"
 
 let builtin_names = ["say";"int_text";"length";"append";"prepend";"reverse";"contains";"byte_length";"byte_at";"byte_slice";"utf8_slice";"semantic_snapshot";"source_bytes"]
+
+let rec substitute_type substitutions = function
+  |TypeParam name->Hashtbl.find substitutions name
+  |List item->List(substitute_type substitutions item)
+  |ty->ty
+
+let specialize_function fresh signature substitutions template =
+  let substitute=substitute_type substitutions in
+  let bindings=Hashtbl.create 16 in
+  let declare binding =
+    let copy={binding with bid=fresh();bty=Option.map substitute binding.bty} in
+    Hashtbl.add bindings binding.bid copy;
+    copy in
+  let use binding=Option.value (Hashtbl.find_opt bindings binding.bid) ~default:binding in
+  let rec pattern = function
+    | TPWildcard _ as leaf->leaf
+    | TPBind binding->TPBind(declare binding)
+    | TPConstructor(id,args,span)->TPConstructor(id,List.map pattern args,span)
+  in
+  let rec expression e =
+    let node=match e.node with
+      | XVar id->XVar(match Hashtbl.find_opt bindings id with Some b->b.bid|None->id)
+      | XCall(id,name,args)->XCall(id,name,List.map expression args)
+      | XBin(op,left,right)->XBin(op,expression left,expression right)
+      | XUnary(op,value)->XUnary(op,expression value)
+      | XList items->XList(List.map expression items)
+      | XIndex(target,index)->XIndex(expression target,expression index)
+      | XIf(condition,yes,no)->XIf(expression condition,expression yes,expression no)
+      | XRecord(id,fields)->XRecord(id,List.map(fun (fid,value)->fid,expression value)fields)
+      | XField(id,value)->XField(id,expression value)
+      | XConstructor(id,ctor,name,args)->XConstructor(id,ctor,name,List.map expression args)
+      | XMatch(subject,arms)->
+        XMatch(expression subject,List.map(fun arm->
+          let tpattern=pattern arm.tpattern in
+          {tpattern;tresult=expression arm.tresult})arms)
+      | (XInt _|XBool _|XStr _|XHole _) as leaf->leaf
+    in
+    {e with node;ety=Option.map substitute e.ety}
+  in
+  let rec statement = function
+    | TLet(binding,value)->TLet(declare binding,expression value)
+    | TVar(binding,value)->TVar(declare binding,expression value)
+    | TAssign(binding,value,span)->TAssign(use binding,expression value,span)
+    | TReturn value->TReturn(expression value)
+    | TBlock body->TBlock(List.map statement body)
+    | TIf(condition,yes,no,span)->TIf(expression condition,List.map statement yes,List.map statement no,span)
+    | TFor(binding,values,body,span)->
+      let binding=declare binding in
+      TFor(binding,expression values,List.map statement body,span)
+    | TWhile(condition,body,span)->TWhile(expression condition,List.map statement body,span)
+    | TLoopTransfer _ as transfer->transfer
+    | TExpr value->TExpr(expression value)
+  in
+  let tparams=List.map declare template.tparams in
+  {sig_=signature;tparams;tbody=List.map statement template.tbody}
 
 let check ?entry_document tops =
   let next_id=ref 0 and next_fid=ref 0 and next_type_id=ref 0 and next_field_id=ref 0 and next_ctor_id=ref 0 and holes=ref [] in
@@ -526,8 +603,15 @@ let check ?entry_document tops =
   List.iter(fun info->List.iter(fun(_,_,args,sp)->List.iter(fun ty->valid_type ty sp) args) info.union_variants)!unions;
   let signatures=Hashtbl.create 16 in
   List.iter(function TopFun f->if List.mem f.fname builtin_names || Hashtbl.mem constructor_table f.fname then record_error {code="PEP_RESERVED_FUNCTION";message=("Function name "^f.fname^" is reserved for a builtin or constructor");at=f.fspan;expected=None} else if Hashtbl.mem signatures f.fname then record_error {code="PEP_DUPLICATE_FUNCTION";message=("Duplicate function '"^f.fname^"'");at=f.fspan;expected=None} else
-    let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f}
+    let fid= !next_fid in incr next_fid;Hashtbl.add signatures f.fname {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f;generic_origin=None}
     |_->())tops;
+  let rec specialization_prefix prefix =
+    if Hashtbl.fold(fun name _ found->found || String.starts_with ~prefix name)signatures false then
+      specialization_prefix ("_"^prefix)
+    else prefix
+  in
+  let specialized_prefix=specialization_prefix "_pep_specialization_" in
+  let instances=Hashtbl.create 16 and instance_order=ref [] in
   let record_hole env scope id expected sp = holes:={hid=id;hscope=scope;hty=expected;hspan=sp;hbindings=visible env}::!holes in
   let rec pattern_covers expected pat = match pat with
     |PWildcard _|PBind _->true
@@ -640,16 +724,22 @@ let check ?entry_document tops =
       if List.exists contains_empty_list items then fail "PEP_EMPTY_LIST_NEEDS_TYPE" "An empty list needs an expected List element type" sp ();
       let checked=List.map(synth env scope)items in {node=XList checked;ety=None;espan=sp}
     |Some ty,_->let checked=List.map(check_expr env scope (Some ty))items in {node=XList checked;ety=Some(List ty);espan=sp}
-  and check_expr env scope expected e = match e with
+  and check_expr env scope expected e =
+    let t=match e with
    |EList(items,sp)->(match expected with Some(List ty)->list_expr env scope (Some ty) items sp|_->list_expr env scope None items sp)
    |EHole(id,s)->record_hole env scope id expected s;{node=XHole id;ety=expected;espan=s}
    |EIf(c,y,n,s)->let tc=check_expr env scope (Some Bool) c in let ty=check_expr env scope expected y and en=check_expr env scope expected n in
       (match ty.ety,en.ety with Some a,Some b when a<>b->fail "PEP_TYPE_MISMATCH" ("If branches have types "^type_name a^" and "^type_name b) s ()|_->());
       {node=XIf(tc,ty,en);ety=(match expected with Some _ as t->t|None->(match ty.ety with Some _ as t->t|None->en.ety));espan=s}
    |EMatch(subject,arms,s)->match_expr env scope expected subject arms s
-   |_->let t=match e with EIndex(target,index,s)->index_expr env scope expected target index s|_->synth env scope e in
-      (match expected,t.ety with Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()|_->());t
-  and call env scope name args s =
+   |EIndex(target,index,s)->index_expr env scope expected target index s
+   |ECall(n,args,s)->call env scope ?expected n args s
+   |_->synth env scope e in
+    (match expected,t.ety with
+     |Some want,Some got when want<>got->fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) t.espan ~expected:want ()
+     |_->());
+    t
+  and call env scope ?expected name args s =
     match Hashtbl.find_opt constructor_table name with
     |Some (owner,(cid,_,params,_))->
        if List.length args<>List.length params then fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Constructor '%s' expects %d argument(s), found %d" name (List.length params) (List.length args)) s ();
@@ -713,7 +803,9 @@ let check ?entry_document tops =
          let value=check_expr env scope (Some element) (List.nth args 1) in
          {node=XCall(None,name,[collection;value]);ety=Some Bool;espan=s}
        ) else (
-         let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
+         match Hashtbl.find_opt signatures name with
+         |Some f when f.decl.type_params<>[]->generic_call env scope expected f args s
+         |_->let params,result,fid = if name="semantic_snapshot" then [],Named "ProgramInfo",None else if name="source_bytes" then [],SourceBytes,None else if name="say" then [Str],Unit,None else if name="int_text" then [Int],Str,None else
            match Hashtbl.find_opt signatures name with None->
              let constructor_like=name<>"" && name.[0]>='A' && name.[0]<='Z' in
              let code=if constructor_like then "PEP_UNKNOWN_CONSTRUCTOR" else "PEP_UNKNOWN_FUNCTION" in
@@ -723,6 +815,63 @@ let check ?entry_document tops =
          let checked=List.map2(fun arg ty->check_expr env scope (Some ty) arg)args params in
          {node=XCall(fid,name,checked);ety=Some result;espan=s}
        )
+  and generic_call env scope expected signature args s =
+    (match Hashtbl.find_opt signatures scope with
+     |Some caller when caller.decl.type_params<>[]->
+       fail "PEP_GENERIC_NESTED_CALL_UNSUPPORTED" "A generic function cannot yet call a generic function" s ()
+     |_->());
+    if List.length args<>List.length signature.params then
+      fail "PEP_ARGUMENT_COUNT" (Printf.sprintf "Function '%s' expects %d argument(s), found %d" signature.name (List.length signature.params) (List.length args)) s ();
+    let substitutions=Hashtbl.create 8 in
+    let mismatch want got span =
+      fail "PEP_TYPE_MISMATCH" ("Expected "^type_name want^" but found "^type_name got) span ~expected:want () in
+    let rec infer pattern actual span = match pattern,actual with
+      |TypeParam name,_->(match Hashtbl.find_opt substitutions name with
+        |None->Hashtbl.add substitutions name actual
+        |Some previous when previous<>actual->mismatch previous actual span
+        |Some _->())
+      |List item,List actual_item->infer item actual_item span
+      |want,got when want<>got->mismatch want got span
+      |_->()
+    in
+    Option.iter (fun result->infer signature.result result s) expected;
+    let rec needs_type = function
+      |TypeParam name->not(Hashtbl.mem substitutions name)
+      |List item->needs_type item
+      |_->false
+    in
+    List.iter2 (fun (_,pattern) arg->
+      if needs_type pattern then (
+        let saved= !holes in
+        let actual=Fun.protect ~finally:(fun ()->holes:=saved) (fun ()->
+          try (synth env scope arg).ety with
+          |Error d when d.code="PEP_EMPTY_LIST_NEEDS_TYPE" || d.code="PEP_GENERIC_INFERENCE"->None)
+        in
+        Option.iter (fun ty->infer pattern ty (expr_span arg)) actual)) signature.params args;
+    let type_arguments=List.map (fun name->
+      match Hashtbl.find_opt substitutions name with Some ty->ty|None->
+        fail "PEP_GENERIC_INFERENCE" ("Cannot infer type parameter "^name^" of '"^signature.name^"'") s ()) signature.decl.type_params in
+    let substitute=substitute_type substitutions in
+    let checked=List.map2 (fun (_,ty) arg->check_expr env scope (Some(substitute ty)) arg) signature.params args in
+    (* A generic body is checked with rigid parameters. Only checked calls
+       request a concrete instance, which is shared by both runtimes. *)
+    let key=signature.fid,type_arguments in
+    let instance=match Hashtbl.find_opt instances key with
+      |Some instance->instance
+      |None->
+        if Hashtbl.length instances>=256 then fail "PEP_GENERIC_INSTANCE_LIMIT" "Too many generic instances in this program" s ();
+        let fid= !next_fid in incr next_fid;
+        let instance={
+          signature with fid;name=specialized_prefix^string_of_int fid;
+          params=List.map(fun (name,ty)->name,substitute ty) signature.params;
+          result=substitute signature.result;
+          generic_origin=Some(signature.fid,signature.name,type_arguments)
+        } in
+        Hashtbl.add instances key instance;
+        instance_order:=(instance,signature.fid,substitutions)::!instance_order;
+        instance
+    in
+    {node=XCall(Some instance.fid,instance.name,checked);ety=Some instance.result;espan=s}
   and match_expr env scope expected subject arms sp =
     if arms=[] then fail "PEP_EMPTY_MATCH" "A match expression must have at least one arm" sp ();
     let checked_subject=synth env scope subject in
@@ -871,7 +1020,7 @@ let check ?entry_document tops =
          | Some s -> s
          | None ->
              let fid = fresh() in
-             let s = {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f} in
+             let s = {fid;name=f.fname;params=List.map(fun(n,t,_)->n,t)f.params;result=f.result;decl=f;generic_origin=None} in
              Hashtbl.add signatures f.fname s; s
        in
        let seen=Hashtbl.create 8 in
@@ -892,7 +1041,13 @@ let check ?entry_document tops =
     | [single] -> raise (Error single)
     | multiple -> raise (MultiError multiple)
   );
-  {functions=List.rev !functions;tops=List.rev !top_typed;holes=List.rev !holes;records=List.rev !records;unions=List.rev !unions}
+  let generic_functions,monomorphic=List.partition (fun f->f.sig_.decl.type_params<>[]) (List.rev !functions) in
+  let templates=Hashtbl.create 8 in
+  List.iter(fun f->Hashtbl.add templates f.sig_.fid f) generic_functions;
+  let specialized=List.rev_map (fun (signature,origin,types)->
+    specialize_function fresh signature types (Hashtbl.find templates origin)) !instance_order in
+  {functions=monomorphic@specialized;generic_functions;tops=List.rev !top_typed;
+   holes=List.rev !holes;records=List.rev !records;unions=List.rev !unions}
 
 let rec typed_expr_json e =
  let typ=match e.ety with None->"null"|Some t->json_string(type_name t) in
@@ -928,8 +1083,24 @@ let rec typed_stmt_json = function
  |TWhile(c,body,sp)->"{\"kind\":\"while\",\"condition\":"^typed_expr_json c^",\"body\":["^String.concat ","(List.map typed_stmt_json body)^"],\"span\":"^span_json sp^"}"
  |TLoopTransfer(transfer,sp)->"{\"kind\":"^json_string(loop_transfer_name transfer)^",\"span\":"^span_json sp^"}"
  |TExpr e->"{\"kind\":\"expression\",\"value\":"^typed_expr_json e^"}"
+let typed_function_json f =
+ let metadata=match f.sig_.generic_origin with
+   |None->generic_parameters_json f.sig_.decl.type_params
+   |Some(fid,name,args)->
+     ",\"genericOrigin\":{\"functionId\":"^string_of_int fid^",\"name\":"^json_string name^
+     ",\"typeArguments\":["^String.concat ","(List.map(fun ty->json_string(type_name ty))args)^"]}"
+ in
+ "{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^metadata^
+ ",\"parameters\":["^String.concat ","(List.map(fun b->
+   "{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^
+   ",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^
+ "],\"returnType\":"^json_string(type_name f.sig_.result)^
+ ",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}"
 let typed_json_base c =
- "{\"functions\":["^String.concat ","(List.map(fun f->"{\"functionId\":"^string_of_int f.sig_.fid^",\"name\":"^json_string f.sig_.name^",\"parameters\":["^String.concat ","(List.map(fun b->"{\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^json_string(type_name(Option.get b.bty))^"}")f.tparams)^"],\"returnType\":"^json_string(type_name f.sig_.result)^",\"body\":["^String.concat ","(List.map typed_stmt_json f.tbody)^"]}")c.functions)^"],\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
+ let templates=if c.generic_functions=[] then "" else
+   ",\"genericFunctions\":["^String.concat ","(List.map typed_function_json c.generic_functions)^"]" in
+ "{\"functions\":["^String.concat ","(List.map typed_function_json c.functions)^"]"^templates^
+ ",\"statements\":["^String.concat ","(List.map typed_stmt_json c.tops)^"]}"
 let typed_json c =
  let record_json r = "{\"kind\":\"record\",\"typeId\":"^string_of_int r.record_id^",\"name\":"^json_string r.record_name^",\"fields\":["^String.concat "," (List.map(fun(id,name,ty,sp)->"{\"fieldId\":"^string_of_int id^",\"name\":"^json_string name^",\"type\":"^json_string(type_name ty)^",\"span\":"^span_json sp^"}")r.record_fields)^"]}" in
  let union_json u = "{\"kind\":\"union\",\"typeId\":"^string_of_int u.union_id^",\"name\":"^json_string u.union_name^",\"variants\":["^String.concat "," (List.map(fun(id,name,args,sp)->"{\"constructorId\":"^string_of_int id^",\"name\":"^json_string name^",\"arguments\":["^String.concat "," (List.map(fun ty->json_string(type_name ty))args)^"],\"span\":"^span_json sp^"}")u.union_variants)^"]}" in
@@ -1555,7 +1726,7 @@ let session_tool_registration_json operation entry outcome =
     (if entry.tool_status = "Active" then "true" else "false")
     (match entry.tool_failure with None -> "null" | Some message -> json_string message)
 
-let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ -> false
+let session_tool_scalar = function Int | Bool | Str | Unit -> true | SourceBytes | List _ | Named _ | TypeParam _ -> false
 
 let tool_value_json ty value =
   let encoded = match ty,value with
@@ -1601,7 +1772,7 @@ let session_record_by_name checked name =
 let session_tool_transport_supported checked ty =
   let rec supports seen = function
     |Int|Bool|Str|Unit->true
-    |SourceBytes->false
+    |SourceBytes|TypeParam _->false
     |List element->supports seen element
     |Named name->
         (match session_record_by_name checked name with
@@ -1665,6 +1836,7 @@ let session_tool_value_v2 checked expected payload =
        if actual<>type_name ty then raise (Session_error ("PEP_TOOL_ARGUMENT_TYPE", "Tool argument type did not match the checked parameter type"));
        (match ty with
         |SourceBytes -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "SourceBytes cannot cross the v2 tool boundary"))
+        |TypeParam _ -> raise (Session_error ("PEP_TOOL_ARGUMENT_VALUE", "A tool argument requires a concrete type"))
         |Int|Bool|Str|Unit ->
            session_exact_fields fields ["type";"value"] "PEP_TOOL_VALUE_FIELDS";
            scalar ty (Option.value (session_member fields "value") ~default:JNull)
@@ -1763,8 +1935,16 @@ let session_semantic_target tool_checked target_message =
     |None when entry_names<>[]->raise(Session_error("PEP_SEMANTIC_ROOT_UNAVAILABLE","Entry functions cannot be resolved for invalid target source"))
     |None->[],[],[]
     |Some target_checked ->
+        let source_functions=
+          List.filter(fun f->f.sig_.generic_origin=None)target_checked.functions @ target_checked.generic_functions
+          |> List.sort (fun left right->Int.compare left.sig_.fid right.sig_.fid) in
+        let instance_origins=Hashtbl.create 16 in
+        List.iter(fun f->match f.sig_.generic_origin with
+          |Some(id,_,_)->Hashtbl.add instance_origins f.sig_.fid id
+          |None->())target_checked.functions;
+        let source_id id=Option.value (Hashtbl.find_opt instance_origins id) ~default:id in
         let explicit_roots=List.map(fun name->
-          match List.filter(fun function_->function_.sig_.name=name)target_checked.functions with
+          match List.filter(fun function_->function_.sig_.name=name && function_.sig_.generic_origin=None)target_checked.functions with
           |[function_]->function_.sig_.fid
           |[]->raise(Session_error("PEP_SEMANTIC_ROOT_NOT_FOUND","Host entry function does not resolve in the target revision"))
           |_ ->raise(Session_error("PEP_SEMANTIC_ROOT_AMBIGUOUS","Host entry function resolves ambiguously"))
@@ -1778,12 +1958,12 @@ let session_semantic_target tool_checked target_message =
              "name",VStr function_.sig_.name;
              "startByte",VInt(Int64.of_int function_.sig_.decl.fspan.lo);
              "endByte",VInt(Int64.of_int function_.sig_.decl.fspan.hi)]
-        )target_checked.functions in
+        )source_functions in
         let edge_pairs=List.concat_map(fun function_->
-          List.filter_map(function Some callee,_->Some(function_.sig_.fid,callee)|None,_->None)
+          List.filter_map(function Some callee,_->Some(function_.sig_.fid,source_id callee)|None,_->None)
             (List.concat_map tool_stmt_calls function_.tbody)
-        )target_checked.functions |> unique in
-        let top_roots=List.filter_map(function Some called,_->Some called|None,_->None)
+        )source_functions |> unique in
+        let top_roots=List.filter_map(function Some called,_->Some(source_id called)|None,_->None)
           (List.concat_map tool_stmt_calls target_checked.tops) in
         let roots=unique(top_roots@explicit_roots) in
         let calls=List.map(fun(caller,callee)->
@@ -1838,7 +2018,8 @@ let tool_replacement_policy entry =
        | Some _ -> Some "Replacement signature is incompatible with the active tool"
        | None -> None)
 
-let tool_find_function checked name = List.find_opt (fun function_ -> function_.sig_.name=name) checked.functions
+let tool_find_function checked name =
+  List.find_opt (fun function_ -> function_.sig_.name=name && function_.sig_.generic_origin=None) checked.functions
 
 let session_tool_register fields =
   let protocol=session_tool_version fields in
@@ -2424,7 +2605,7 @@ let load_file_program file =
         let signature=Hashtbl.find public_interfaces name in
         let parameters=List.map (fun (param,ty,_)->
           "{\"name\":"^json_string param^",\"type\":"^json_string (type_name ty)^"}") signature.params in
-        "{\"name\":"^json_string name^",\"symbol\":"^json_string signature.fname^
+        "{\"name\":"^json_string name^",\"symbol\":"^json_string signature.fname^generic_parameters_json signature.type_params^
         ",\"parameters\":["^String.concat "," parameters^"],\"returnType\":"^json_string (type_name signature.result)^
         ",\"span\":"^span_json signature.fspan^"}") public_names in
       let type_exports=List.map (fun (name,symbol)->
@@ -2453,7 +2634,7 @@ let () =
  try
   let args=Array.to_list Sys.argv |> List.tl in
   match args with
-  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"checked_list_index\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"integer_ordering\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
+  |["describe"]|["describe";"--json"]->print_endline "{\"schemaVersion\":2,\"language\":\"Pep\",\"types\":[\"Int\",\"Bool\",\"Str\",\"SourceBytes\",\"Unit\"],\"parametricTypes\":[\"List[T]\"],\"features\":[\"functions\",\"recursion\",\"lexical_scopes\",\"typed_holes\",\"query_holes\",\"checked_integer_arithmetic\",\"interpreter\",\"revisioned_documents\",\"jsonl_session\",\"per_revision_analysis_cache\",\"semantic_hole_fill\",\"records\",\"tagged_unions\",\"pattern_matching\",\"local_tool_registry\",\"tool_validation\",\"tool_activation\",\"typed_tool_invocation\",\"tool_hot_replacement\",\"typed_lists\",\"immutable_list_append\",\"immutable_list_prepend\",\"linear_list_reverse\",\"original_source_byte_access\",\"opaque_source_bytes\",\"checked_byte_slices\",\"explicit_utf8_slice_conversion\",\"list_membership\",\"mutable_bindings\",\"for_in\",\"while\",\"statement_if\",\"else_if\",\"break\",\"continue\",\"checked_list_index\",\"short_circuit_boolean_logic\",\"scalar_equality\",\"integer_ordering\",\"inferred_generic_functions\"],\"session\":{\"command\":\"session --jsonl\",\"schemaVersion\":3,\"crossRevisionReuse\":false,\"maxOpenByteInput\":65536,\"operations\":[\"open\",\"open_bytes\",\"query\",\"inspect\",\"apply_edit\",\"fill_hole\",\"tool_register\",\"tool_validate\",\"tool_activate\",\"tool_list\",\"tool_invoke\",\"metrics\"],\"toolProtocolVersion\":1,\"toolProtocolVersions\":[1,2],\"semanticSnapshot\":\"semantic_snapshot() -> ProgramInfo (host-authorised, v2 only)\",\"sourceBytes\":\"source_bytes() -> SourceBytes (same host-authorised semanticTarget revision, v2 only)\",\"semanticTypes\":[\"FunctionInfo\",\"CallEdge\",\"SemanticDiagnostic\",\"ProgramInfo\"],\"typedTransport\":{\"maxDepth\":16,\"maxNodes\":10000,\"maxMessageBytes\":1048576},\"toolRuntime\":{\"trustedLocal\":true,\"sandboxed\":false,\"maxSteps\":100000,\"maxCallDepth\":128}},\"runtime\":{\"maxSteps\":1000000,\"maxCallDepth\":512},\"builtins\":[{\"name\":\"say\",\"parameters\":[\"Str\"],\"returns\":\"Unit\"},{\"name\":\"int_text\",\"parameters\":[\"Int\"],\"returns\":\"Str\"},{\"name\":\"length\",\"parameters\":[\"List[T]\"],\"returns\":\"Int\",\"complexity\":\"O(n)\"},{\"name\":\"append\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"prepend\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"List[T]\",\"complexity\":\"O(1)\"},{\"name\":\"reverse\",\"parameters\":[\"List[T]\"],\"returns\":\"List[T]\",\"complexity\":\"O(n)\"},{\"name\":\"byte_length\",\"parameters\":[\"SourceBytes\"],\"returns\":\"Int\",\"complexity\":\"O(1)\"},{\"name\":\"byte_at\",\"parameters\":[\"SourceBytes\",\"Int\"],\"returns\":\"Int\",\"byteRange\":\"checked\",\"value\":\"unsigned\"},{\"name\":\"byte_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"SourceBytes\",\"complexity\":\"O(n)\",\"boundaries\":\"any byte\"},{\"name\":\"utf8_slice\",\"parameters\":[\"SourceBytes\",\"Int\",\"Int\"],\"returns\":\"Str\",\"complexity\":\"O(n)\",\"boundaries\":\"UTF-8\"},{\"name\":\"source_bytes\",\"parameters\":[],\"returns\":\"SourceBytes\",\"authority\":\"v2 semanticTarget revision\"},{\"name\":\"contains\",\"parameters\":[\"List[T]\",\"T\"],\"returns\":\"Bool\",\"complexity\":\"O(n)\",\"equality\":\"scalar-only\"}]}"
   |["session";"--jsonl"]->run_session_jsonl ()
   |command::file::flags when List.mem command ["inspect";"check";"run";"query"] ->
     let tops,graph,entry_document=load_file_program file in
