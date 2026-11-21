@@ -159,6 +159,7 @@ let accept_sym p s = if symbol p s then (ignore(take p);true) else false
 let expect_sym p s = if not(accept_sym p s) then fail "PEP_PARSE_EXPECTED" ("Expected '"^s^"'") (at p) ()
 let expect_id p = match take p with {kind=Id s;_}->s|t->fail "PEP_PARSE_NAME" "Expected a name" t.at ()
 let rec parse_type p = match take p with
+  |{kind=Id qualifier;_} when accept_sym p "." -> Named(qualifier^"."^expect_id p)
   |{kind=Id "Int";_}->Int |{kind=Id "Bool";_}->Bool |{kind=Id "Str";_}->Str |{kind=Id "SourceBytes";_}->SourceBytes |{kind=Id "Unit";_}->Unit
   |{kind=Id "List";_}->expect_sym p "[";let element=parse_type p in expect_sym p "]";List element
   |{kind=Id name;_}->Named name
@@ -320,11 +321,16 @@ let parse_func p =
   let body=match parse_stmt p with SBlock(xs,_)->xs|s->fail "PEP_FUNCTION_BODY" "Expected a braced function body" (stmt_span s) () in
   let ending=p.ts.(p.p-1).at in {fname=name;params= !params;result;body;fspan=combine start ending}
 type import_decl = { parts:string list; alias:string; import_span:span }
-type parsed_module = { tops:top list; imports:import_decl list; exports:(string * span) list }
+type parsed_module = {
+  tops:top list;
+  imports:import_decl list;
+  exports:(string * span) list;
+  type_exports:(string * span) list;
+}
 
 let parse_module ?document source =
   let p={ts=lex ?document source;p=0;record_literals_allowed=true} in
-  let tops=ref [] and imports=ref [] and exports=ref [] in
+  let tops=ref [] and imports=ref [] and exports=ref [] and type_exports=ref [] in
   while (peek p).kind<>Eof do
     if keyword p "import" then (
       let start=(take p).at in
@@ -338,18 +344,23 @@ let parse_module ?document source =
       ignore(accept_sym p ";"))
     else if keyword p "pub" then (
       let start=(take p).at in
-      if not(keyword p "fn") then fail "PEP_MODULE_EXPORT_KIND" "Only functions may be exported in this module slice" (at p) ();
-      let f=parse_func p in
-      exports:=(f.fname,start)::!exports; tops:=TopFun f::!tops)
+      if keyword p "fn" then (
+        let f=parse_func p in
+        exports:=(f.fname,start)::!exports; tops:=TopFun f::!tops)
+      else if keyword p "type" then (
+        let declaration=parse_type_decl p in
+        let name=match declaration with RecordDecl(name,_,_)|UnionDecl(name,_,_)->name in
+        type_exports:=(name,start)::!type_exports; tops:=TopType declaration::!tops)
+      else fail "PEP_MODULE_EXPORT_KIND" "Expected a function or opaque type export" (at p) ())
     else if keyword p "fn" then tops:=TopFun(parse_func p)::!tops
     else if keyword p "type" then tops:=TopType(parse_type_decl p)::!tops
     else tops:=TopStmt(parse_stmt p)::!tops
   done;
-  {tops=List.rev !tops;imports=List.rev !imports;exports=List.rev !exports}
+  {tops=List.rev !tops;imports=List.rev !imports;exports=List.rev !exports;type_exports=List.rev !type_exports}
 
 let parse source =
   let parsed=parse_module source in
-  (match parsed.imports,parsed.exports with
+  (match parsed.imports,parsed.exports @ parsed.type_exports with
    | import::_,_ -> fail "PEP_MODULE_FILE_CONTEXT" "Imports require the file project front end" import.import_span ()
    | [],(_,span)::_ -> fail "PEP_MODULE_FILE_CONTEXT" "Exports require the file project front end" span ()
    | [],[] -> ());
@@ -529,6 +540,8 @@ let check ?entry_document tops =
       let checked=synth env scope target in
       (match checked.ety with
        |Some (Named type_name)->(match Hashtbl.find_opt type_table type_name with
+          |Some (`Record info) when info.record_span.document<>s.document ->
+            fail "PEP_MODULE_OPAQUE_FIELD" "Record fields are private to the declaring module" s ()
           |Some (`Record info)->(match List.find_opt(fun(_,field,_,_)->field=name)info.record_fields with
             |Some(fid,_,ty,_)->{node=XField(fid,checked);ety=Some ty;espan=s}
             |None->fail "PEP_UNKNOWN_FIELD" ("Record '"^type_name^"' has no field '"^name^"'") s ())
@@ -2134,12 +2147,17 @@ let run_session_jsonl () =
   loop ()
 
 let read_file path = let ic=open_in_bin path in Fun.protect ~finally:(fun()->close_in ic)(fun()->really_input_string ic (in_channel_length ic))
-type loaded_module = { declarations:top list; functions:(string,string) Hashtbl.t; public_names:string list }
+type loaded_module = {
+  declarations:top list;
+  functions:(string,string) Hashtbl.t;
+  public_names:string list;
+  public_types:(string * string) list;
+}
 
 let load_file_program file =
   let source=read_file file in
   let entry=parse_module source in
-  if entry.imports=[] && entry.exports=[] then entry.tops,"",None
+  if entry.imports=[] && entry.exports=[] && entry.type_exports=[] then entry.tops,"",None
   else (
     let entry_path=Unix.realpath file in
     let root=Filename.dirname entry_path in
@@ -2186,11 +2204,6 @@ let load_file_program file =
       let functions=Hashtbl.create 8 and aliases=Hashtbl.create 8 in
       let public_names=List.map fst parsed.exports in
       let types=Hashtbl.create 8 and constructors=Hashtbl.create 8 in
-      let rec verify_type span = function
-        |Named name->fail "PEP_MODULE_TYPE_UNSUPPORTED" ("Named module interface type is unavailable: "^name) span ()
-        |List item->verify_type span item
-        |_->()
-      in
       let hex text=String.concat "" (List.init (String.length text) (fun i->Printf.sprintf "%02x" (Char.code text.[i]))) in
       let local_prefix=if is_entry then "" else prefix^hex document^"_" in
       let local_symbol name=local_prefix^name in
@@ -2203,9 +2216,6 @@ let load_file_program file =
         |TopFun f->
           if List.mem f.fname builtin_names then
             fail "PEP_RESERVED_FUNCTION" ("Function name is reserved: "^f.fname) f.fspan ();
-          if List.mem f.fname public_names then (
-            List.iter (fun (_,t,span)->verify_type span t) f.params;
-            verify_type f.fspan f.result);
           if Hashtbl.mem functions f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function "^f.fname) f.fspan ();
           Hashtbl.add functions f.fname (local_symbol f.fname)
         |TopStmt s when not is_entry ->
@@ -2250,9 +2260,25 @@ let load_file_program file =
         |Some symbol->symbol
         |None->fail "PEP_UNKNOWN_TYPE" ("Unknown type "^name^" in "^document) span ()
       in
-      let rec local_type span = function
-        |Named name->Named(resolve_type name span)
-        |List item->List(local_type span item)
+      let public_types=List.map (fun (name,span)->name,resolve_type name span) parsed.type_exports in
+      let rec local_type ?(public=false) span = function
+        |Named name->
+          (match String.split_on_char '.' name with
+           |[local]->
+             let symbol=resolve_type local span in
+             if public && not(List.mem_assoc local public_types) then
+               fail "PEP_MODULE_TYPE_UNSUPPORTED" ("Public signature exposes private type "^local) span ();
+             Named symbol
+           |[alias;member]->
+             let imported=match Hashtbl.find_opt aliases alias with
+               |Some target->target
+               |None->fail "PEP_MODULE_UNKNOWN_ALIAS" ("Unknown import alias "^alias) span ()
+             in
+             (match List.assoc_opt member imported.public_types with
+              |Some symbol->Named symbol
+              |None->fail "PEP_MODULE_UNKNOWN_TYPE_EXPORT" ("No public type "^name) span ())
+           |_->fail "PEP_MODULE_INVALID_QUALIFIER" ("Invalid qualified type "^name) span ())
+        |List item->List(local_type ~public span item)
         |ty->ty
       in
       let rec pattern = function
@@ -2291,10 +2317,12 @@ let load_file_program file =
         |SWhile(c,body,s)->SWhile(expression c,List.map statement body,s)
       in
       let declarations=List.map (function
-        |TopFun f->TopFun {f with
+        |TopFun f->
+          let public=List.mem f.fname public_names in
+          TopFun {f with
             fname=Hashtbl.find functions f.fname;
-            params=List.map (fun (name,ty,at)->name,local_type at ty,at) f.params;
-            result=local_type f.fspan f.result;
+            params=List.map (fun (name,ty,at)->name,local_type ~public at ty,at) f.params;
+            result=local_type ~public f.fspan f.result;
             body=List.map statement f.body}
         |TopStmt s->TopStmt(statement s)
         |TopType (RecordDecl(name,fields,span))->
@@ -2306,11 +2334,14 @@ let load_file_program file =
         ) parsed.tops in
       let exports=List.map (fun name->
         "{\"name\":"^json_string name^",\"symbol\":"^json_string (Hashtbl.find functions name)^"}") public_names in
+      let type_exports=List.map (fun (name,symbol)->
+        "{\"name\":"^json_string name^",\"symbol\":"^json_string symbol^",\"opaque\":true}") public_types in
       let imports=List.map (fun i->
         "{\"path\":"^json_string (String.concat "/" i.parts^".pep")^",\"alias\":"^json_string i.alias^"}") parsed.imports in
       graph:=("{\"document\":"^json_string document^",\"revision\":"^json_string (session_revision source)^
-              ",\"imports\":["^String.concat "," imports^"],\"exports\":["^String.concat "," exports^"]}")::!graph;
-      let result={declarations;functions;public_names} in
+              ",\"imports\":["^String.concat "," imports^"],\"exports\":["^String.concat "," exports^
+              "],\"typeExports\":["^String.concat "," type_exports^"]}")::!graph;
+      let result={declarations;functions;public_names;public_types} in
       if not is_entry then dependency_tops:=List.rev_append declarations !dependency_tops;
       Hashtbl.remove active path; Hashtbl.add loaded path result; result
     in

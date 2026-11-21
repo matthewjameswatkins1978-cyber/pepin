@@ -519,6 +519,50 @@ pub fn value() -> Int {
                     diagnostic = json.loads(output)["diagnostics"][0]
                     self.assertEqual((diagnostic["code"], diagnostic["span"]["document"]), (code, "alpha.pep"))
 
+    def test_opaque_nominal_type_crosses_modules_through_public_functions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            module = """pub type Counter { value: Int }
+pub type Reading = Available(Int) | Missing()
+pub fn make(value: Int) -> Counter { return Counter { value: value } }
+pub fn read(counter: Counter) -> Reading { return Available(counter.value) }
+pub fn unwrap(reading: Reading) -> Int {
+    return match reading { Available(n) => n Missing() => 0 }
+}
+"""
+            for name in ("alpha", "beta"):
+                (root / f"{name}.pep").write_text(module, encoding="utf-8")
+            entry = root / "main.pep"
+            imports = "import alpha as counter\nimport beta\n"
+            entry.write_text(imports
+                             + "let value: counter.Counter = counter.make(42)\n"
+                             + "let reading: counter.Reading = counter.read(value)\n"
+                             + "say(int_text(counter.unwrap(reading)))\n", encoding="utf-8")
+            status, output, stderr = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+            self.assertEqual(status, 0, output or stderr)
+            graph = json.loads(output)["moduleGraph"]
+            types = graph["files"][0]["typeExports"]
+            self.assertEqual([(t["name"], t["opaque"]) for t in types],
+                             [("Counter", True), ("Reading", True)])
+            self.assertTrue(all(set(t) == {"name", "symbol", "opaque"} for t in types))
+            reference = pep_c23_direct.run_pep_cmd("run", str(entry))
+            self.assertEqual(reference, (0, "42\n", ""))
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    self.assertEqual(pep_c23_direct.run_c23(entry, compiler), reference)
+            for statement, code in (
+                ("say(int_text(counter.make(1).value))", "PEP_MODULE_OPAQUE_FIELD"),
+                ("let value: counter.Counter = beta.make(1)", "PEP_TYPE_MISMATCH"),
+                ("let reading = counter.Available(1)", "PEP_MODULE_UNKNOWN_EXPORT"),
+                ("let value: counter.Unexported = counter.make(1)", "PEP_MODULE_UNKNOWN_TYPE_EXPORT"),
+            ):
+                with self.subTest(code=code):
+                    entry.write_text(imports + statement + "\n", encoding="utf-8")
+                    status, output, stderr = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+                    self.assertNotEqual(status, 0, output or stderr)
+                    diagnostic = json.loads(output)["diagnostics"][0]
+                    self.assertEqual((diagnostic["code"], diagnostic["span"]["document"]), (code, "main.pep"))
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:
