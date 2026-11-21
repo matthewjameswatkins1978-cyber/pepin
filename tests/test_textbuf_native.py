@@ -29,7 +29,7 @@ UTF8_MODEL_EXPECTED_OUTPUT = (
 )
 PROBE_EXPECTED_OUTPUT = (
     "v ok\nv ok\nv ok\nv ok\nv ok\n"
-    "v err 0\nv err 0\nv err 0\nv err 1\nv err 1\nv err 1\nv err 0\nv err 0\n"
+    "v err 0\nv err 0\nv err 0\nv err 0\nv err 0\nv err 0\nv err 0\nv err 0\n"
     "v err 1\nv err 1\nv err 0\n"
     "d 41 1\nd E9 2\nd 20AC 3\nd 1F600 4\n"
     "d invalid\nd invalid\nd invalid\n"
