@@ -30,23 +30,24 @@ def _clang_rt_dir(compiler):
 
 
 class NativeMemoryTests(unittest.TestCase):
-    def run_probe(self, name, module, probe):
+    def run_probe(self, name, source, probe, allocators=("malloc", "free")):
         compiler = shutil.which(name)
         if compiler is None:
             self.skipTest(f"{name} is unavailable")
-        runtime = ROOT / "runtime" / module
+        runtime_source = ROOT / "runtime" / source
         fixture = ROOT / "tests" / "native" / f"{probe}.c"
-        flags = ["-std=c23", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]
+        flags = ["-std=c23", "-O2", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                 "-D_CRT_SECURE_NO_WARNINGS"]
         build = ROOT / "_build"
         build.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=build) as directory:
             path = pathlib.Path(directory)
-            runtime_object = path / f"{module}.o"
+            runtime_object = path / "runtime.o"
             executable = path / f"{probe}.exe"
             for command in (
-                [compiler, *flags, "-Dmalloc=probe_malloc", "-Dfree=probe_free",
-                 "-c", str(runtime / f"{module}.c"), "-o", str(runtime_object)],
-                [compiler, *flags, "-I", str(runtime), str(fixture), str(runtime_object),
+                [compiler, *flags, *(f"-D{symbol}=probe_{symbol}" for symbol in allocators),
+                 "-c", str(runtime_source), "-o", str(runtime_object)],
+                [compiler, *flags, "-I", str(runtime_source.parent), str(fixture), str(runtime_object),
                  "-o", str(executable)],
                 [str(executable)],
             ):
@@ -54,16 +55,22 @@ class NativeMemoryTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
 
     def test_heap_clang(self):
-        self.run_probe("clang", "pep_heap", "pep_heap_probe")
+        self.run_probe("clang", "pep_heap/pep_heap.c", "pep_heap_probe")
 
     def test_heap_gcc(self):
-        self.run_probe("gcc", "pep_heap", "pep_heap_probe")
+        self.run_probe("gcc", "pep_heap/pep_heap.c", "pep_heap_probe")
 
     def test_arena_growth_clang(self):
-        self.run_probe("clang", "pep_arena", "pep_arena_growth_probe")
+        self.run_probe("clang", "pep_arena/pep_arena.c", "pep_arena_growth_probe")
 
     def test_arena_growth_gcc(self):
-        self.run_probe("gcc", "pep_arena", "pep_arena_growth_probe")
+        self.run_probe("gcc", "pep_arena/pep_arena.c", "pep_arena_growth_probe")
+
+    def test_integer_append_clang(self):
+        self.run_probe("clang", "pep_text/pep_textbuf.c", "pep_textbuf_integer_probe", ("realloc",))
+
+    def test_integer_append_gcc(self):
+        self.run_probe("gcc", "pep_text/pep_textbuf.c", "pep_textbuf_integer_probe", ("realloc",))
 
     def run_probe_sanitized(self, module, probe):
         compiler = shutil.which("clang")
