@@ -28,7 +28,9 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from pep_c23_memory import RootFrame, constructor_tag, has_references, runtime_source, trace_layouts
+from pep_c23_memory import (
+    SOURCE_VIEW_RUNTIME, RootFrame, constructor_tag, has_references, runtime_source, trace_layouts,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PEP_CLI = ROOT / "pep.ps1"
@@ -135,6 +137,8 @@ class C23Emitter:
             return "bool"
         elif type_str == "Str":
             return "pep_str_t"
+        elif type_str == "SourceBytes":
+            return "pep_source_bytes"
         elif type_str == "Unit":
             return "void"
         elif type_str in self.records:
@@ -437,6 +441,8 @@ class C23Emitter:
                 return f"pep_say({args[0]})"
             elif fname == "int_text":
                 return f"pep_int_text({args[0]})"
+            elif fname in ("byte_length", "byte_at", "byte_slice"):
+                return f"pep_{fname}({', '.join(args)})"
             elif fname in ("length", "contains", "append", "prepend", "reverse"):
                 list_type, _ = unwrap_expr(expr["arguments"][0])
                 prefix, _ = self._list_prefix(list_type)
@@ -729,6 +735,9 @@ class C23Emitter:
         return ordered
 
     def generate_c23(self) -> str:
+        if self.functions.get("main", {}).get("parameters"):
+            raise ValueError("Standalone C23 requires a main function without parameters")
+
         # Pre-process match helpers by generating functions first
         function_bodies = []
         for f in self.typed_tree.get("functions", []):
@@ -778,6 +787,7 @@ class C23Emitter:
         out.append("#define PEP_INLINE [[maybe_unused]] static inline")
         out.append("")
         out.append(runtime_source())
+        out.append(SOURCE_VIEW_RUNTIME)
 
         out.append("static inline size_t pep_checked_index(int64_t index, size_t length) {")
         out.append("  if (index < 0 || (uintmax_t)index >= (uintmax_t)length) {")

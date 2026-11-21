@@ -4,7 +4,53 @@ from pathlib import Path
 
 
 HEAP_SOURCE = Path(__file__).resolve().parent / "runtime" / "pep_heap"
-SCALAR_TYPES = {"int64_t", "bool", "void"}
+UNMANAGED_TYPES = {"int64_t", "bool", "void", "pep_source_bytes"}
+
+SOURCE_VIEW_RUNTIME = r"""
+/* Borrowed immutable bytes. The host keeps the backing alive for every use,
+   including use of views returned from generated functions.
+   The direct program does not obtain a source grant or open any path. */
+typedef struct { const unsigned char *data; size_t length; } pep_source_bytes;
+
+static inline void pep_validate_source_view(pep_source_bytes source)
+{
+    if (source.length > 65536) {
+        fputs("PEP_SOURCE_BYTE_LIMIT: Source byte input exceeds 65536 bytes\n", stderr);
+        exit(1);
+    }
+    if (source.length != 0 && source.data == nullptr) {
+        fputs("PEP_RUNTIME_INVALID_SOURCE_BYTES: Source byte input has no backing\n", stderr);
+        exit(1);
+    }
+}
+
+static inline int64_t pep_byte_length(pep_source_bytes source)
+{
+    pep_validate_source_view(source);
+    return (int64_t)source.length;
+}
+
+static inline int64_t pep_byte_at(pep_source_bytes source, int64_t offset)
+{
+    pep_validate_source_view(source);
+    if (offset < 0 || (uintmax_t)offset >= source.length) {
+        fputs("PEP_RUNTIME_BYTE_RANGE: Byte offset is outside the source\n", stderr);
+        exit(1);
+    }
+    return source.data[(size_t)offset];
+}
+
+static inline pep_source_bytes pep_byte_slice(pep_source_bytes source, int64_t start, int64_t finish)
+{
+    pep_validate_source_view(source);
+    if (start < 0 || finish < start || (uintmax_t)finish > source.length) {
+        fputs("PEP_RUNTIME_BYTE_RANGE: Byte slice must be a valid half-open source range\n", stderr);
+        exit(1);
+    }
+    const unsigned char *data = start == 0 ? source.data : source.data + (size_t)start;
+    return (pep_source_bytes){data, (size_t)(finish - start)};
+}
+"""
 
 
 def trace_name(c_type):
@@ -12,7 +58,7 @@ def trace_name(c_type):
 
 
 def has_references(c_type):
-    return c_type not in SCALAR_TYPES
+    return c_type not in UNMANAGED_TYPES
 
 
 def constructor_tag(checked_id):
