@@ -63,11 +63,17 @@ static void trace_roots(pep_heap_marker *marker, void *context)
 
 static void probe_safepoints(void)
 {
-    pep_heap heap = {.stress = true};
+    pep_heap heap = {0};
     roots caller = {0};
     roots callee = {0};
     pep_heap_frame outer;
     pep_heap_frame inner;
+    size_t before = attempts;
+    refuse = true;
+    assert(pep_heap_alloc_safepoint(&heap, 16, nullptr) == nullptr);
+    assert(attempts == before + 1 && heap.live_objects == 0);
+    refuse = false;
+    heap.stress = true;
     pep_heap_push_frame(&heap, &outer, trace_roots, &caller);
     caller.owner = pep_heap_alloc_safepoint(&heap, 16, nullptr);
     assert(caller.owner != nullptr);
@@ -83,15 +89,26 @@ static void probe_safepoints(void)
     assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
     assert(heap.live_objects == 3 && *caller.view == 7);
 
+    refuse = true;
+    before = attempts;
+    assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) == nullptr);
+    assert(attempts == before + 1 && heap.live_objects == 2 && *caller.view == 7);
+    heap.stress = false;
+    before = attempts;
+    assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) == nullptr);
+    assert(attempts == before + 2 && heap.live_objects == 2 && *caller.view == 7);
+    refuse = false;
+
     // Transfer the result across return without collecting between pop and publish.
     pep_heap_object *result = callee.graph;
     pep_heap_pop_frame(&heap, &inner);
     caller.graph = result;
+    heap.stress = true;
     assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
     assert(heap.live_objects == 3 && *caller.view == 7);
 
     heap.stress = false;
-    size_t before = attempts;
+    before = attempts;
     fail_once = true;
     assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
     assert(attempts == before + 2 && heap.live_objects == 3);
