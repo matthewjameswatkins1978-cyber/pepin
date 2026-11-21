@@ -13,7 +13,7 @@ Key Guarantees:
 3. Unary Negation: Correctly translates unary and binary `neg` with overflow checks.
 4. Typed Holes: Rejects incomplete programs upfront; never silently compiles holes to zero.
 5. String Equality: Compares the full UTF-8 byte sequences.
-6. Safe Memory Lifetimes: List storage is heap-allocated (`pep_list_t`), preventing escaping stack corruption.
+6. Managed Memory Lifetimes: Lists and dynamic strings trace their backing storage through typed roots.
 7. Top-Level Statements: Full support for top-level conditionals, loops, lets, and expressions.
 8. Strict ISO C23: Lowers `match` expressions into static inline functions with zero GNU statement expressions.
 9. Collision Prevention: Guards against source/output/emitted C file path collisions.
@@ -27,6 +27,8 @@ import shutil
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+from pep_c23_memory import RootFrame, constructor_tag, has_references, runtime_source, trace_layouts
 
 ROOT = pathlib.Path(__file__).resolve().parent
 PEP_CLI = ROOT / "pep.ps1"
@@ -186,6 +188,9 @@ class C23Emitter:
         elif kind == "list":
             for el in expr.get("elements", []):
                 free.update(self._collect_free_bindings(el, bound))
+        elif kind == "index":
+            free.update(self._collect_free_bindings(expr["target"], bound))
+            free.update(self._collect_free_bindings(expr["index"], bound))
         elif kind == "record":
             for f in expr.get("fields", []):
                 free.update(self._collect_free_bindings(f["value"], bound))
@@ -218,7 +223,7 @@ class C23Emitter:
         self.match_counter += 1
         fn_name = f"pep_match_{helper_id}"
 
-        subj_type, subj_inner = unwrap_expr(match_expr["value"])
+        subj_type, _ = unwrap_expr(match_expr["value"])
         subj_c_type = self.emit_c_type(subj_type)
         ret_c_type = self.emit_c_type(result_type)
 
@@ -233,13 +238,15 @@ class C23Emitter:
         captured_bids = sorted(free_bids - self.global_bindings.keys())
 
         # Helper signature
+        frame = RootFrame()
         params = [f"{subj_c_type} __subj"]
+        frame.track("__subj", subj_c_type)
         for bid in captured_bids:
             btype = self.emit_c_type(self.binding_types.get(bid, "Int"))
             params.append(f"{btype} pep_bind_{bid}")
+            frame.track(f"pep_bind_{bid}", btype)
 
         lines = []
-        lines.append(f"PEP_INLINE {ret_c_type} {fn_name}({', '.join(params)}) {{")
 
         first = True
         for arm in match_expr.get("arms", []):
@@ -248,7 +255,7 @@ class C23Emitter:
             prefix = "  if" if first else "  else if"
             first = False
 
-            conds, bindings = self._emit_pattern_checks(pat, "__subj")
+            conds, bindings = self._emit_pattern_checks(pat, "__subj", frame)
             if conds:
                 cond_str = " && ".join(conds)
                 lines.append(f"{prefix} ({cond_str}) {{")
@@ -259,12 +266,9 @@ class C23Emitter:
                 lines.append(f"    {b_stmt}")
 
             declarations: List[str] = []
-            res_code = self.emit_expr(res, declarations)
+            res_code = self.emit_expr(res, declarations, frame)
             lines.extend(f"    {declaration}" for declaration in declarations)
-            if ret_c_type == "void":
-                lines.extend([f"    {res_code};", "    return;"])
-            else:
-                lines.append(f"    return {res_code};")
+            lines.extend(frame.lower_return(ret_c_type, res_code, "    "))
             lines.append("  }")
 
         lines.append('  fprintf(stderr, "PEP_RUNTIME_MATCH_EXHAUSTION: Match pattern exhaustion\\n");')
@@ -272,13 +276,16 @@ class C23Emitter:
         lines.append("}")
         lines.append("")
 
-        self.match_helpers.append("\n".join(lines))
+        signature = f"PEP_INLINE {ret_c_type} {fn_name}({', '.join(params)}) {{"
+        self.match_helpers.append("\n".join([signature, *frame.enter(), *lines]))
 
         # Call-site expression
         call_args = [subject] + [f"pep_bind_{bid}" for bid in captured_bids]
         return f"{fn_name}({', '.join(call_args)})"
 
-    def _emit_pattern_checks(self, pat: Dict[str, Any], accessor: str) -> Tuple[List[str], List[str]]:
+    def _emit_pattern_checks(
+        self, pat: Dict[str, Any], accessor: str, frame: RootFrame
+    ) -> Tuple[List[str], List[str]]:
         conds: List[str] = []
         bindings: List[str] = []
         kind = pat.get("kind")
@@ -289,18 +296,20 @@ class C23Emitter:
             bid = pat["bindingId"]
             bname = pat.get("name", f"bind_{bid}")
             btype = self.emit_c_type(self.binding_types.get(bid, "Int"))
-            bindings.append(f"{btype} pep_bind_{bid} /* {bname} */ = {accessor};")
+            binder = f"pep_bind_{bid}"
+            storage = "" if frame.track(binder, btype, declare=True) else f"{btype} "
+            bindings.append(f"{storage}{binder} /* {bname} */ = {accessor};")
         elif kind == "constructor":
             cid = pat["constructorId"]
             union_info = self.ctors_by_id.get(cid)
             if not union_info:
                 raise ValueError(f"Unknown constructor ID in pattern: {cid}")
             union_name, ctor_name, arg_types = union_info
-            conds.append(f"{accessor}.tag == {cid}")
+            conds.append(f"{accessor}.tag == {constructor_tag(cid)}")
 
             for idx, arg_pat in enumerate(pat.get("arguments", [])):
                 arg_accessor = f"{accessor}.val.{ctor_name}._{idx}"
-                c_sub, b_sub = self._emit_pattern_checks(arg_pat, arg_accessor)
+                c_sub, b_sub = self._emit_pattern_checks(arg_pat, arg_accessor, frame)
                 conds.extend(c_sub)
                 bindings.extend(b_sub)
         else:
@@ -308,9 +317,9 @@ class C23Emitter:
 
         return conds, bindings
 
-    def emit_expr(self, expr_node: Dict[str, Any], declarations: List[str]) -> str:
+    def emit_expr(self, expr_node: Dict[str, Any], declarations: List[str], frame: RootFrame) -> str:
         assignments: List[str] = []
-        result = self._emit_expr(expr_node, declarations, assignments)
+        result = self._emit_expr(expr_node, declarations, assignments, frame)
         if assignments:
             # C's comma operator sequences eager operands. The assignments remain
             # inside the expression so lazy branches and loop tests stay local.
@@ -318,10 +327,11 @@ class C23Emitter:
         return result
 
     def _emit_expr(
-        self, expr_node: Dict[str, Any], declarations: List[str], assignments: List[str]
+        self, expr_node: Dict[str, Any], declarations: List[str], assignments: List[str],
+        frame: RootFrame,
     ) -> str:
         def lower(node: Dict[str, Any]) -> str:
-            return self.emit_expr(node, declarations)
+            return self.emit_expr(node, declarations, frame)
 
         def capture(node: Dict[str, Any]) -> str:
             operand_type, _ = unwrap_expr(node)
@@ -329,7 +339,9 @@ class C23Emitter:
                 raise ValueError(f"Unsupported C23 value operand type: {operand_type}")
             name = f"pep_tmp_{self.temporary_counter}"
             self.temporary_counter += 1
-            declarations.append(f"{self.emit_c_type(operand_type)} {name};")
+            c_type = self.emit_c_type(operand_type)
+            if not frame.track(name, c_type, declare=True):
+                declarations.append(f"{c_type} {name};")
             assignments.append(f"{name} = {lower(node)}")
             return name
 
@@ -350,7 +362,7 @@ class C23Emitter:
                 chr(byte) if 32 <= byte < 127 and byte not in (34, 92) else f"\\{byte:03o}"
                 for byte in data
             )
-            return f'(pep_str_t){{ "{literal}", {len(data)} }}'
+            return f'(pep_str_t){{ "{literal}", {len(data)}, nullptr }}'
 
         elif kind == "binding":
             bid = expr["bindingId"]
@@ -492,7 +504,9 @@ class C23Emitter:
         else:
             raise ValueError(f"Unsupported expression kind in C23 emission: {kind} ({expr})")
 
-    def emit_stmt(self, stmt: Dict[str, Any], indent: str = "  ", is_global: bool = False) -> List[str]:
+    def emit_stmt(
+        self, stmt: Dict[str, Any], frame: RootFrame, indent: str = "  ", is_global: bool = False
+    ) -> List[str]:
         lines: List[str] = []
         declarations: List[str] = []
         kind = stmt.get("kind")
@@ -500,7 +514,7 @@ class C23Emitter:
         if kind in ("let", "var"):
             vname = stmt["name"]
             bid = stmt["bindingId"]
-            vval = self.emit_expr(stmt["value"], declarations)
+            vval = self.emit_expr(stmt["value"], declarations, frame)
             ann = stmt.get("type")
             c_type = self.emit_c_type(ann)
             self.binding_types[bid] = ann or "Int"
@@ -508,11 +522,13 @@ class C23Emitter:
                 lines.append(f"{indent}pep_bind_{bid} /* {vname} */ = {vval};")
                 lines.append(f"{indent}pep_ready_{bid} = true;")
             else:
-                lines.append(f"{indent}{c_type} pep_bind_{bid} /* {vname} */ = {vval};")
+                binder = f"pep_bind_{bid}"
+                storage = "" if frame.track(binder, c_type, declare=True) else f"{c_type} "
+                lines.append(f"{indent}{storage}{binder} /* {vname} */ = {vval};")
 
         elif kind == "assignment":
             bid = stmt["bindingId"]
-            vval = self.emit_expr(stmt["value"], declarations)
+            vval = self.emit_expr(stmt["value"], declarations, frame)
             if bid in self.global_bindings:
                 value_type = self.emit_c_type(self.binding_types[bid])
                 lines.extend([
@@ -526,43 +542,40 @@ class C23Emitter:
                 lines.append(f"{indent}pep_bind_{bid} = {vval};")
 
         elif kind == "return":
-            val = self.emit_expr(stmt["value"], declarations)
+            val = self.emit_expr(stmt["value"], declarations, frame)
             value_type, _ = unwrap_expr(stmt["value"])
-            if value_type == "Unit":
-                lines.extend([f"{indent}{val};", f"{indent}return;"])
-            else:
-                lines.append(f"{indent}return {val};")
+            lines.extend(frame.lower_return(self.emit_c_type(value_type), val, indent))
 
         elif kind == "expression":
-            val = self.emit_expr(stmt["value"], declarations)
+            val = self.emit_expr(stmt["value"], declarations, frame)
             lines.append(f"{indent}(void)({val});")
 
         elif kind == "block":
             lines.append(f"{indent}{{")
             for s in stmt.get("statements", []):
-                lines.extend(self.emit_stmt(s, indent + "  "))
+                lines.extend(self.emit_stmt(s, frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         elif kind == "if_statement":
-            cond = self.emit_expr(stmt["condition"], declarations)
+            cond = self.emit_expr(stmt["condition"], declarations, frame)
             lines.append(f"{indent}if ({cond}) {{")
             for s in stmt.get("then", []):
-                lines.extend(self.emit_stmt(s, indent + "  "))
+                lines.extend(self.emit_stmt(s, frame, indent + "  "))
             else_branch = stmt.get("else", [])
             if else_branch:
                 lines.append(f"{indent}}} else {{")
                 for s in else_branch:
-                    lines.extend(self.emit_stmt(s, indent + "  "))
+                    lines.extend(self.emit_stmt(s, frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         elif kind in ("break", "continue"):
             lines.append(f"{indent}{kind};")
 
         elif kind == "while":
-            cond = self.emit_expr(stmt["condition"], declarations)
+            cond = self.emit_expr(stmt["condition"], declarations, frame)
             lines.append(f"{indent}while ({cond}) {{")
             for s in stmt.get("body", []):
-                lines.extend(self.emit_stmt(s, indent + "  "))
+                lines.extend(self.emit_stmt(s, frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         elif kind == "for_in":
@@ -571,16 +584,19 @@ class C23Emitter:
             ann = stmt.get("type", "Int")
             self.binding_types[bid] = ann
             c_type = self.emit_c_type(ann)
-            iter_val = self.emit_expr(stmt["iterable"], declarations)
+            iter_val = self.emit_expr(stmt["iterable"], declarations, frame)
             loop_var = f"__list_{bid}"
             idx_var = f"__idx_{bid}"
 
             list_type, _ = unwrap_expr(stmt["iterable"])
-            lines.append(f"{indent}{self.emit_c_type(list_type)} {loop_var} = {iter_val};")
+            frame.track(loop_var, self.emit_c_type(list_type), declare=True)
+            lines.append(f"{indent}{loop_var} = {iter_val};")
             lines.append(f"{indent}for (size_t {idx_var} = 0; {idx_var} < {loop_var}.len; ++{idx_var}) {{")
-            lines.append(f"{indent}  {c_type} pep_bind_{bid} /* {vname} */ = {loop_var}.data[{idx_var}];")
+            binder = f"pep_bind_{bid}"
+            storage = "" if frame.track(binder, c_type, declare=True) else f"{c_type} "
+            lines.append(f"{indent}  {storage}{binder} /* {vname} */ = {loop_var}.data[{idx_var}];")
             for s in stmt.get("body", []):
-                lines.extend(self.emit_stmt(s, indent + "  "))
+                lines.extend(self.emit_stmt(s, frame, indent + "  "))
             lines.append(f"{indent}}}")
 
         else:
@@ -591,17 +607,19 @@ class C23Emitter:
     @staticmethod
     def _emit_list_runtime(prefix: str, list_type: str, item_type: str, equal: Optional[str]) -> List[str]:
         out: List[str] = []
+        trace = f"{prefix}mark_items" if has_references(item_type) else "nullptr"
         out.append(f"static inline {list_type} {prefix}list_alloc(size_t len) {{")
-        out.append(f"  {list_type} list;")
-        out.append("  list.len = len;")
+        out.append(f"  {list_type} list = {{ .len = len }};")
         out.append("  if (len == 0) {")
-        out.append("    list.data = NULL;")
         out.append("    return list;")
         out.append("  }")
-        out.append("  list.data = len <= SIZE_MAX / sizeof *list.data ? malloc(len * sizeof *list.data) : NULL;")
-        out.append("  if (!list.data) {")
+        out.append("  if (len <= SIZE_MAX / sizeof *list.data) {")
+        out.append(f"    list.owner = pep_heap_alloc_safepoint(&pep_native_heap, len * sizeof *list.data, {trace});")
+        out.append("  }")
+        out.append("  if (!list.owner) {")
         out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: List allocation failed\\n"); exit(1);')
         out.append("  }")
+        out.append("  list.data = pep_heap_data(list.owner);")
         out.append("  return list;")
         out.append("}")
         out.append("")
@@ -687,25 +705,30 @@ class C23Emitter:
             fname = f["name"]
             ret_type = self.emit_c_type(f.get("returnType", "Unit"))
             c_params = []
+            frame = RootFrame()
             for p in f.get("parameters", []):
                 ptype = self.emit_c_type(p["type"])
                 bid = p["bindingId"]
                 c_params.append(f"{ptype} pep_bind_{bid} /* {p['name']} */")
+                frame.track(f"pep_bind_{bid}", ptype)
 
             param_str = ", ".join(c_params) if c_params else "void"
-            f_lines = [f"{ret_type} pep_fn_{fname}({param_str}) {{"]
+            f_lines = []
             for s in f.get("body", []):
-                f_lines.extend(self.emit_stmt(s, "  "))
+                f_lines.extend(self.emit_stmt(s, frame))
             if ret_type == "void":
+                f_lines.append(frame.leave("  "))
                 f_lines.append("  return;")
             f_lines.append("}")
             f_lines.append("")
-            function_bodies.append("\n".join(f_lines))
+            signature = f"{ret_type} pep_fn_{fname}({param_str}) {{"
+            function_bodies.append("\n".join([signature, *frame.enter(), *f_lines]))
 
         # Top-level statements
         top_lines = []
+        top_frame = RootFrame()
         for s in self.globals:
-            top_lines.extend(self.emit_stmt(s, "  ", is_global=True))
+            top_lines.extend(self.emit_stmt(s, top_frame, is_global=True))
 
         out: List[str] = []
         out.append("/* Generated by Pepin C23 Native Emitter (ISO C23 Compliant) */")
@@ -724,6 +747,7 @@ class C23Emitter:
         out.append("")
         out.append("#define PEP_INLINE [[maybe_unused]] static inline")
         out.append("")
+        out.append(runtime_source())
 
         out.append("static inline size_t pep_checked_index(int64_t index, size_t length) {")
         out.append("  if (index < 0 || (uintmax_t)index >= (uintmax_t)length) {")
@@ -779,7 +803,7 @@ class C23Emitter:
 
         # Monomorphic Built-ins
         out.append("/* Monomorphic Built-ins & String Equality */")
-        out.append("typedef struct { const char* data; size_t len; } pep_str_t;")
+        out.append("typedef struct { const char* data; size_t len; pep_heap_object *owner; } pep_str_t;")
         out.append("")
         out.append("static inline void pep_say(pep_str_t s) {")
         out.append("  if (s.len) fwrite(s.data, 1, s.len, stdout);")
@@ -787,12 +811,13 @@ class C23Emitter:
         out.append("}")
         out.append("")
         out.append("static inline pep_str_t pep_int_text(int64_t n) {")
-        out.append("  char* buf = (char*)malloc(32);")
-        out.append("  if (!buf) {")
+        out.append("  pep_heap_object *owner = pep_heap_alloc_safepoint(&pep_native_heap, 32, nullptr);")
+        out.append("  if (!owner) {")
         out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: String allocation failed\\n"); exit(1);')
         out.append("  }")
+        out.append("  char *buf = pep_heap_data(owner);")
         out.append('  int len = snprintf(buf, 32, "%lld", (long long)n);')
-        out.append("  return (pep_str_t){ buf, (size_t)len };")
+        out.append("  return (pep_str_t){ buf, (size_t)len, owner };")
         out.append("}")
         out.append("")
         out.append("static inline bool pep_str_eq(pep_str_t a, pep_str_t b) {")
@@ -819,7 +844,7 @@ class C23Emitter:
 
         # List descriptors can point at types that have only been forward declared.
         for list_type, c_item, _ in self.list_layouts.values():
-            out.append(f"typedef struct {{ size_t len; {c_item}* data; }} {list_type};")
+            out.append(f"typedef struct {{ size_t len; {c_item}* data; pep_heap_object *owner; }} {list_type};")
         out.append("")
 
         # By-value members require complete types in dependency order.
@@ -849,6 +874,7 @@ class C23Emitter:
             out.append("")
 
         # Operations allocate or copy items and therefore require their complete types.
+        out.extend(trace_layouts(self.records, self.unions, self.list_layouts, self.emit_c_type))
         for prefix, layout in self.list_layouts.items():
             out.extend(self._emit_list_runtime(prefix, *layout))
 
@@ -856,12 +882,13 @@ class C23Emitter:
             # Constructors
             for v in u.get("variants", []):
                 cid = v["constructorId"]
+                tag = constructor_tag(cid)
                 vname = v["name"]
                 args = v.get("arguments", [])
                 if args:
                     c_params = [f"{self.emit_c_type(a)} _{i}" for i, a in enumerate(args)]
                     out.append(f"static inline pep_union_{uname} pep_ctor_{vname}({', '.join(c_params)}) {{")
-                    out.append(f"  pep_union_{uname} u = {{ .tag = {cid} }};")
+                    out.append(f"  pep_union_{uname} u = {{ .tag = {tag} }};")
                     for i in range(len(args)):
                         out.append(f"  u.val.{vname}._{i} = _{i};")
                     out.append("  return u;")
@@ -870,7 +897,7 @@ class C23Emitter:
                     out.append(f"static inline pep_union_{uname} pep_fn_{vname}({', '.join(c_params)}) {{ return pep_ctor_{vname}({', '.join(f'_{i}' for i in range(len(args)))}); }}")
                 else:
                     out.append(f"static inline pep_union_{uname} pep_ctor_{vname}(void) {{")
-                    out.append(f"  return (pep_union_{uname}){{ .tag = {cid} }};")
+                    out.append(f"  return (pep_union_{uname}){{ .tag = {tag} }};")
                     out.append("}")
                     out.append(f"static inline pep_union_{uname} pep_fn_{vname}(void) {{ return pep_ctor_{vname}(); }}")
                 out.append("")
@@ -880,10 +907,12 @@ class C23Emitter:
         out.append("PEP_INLINE void pep_require_global(bool ready, const char* message) {")
         out.append('  if (!ready) { fprintf(stderr, "PEP_RUNTIME_UNRESOLVED_BINDING: %s\\n", message); exit(1); }')
         out.append("}")
+        global_frame = RootFrame()
         for bid, binding in self.global_bindings.items():
             btype = self.emit_c_type(binding["type"])
             out.append(f"[[maybe_unused]] static {btype} pep_bind_{bid}; /* {binding['name']} */")
             out.append(f"[[maybe_unused]] static bool pep_ready_{bid};")
+            global_frame.track(f"pep_bind_{bid}", btype)
         out.append("")
 
         # Function Prototypes
@@ -912,7 +941,9 @@ class C23Emitter:
         # Top-Level Initializer
         out.append("/* Top-Level Initializer & Statements */")
         out.append("static void pep_init_top_level(void) {")
+        out.extend(top_frame.enter())
         out.extend(top_lines)
+        out.append(top_frame.leave("  "))
         out.append("}")
         out.append("")
 
@@ -920,18 +951,24 @@ class C23Emitter:
         out.append("/* Native Program Entrypoint */")
         out.append("int main(int argc, char** argv) {")
         out.append("  (void)argc; (void)argv;")
+        out.append("  if (atexit(pep_destroy_native_heap) != 0) {")
+        out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: Cannot register heap cleanup\\n");')
+        out.append("    return 1;")
+        out.append("  }")
+        out.append("#if defined(PEP_GC_STRESS) && PEP_GC_STRESS")
+        out.append("  pep_native_heap.stress = true;")
+        out.append("#endif")
+        out.extend(global_frame.enter())
         out.append("  pep_init_top_level();")
         if "main" in self.functions:
             fn_main = self.functions["main"]
             if fn_main.get("returnType") == "Int":
                 out.append("  int64_t exit_val = pep_fn_main();")
                 out.append('  printf("%lld\\n", (long long)exit_val);')
-                out.append("  return 0;")
             else:
                 out.append("  pep_fn_main();")
-                out.append("  return 0;")
-        else:
-            out.append("  return 0;")
+        out.append(global_frame.leave("  "))
+        out.append("  return 0;")
         out.append("}")
         out.append("")
 
