@@ -563,6 +563,33 @@ pub fn unwrap(reading: Reading) -> Int {
                     diagnostic = json.loads(output)["diagnostics"][0]
                     self.assertEqual((diagnostic["code"], diagnostic["span"]["document"]), (code, "main.pep"))
 
+    def test_native_nominal_layout_orders_by_value_dependencies(self):
+        self.assert_native_order_parity(
+            """type Batch { item: Choice, empty: Empty }
+type Empty {}
+type Choice = Taken(Payload) | Absent()
+type Payload { number: Int }
+let batch = Batch { item: Taken(Payload { number: 42 }), empty: Empty {} }
+let result = match batch.item {
+    Taken(payload) => payload.number
+    Absent() => 0
+}
+say(int_text(result))
+""",
+            "42\n",
+        )
+
+    def test_native_recursive_nominal_layout_is_explicitly_unsupported(self):
+        with tempfile.TemporaryDirectory() as folder:
+            pep_file = pathlib.Path(folder) / "tree.pep"
+            pep_file.write_text("type Tree = Leaf(Int) | Branch(Tree)\n", encoding="utf-8")
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(pep_file)), (0, "", ""))
+            output = pep_file.with_suffix(".exe")
+            with self.assertRaisesRegex(ValueError, "Unsupported recursive by-value C23 layout: Tree"):
+                pep_c23_direct.build_c23(pep_file, output)
+            self.assertFalse(output.exists())
+            self.assertFalse(output.with_suffix(".c").exists())
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:

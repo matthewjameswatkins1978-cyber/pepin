@@ -631,6 +631,36 @@ class C23Emitter:
         out.append("")
         return out
 
+    def _nominal_layout_order(self) -> List[str]:
+        dependencies = {
+            name: [field["type"] for field in record["fields"]]
+            for name, record in self.records.items()
+        }
+        dependencies.update({
+            name: [argument for variant in union["variants"] for argument in variant["arguments"]]
+            for name, union in self.unions.items()
+        })
+        visited: Set[str] = set()
+        pending: Set[str] = set()
+        ordered: List[str] = []
+
+        def visit(name: str) -> None:
+            if name in pending:
+                raise ValueError(f"Unsupported recursive by-value C23 layout: {name}")
+            if name in visited:
+                return
+            pending.add(name)
+            for member_type in dependencies[name]:
+                if member_type in dependencies:
+                    visit(member_type)
+            pending.remove(name)
+            visited.add(name)
+            ordered.append(name)
+
+        for name in sorted(dependencies):
+            visit(name)
+        return ordered
+
     def generate_c23(self) -> str:
         # Pre-process match helpers by generating functions first
         function_bodies = []
@@ -754,62 +784,54 @@ class C23Emitter:
             out.append(f"typedef struct pep_union_{uname} pep_union_{uname};")
         out.append("")
 
-        # Record Types
-        if self.records:
-            out.append("/* Record Types */")
-            for rname in sorted(self.records.keys()):
-                r = self.records[rname]
-                out.append(f"struct pep_rec_{rname} {{")
-                for f in r.get("fields", []):
-                    fname = f["name"]
-                    ftype = self.emit_c_type(f["type"])
-                    out.append(f"  {ftype} {fname};")
-                out.append("};")
-                out.append("")
-
-        # Tagged Unions
-        if self.unions:
-            out.append("/* Tagged Union Types & Constructors */")
-            for uname in sorted(self.unions.keys()):
-                u = self.unions[uname]
-                out.append(f"struct pep_union_{uname} {{")
+        # By-value members require complete types in dependency order.
+        for name in self._nominal_layout_order():
+            if name in self.records:
+                fields = self.records[name]["fields"]
+                out.append(f"struct pep_rec_{name} {{")
+                for field in fields:
+                    out.append(f"  {self.emit_c_type(field['type'])} {field['name']};")
+                if not fields:
+                    out.append("  unsigned char unused;")
+            else:
+                variants = self.unions[name]["variants"]
+                out.append(f"struct pep_union_{name} {{")
                 out.append("  int tag;")
-                has_payloads = any(bool(v.get("arguments")) for v in u.get("variants", []))
-                if has_payloads:
+                if any(variant["arguments"] for variant in variants):
                     out.append("  union {")
-                    for v in u.get("variants", []):
-                        vname = v["name"]
-                        args = v.get("arguments", [])
+                    for variant in variants:
+                        args = variant["arguments"]
                         if args:
-                            out.append(f"    struct {{")
-                            for i, a in enumerate(args):
-                                out.append(f"      {self.emit_c_type(a)} _{i};")
-                            out.append(f"    }} {vname};")
+                            out.append("    struct {")
+                            for i, arg in enumerate(args):
+                                out.append(f"      {self.emit_c_type(arg)} _{i};")
+                            out.append(f"    }} {variant['name']};")
                     out.append("  } val;")
-                out.append("};")
-                out.append("")
+            out.append("};")
+            out.append("")
 
-                # Constructors
-                for v in u.get("variants", []):
-                    cid = v["constructorId"]
-                    vname = v["name"]
-                    args = v.get("arguments", [])
-                    if args:
-                        c_params = [f"{self.emit_c_type(a)} _{i}" for i, a in enumerate(args)]
-                        out.append(f"static inline pep_union_{uname} pep_ctor_{vname}({', '.join(c_params)}) {{")
-                        out.append(f"  pep_union_{uname} u = {{ .tag = {cid} }};")
-                        for i in range(len(args)):
-                            out.append(f"  u.val.{vname}._{i} = _{i};")
-                        out.append("  return u;")
-                        out.append("}")
-                        # Backward-compatible function alias
-                        out.append(f"static inline pep_union_{uname} pep_fn_{vname}({', '.join(c_params)}) {{ return pep_ctor_{vname}({', '.join(f'_{i}' for i in range(len(args)))}); }}")
-                    else:
-                        out.append(f"static inline pep_union_{uname} pep_ctor_{vname}(void) {{")
-                        out.append(f"  return (pep_union_{uname}){{ .tag = {cid} }};")
-                        out.append("}")
-                        out.append(f"static inline pep_union_{uname} pep_fn_{vname}(void) {{ return pep_ctor_{vname}(); }}")
-                    out.append("")
+        for uname, u in sorted(self.unions.items()):
+            # Constructors
+            for v in u.get("variants", []):
+                cid = v["constructorId"]
+                vname = v["name"]
+                args = v.get("arguments", [])
+                if args:
+                    c_params = [f"{self.emit_c_type(a)} _{i}" for i, a in enumerate(args)]
+                    out.append(f"static inline pep_union_{uname} pep_ctor_{vname}({', '.join(c_params)}) {{")
+                    out.append(f"  pep_union_{uname} u = {{ .tag = {cid} }};")
+                    for i in range(len(args)):
+                        out.append(f"  u.val.{vname}._{i} = _{i};")
+                    out.append("  return u;")
+                    out.append("}")
+                    # Backward-compatible function alias
+                    out.append(f"static inline pep_union_{uname} pep_fn_{vname}({', '.join(c_params)}) {{ return pep_ctor_{vname}({', '.join(f'_{i}' for i in range(len(args)))}); }}")
+                else:
+                    out.append(f"static inline pep_union_{uname} pep_ctor_{vname}(void) {{")
+                    out.append(f"  return (pep_union_{uname}){{ .tag = {cid} }};")
+                    out.append("}")
+                    out.append(f"static inline pep_union_{uname} pep_fn_{vname}(void) {{ return pep_ctor_{vname}(); }}")
+                out.append("")
 
         # Global File-Scope Variables
         out.append("/* Global Bindings (File Scope) */")
