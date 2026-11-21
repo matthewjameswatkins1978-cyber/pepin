@@ -5,7 +5,7 @@
 
 The language is **Pep** (`.pep` files). The long-term compiler and toolchain is **Lucy**. The idea is simple: keep source code readable and the language core compact, while making the compiler exceptionally good at explaining programs, checking changes and exposing reliable knowledge to other tools.
 
-> **Project status: pre-1.0, actively under development.** The accepted `master` baseline is the working OCaml seed through milestone **A8**. Later compiler, native-backend and language work exists on development/review branches but is **not** part of the accepted master release. [See what actually works](docs/DESIGN.md) · [Road to 1.0](docs/ROADMAP_TO_1_0.md)
+> **Project status: pre-1.0, actively under development.** The accepted `master` baseline is the working OCaml seed through milestone **A8**. Later compiler, native-backend and language work exists on development/review branches but is **not** part of the accepted master release. [See what actually works](docs/DESIGN.md) · [Living language specification](docs/LANGUAGE_SPEC.md) · [Road to 1.0](docs/ROADMAP_TO_1_0.md)
 
 ## Why build Pepin?
 
@@ -90,13 +90,13 @@ The CLI can report its actual supported capabilities using `describe --json`. Tr
 
 ## The road to 1.0
 
-**Two roads, one destination.** The first gets us to *Pepin in Pepin*: a Pep-written compiler capable of rebuilding itself. The second completes the language and environment people can rely on. **Self-hosting is not, by itself, 1.0.**
+**Useful native Pep first; self-hosting before 1.0.** The accepted OCaml reference seed remains while we develop practical C23 compilation, a safe memory foundation, a complete core language and useful libraries.
 
-1. **Prove the foundation.** Working typed OCaml seed; source revisions, holes, semantic queries and Pep-written development tools. **Accepted through A8.**
-2. **Make Pep capable of building Pep.** Grow the smallest necessary Pep-written compiler foundations, lexer, parser and checker; prove a genuine C23 native path; reproduce compiler self-builds. **Experimental/development work, not accepted on master.**
-3. **Finish the everyday language.** Complete the accepted typing, values, generics, modules, errors, effects, safe memory/access rules, concurrency and native parity. Build useful standard-library layers **in Pep whenever practical**.
-4. **Make Lucy a dependable development partner.** A single compiler-derived semantic model, stage checkpoints, evidence-aware queries, safe edits, tests and versioned tooling, with no second hidden semantic engine.
-5. **Earn the 1.0 release.** Independent negative/adversarial testing, real Pep applications, reproducible builds, documented platforms, language and library specifications, security review and explicit release acceptance.
+1. **Prove the foundation.** Working typed seed, revisions, holes, semantic queries and Pep-written tools. **Accepted through A8.**
+2. **Make native Pep dependable.** Integrate checked C23 compilation, complete modules/control flow, data, generics and the memory/ownership foundation; grow the library alongside. **Provisional work, not accepted on master.**
+3. **Build a practical language.** Finish errors, effects, closures, tests, data-oriented storage, safe concurrency and host capabilities; demonstrate real native applications.
+4. **Make Lucy a dependable development partner.** Unified compiler-derived semantic model, living specifications, linked tests/evidence, bounded context and revision-safe collaborative edits.
+5. **Earn 1.0.** Reproduce genuine self-hosting and independent conformance, review safety, ship documentation and supported builds, and obtain explicit release acceptance.
 
 No calendar date or version badge is being promised ahead of evidence. The [detailed 1.0 milestones and acceptance gates](docs/ROADMAP_TO_1_0.md) distinguish accepted, experimental and proposed work.
 
@@ -105,6 +105,7 @@ No calendar date or version badge is being promised ahead of evidence. The [deta
 | Start here | Purpose |
 | --- | --- |
 | [Documentation guide](docs/README.md) | Find the right document and understand which sources are authoritative |
+| [Living language specification](docs/LANGUAGE_SPEC.md) | Consolidated target, status ledger and normative obligations |
 | [Road to 1.0](docs/ROADMAP_TO_1_0.md) | Product milestones, priorities and release criteria |
 | [Implementation status](docs/DESIGN.md) | Accepted compiler capabilities and known limits |
 | [Bootstrap and first commands](docs/BOOTSTRAP.md) | Reproduce today's development workflow |

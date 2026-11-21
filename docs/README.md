@@ -9,6 +9,7 @@ Documentation has three jobs: **help you try what exists**, **explain why the la
 | If you want to… | Read |
 | --- | --- |
 | Understand the project in two minutes | [Project README](../README.md) |
+| Read the consolidated language contract and feature ledger | [Living language specification](LANGUAGE_SPEC.md) |
 | See the milestones and 1.0 finish line | [Road to 1.0](ROADMAP_TO_1_0.md) |
 | Try the accepted OCaml seed | [Bootstrap and commands](BOOTSTRAP.md) |
 | Know what is genuinely implemented | [Implementation status](DESIGN.md), then [seed-language specifics](SEED_LANGUAGE.md) |
@@ -22,7 +23,7 @@ Documentation has three jobs: **help you try what exists**, **explain why the la
 
 **Implemented** means accepted code and supported test evidence at a stated revision. **Designed** means an agreed desired semantic direction. **Proposed** means a candidate interface or syntax still under review. **Experimental** means development-branch work, not `master` release support.
 
-Some founding examples and design documents predate later decisions. The accepted 27 October language draft expands the original founding design; subsequent 28 October priorities place **Pep-written library foundations and compiler-derived semantic facts/checkpoints** ahead of annotation-centred Semantic Notes. The future native backend is **C23**, not the original MoonBit/C11 proof.
+Some founding examples and design documents predate later decisions. The accepted 27 October language draft expands the original founding design; subsequent 28 October priorities place **Pep-written library foundations and compiler-derived semantic facts/checkpoints** ahead of annotation-centred Semantic Notes. The native target is **C23**, not the original MoonBit/C11 proof. The 20–21 November priority change puts reliable native compilation, practical core language and memory/library foundations ahead of full self-hosting. See the [living specification](LANGUAGE_SPEC.md) and [updated roadmap](ROADMAP_TO_1_0.md).
 
 Useful *review and development branch* documents, not part of accepted `master`:
 
