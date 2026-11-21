@@ -474,6 +474,51 @@ fn subtract(a: Int, b: Int) -> Int { return a - b }
                     self.assertIn((code, source), [(d["code"], d["span"].get("document"))
                                                   for d in diagnostics])
 
+    def test_imported_private_nominal_types_stay_local(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = pathlib.Path(folder)
+            entry = root / "main.pep"
+            entry.write_text(
+                "import alpha\nimport beta\n"
+                "type EntryOnly { unrelated: Int }\n"
+                "say(int_text(alpha.value() + beta.value()))\n", encoding="utf-8"
+            )
+            source = """type Payload { number: Int }
+type Choice = Keep(Payload) | Empty()
+fn evaluate(choice: Choice) -> Int {
+    return match choice {
+        Keep(payload) => payload.number
+        Empty() => 0
+    }
+}
+pub fn value() -> Int {
+    let payload: Payload = Payload { number: NUMBER }
+    return evaluate(Keep(payload))
+}
+"""
+            for module, number in (("alpha", 19), ("beta", 23)):
+                (root / f"{module}.pep").write_text(
+                    source.replace("NUMBER", str(number)), encoding="utf-8"
+                )
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(entry)), (0, "42\n", ""))
+            for compiler in filter(None, [self.clang, self.gcc]):
+                with self.subTest(compiler=compiler.name):
+                    self.assertEqual(pep_c23_direct.run_c23(entry, compiler), (0, "42\n", ""))
+
+            alpha = root / "alpha.pep"
+            for function, code in (
+                ("pub fn value() -> Payload { return Payload { number: 1 } }",
+                 "PEP_MODULE_TYPE_UNSUPPORTED"),
+                ("pub fn value() -> Int { return (EntryOnly { unrelated: 1 }).unrelated }",
+                 "PEP_UNKNOWN_TYPE"),
+            ):
+                with self.subTest(code=code):
+                    alpha.write_text("type Payload { number: Int }\n" + function + "\n", encoding="utf-8")
+                    status, output, stderr = pep_c23_direct.run_pep_cmd("check", str(entry), "--json")
+                    self.assertNotEqual(status, 0, output or stderr)
+                    diagnostic = json.loads(output)["diagnostics"][0]
+                    self.assertEqual((diagnostic["code"], diagnostic["span"]["document"]), (code, "alpha.pep"))
+
     def test_path_collision_prevention(self):
         """Collision Prevention: Source, output executable, and emitted C file paths must be distinct."""
         with tempfile.TemporaryDirectory() as td:

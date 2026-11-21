@@ -844,7 +844,7 @@ let rec typed_expr_json e =
  "{\"type\":"^typ^",\"span\":"^span_json e.espan^",\"expression\":"^node^"}"
 and typed_pattern_json = function
  |TPWildcard sp->"{\"kind\":\"wildcard\",\"span\":"^span_json sp^"}"
- |TPBind binding->"{\"kind\":\"binding\",\"name\":"^json_string binding.bname^",\"bindingId\":"^string_of_int binding.bid^",\"mutable\":false,\"span\":"^span_json binding.bspan^"}"
+ |TPBind binding->"{\"kind\":\"binding\",\"name\":"^json_string binding.bname^",\"bindingId\":"^string_of_int binding.bid^",\"type\":"^json_string(type_name(Option.get binding.bty))^",\"mutable\":false,\"span\":"^span_json binding.bspan^"}"
  |TPConstructor(id,arguments,sp)->"{\"kind\":\"constructor\",\"constructorId\":"^string_of_int id^",\"arguments\":["^String.concat "," (List.map typed_pattern_json arguments)^"],\"span\":"^span_json sp^"}"
 let rec typed_stmt_json = function
  |TLet(b,e)->"{\"kind\":\"let\",\"name\":"^json_string b.bname^",\"bindingId\":"^string_of_int b.bid^",\"type\":"^(match b.bty with None->"null"|Some t->json_string(type_name t))^",\"mutable\":false,\"value\":"^typed_expr_json e^"}"
@@ -2147,7 +2147,8 @@ let load_file_program file =
     let entry_name=Filename.basename entry_path in
     let entry_symbols=List.concat_map (function
       |TopFun f->[f.fname]
-      |TopType (UnionDecl(_,ctors,_))->List.map (fun (name,_,_)->name) ctors
+      |TopType (UnionDecl(name,ctors,_))->name::List.map (fun (ctor,_,_)->ctor) ctors
+      |TopType (RecordDecl(name,_,_))->[name]
       |_->[]) entry.tops in
     let rec unique_prefix prefix =
       if List.exists (String.starts_with ~prefix) entry_symbols then unique_prefix ("_"^prefix) else prefix
@@ -2184,29 +2185,38 @@ let load_file_program file =
       let parsed=parse_module ~document source in
       let functions=Hashtbl.create 8 and aliases=Hashtbl.create 8 in
       let public_names=List.map fst parsed.exports in
-      let constructors=List.concat_map (function
-        |TopType (UnionDecl(_,cases,_))->List.map (fun (name,_,_)->name) cases
-        |_->[]) parsed.tops in
+      let types=Hashtbl.create 8 and constructors=Hashtbl.create 8 in
       let rec verify_type span = function
         |Named name->fail "PEP_MODULE_TYPE_UNSUPPORTED" ("Named module interface type is unavailable: "^name) span ()
         |List item->verify_type span item
         |_->()
       in
       let hex text=String.concat "" (List.init (String.length text) (fun i->Printf.sprintf "%02x" (Char.code text.[i]))) in
+      let local_prefix=if is_entry then "" else prefix^hex document^"_" in
+      let local_symbol name=local_prefix^name in
+      let add_type name span =
+        if List.mem name ["Int";"Bool";"Str";"SourceBytes";"Unit";"List"] then
+          fail "PEP_DUPLICATE_TYPE" ("Reserved type "^name) span ();
+        Hashtbl.replace types name (local_symbol name)
+      in
       List.iter (function
         |TopFun f->
           if List.mem f.fname builtin_names then
             fail "PEP_RESERVED_FUNCTION" ("Function name is reserved: "^f.fname) f.fspan ();
-          if not is_entry || List.mem f.fname public_names then (
+          if List.mem f.fname public_names then (
             List.iter (fun (_,t,span)->verify_type span t) f.params;
             verify_type f.fspan f.result);
           if Hashtbl.mem functions f.fname then fail "PEP_DUPLICATE_FUNCTION" ("Duplicate function "^f.fname) f.fspan ();
-          Hashtbl.add functions f.fname (if is_entry then f.fname else prefix^hex document^"_"^f.fname)
+          Hashtbl.add functions f.fname (local_symbol f.fname)
         |TopStmt s when not is_entry ->
           fail "PEP_MODULE_INITIALIZER" "Imported modules may not execute top-level statements" (stmt_span s) ()
-        |TopType (RecordDecl(_,_,span)|UnionDecl(_,_,span)) when not is_entry ->
-          fail "PEP_MODULE_TYPE_UNSUPPORTED" "Imported types are unavailable in the function module slice" span ()
-        |_->()) parsed.tops;
+        |TopType (RecordDecl(name,_,span))->add_type name span
+        |TopType (UnionDecl(name,cases,span))->
+          add_type name span;
+          List.iter (fun (ctor,_,at)->
+            if List.mem ctor builtin_names then fail "PEP_RESERVED_CONSTRUCTOR" ("Reserved constructor "^ctor) at ();
+            Hashtbl.replace constructors ctor (local_symbol ctor)) cases
+        |TopStmt _->()) parsed.tops;
       List.iter (fun import->
         if Hashtbl.mem aliases import.alias then
           fail "PEP_MODULE_DUPLICATE_ALIAS" ("Duplicate import alias "^import.alias) import.import_span ();
@@ -2218,8 +2228,11 @@ let load_file_program file =
         |[local]->
           (match Hashtbl.find_opt functions local with
            |Some symbol->symbol
-           |None when List.mem local builtin_names || List.mem local constructors->local
-           |None->fail "PEP_UNKNOWN_FUNCTION" ("Unknown function "^local^" in "^document) span ())
+           |None when List.mem local builtin_names->local
+           |None->
+             (match Hashtbl.find_opt constructors local with
+              |Some symbol->symbol
+              |None->fail "PEP_UNKNOWN_FUNCTION" ("Unknown function "^local^" in "^document) span ()))
         |[alias;member]->
           let target=match Hashtbl.find_opt aliases alias with
             |Some found->found
@@ -2232,22 +2245,43 @@ let load_file_program file =
            |Some symbol->symbol)
         |_->fail "PEP_MODULE_INVALID_QUALIFIER" ("Invalid qualified call "^name) span ()
       in
+      let resolve_type name span =
+        match Hashtbl.find_opt types name with
+        |Some symbol->symbol
+        |None->fail "PEP_UNKNOWN_TYPE" ("Unknown type "^name^" in "^document) span ()
+      in
+      let rec local_type span = function
+        |Named name->Named(resolve_type name span)
+        |List item->List(local_type span item)
+        |ty->ty
+      in
+      let rec pattern = function
+        |PConstructor(name,args,span)->
+          let symbol=match Hashtbl.find_opt constructors name with
+            |Some symbol->symbol
+            |None->fail "PEP_UNKNOWN_CONSTRUCTOR" ("Unknown constructor "^name^" in "^document) span ()
+          in
+          PConstructor(symbol,List.map pattern args,span)
+        |(PWildcard _|PBind _) as leaf->leaf
+      in
       let rec expression = function
         |ECall(n,args,s)->ECall(resolve n s,List.map expression args,s)
         |EBin(op,l,r,s)->EBin(op,expression l,expression r,s)
         |EUnary(op,x,s)->EUnary(op,expression x,s)
         |EList(xs,s)->EList(List.map expression xs,s)
         |EIf(c,y,n,s)->EIf(expression c,expression y,expression n,s)
-        |ERecord(_,_,s) when not is_entry ->
-          fail "PEP_MODULE_TYPE_UNSUPPORTED" "Imported functions may not construct entry-file records" s ()
-        |ERecord(n,fields,s)->ERecord(n,List.map (fun (f,v,sp)->f,expression v,sp) fields,s)
+        |ERecord(n,fields,s)->
+          ERecord(resolve_type n s,List.map (fun (f,v,sp)->f,expression v,sp) fields,s)
         |EField(x,n,s)->EField(expression x,n,s)
-        |EMatch(x,arms,s)->EMatch(expression x,List.map (fun (arm:match_arm)->{arm with result=expression arm.result}) arms,s)
+        |EMatch(x,arms,s)->
+          let arms=List.map (fun (arm:match_arm)->
+            {arm with pattern=pattern arm.pattern;result=expression arm.result}) arms in
+          EMatch(expression x,arms,s)
         |(EInt _|EBool _|EStr _|EName _|EHole _) as leaf->leaf
       in
       let rec statement = function
-        |SLet(n,t,e,s)->SLet(n,t,expression e,s)
-        |SVar(n,t,e,s)->SVar(n,t,expression e,s)
+        |SLet(n,t,e,s)->SLet(n,Option.map (local_type s) t,expression e,s)
+        |SVar(n,t,e,s)->SVar(n,Option.map (local_type s) t,expression e,s)
         |SAssign(n,e,s)->SAssign(n,expression e,s)
         |SReturn(e,s)->SReturn(expression e,s)
         |SExpr(e,s)->SExpr(expression e,s)
@@ -2257,9 +2291,19 @@ let load_file_program file =
         |SWhile(c,body,s)->SWhile(expression c,List.map statement body,s)
       in
       let declarations=List.map (function
-        |TopFun f->TopFun {f with fname=Hashtbl.find functions f.fname;body=List.map statement f.body}
+        |TopFun f->TopFun {f with
+            fname=Hashtbl.find functions f.fname;
+            params=List.map (fun (name,ty,at)->name,local_type at ty,at) f.params;
+            result=local_type f.fspan f.result;
+            body=List.map statement f.body}
         |TopStmt s->TopStmt(statement s)
-        |TopType _ as t->t) parsed.tops in
+        |TopType (RecordDecl(name,fields,span))->
+          TopType(RecordDecl(resolve_type name span,
+            List.map (fun (field,ty,at)->field,local_type at ty,at) fields,span))
+        |TopType (UnionDecl(name,cases,span))->
+          TopType(UnionDecl(resolve_type name span,
+            List.map (fun (ctor,args,at)->Hashtbl.find constructors ctor,List.map (local_type at) args,at) cases,span))
+        ) parsed.tops in
       let exports=List.map (fun name->
         "{\"name\":"^json_string name^",\"symbol\":"^json_string (Hashtbl.find functions name)^"}") public_names in
       let imports=List.map (fun i->
