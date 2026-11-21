@@ -449,7 +449,7 @@ fn lexer_step(cursor: LexCursor) -> LexProgress {
             var symbol = ""
             if !(length <= offset + 1) {
               let next = byte_at(source, offset + 1)
-              if (byte == 60 && next == 61) || (byte == 61 && (next == 61 || next == 62)) ||
+              if ((byte == 60 || byte == 62) && next == 61) || (byte == 61 && (next == 61 || next == 62)) ||
                  (byte == 33 && next == 61) || (byte == 38 && next == 38) ||
                  (byte == 124 && next == 124) || (byte == 45 && next == 62) {
                 width = 2
@@ -460,7 +460,8 @@ fn lexer_step(cursor: LexCursor) -> LexProgress {
             } else {
               if byte == 40 || byte == 41 || byte == 123 || byte == 125 || byte == 91 || byte == 93 ||
                  byte == 44 || byte == 58 || byte == 59 || byte == 43 || byte == 45 || byte == 42 ||
-                 byte == 47 || byte == 61 || byte == 46 || byte == 124 || byte == 38 || byte == 33 {
+                 byte == 47 || byte == 61 || byte == 46 || byte == 124 || byte == 38 || byte == 33 ||
+                 byte == 60 || byte == 62 {
                 symbol = utf8_slice(source, offset, offset + 1)
               } else { }
             }

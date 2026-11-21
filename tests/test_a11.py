@@ -144,7 +144,7 @@ class A11DifferentialTests(unittest.TestCase):
         build_env["PEPIN_OPAM_ROOT"] = opam_root
         compiled = subprocess.run(
             ["opam", "exec", "--root", opam_root, "--switch", "pepin-5.5.2", "--",
-             "ocamlopt", "-o", str(cls.oracle_executable), str(helper_source)],
+             "ocamlopt", "-I", "+unix", "unix.cmxa", "-o", str(cls.oracle_executable), str(helper_source)],
             cwd=ROOT, env=build_env, text=True, capture_output=True, check=False,
         )
         if compiled.returncode != 0:
@@ -338,7 +338,7 @@ class A11DifferentialTests(unittest.TestCase):
             b" \t\r\n# comment\r\n// another comment\n",
             b"fn type let var return if else while for in match true false Int Bool Str SourceBytes Unit List",
             b"_ _x ? ?name ?1 name2",
-            b"(){}[],:;+-*/=.|&! <= == != && || -> =>",
+            b"(){}[],:;+-*/=.|&! < <= > >= == != && || -> =>",
             b"<",
             b"> >= %=",
             b"0 7 0010 9223372036854775807 -12",
