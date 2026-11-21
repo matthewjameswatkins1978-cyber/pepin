@@ -395,13 +395,40 @@ fn subtract(a: Int, b: Int) -> Int { return a - b }
     def test_native_rejects_unsupported_checked_value_type_before_writing_c(self):
         with tempfile.TemporaryDirectory() as folder:
             pep_file = pathlib.Path(folder) / "unsupported.pep"
-            pep_file.write_text("let xs: List[List[Int]] = [[1]]\n", encoding="utf-8")
-            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(pep_file)), (0, "", ""))
+            pep_file.write_text('let xs: List[Unit] = [say("done")]\n', encoding="utf-8")
+            self.assertEqual(pep_c23_direct.run_pep_cmd("run", str(pep_file)), (0, "done\n", ""))
             executable = pep_file.with_suffix(".exe")
-            with self.assertRaisesRegex(ValueError, r"Unsupported checked type.*List\[List\[Int\]\]"):
+            with self.assertRaisesRegex(ValueError, "Unsupported C23 list element type: Unit"):
                 pep_c23_direct.build_c23(pep_file, executable)
             self.assertFalse(executable.with_suffix(".c").exists())
             self.assertFalse(executable.exists())
+
+    def test_native_lists_store_nested_and_nominal_values(self):
+        self.assert_native_order_parity(
+            """type Item { value: Int }
+type Tree { children: List[Tree], value: Int }
+fn items() -> List[Item] {
+    return [Item { value: 19 }]
+}
+fn tree_sum(tree: Tree) -> Int {
+    var total = tree.value
+    for child in tree.children { total = total + tree_sum(child) }
+    return total
+}
+let original = [items()]
+let groups = reverse(prepend(append(original, [Item { value: 23 }]), []))
+var total = 0
+for list in groups {
+    for item in list { total = total + item.value }
+}
+say(int_text(total))
+say(int_text(length(original)))
+let leaf = Tree { children: [], value: 2 }
+let root = Tree { children: [leaf], value: 40 }
+say(int_text(tree_sum(root)))
+""",
+            "42\n1\n42\n",
+        )
 
     def test_file_modules_check_and_execute_the_same_program(self):
         with tempfile.TemporaryDirectory() as folder:

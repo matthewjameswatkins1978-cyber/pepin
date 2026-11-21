@@ -92,6 +92,7 @@ class C23Emitter:
         self.match_helpers: List[str] = []
         self.match_counter = 0
         self.temporary_counter = 0
+        self.list_layouts: Dict[str, Tuple[str, str, Optional[str]]] = {}
 
         # Index types
         for t in self.typed_tree.get("types", []):
@@ -138,11 +139,26 @@ class C23Emitter:
             return f"pep_rec_{type_str}"
         elif type_str in self.unions:
             return f"pep_union_{type_str}"
-        elif type_str == "List[Str]":
-            return "pep_str_list_t"
-        elif type_str in ("List[Int]", "List[Bool]"):
-            return "pep_list_t"
+        elif type_str.startswith("List[") and type_str.endswith("]"):
+            return self._list_prefix(type_str)[1]
         raise ValueError(f"Unsupported checked type in C23 emission: {type_str}")
+
+    def _list_prefix(self, type_str: Optional[str]) -> Tuple[str, str]:
+        if not type_str or not type_str.startswith("List[") or not type_str.endswith("]"):
+            raise ValueError(f"Expected checked list type in C23 emission: {type_str}")
+        item_type = type_str[5:-1]
+        if item_type in ("Int", "Bool"):
+            prefix, list_type, c_item, equality = "pep_", "pep_list_t", "int64_t", "list.data[i] == item"
+        elif item_type == "Str":
+            prefix, list_type, c_item, equality = "pep_str_", "pep_str_list_t", "pep_str_t", "pep_str_eq(list.data[i], item)"
+        else:
+            c_item = self.emit_c_type(item_type)
+            if c_item == "void":
+                raise ValueError(f"Unsupported C23 list element type: {item_type}")
+            prefix = f"pep_list_of_{c_item}_"
+            list_type, equality = f"{prefix}t", None
+        self.list_layouts[prefix] = (list_type, c_item, equality)
+        return prefix, list_type
 
     def _collect_free_bindings(self, node: Dict[str, Any], bound: Set[int]) -> Set[int]:
         """Collects bindingIds used inside an expression that are not locally bound."""
@@ -411,7 +427,7 @@ class C23Emitter:
                 return f"pep_int_text({args[0]})"
             elif fname in ("length", "contains", "append", "prepend", "reverse"):
                 list_type, _ = unwrap_expr(expr["arguments"][0])
-                prefix = "pep_str_" if list_type == "List[Str]" else "pep_"
+                prefix, _ = self._list_prefix(list_type)
                 return f"{prefix}{fname}({', '.join(args)})"
             elif fname in self.functions:
                 return f"pep_fn_{fname}({', '.join(args)})"
@@ -419,11 +435,10 @@ class C23Emitter:
 
         elif kind == "list":
             elements = [capture(e) for e in expr.get("elements", [])]
-            is_string_list = ret_type == "List[Str]"
-            prefix = "pep_str_" if is_string_list else "pep_"
+            prefix, _ = self._list_prefix(ret_type)
             if not elements:
                 return f"{prefix}list_alloc(0)"
-            if not is_string_list:
+            if ret_type in ("List[Int]", "List[Bool]"):
                 elements = [f"(int64_t)({element})" for element in elements]
             return f"{prefix}list_create({len(elements)}, {', '.join(elements)})"
 
@@ -566,13 +581,8 @@ class C23Emitter:
         return [*(f"{indent}{declaration}" for declaration in declarations), *lines]
 
     @staticmethod
-    def _emit_list_runtime(prefix: str, list_type: str, item_type: str, equal: str) -> List[str]:
+    def _emit_list_runtime(prefix: str, list_type: str, item_type: str, equal: Optional[str]) -> List[str]:
         out: List[str] = []
-        out.append("typedef struct {")
-        out.append("  size_t len;")
-        out.append(f"  {item_type}* data;")
-        out.append(f"}} {list_type};")
-        out.append("")
         out.append(f"static inline {list_type} {prefix}list_alloc(size_t len) {{")
         out.append(f"  {list_type} list;")
         out.append("  list.len = len;")
@@ -602,13 +612,14 @@ class C23Emitter:
         out.append("  return (int64_t)list.len;")
         out.append("}")
         out.append("")
-        out.append(f"static inline bool {prefix}contains({list_type} list, {item_type} item) {{")
-        out.append("  for (size_t i = 0; i < list.len; ++i) {")
-        out.append(f"    if ({equal}) return true;")
-        out.append("  }")
-        out.append("  return false;")
-        out.append("}")
-        out.append("")
+        if equal is not None:
+            out.append(f"static inline bool {prefix}contains({list_type} list, {item_type} item) {{")
+            out.append("  for (size_t i = 0; i < list.len; ++i) {")
+            out.append(f"    if ({equal}) return true;")
+            out.append("  }")
+            out.append("  return false;")
+            out.append("}")
+            out.append("")
         out.append(f"static inline {list_type} {prefix}append({list_type} list, {item_type} item) {{")
         out.append(f"  {list_type} out = {prefix}list_alloc(list.len + 1);")
         out.append("  for (size_t i = 0; i < list.len; ++i) out.data[i] = list.data[i];")
@@ -773,15 +784,26 @@ class C23Emitter:
         out.append("}")
         out.append("")
 
-        out.extend(self._emit_list_runtime("pep_", "pep_list_t", "int64_t", "list.data[i] == item"))
-        out.extend(self._emit_list_runtime("pep_str_", "pep_str_list_t", "pep_str_t", "pep_str_eq(list.data[i], item)"))
-
         # Type Forward Declarations
         out.append("/* Forward Declarations for Types */")
         for rname in sorted(self.records.keys()):
             out.append(f"typedef struct pep_rec_{rname} pep_rec_{rname};")
         for uname in sorted(self.unions.keys()):
             out.append(f"typedef struct pep_union_{uname} pep_union_{uname};")
+        out.append("")
+
+        # Register list types used only in nominal members before emitting layouts.
+        for record in self.records.values():
+            for field in record["fields"]:
+                self.emit_c_type(field["type"])
+        for union in self.unions.values():
+            for variant in union["variants"]:
+                for argument in variant["arguments"]:
+                    self.emit_c_type(argument)
+
+        # List descriptors can point at types that have only been forward declared.
+        for list_type, c_item, _ in self.list_layouts.values():
+            out.append(f"typedef struct {{ size_t len; {c_item}* data; }} {list_type};")
         out.append("")
 
         # By-value members require complete types in dependency order.
@@ -809,6 +831,10 @@ class C23Emitter:
                     out.append("  } val;")
             out.append("};")
             out.append("")
+
+        # Operations allocate or copy items and therefore require their complete types.
+        for prefix, layout in self.list_layouts.items():
+            out.extend(self._emit_list_runtime(prefix, *layout))
 
         for uname, u in sorted(self.unions.items()):
             # Constructors
