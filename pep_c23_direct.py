@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from pep_c23_memory import (
     SOURCE_VIEW_RUNTIME, RootFrame, constructor_tag, has_references, runtime_source, trace_layouts,
+    UTF8_SLICE_RUNTIME,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -452,7 +453,7 @@ class C23Emitter:
                 return f"pep_say({args[0]})"
             elif fname == "int_text":
                 return f"pep_int_text({args[0]})"
-            elif fname in ("byte_length", "byte_at", "byte_slice"):
+            elif fname in ("byte_length", "byte_at", "byte_slice", "utf8_slice"):
                 return f"pep_{fname}({', '.join(args)})"
             elif fname in ("length", "contains", "append", "prepend", "reverse"):
                 list_type, _ = unwrap_expr(expr["arguments"][0])
@@ -867,17 +868,14 @@ class C23Emitter:
         # Monomorphic Built-ins
         out.append("/* Monomorphic Built-ins & String Equality */")
         out.append("typedef struct { const char* data; size_t len; pep_heap_object *owner; } pep_str_t;")
-        out.append("")
+        out.append(UTF8_SLICE_RUNTIME)
         out.append("static inline void pep_say(pep_str_t s) {")
         out.append("  if (s.len) fwrite(s.data, 1, s.len, stdout);")
         out.append("  putchar('\\n');")
         out.append("}")
         out.append("")
         out.append("static inline pep_str_t pep_int_text(int64_t n) {")
-        out.append("  pep_heap_object *owner = pep_heap_alloc_safepoint(&pep_native_heap, 32, nullptr);")
-        out.append("  if (!owner) {")
-        out.append('    fprintf(stderr, "PEP_RUNTIME_ALLOC_FAILURE: String allocation failed\\n"); exit(1);')
-        out.append("  }")
+        out.append("  pep_heap_object *owner = pep_alloc_string(32);")
         out.append("  char *buf = pep_heap_data(owner);")
         out.append('  int len = snprintf(buf, 32, "%lld", (long long)n);')
         out.append("  return (pep_str_t){ buf, (size_t)len, owner };")

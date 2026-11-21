@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-HEAP_SOURCE = Path(__file__).resolve().parent / "runtime" / "pep_heap"
+RUNTIME = Path(__file__).resolve().parent / "runtime"
 UNMANAGED_TYPES = {"int64_t", "bool", "void", "pep_source_bytes"}
 
 SOURCE_VIEW_RUNTIME = r"""
@@ -52,6 +52,51 @@ static inline pep_source_bytes pep_byte_slice(pep_source_bytes source, int64_t s
 }
 """
 
+UTF8_SLICE_RUNTIME = r"""
+static inline pep_heap_object *pep_alloc_string(size_t bytes)
+{
+    pep_heap_object *owner = pep_heap_alloc_safepoint(&pep_native_heap, bytes, nullptr);
+    if (owner == nullptr) {
+        fputs("PEP_RUNTIME_ALLOC_FAILURE: String allocation failed\n", stderr);
+        exit(1);
+    }
+    return owner;
+}
+
+static inline bool pep_utf8_boundary(pep_source_bytes source, size_t offset)
+{
+    return offset == 0 || offset == source.length || (source.data[offset] & 0xc0u) != 0x80u;
+}
+
+static inline pep_str_t pep_utf8_slice(pep_source_bytes source, int64_t start, int64_t finish)
+{
+    pep_validate_source_view(source);
+    if (start < 0 || finish < start || (uintmax_t)finish > source.length) {
+        fputs("PEP_RUNTIME_BYTE_RANGE: UTF-8 slice must be a valid half-open source range\n", stderr);
+        exit(1);
+    }
+    if (!pep_utf8_boundary(source, (size_t)start) || !pep_utf8_boundary(source, (size_t)finish)) {
+        fputs("PEP_RUNTIME_BYTE_BOUNDARY: UTF-8 slice boundary splits a UTF-8 sequence\n", stderr);
+        exit(1);
+    }
+    size_t length = (size_t)(finish - start);
+    if (length == 0) {
+        return (pep_str_t){"", 0, nullptr};
+    }
+    const char *selected = (const char *)source.data + (size_t)start;
+    size_t invalid = 0;
+    if (pep_utf8_validate(selected, length, &invalid) != PEP_UTF8_OK) {
+        fprintf(stderr, "PEP_RUNTIME_INVALID_UTF8: UTF-8 slice contains invalid encoding at byte %zu\n", invalid);
+        exit(1);
+    }
+    // The Str can outlive the borrowed view or its caller's storage.
+    pep_heap_object *owner = pep_alloc_string(length);
+    char *data = pep_heap_data(owner);
+    memcpy(data, selected, length);
+    return (pep_str_t){data, length, owner};
+}
+"""
+
 
 def trace_name(c_type):
     return f"pep_mark_{c_type}"
@@ -66,12 +111,17 @@ def constructor_tag(checked_id):
     return checked_id + 1
 
 
-def runtime_source():
+def _inline_runtime(stem):
     # --emit-c must produce a standalone translation unit.
-    header = (HEAP_SOURCE / "pep_heap.h").read_text(encoding="utf-8")
-    implementation = (HEAP_SOURCE / "pep_heap.c").read_text(encoding="utf-8")
-    implementation = implementation.replace('#include "pep_heap.h"\n', "", 1)
-    return header + "\n" + implementation + """
+    header = stem.with_suffix(".h").read_text(encoding="utf-8")
+    implementation = stem.with_suffix(".c").read_text(encoding="utf-8")
+    include = f'#include "{stem.name}.h"\n'
+    return header + "\n" + implementation.replace(include, "", 1)
+
+
+def runtime_source():
+    return (_inline_runtime(RUNTIME / "pep_heap" / "pep_heap")
+            + "\n" + _inline_runtime(RUNTIME / "pep_text" / "pep_utf8") + """
 typedef struct {
     pep_heap_roots mark;
     void *address;
@@ -96,7 +146,7 @@ static void pep_destroy_native_heap(void)
 {
     pep_heap_destroy(&pep_native_heap);
 }
-"""
+""")
 
 
 class RootFrame:
