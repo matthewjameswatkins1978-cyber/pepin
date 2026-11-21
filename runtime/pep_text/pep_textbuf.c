@@ -2,6 +2,7 @@
 #include "pep_textbuf.h"
 
 #include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 

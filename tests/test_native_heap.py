@@ -22,9 +22,13 @@ def _clang_rt_dir(compiler):
         return None
     if out.returncode != 0:
         return None
-    lib = pathlib.Path(out.stdout.decode().strip()) / "lib" / "windows"
-    needles = ("clang_rt.asan_dynamic-x86_64.dll",)
-    if lib.is_dir() and all((lib / n).is_file() for n in needles):
+    lib = pathlib.Path(out.stdout.decode().strip()) / "lib"
+    if os.name == "nt":
+        windows = lib / "windows"
+        if (windows / "clang_rt.asan_dynamic-x86_64.dll").is_file():
+            return windows
+    elif any(path.is_file() and path.suffix in {".a", ".so", ".dylib"}
+             for path in lib.rglob("libclang_rt.asan*")):
         return lib
     return None
 
@@ -83,9 +87,10 @@ class NativeMemoryTests(unittest.TestCase):
         fixture = ROOT / "tests" / "native" / f"{probe}.c"
         flags = ["-std=c23", "-O2", "-Wall", "-Wextra", "-Wpedantic",
                  "-Werror", "-fsanitize=address,undefined",
-                 "-fno-omit-frame-pointer", "-g"]
+                 "-fno-sanitize-recover=all", "-fno-omit-frame-pointer", "-g"]
         env = dict(os.environ)
-        env["PATH"] = str(rtlib) + os.pathsep + env.get("PATH", "")
+        if os.name == "nt":
+            env["PATH"] = str(rtlib) + os.pathsep + env.get("PATH", "")
         build = ROOT / "_build"
         build.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=build) as directory:
@@ -100,11 +105,13 @@ class NativeMemoryTests(unittest.TestCase):
                 [compiler, *flags, "-I", str(runtime),
                  str(fixture), str(runtime_object),
                  "-o", str(executable)],
-                [str(executable)],
             ):
                 result = run_guarded(command, timeout=120, env=env)
                 self.assertEqual(result.returncode, 0,
                                  result.stderr.decode(errors="replace"))
+            result = run_guarded([str(executable)], timeout=120, env=env)
+            self.assertEqual((result.returncode, result.stderr), (0, b""),
+                             result.stderr.decode(errors="replace"))
 
     def test_heap_asan_ubsan(self):
         self.run_probe_sanitized("pep_heap", "pep_heap_probe")
