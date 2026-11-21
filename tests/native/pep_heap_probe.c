@@ -7,12 +7,14 @@
 static size_t allocations;
 static size_t attempts;
 static bool refuse;
+static bool fail_once;
 
 // Only the heap translation unit is compiled with these allocator overrides.
 void *probe_malloc(size_t size)
 {
     attempts++;
-    void *allocation = refuse ? nullptr : malloc(size);
+    void *allocation = (refuse || fail_once) ? nullptr : malloc(size);
+    fail_once = false;
     allocations += allocation != nullptr;
     return allocation;
 }
@@ -57,6 +59,54 @@ static void trace_roots(pep_heap_marker *marker, void *context)
     const roots *root = context;
     pep_heap_mark(marker, root->graph);
     pep_heap_mark(marker, root->owner);
+}
+
+static void probe_safepoints(void)
+{
+    pep_heap heap = {.stress = true};
+    roots caller = {0};
+    roots callee = {0};
+    pep_heap_frame outer;
+    pep_heap_frame inner;
+    pep_heap_push_frame(&heap, &outer, trace_roots, &caller);
+    caller.owner = pep_heap_alloc_safepoint(&heap, 16, nullptr);
+    assert(caller.owner != nullptr);
+    unsigned char *bytes = pep_heap_data(caller.owner);
+    bytes[3] = 7;
+    caller.view = bytes + 3;
+
+    pep_heap_push_frame(&heap, &inner, trace_roots, &callee);
+    callee.graph = pep_heap_alloc_safepoint(&heap, sizeof(node), trace_node);
+    assert(callee.graph != nullptr);
+    *(node *)pep_heap_data(callee.graph) = (node){.first = caller.owner};
+    caller.owner = nullptr;
+    assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
+    assert(heap.live_objects == 3 && *caller.view == 7);
+
+    // Transfer the result across return without collecting between pop and publish.
+    pep_heap_object *result = callee.graph;
+    pep_heap_pop_frame(&heap, &inner);
+    caller.graph = result;
+    assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
+    assert(heap.live_objects == 3 && *caller.view == 7);
+
+    heap.stress = false;
+    size_t before = attempts;
+    fail_once = true;
+    assert(pep_heap_alloc_safepoint(&heap, 8, nullptr) != nullptr);
+    assert(attempts == before + 2 && heap.live_objects == 3);
+    assert(*caller.view == 7);
+
+    // An unrooted allocation loop must stay under the default threshold.
+    for (size_t i = 0; i < 4096; i++) {
+        assert(pep_heap_alloc_safepoint(&heap, 4096, nullptr) != nullptr);
+        assert(heap.live_bytes <= 65536);
+        assert(*caller.view == 7);
+    }
+    pep_heap_pop_frame(&heap, &outer);
+    pep_heap_collect(&heap, nullptr, nullptr);
+    assert(allocations == 0 && heap.live_objects == 0);
+    pep_heap_destroy(&heap);
 }
 
 int main(void)
@@ -122,4 +172,5 @@ int main(void)
     pep_heap_destroy(&heap);
     pep_heap_destroy(&other);
     assert(allocations == 0);
+    probe_safepoints();
 }
