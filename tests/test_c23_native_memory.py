@@ -216,6 +216,29 @@ show()
                 self.assertEqual((code, output), seed[:2])
                 self.assertIn("PEP_RUNTIME_INDEX_BOUNDS", error)
 
+    def test_nonescaping_literal_length_preserves_eager_elements(self):
+        source = """\
+fn mark(value: Int) -> Int {
+    say(int_text(value))
+    if value == 99 {
+        let one = [value]
+        return one[4]
+    }
+    return value
+}
+say(int_text(length([mark(11), mark(22)])))
+say(int_text(length([mark(33), mark(99), mark(55)])))
+"""
+        c_file, seed = self.emit(source)
+        self.assertEqual(seed[:2], (1, "11\n22\n2\n33\n99\n"))
+        self.assertIn("PEP_RUNTIME_INDEX_BOUNDS", seed[2])
+        for compiler in self.compilers():
+            with self.subTest(compiler=compiler):
+                code, output, error, _, calls = self.run_native(compiler, c_file, stress=True)
+                self.assertEqual((code, output), seed[:2])
+                self.assertIn("PEP_RUNTIME_INDEX_BOUNDS", error)
+                self.assertEqual(calls, 6)
+
     def test_allocation_failure_releases_preserved_roots(self):
         c_file, seed = self.emit(OOM)
         self.assertEqual(seed, (0, "before failure\n1\n", ""))

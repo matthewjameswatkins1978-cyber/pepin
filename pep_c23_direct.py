@@ -436,7 +436,17 @@ class C23Emitter:
 
         elif kind == "call":
             fname = expr["name"]
-            args = [capture(a) for a in expr.get("arguments", [])]
+            arguments = expr.get("arguments", [])
+            if fname == "length" and arguments:
+                list_type, argument = unwrap_expr(arguments[0])
+                if argument.get("kind") == "list":
+                    self._list_prefix(list_type)
+                    elements = argument.get("elements", [])
+                    # The container never escapes into length, but every
+                    # element still evaluates eagerly and can trap or print.
+                    assignments.extend(f"(void)({lower(item)})" for item in elements)
+                    return f"{len(elements)}LL"
+            args = [capture(a) for a in arguments]
             if fname == "say":
                 return f"pep_say({args[0]})"
             elif fname == "int_text":
