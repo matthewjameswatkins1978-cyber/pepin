@@ -28,6 +28,8 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from pep_c23_grant import NativeSourceGrant
+
 from pep_c23_memory import (
     SOURCE_VIEW_RUNTIME, RootFrame, constructor_tag, has_references, runtime_source, trace_layouts,
     UTF8_SLICE_RUNTIME, field_member, variant_member,
@@ -766,8 +768,14 @@ class C23Emitter:
             visit(name)
         return ordered
 
-    def generate_c23(self) -> str:
-        if self.functions.get("main", {}).get("parameters"):
+    def generate_c23(self, *, source_grant: Optional[NativeSourceGrant] = None) -> str:
+        main_params = self.functions.get("main", {}).get("parameters", [])
+        if source_grant is not None:
+            if not isinstance(source_grant, NativeSourceGrant):
+                raise ValueError("Native source entry requires a validated host grant")
+            if [param["type"] for param in main_params] != ["SourceBytes"]:
+                raise ValueError("Granted native entry requires main(source: SourceBytes)")
+        elif main_params:
             raise ValueError("Standalone C23 requires a main function without parameters")
 
         # Pre-process match helpers by generating functions first
@@ -1033,11 +1041,15 @@ class C23Emitter:
         out.append("  pep_init_top_level();")
         if "main" in self.functions:
             fn_main = self.functions["main"]
+            entry_args = ""
+            if source_grant is not None:
+                source_lines, entry_args = source_grant.emit_entry_view()
+                out.extend(source_lines)
             if fn_main.get("returnType") == "Int":
-                out.append("  int64_t exit_val = pep_fn_main();")
+                out.append(f"  int64_t exit_val = pep_fn_main({entry_args});")
                 out.append('  printf("%lld\\n", (long long)exit_val);')
             else:
-                out.append("  pep_fn_main();")
+                out.append(f"  pep_fn_main({entry_args});")
         out.extend(global_frame.leave("  "))
         out.append("  return 0;")
         out.append("}")
