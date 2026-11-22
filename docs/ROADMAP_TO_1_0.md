@@ -1,6 +1,6 @@
 # Pepin: the road to 1.0
 
-**Product roadmap · 21 November 2026 · updated execution order, not a release or implementation certificate.**
+**Product roadmap · revised 22 November 2026 · updated execution order, not a release or implementation certificate.**
 
 The finish line is a useful, independently buildable AI-first general-purpose language, not merely a compiler that compiles itself. The [living language specification](LANGUAGE_SPEC.md) defines the target inventory and separates accepted, provisional, target and open items.
 
@@ -28,7 +28,7 @@ The numbers below are planning milestones, not new packet IDs or claims of accep
 | M9 — Self-host Lucy | Pep-written lexer/parser/checker/runtime interface and C23 emitter; no concealed semantic seed in later stages | Reproducible Stage0→A→B→C builds with source/artifact identities and independent conformance; reference OCaml retained for recovery |
 | M10 — 1.0 acceptance | Freeze semantic contracts, APIs, protocols, release/distribution and supported-platform matrix | Every accepted requirement disposition, conformance/adversarial tests, safety review, practical applications, reproducible build/install and explicit human approval |
 
-M0 and M1 start immediately on current authorised lanes. **M3 foundational work starts alongside M1/M2, not after them:** settle concrete layout, value/ownership boundaries, root representation, runtime calls and error/cleanup interfaces early; finish generics and collections against that seam. Do not pretend advanced lifetime/GC support is complete in order to ship an elementary construct. M4 typed Result and errors may begin as soon as unions/generics support them; closure and effect work builds on ownership. First-party test discovery, specification/evidence links and library foundations start in M1/M2 and grow continuously; M5 is the usability gate, not their starting point.
+M0 and M1 start immediately on current authorised lanes. **M3 foundational work starts alongside M1/M2, not after them:** settle concrete layout, value/ownership boundaries, root representation, runtime calls and error/cleanup interfaces early; finish generics and collections against that seam. Do not pretend advanced lifetime/GC support is complete in order to ship an elementary construct. M4 typed Result and errors may begin as soon as unions/generics support them; closure and effect work builds on ownership. First-party test discovery, specification/evidence links and library foundations start in M1/M2 and grow continuously; M5 is the usability gate, not their starting point. PEP-L22 begins as a machine-first, schema-validated project specification linked to existing symbols and tests, with explicit unresolved obligations and stale evidence. M5 demonstrates a usable multi-module fixture; M8 stabilises the contract/evidence/query APIs, component compatibility checks and human-readable projection. Keep optional stronger verification and external Oracle/Terror Bats adapters progressive; do not delay native/core work for a new proof engine.
 
 ## Immediate execution lanes
 
@@ -46,7 +46,7 @@ A multi-file typed Pep program can import a collection and math library, parse t
 ## Verification and integration discipline
 
 For each coherent slice:
-1. Specify stable requirement ID, intended semantics, non-goals, dependencies, grammar/IR/ABI changes and test obligations before implementation. Preserve ordinary source as truth.
+1. Specify stable requirement ID, intended semantics, non-goals, assumptions, dependencies, interface/grammar/IR/ABI changes and observable acceptance obligations before implementation. Exploratory aspirations may remain open, but do not promote them to accepted requirements without a defined acceptance method or explicit unresolved obligation. Preserve ordinary source as implementation truth and accepted intent as a separate revisioned contract.
 2. Execute valid, invalid, incomplete, edge and regression fixtures; compare interpreter and native stdout, stderr/error class (document permitted location differences), exit status and observable side effects. Use strict C23 Clang/GCC, -O0/-O2/-O3 where relevant, ASan/UBSan, stress collection and property/adversarial cases; later race checks with TSan where supported. Record exact compiler/revision/flags/target/test outcomes and limitations, never just count successes.
 3. Keep tests linked to requirement and symbol dependencies in the Semantic Map; invalidate stale receipts on source, toolchain or contract change. Unknown evidence is not pass. Verify LF/CRLF and exact byte spans.
 4. Isolated branches/worktrees, one writer per conflicting path or symbol, agreed seams, immutable pushed checkpoints; exchange alternative proposals and fresh adversarial cases. Request independent review after three slices or at safety-critical gates; keep independent bounded implementation moving when it does not depend on blocked acceptance. Designated integration owner composes reviewed pins; Lucy retains acceptance. No automatic merge or release-state advance.
