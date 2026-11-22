@@ -1,6 +1,6 @@
 # Pepin — living language specification
 
-**PEP-SPEC-20261121 · 21 November 2026 · consolidated target specification, not a grammar freeze or release certificate.**
+**PEP-SPEC-20261121 · revised 22 November 2026 · consolidated target specification, not a grammar freeze or release certificate.**
 
 Pepin is the project; Pep (`.pep`) is its small, statically typed general-purpose language; Lucy is its compiler and semantic development environment. Agents and humans use the same source, language rules and deterministic compiler. No LLM is required to build or run Pep programs.
 
@@ -24,6 +24,8 @@ Current integration pointer: [CURRENT](packets/CURRENT.md), [manifest](packets/m
 - Deterministic observable behaviour is independent of interpreter, C23 compiler, optimisation and allocator choices.
 - Safety by default; explicit authority and narrowly bounded low-level control. No hidden conversions, implicit ownership moves, ambient host access or silent changes to observable value semantics.
 - The compiler/runtime may be sophisticated; the language surface should remain small. No classes/inheritance, macro language, global arbitrary overloads, wildcard imports or AI-only dialect in the 1.0 core.
+
+- Freedom within components; rigour between components. Keep accepted interface obligations explicit and machine-inspectable; permit exploratory ideas without treating them as established requirements.
 
 ## 2. Core language inventory and acceptance ledger
 
@@ -52,6 +54,7 @@ IDs below are stable requirement anchors for the living specification; they are 
 | PEP-L19 | Tiered Pep-first stdlib, explicit capabilities and inspectable public contracts | A seed primitive subset; T |
 | PEP-L20 | Compiler-derived Semantic Map, requirements/test links, context packets, mechanical repairs, safe multi-agent work | A semantic/session/guarded-edit subset; extended map P |
 | PEP-L21 | Native C23 lowering, deterministic semantics, tested runtime/ABI, reproducible Pep-written compiler | P direct native subset; T full backend/self-host |
+| PEP-L22 | Machine-first living program specifications, explicit component obligations, acceptance discipline, linked evidence and later human projections | T; schema, enforcement and syntax O |
 
 ### 2.1 Surface syntax (target illustration, not a seed fixture)
 
@@ -123,6 +126,28 @@ A receipt records requirement/symbol/test IDs, exact revision and compiler/toolc
 Context packets are minimal dependency-complete, budgeted views of signatures, source, effects, invariants, requirements, callers/callees, tests and revision. If a mandatory dependency cannot fit, report the missing context, never pretend complete. Mechanical repairs have explicit safety tiers: deterministic safe automatic edits versus choices needing review. Structural edits preserve untouched source bytes and reject stale revisions. Diagnostic accumulation should report independent useful errors while suppressing cascades.
 
 Built-in multi-agent *development* support is distinct from runtime parallelism: declare lanes, base revisions, symbol/requirement write ownership and dependencies; agents may propose different solutions for the same symbol on isolated branches, exchange evidence and review one another, but the integrator selects/composes checked changes. Detect signature, effect, invariant, requirement, dependency and test conflicts even if Git merges text cleanly. Never auto-accept a competing edit, grant permissions or run an untrusted extension merely because it is Pep. Shared semantic truth, independent review, guarded integration.
+
+### 6.1 Intent-oriented programming: machine-first living specifications (T)
+
+A Pep project must be able to carry an explicit, versioned program specification alongside ordinary source. This is a program's own intent, not the Pep language specification or a substitute for the checked Semantic Map. **Freedom within components; rigour between components.** Human and AI implementers may explore algorithms and replace internals freely within the same accepted boundary contract. Do not let individually plausible implementations drift into mutually incompatible components.
+
+**Canonical machine model first.** Begin with a compact, deterministic, typed or schema-validated, model-independent representation of project intent. It is a first-class toolchain artifact, not a second programming language, prompt format, or an AI-generated guess. An application may have multiple scoped specs, but each requirement has one canonical identity and authority. The precise encoding, file naming and query protocol remain open. Human rationale and examples may be attached to the same IDs from the outset. Defer a polished human-readable projection until this model and the links are stable; later render explanations and diagrams from the same requirement identities and revision, distinguishing authored rationale from generated explanations. Never maintain two independently authoritative specifications or silently interpret prose as formal truth.
+
+| Target ID | Obligation |
+| --- | --- |
+| PEP-L22.1 | Define stable project/module/component requirement identities and a versioned schema for purpose, scope/non-goals, requirements, assumptions, constraints, decisions and ownership; distinguish proposed, accepted and superseded intent. |
+| PEP-L22.2 | Every committed requirement must describe an observable obligation, its scope and applicable conditions, and an acceptance method or an explicit unresolved proof/test obligation. Vague aspirations remain labelled exploratory; no hand-waving is silently promoted to accepted requirements. |
+| PEP-L22.3 | Bind interface contracts to compiler-resolved symbols: typed inputs/outputs, preconditions, postconditions, invariants, permissible effects/access and relevant failure behaviour. Initially reuse signatures, types, effects and tests; add native executable contract expressions only after their semantics are deliberately specified. A replacement must preserve accepted obligations; changed contracts require a revision and dependency-impact review. |
+| PEP-L22.4 | Query the single Semantic Map by requirement, symbol, dependency, contract and evidence; expose missing, ambiguous, contradictory (where mechanically detectable) and dangling links, unmet obligations and stale receipts. Report undecidable/unresolved cases honestly. Derive facts from the compiler rather than duplicating or guessing them. |
+| PEP-L22.5 | Keep intent authority separate from implementation and evidence. Record evidence classes independently: compiler-established fact, proved property within stated premises, runtime assertion, bounded test observation, external operational observation, counterexample, and unknown/stale. Never infer universal proof from a passing test or an AI's confidence. |
+| PEP-L22.6 | Maintain revision-bound traces from requirement to implementation, tests and evidence; report change impact and invalidate affected receipts conservatively. Independent adversarial testing (Terror Bats) and operational instrumentation (Oracle) may supply evidence through bounded adapters, but cannot amend intent, grant authority or certify unrelated guarantees. No embedded LLM or external service is required for compilation. |
+| PEP-L22.7 | Generate a human-facing view from the canonical structured graph and linked rationale, preserving IDs/revision and explicit omissions; non-authoritative explanatory prose cannot silently alter obligations. A human or agent can propose revisions, but accepted contract changes require the project's explicit change-control policy. |
+
+**First slice:** a small project-side manifest/schema plus deterministic validation and requirement-to-symbol/test links into the existing checked model, without new core keywords. Support an exploration-to-accepted-requirement transition and explicit missing/stale evidence; prove the flow on a multi-module fixture containing an incompatible interface change, a missing requirement link, a failed test, and a revised requirement invalidating an old receipt. Report unresolved conditions instead of pretending they are satisfied. Benchmark agent comprehension and integration on comparable tasks (correctness, context/tokens, elapsed time, failed integrations and rework); improved performance is a hypothesis until measured.
+
+**Later slices:** executable contracts with bounded, side-effect-free expressions and defined evaluation/failure semantics; optional static proof where useful; runtime observation and adversarial evidence adapters; generated human projections. Full theorem proving and automatic translation from arbitrary prose are not mandatory 1.0 prerequisites. Contract metadata itself must not change runtime behaviour, enable permissions or make Pep programs depend on AI inference. The spec is not a blanket requirement to annotate every private helper. Exact local enforcement and proof capability are open; document supported scope and limitations.
+
+Design ancestry: Bertrand Meyer's [Applying Design by Contract (1992)](https://se.inf.ethz.ch/~meyer/publications/computer/contract.pdf) establishes explicit caller/supplier obligations; Donald Knuth's [Literate Programming (1984)](https://doi.org/10.1093/comjnl/27.2.97) integrates explanation with implementation; [Dafny](https://dafny.org/) and [SPARK contracts](https://learn.adacore.com/courses/Guidelines_for_Safe_and_Secure_Ada_SPARK/chapters/guidelines/robust_programming_practice/rpp09_use_precondition_and_postcondition_contracts.html) demonstrate verification-aware specifications. Pepin synthesises these principles with compiler-derived semantics, traceable evidence and model-independent AI context; it does not assume this combination is unprecedented or already proven effective.
 
 ## 7. Library, native backend and release contract
 
