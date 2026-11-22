@@ -59,7 +59,6 @@ int pep_arena_init(pep_arena_t **arena, size_t chunk_hint)
 // hand out its first `size` bytes at `align` from the chunk start.
 static void *grow(pep_arena_t *arena, size_t size, size_t align)
 {
-    size_t grown;
     size_t cap;
     size_t total;
     struct pep_chunk *fresh;
@@ -70,17 +69,9 @@ static void *grow(pep_arena_t *arena, size_t size, size_t align)
         (void)note(arena, PEP_ARENA_OVERFLOW);
         return nullptr;
     }
-    grown = arena->next_cap;
-    if (grown <= SIZE_MAX / 2) {
-        grown *= 2;
-    } else {
-        grown = SIZE_MAX;
-    }
-    {
-        size_t need = size + (align - 1);
-        cap = (need > grown) ? need : grown;
-    }
-    arena->next_cap = grown;
+    size_t target = arena->next_cap;
+    size_t need = size + (align - 1);
+    cap = (need > target) ? need : target;
     if (cap > SIZE_MAX - sizeof(struct pep_chunk)) {
         (void)note(arena, PEP_ARENA_OVERFLOW);
         return nullptr;
@@ -102,6 +93,7 @@ static void *grow(pep_arena_t *arena, size_t size, size_t align)
         arena->tail->next = fresh;
     }
     arena->tail = fresh;
+    arena->next_cap = target <= SIZE_MAX / 2 ? target * 2 : SIZE_MAX;
     cur = base + pad;
     return (void *)cur;
 }

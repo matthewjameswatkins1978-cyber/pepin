@@ -94,7 +94,7 @@ class NativeLoweringGate(unittest.TestCase):
         if not cls.compilers:
             raise unittest.SkipTest("No GCC/Clang C23 compiler available")
 
-    def assert_native_output(self, report, expected):
+    def assert_native_output(self, report, expected, *, stress=False):
         source = native.C23Emitter(report).generate_c23()
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -103,8 +103,9 @@ class NativeLoweringGate(unittest.TestCase):
             for compiler in self.compilers:
                 with self.subTest(compiler=compiler):
                     exe = root / "fixture.exe"
+                    flags = ["-DPEP_GC_STRESS=1"] if stress else []
                     compiled = subprocess.run([str(compiler), "-std=c23", "-pedantic-errors",
-                                               "-O2", str(c_file), "-o", str(exe)],
+                                               "-O2", *flags, str(c_file), "-o", str(exe)],
                                               capture_output=True, text=True, timeout=30)
                     self.assertEqual(compiled.returncode, 0, compiled.stderr)
                     ran = subprocess.run([str(exe)], capture_output=True, text=True, timeout=10)
@@ -133,6 +134,44 @@ class NativeLoweringGate(unittest.TestCase):
 
     def test_unit_argument_preserves_effects(self):
         self.assert_native_output(unit_argument_case(), "first\n42\n")
+
+    def test_unit_returns_values_and_match_under_managed_frames(self):
+        functions = [
+            {"functionId": 1, "name": "finish", "returnType": "Unit", "parameters": [],
+             "body": [{"kind": "expression", "value": say("implicit")}]},
+            {"functionId": 2, "name": "pass_unit", "returnType": "Unit",
+             "parameters": [{"name": "u", "bindingId": 3, "type": "Unit"}],
+             "body": [{"kind": "return", "value": binding("Unit", 3)}]},
+        ]
+        union = {"kind": "union", "typeId": 1, "name": "Done", "variants": [
+            {"constructorId": 1, "name": "switch", "arguments": ["Unit"]}]}
+        value = expr("Done", "constructor", typeId=1, constructorId=1, name="switch",
+                     arguments=[call("Unit", "finish", fid=1)])
+        pattern = {"kind": "constructor", "constructorId": 1, "arguments": [
+            {"kind": "binding", "bindingId": 4, "name": "u", "type": "Unit"}]}
+        matched = expr("Unit", "match", value=binding("Done", 1), arms=[
+            {"pattern": pattern, "result": call("Unit", "pass_unit", binding("Unit", 4), fid=2)}])
+        equals = expr("Bool", "binary", operator="==", left=binding("Unit", 2), right=say("right"))
+        choose = expr("Int", "if", condition=equals, then=number(42), **{"else": number(0)})
+        self.assert_native_output(checked([let("Done", 1, value), let("Unit", 2, matched),
+                                           print_int(choose)], types=[union], functions=functions),
+                                  "implicit\nright\n42\n", stress=True)
+
+    def test_managed_keyword_members_remain_traced_at_safepoints(self):
+        record = {"kind": "record", "typeId": 1, "name": "Box", "fields": [
+            {"fieldId": 1, "name": "bool", "type": "Str"}]}
+        union = {"kind": "union", "typeId": 2, "name": "Choice", "variants": [
+            {"constructorId": 1, "name": "nullptr", "arguments": ["Box"]}]}
+        text = call("Str", "int_text", number(42))
+        box = expr("Box", "record", typeId=1, fields=[{"fieldId": 1, "value": text}])
+        choice = expr("Choice", "constructor", typeId=2, constructorId=1, name="nullptr", arguments=[box])
+        pattern = {"kind": "constructor", "constructorId": 1, "arguments": [
+            {"kind": "binding", "bindingId": 2, "name": "box", "type": "Box"}]}
+        field = expr("Str", "field_access", fieldId=1, value=binding("Box", 2))
+        matched = expr("Str", "match", value=binding("Choice", 1), arms=[{"pattern": pattern, "result": field}])
+        self.assert_native_output(checked([let("Choice", 1, choice), print_int(number(7)),
+                                           print_int(number(8)), {"kind": "expression", "value": call("Unit", "say", matched)}],
+                                          types=[record, union]), "7\n8\n42\n", stress=True)
 
     def drive(self, code, report, *, accepted, expected="42\n"):
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +210,15 @@ class NativeLoweringGate(unittest.TestCase):
         no_tree = {key: value for key, value in report.items() if key != "typedTree"}
         for malformed in (no_tree, report | {"typedTree": {}},
                           report | {"typedTree": {"types": [], "functions": []}}):
+            with self.subTest(report=malformed):
+                self.drive(0, malformed, accepted=False)
+
+    def test_malformed_authority_envelopes_cannot_build(self):
+        report = checked([])
+        for malformed in ([], None, report | {"schemaVersion": 3}, report | {"holes": None},
+                          report | {"diagnostics": {}}, report | {"typedTree": None},
+                          {key: value for key, value in report.items() if key != "diagnostics"},
+                          report | {"typedTree": {"types": [], "functions": [], "statements": None}}):
             with self.subTest(report=malformed):
                 self.drive(0, malformed, accepted=False)
 

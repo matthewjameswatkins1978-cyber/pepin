@@ -41,6 +41,7 @@ int pep_textbuf_reserve(pep_textbuf_t *buf, size_t extra);
 
 // Append raw bytes / a NUL-terminated string / a signed 64-bit integer in
 // decimal (INT64_MIN safe) / an unsigned 64-bit integer in decimal.
+// Decimal appends keep the previous contents unchanged if allocation fails.
 int pep_textbuf_append_bytes(pep_textbuf_t *buf, const char *src, size_t n);
 int pep_textbuf_append_cstr(pep_textbuf_t *buf, const char *s);
 int pep_textbuf_append_i64(pep_textbuf_t *buf, long long value);

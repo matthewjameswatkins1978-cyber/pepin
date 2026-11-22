@@ -1,6 +1,8 @@
 // See pep_textbuf.h for the contract. Strict C23, no extensions.
 #include "pep_textbuf.h"
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -104,45 +106,32 @@ int pep_textbuf_append_cstr(pep_textbuf_t *buf, const char *s)
     return pep_textbuf_append_bytes(buf, s, strlen(s));
 }
 
-int pep_textbuf_append_u64(pep_textbuf_t *buf, unsigned long long value)
+static int append_decimal(pep_textbuf_t *buf, unsigned long long value, bool negative)
 {
-    char digits[20];
-    size_t count = 0;
-    size_t i;
-    if (buf == nullptr) {
-        return PEP_TEXTBUF_BADARG;
-    }
+    char digits[sizeof value * CHAR_BIT + 1];
+    char *end = digits + sizeof digits;
+    char *start = end;
     do {
-        digits[count] = (char)('0' + value % 10);
-        count++;
+        *--start = (char)('0' + value % 10);
         value /= 10;
     } while (value != 0);
-    for (i = 0; i < count; i++) {
-        int status = pep_textbuf_append_bytes(buf, &digits[count - 1 - i], 1);
-        if (status != PEP_TEXTBUF_OK) {
-            return status;
-        }
+    if (negative) {
+        *--start = '-';
     }
-    return PEP_TEXTBUF_OK;
+    return pep_textbuf_append_bytes(buf, start, (size_t)(end - start));
+}
+
+int pep_textbuf_append_u64(pep_textbuf_t *buf, unsigned long long value)
+{
+    return append_decimal(buf, value, false);
 }
 
 int pep_textbuf_append_i64(pep_textbuf_t *buf, long long value)
 {
-    unsigned long long mag;
-    if (buf == nullptr) {
-        return PEP_TEXTBUF_BADARG;
-    }
-    if (value < 0) {
-        int status = pep_textbuf_append_bytes(buf, "-", 1);
-        if (status != PEP_TEXTBUF_OK) {
-            return status;
-        }
-        // Negating INT64_MIN is undefined; convert via unsigned arithmetic.
-        mag = (unsigned long long)(-(value + 1)) + 1u;
-    } else {
-        mag = (unsigned long long)value;
-    }
-    return pep_textbuf_append_u64(buf, mag);
+    // Convert through the unsigned type so the minimum signed value is safe.
+    bool negative = value < 0;
+    unsigned long long magnitude = (unsigned long long)value;
+    return append_decimal(buf, negative ? 0ULL - magnitude : magnitude, negative);
 }
 
 int pep_textbuf_join(pep_textbuf_t *buf, const char *const *parts, size_t count)
