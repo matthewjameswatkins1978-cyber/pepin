@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 RUNTIME = Path(__file__).resolve().parent / "runtime"
-UNMANAGED_TYPES = {"int64_t", "bool", "void", "pep_source_bytes"}
+UNMANAGED_TYPES = {"int64_t", "bool", "void", "pep_source_bytes", "pep_unit_t"}
 
 SOURCE_VIEW_RUNTIME = r"""
 /* Borrowed immutable bytes. The host keeps the backing alive for every use,
@@ -109,6 +109,15 @@ def has_references(c_type):
 def constructor_tag(checked_id):
     # A zero-initialized root slot has no active union payload.
     return checked_id + 1
+
+
+def field_member(checked_id):
+    # Reserved semantic-record field IDs are negative.
+    return f"pep_field_{'n' + str(-checked_id) if checked_id < 0 else checked_id}"
+
+
+def variant_member(checked_id):
+    return f"pep_variant_{checked_id}"
 
 
 def _inline_runtime(stem):
@@ -253,12 +262,12 @@ def trace_layouts(records, unions, lists, emit_type):
     for list_type, _, _ in lists.values():
         bodies[list_type] = descriptor_body
     for name, record in records.items():
-        fields = [(emit_type(field["type"]), field["name"]) for field in record["fields"]]
+        fields = [(emit_type(field["type"]), field_member(field["fieldId"])) for field in record["fields"]]
         bodies[f"pep_rec_{name}"] = _trace_fields(fields)
     for name, union in unions.items():
         cases = []
         for variant in union["variants"]:
-            fields = [(emit_type(arg), f"val.{variant['name']}._{i}")
+            fields = [(emit_type(arg), f"val.{variant_member(variant['constructorId'])}._{i}")
                       for i, arg in enumerate(variant["arguments"])]
             visits = _trace_fields(fields)
             if visits:

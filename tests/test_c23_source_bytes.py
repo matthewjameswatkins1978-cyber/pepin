@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from pep_c23_direct import C23Emitter, build_c23, run_pep_cmd
+from pep_c23_memory import field_member
 from tests.test_a10 import invoke_session, request, result_field, revision, scalar, typed_record
 from tests.test_textbuf_native import CLANG_FLAGS, run_guarded
 
@@ -53,7 +54,7 @@ def target(document, raw):
             "entryFunctions": []}
 
 
-def harness(vectors):
+def harness(vectors, fields):
     lines = [
         "int main(int argc, char **argv) {",
         "  if (argc != 2) return 2;",
@@ -77,7 +78,7 @@ def harness(vectors):
         "    }",
         "    default: return 2;",
         "  }",
-        '  printf("%lld %lld\\n", (long long)result.width, (long long)result.invalidOffset);',
+        f'  printf("%lld %lld\\n", (long long)result.{fields["width"]}, (long long)result.{fields["invalidOffset"]});',
         "  return 0;",
         "}",
     ])
@@ -137,10 +138,14 @@ fn probe_tool(offset: Int, slice: Bool) -> Utf8Check {
         pep_file.write_text(source, encoding="utf-8")
         status, stdout, stderr = run_pep_cmd("check", str(pep_file), "--json")
         self.assertEqual(status, 0, stderr or stdout)
-        c_source = C23Emitter(json.loads(stdout)).generate_c23()
+        checked = json.loads(stdout)
+        emitter = C23Emitter(checked)
+        fields = {field["name"]: field_member(field["fieldId"])
+                  for field in emitter.records["Utf8Check"]["fields"]}
+        c_source = emitter.generate_c23()
         c_file = pep_file.with_suffix(".c")
         c_file.write_text("#define main pep_generated_main\n" + c_source
-                          + "\n#undef main\n" + harness(VECTORS), encoding="utf-8")
+                          + "\n#undef main\n" + harness(VECTORS, fields), encoding="utf-8")
         executable = pep_file.with_suffix(".exe")
         for compiler in compilers:
             build = run_guarded([compiler, *CLANG_FLAGS, "-O2", str(c_file), "-o", str(executable)],

@@ -28,9 +28,11 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from pep_c23_grant import NativeSourceGrant
+
 from pep_c23_memory import (
     SOURCE_VIEW_RUNTIME, RootFrame, constructor_tag, has_references, runtime_source, trace_layouts,
-    UTF8_SLICE_RUNTIME,
+    UTF8_SLICE_RUNTIME, field_member, variant_member,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parent
@@ -72,9 +74,15 @@ def unwrap_expr(node: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
 class C23Emitter:
     def __init__(self, checked_data: Dict[str, Any]):
         # Validate authoritative compiler status
+        if not isinstance(checked_data, dict) or checked_data.get("schemaVersion") != 2:
+            raise ValueError("Pep C23 rejected: expected a schema-version 2 check report.")
         status = checked_data.get("status")
         holes = checked_data.get("holes", [])
         diagnostics = checked_data.get("diagnostics", [])
+        if not isinstance(diagnostics, list) or not all(isinstance(d, dict) for d in diagnostics):
+            raise ValueError("Pep C23 rejected: malformed diagnostics.")
+        if not isinstance(holes, list):
+            raise ValueError("Pep C23 rejected: malformed typed holes.")
 
         if diagnostics:
             diag_msgs = [f"  [{d.get('code')}] {d.get('message')} at {d.get('span', {})}" for d in diagnostics]
@@ -86,7 +94,14 @@ class C23Emitter:
         if status != "valid":
             raise ValueError(f"Pep C23 rejected: compiler status is '{status}', expected 'valid'.")
 
-        self.typed_tree = checked_data.get("typedTree", {})
+        if "holes" not in checked_data or "diagnostics" not in checked_data:
+            raise ValueError("Pep C23 rejected: valid check report must include holes and diagnostics.")
+        self.typed_tree = checked_data.get("typedTree")
+        if not isinstance(self.typed_tree, dict) or any(
+            not isinstance(self.typed_tree.get(key), list)
+            for key in ("types", "functions", "statements")
+        ):
+            raise ValueError("Pep C23 rejected: missing or malformed checked typedTree.")
         self.records: Dict[str, Dict[str, Any]] = {}
         self.records_by_id: Dict[int, Dict[str, Any]] = {}
         self.unions: Dict[str, Dict[str, Any]] = {}
@@ -142,7 +157,7 @@ class C23Emitter:
         elif type_str == "SourceBytes":
             return "pep_source_bytes"
         elif type_str == "Unit":
-            return "void"
+            return "pep_unit_t"
         elif type_str in self.records:
             return f"pep_rec_{type_str}"
         elif type_str in self.unions:
@@ -161,7 +176,7 @@ class C23Emitter:
             prefix, list_type, c_item, equality = "pep_str_", "pep_str_list_t", "pep_str_t", "pep_str_eq(list.data[i], item)"
         else:
             c_item = self.emit_c_type(item_type)
-            if c_item == "void":
+            if item_type == "Unit":
                 raise ValueError(f"Unsupported C23 list element type: {item_type}")
             prefix = f"pep_list_of_{c_item}_"
             list_type, equality = f"{prefix}t", None
@@ -314,7 +329,7 @@ class C23Emitter:
             conds.append(f"{accessor}.tag == {constructor_tag(cid)}")
 
             for idx, arg_pat in enumerate(pat.get("arguments", [])):
-                arg_accessor = f"{accessor}.val.{ctor_name}._{idx}"
+                arg_accessor = f"{accessor}.val.{variant_member(cid)}._{idx}"
                 c_sub, b_sub = self._emit_pattern_checks(arg_pat, arg_accessor, frame)
                 conds.extend(c_sub)
                 bindings.extend(b_sub)
@@ -341,7 +356,7 @@ class C23Emitter:
 
         def capture(node: Dict[str, Any]) -> str:
             operand_type, _ = unwrap_expr(node)
-            if not operand_type or operand_type == "Unit":
+            if not operand_type:
                 raise ValueError(f"Unsupported C23 value operand type: {operand_type}")
             name = f"pep_tmp_{self.temporary_counter}"
             self.temporary_counter += 1
@@ -483,12 +498,14 @@ class C23Emitter:
             if not rec_info:
                 raise ValueError(f"Unknown record type ID: {tid}")
             rec_name = rec_info["name"]
-            field_map = {f["fieldId"]: f["name"] for f in rec_info.get("fields", [])}
+            field_ids = {f["fieldId"] for f in rec_info.get("fields", [])}
 
             inits = []
             for f in expr.get("fields", []):
                 fid = f["fieldId"]
-                fname = field_map.get(fid, f"field_{fid}")
+                if fid not in field_ids:
+                    raise ValueError(f"Unknown field ID {fid} for checked record {rec_name}")
+                fname = field_member(fid)
                 fval = capture(f["value"])
                 inits.append(f".{fname} = {fval}")
             return f"(pep_rec_{rec_name}){{ {', '.join(inits)} }}"
@@ -496,18 +513,11 @@ class C23Emitter:
         elif kind == "field_access":
             fid = expr["fieldId"]
             val_code = lower(expr["value"])
-            # Resolve field name from fieldId
-            fname = None
-            for r in self.records.values():
-                for f in r.get("fields", []):
-                    if f.get("fieldId") == fid:
-                        fname = f.get("name")
-                        break
-                if fname:
-                    break
-            if not fname:
-                fname = f"field_{fid}"
-            return f"({val_code}).{fname}"
+            record_type, _ = unwrap_expr(expr["value"])
+            record = self.records.get(record_type)
+            if not record or not any(f["fieldId"] == fid for f in record["fields"]):
+                raise ValueError(f"Unknown field ID {fid} for checked record {record_type}")
+            return f"({val_code}).{field_member(fid)}"
 
         elif kind == "constructor":
             cid = expr["constructorId"]
@@ -758,8 +768,14 @@ class C23Emitter:
             visit(name)
         return ordered
 
-    def generate_c23(self) -> str:
-        if self.functions.get("main", {}).get("parameters"):
+    def generate_c23(self, *, source_grant: Optional[NativeSourceGrant] = None) -> str:
+        main_params = self.functions.get("main", {}).get("parameters", [])
+        if source_grant is not None:
+            if not isinstance(source_grant, NativeSourceGrant):
+                raise ValueError("Native source entry requires a validated host grant")
+            if [param["type"] for param in main_params] != ["SourceBytes"]:
+                raise ValueError("Granted native entry requires main(source: SourceBytes)")
+        elif main_params:
             raise ValueError("Standalone C23 requires a main function without parameters")
 
         # Pre-process match helpers by generating functions first
@@ -779,9 +795,9 @@ class C23Emitter:
             f_lines = []
             for s in f.get("body", []):
                 f_lines.extend(self.emit_stmt(s, frame))
-            if ret_type == "void":
+            if ret_type == "pep_unit_t":
                 f_lines.extend(frame.leave("  "))
-                f_lines.append("  return;")
+                f_lines.append("  return PEP_UNIT;")
             f_lines.append("}")
             f_lines.append("")
             signature = f"{ret_type} pep_fn_{fname}({param_str}) {{"
@@ -867,11 +883,13 @@ class C23Emitter:
 
         # Monomorphic Built-ins
         out.append("/* Monomorphic Built-ins & String Equality */")
+        out.append("typedef enum { PEP_UNIT = 0 } pep_unit_t;")
         out.append("typedef struct { const char* data; size_t len; pep_heap_object *owner; } pep_str_t;")
         out.append(UTF8_SLICE_RUNTIME)
-        out.append("static inline void pep_say(pep_str_t s) {")
+        out.append("static inline pep_unit_t pep_say(pep_str_t s) {")
         out.append("  if (s.len) fwrite(s.data, 1, s.len, stdout);")
         out.append("  putchar('\\n');")
+        out.append("  return PEP_UNIT;")
         out.append("}")
         out.append("")
         out.append("static inline pep_str_t pep_int_text(int64_t n) {")
@@ -914,7 +932,7 @@ class C23Emitter:
                 fields = self.records[name]["fields"]
                 out.append(f"struct pep_rec_{name} {{")
                 for field in fields:
-                    out.append(f"  {self.emit_c_type(field['type'])} {field['name']};")
+                    out.append(f"  {self.emit_c_type(field['type'])} {field_member(field['fieldId'])};")
                 if not fields:
                     out.append("  unsigned char unused;")
             else:
@@ -929,7 +947,7 @@ class C23Emitter:
                             out.append("    struct {")
                             for i, arg in enumerate(args):
                                 out.append(f"      {self.emit_c_type(arg)} _{i};")
-                            out.append(f"    }} {variant['name']};")
+                            out.append(f"    }} {variant_member(variant['constructorId'])};")
                     out.append("  } val;")
             out.append("};")
             out.append("")
@@ -951,7 +969,7 @@ class C23Emitter:
                     out.append(f"static inline pep_union_{uname} pep_ctor_{vname}({', '.join(c_params)}) {{")
                     out.append(f"  pep_union_{uname} u = {{ .tag = {tag} }};")
                     for i in range(len(args)):
-                        out.append(f"  u.val.{vname}._{i} = _{i};")
+                        out.append(f"  u.val.{variant_member(cid)}._{i} = _{i};")
                     out.append("  return u;")
                     out.append("}")
                     # Backward-compatible function alias
@@ -1023,11 +1041,15 @@ class C23Emitter:
         out.append("  pep_init_top_level();")
         if "main" in self.functions:
             fn_main = self.functions["main"]
+            entry_args = ""
+            if source_grant is not None:
+                source_lines, entry_args = source_grant.emit_entry_view()
+                out.extend(source_lines)
             if fn_main.get("returnType") == "Int":
-                out.append("  int64_t exit_val = pep_fn_main();")
+                out.append(f"  int64_t exit_val = pep_fn_main({entry_args});")
                 out.append('  printf("%lld\\n", (long long)exit_val);')
             else:
-                out.append("  pep_fn_main();")
+                out.append(f"  pep_fn_main({entry_args});")
         out.extend(global_frame.leave("  "))
         out.append("  return 0;")
         out.append("}")
@@ -1071,6 +1093,8 @@ def build_c23(source_pep: pathlib.Path, output_exe: pathlib.Path,
         raise RuntimeError(f"Failed to parse compiler check output: {stdout[:400]}") from e
 
     emitter = C23Emitter(checked_data)
+    if code != 0:
+        raise RuntimeError(f"Pep check invocation failed with exit status {code}: {stderr}")
     for module in checked_data.get("moduleGraph", {}).get("files", []):
         imported = source_resolved.parent / module["document"]
         for output in (c_file, output_resolved):
